@@ -241,12 +241,9 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
     [
       AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
     ],
-    [
-      AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-    ],
+    [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
     [
       AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
       AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
@@ -263,7 +260,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     },
   );
 
-  it("forwards an OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
+  it("forwards a legacy OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
     const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -282,7 +279,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("forwards an OpenAI Codex auth profile when the auth provider is the legacy codex-cli alias", async () => {
+  it("forwards a legacy OpenAI Codex auth profile when the auth provider is the legacy codex-cli alias", async () => {
     const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -301,8 +298,8 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("does not leak an OpenAI API-key auth profile into the Codex CLI alias", async () => {
-    await runAuthContractAttempt({
+  it("forwards OpenAI auth profiles into the Codex CLI alias", async () => {
+    const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -310,7 +307,14 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
     });
 
-    expect(capturedCliRunParams().authProfileId).toBeUndefined();
+    expect(capturedCliRunParams().authProfileId).toBe(
+      expectedForwardedAuthProfile({
+        provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+        authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+        aliasLookupParams,
+        sessionAuthProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+      }),
+    );
   });
 
   it("does not leak an OpenAI Codex auth profile into an unrelated CLI provider", async () => {
@@ -348,7 +352,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     expect(capturedCliRunParams().authProfileId).toBeUndefined();
   });
 
-  it("forwards an OpenAI Codex auth profile through the embedded OpenClaw path", async () => {
+  it("forwards a legacy OpenAI Codex auth profile through the embedded OpenClaw path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -362,7 +366,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("accepts the legacy codex-cli auth-provider alias on the embedded OpenAI Codex path", async () => {
+  it("accepts the legacy codex-cli auth-provider alias on the embedded OpenAI path", async () => {
     const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -396,7 +400,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
   });
 
-  it("forwards an OpenAI Codex auth profile through the default OpenAI Codex harness path", async () => {
+  it("forwards a legacy OpenAI Codex auth profile through the default OpenAI harness path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -410,7 +414,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("routes explicit OpenAI OpenClaw runs with Codex OAuth through OpenAI Codex transport", async () => {
+  it("routes explicit OpenAI OpenClaw runs with legacy Codex OAuth through OpenAI transport", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -421,7 +425,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     });
 
     const params = capturedEmbeddedRunParams();
-    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider);
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
     expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 

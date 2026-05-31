@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
+import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 
 const PREFERENCE_MAX_ENTRIES = 2_000;
@@ -92,7 +93,15 @@ function timestampMs(value: unknown): number {
 }
 
 function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: number): string {
-  return new Date(timestampMs(updatedAt) + Math.max(0, total - index)).toISOString();
+  const baseMs = timestampMs(updatedAt);
+  const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
+  const shiftedMs = anchorMs - Math.max(0, index);
+  return (
+    timestampMsToIsoString(shiftedMs) ??
+    timestampMsToIsoString(baseMs) ??
+    timestampMsToIsoString(Math.max(0, total - index)) ??
+    "1970-01-01T00:00:00.000Z"
+  );
 }
 
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({

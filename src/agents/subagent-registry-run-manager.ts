@@ -35,6 +35,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -43,30 +44,6 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-}
-
-function resolveSubagentRunDeadlineMs(
-  entry: SubagentRunRecord,
-  observedStartedAt?: number,
-): number | undefined {
-  const timeoutSeconds = entry.runTimeoutSeconds;
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    return undefined;
-  }
-  const startedAt =
-    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
-      ? observedStartedAt
-      : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
-        ? entry.startedAt
-        : entry.createdAt;
-  if (!Number.isFinite(startedAt)) {
-    return undefined;
-  }
-  return startedAt + Math.floor(timeoutSeconds * 1000);
 }
 
 function resolveHardRunTimeoutEndedAt(
@@ -594,6 +571,7 @@ export function createSubagentRunManager(params: {
       endedReason: undefined,
       pauseReason: undefined,
       endedHookEmittedAt: undefined,
+      browserCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,
       execution: {

@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
@@ -20,6 +22,11 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "../infra/outbound/agent-delivery.js";
+import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -40,14 +47,20 @@ import {
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveMessageChannel } from "../utils/message-channel.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  resolveMessageChannel,
+} from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -100,7 +113,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -286,6 +299,115 @@ function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number)
   };
 }
 
+async function resolveCurrentRunDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  opts: AgentCommandOpts;
+  sessionEntry?: SessionEntry;
+}): Promise<DeliveryContext | undefined> {
+  const { cfg, opts, sessionEntry } = params;
+  if (opts.deliver !== true) {
+    return undefined;
+  }
+  // Restart recovery only needs durable route fields; final delivery resolves plugin-specific routes.
+  const deliveryPlan = resolveAgentDeliveryPlan({
+    sessionEntry,
+    requestedChannel: opts.replyChannel ?? opts.channel,
+    explicitTo: opts.replyTo ?? opts.to,
+    explicitThreadId: opts.threadId,
+    accountId: opts.replyAccountId ?? opts.accountId,
+    wantsDelivery: true,
+    turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
+    turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
+    turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
+    turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+  });
+  const explicitChannelHint = normalizeOptionalString(opts.replyChannel ?? opts.channel);
+  const explicitThreadId =
+    opts.threadId != null && opts.threadId !== "" ? opts.threadId : undefined;
+  let effectivePlan = deliveryPlan;
+  if (deliveryPlan.resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !explicitChannelHint) {
+    try {
+      const selection = await resolveMessageChannelSelection({ cfg });
+      effectivePlan = {
+        ...deliveryPlan,
+        resolvedChannel: selection.channel,
+        deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? "implicit",
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  if (!isDeliverableMessageChannel(effectivePlan.resolvedChannel)) {
+    return undefined;
+  }
+  const targetMode =
+    opts.deliveryTargetMode ??
+    effectivePlan.deliveryTargetMode ??
+    (opts.to ? "explicit" : "implicit");
+  const resolvedTo =
+    effectivePlan.resolvedTo ??
+    resolveAgentOutboundTarget({
+      cfg,
+      plan: effectivePlan,
+      targetMode,
+      validateExplicitTarget: false,
+    }).resolvedTo;
+  if (!resolvedTo) {
+    return undefined;
+  }
+  const threadId =
+    targetMode === "explicit"
+      ? (explicitThreadId ??
+        (effectivePlan.baseDelivery.threadIdSource === "explicit"
+          ? effectivePlan.resolvedThreadId
+          : undefined))
+      : effectivePlan.resolvedThreadId;
+  return normalizeDeliveryContext({
+    channel: effectivePlan.resolvedChannel,
+    to: resolvedTo,
+    accountId: effectivePlan.resolvedAccountId,
+    threadId,
+  });
+}
+
+function shouldPersistCurrentRunSessionCleanup(
+  current: SessionEntry | undefined,
+  sessionId: string,
+): boolean {
+  return (
+    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
+  );
+}
+
+function shouldPersistRestartRecoveryContextClaim(
+  current: SessionEntry | undefined,
+  sessionId: string,
+  runId: string,
+  allowCreate: boolean,
+): boolean {
+  if (!current) {
+    return allowCreate;
+  }
+  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
+    return false;
+  }
+  return (
+    current.restartRecoveryDeliveryRunId === undefined ||
+    current.restartRecoveryDeliveryRunId === runId
+  );
+}
+
+function shouldPersistRestartRecoveryCleanup(
+  current: SessionEntry | undefined,
+  sessionId: string,
+  runId: string,
+): boolean {
+  return (
+    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
+    current?.restartRecoveryDeliveryRunId === runId
+  );
+}
+
 function containsControlCharacters(value: string): boolean {
   for (const char of value) {
     const code = char.codePointAt(0);
@@ -346,6 +468,7 @@ function resolveExplicitAgentCommandSessionKey(params: {
 }): string | undefined {
   if (
     isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.agentIdOverride &&
     !params.shouldScopeDefaultAgentKey
   ) {
     return params.rawExplicitSessionKey;
@@ -607,6 +730,8 @@ async function agentCommandInternal(
   } = prepared;
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  let trackedRestartRecoveryDeliveryContext = false;
+  let currentRunDeliveryContext: DeliveryContext | undefined;
 
   try {
     if (opts.deliver === true) {
@@ -624,6 +749,49 @@ async function agentCommandInternal(
 
     if (!isRawModelRun && acpResolution?.kind === "stale") {
       throw acpResolution.error;
+    }
+
+    if (
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects &&
+      !isSubagentSessionKey(sessionKey)
+    ) {
+      const now = Date.now();
+      const currentStoreEntry = sessionStore[sessionKey];
+      const allowCreateRestartRecoveryEntry =
+        currentStoreEntry === undefined && sessionEntry === undefined;
+      const entry = currentStoreEntry ??
+        sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+      currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
+        cfg,
+        opts,
+        sessionEntry: entry,
+      });
+      const next: SessionEntry = {
+        ...entry,
+        sessionId,
+        updatedAt: now,
+        restartRecoveryDeliveryContext: currentRunDeliveryContext,
+        restartRecoveryDeliveryRunId: currentRunDeliveryContext ? runId : undefined,
+      };
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey,
+        storePath,
+        entry: next,
+        shouldPersist: (current) =>
+          shouldPersistRestartRecoveryContextClaim(
+            current,
+            sessionId,
+            runId,
+            allowCreateRestartRecoveryEntry,
+          ),
+      });
+      sessionEntry = persisted ?? sessionEntry;
+      trackedRestartRecoveryDeliveryContext =
+        Boolean(persisted?.restartRecoveryDeliveryContext) &&
+        persisted?.restartRecoveryDeliveryRunId === runId;
     }
 
     if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
@@ -1730,16 +1898,18 @@ async function agentCommandInternal(
             ...entry,
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: combinedPayload,
+            pendingFinalDeliveryContext: currentRunDeliveryContext,
             pendingFinalDeliveryCreatedAt: now,
             updatedAt: now,
           };
-          await persistSessionEntry({
+          const persisted = await persistSessionEntry({
             sessionStore,
             sessionKey,
             storePath,
             entry: next,
+            shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
           });
-          sessionEntry = next;
+          sessionEntry = persisted ?? sessionEntry;
         }
       }
 
@@ -1795,13 +1965,14 @@ async function agentCommandInternal(
           !entry.pendingFinalDeliveryText;
         if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
           const next = clearPendingFinalDeliveryFields(entry, Date.now());
-          await persistSessionEntry({
+          const persisted = await persistSessionEntry({
             sessionStore,
             sessionKey,
             storePath,
             entry: next,
+            shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
           });
-          sessionEntry = next;
+          sessionEntry = persisted ?? sessionEntry;
         }
       }
 
@@ -1812,6 +1983,34 @@ async function agentCommandInternal(
       throw error;
     }
   } finally {
+    if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
+      try {
+        const entry = sessionStore[sessionKey] ?? sessionEntry;
+        if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {
+          const next: SessionEntry = {
+            ...entry,
+            restartRecoveryDeliveryContext: undefined,
+            restartRecoveryDeliveryRunId: undefined,
+            updatedAt: Date.now(),
+          };
+          const persisted = await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: next,
+            shouldPersist: (current) =>
+              shouldPersistRestartRecoveryCleanup(current, sessionId, runId),
+          });
+          sessionEntry = persisted ?? sessionEntry;
+        }
+      } catch (error) {
+        log.warn(
+          `failed to clear restart recovery delivery context for ${sessionKey}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
     clearAgentRunContext(runId);
   }
 }

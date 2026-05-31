@@ -1,11 +1,11 @@
-import {
-  type ImageContent,
-  type Message,
-  type Model,
-  type SimpleStreamOptions,
-  type TextContent,
-  type ThinkingBudgets,
-  type Transport,
+import type {
+  ImageContent,
+  Message,
+  Model,
+  SimpleStreamOptions,
+  TextContent,
+  ThinkingBudgets,
+  Transport,
 } from "../../llm-core/src/index.js";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";

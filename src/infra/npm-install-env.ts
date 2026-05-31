@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
 export type NpmProjectInstallEnvOptions = {
   cacheDir?: string;

@@ -194,10 +194,8 @@ describe("installed plugin index persistence", () => {
     const persistedIndex = requirePersisted(persisted);
     expectPluginIds(persistedIndex, ["demo"]);
     expectInstallRecord(persistedIndex, "demo", { source: "npm" });
-    expect(Object.prototype.hasOwnProperty.call(persisted as object, "__proto__")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(persisted?.installRecords ?? {}, "__proto__")).toBe(
-      false,
-    );
+    expect(Object.hasOwn(persisted as object, "__proto__")).toBe(false);
+    expect(Object.hasOwn(persisted?.installRecords ?? {}, "__proto__")).toBe(false);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 

@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   hasMeaningfulChannelConfig,
@@ -7,8 +9,6 @@ import {
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   createPluginActivationSource,

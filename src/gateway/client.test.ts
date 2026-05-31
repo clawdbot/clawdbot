@@ -100,9 +100,7 @@ class MockWebSocket {
         return;
       case "error":
         this.errorHandlers.push(handler as WsEventHandlers["error"]);
-        return;
       default:
-        return;
     }
   }
 

@@ -1,15 +1,19 @@
 import { existsSync } from "node:fs";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { asNullableObjectRecord as readRecord } from "../shared/record-coerce.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
@@ -540,19 +544,27 @@ function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIde
 }
 
 function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null | undefined {
+  const validNow = asDateTimestampMs(now);
+  if (validNow === undefined) {
+    return undefined;
+  }
   const cached = whoisCache.get(ip);
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= now) {
+  const expiresAt = asDateTimestampMs(cached.expiresAt);
+  if (expiresAt === undefined || expiresAt <= validNow) {
     whoisCache.delete(ip);
     return undefined;
   }
   return cached.value;
 }
 
-function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number) {
-  whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
+function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number): void {
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
+  if (expiresAt !== undefined) {
+    whoisCache.set(ip, { value, expiresAt });
+  }
 }
 
 export async function readTailscaleWhoisIdentity(

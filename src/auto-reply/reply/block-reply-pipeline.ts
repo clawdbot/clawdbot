@@ -121,7 +121,7 @@ export function createBlockReplyPipeline(params: {
     void coalescer?.flush({ force: true });
   };
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
+  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false) => {
     if (aborted) {
       return;
     }
@@ -235,6 +235,32 @@ export function createBlockReplyPipeline(params: {
     bufferedPayloadKeys.clear();
   };
 
+  const enqueueCoalescedPayload = (payload: ReplyPayload) => {
+    if (!coalescer) {
+      return;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    if (
+      assistantMessageIndex !== undefined &&
+      bufferedAssistantMessageIndex !== undefined &&
+      assistantMessageIndex !== bufferedAssistantMessageIndex &&
+      coalescer.hasBuffered()
+    ) {
+      // Logical assistant blocks must not be merged together by the generic
+      // coalescer. Force-flush the previous buffered block before starting a
+      // new assistant-message block.
+      flushBufferedAssistantBlock();
+    }
+    const payloadKey = createBlockReplyPayloadKey(payload);
+    if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
+      return;
+    }
+    seenKeys.add(payloadKey);
+    bufferedKeys.add(payloadKey);
+    bufferedAssistantMessageIndex = assistantMessageIndex;
+    coalescer.enqueue(payload);
+  };
+
   const enqueue = (payload: ReplyPayload) => {
     if (aborted) {
       return;
@@ -248,23 +274,7 @@ export function createBlockReplyPipeline(params: {
       { trimText: true },
     );
     if (reply.hasMedia && coalescer && !hasNonTextContent) {
-      const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-      if (
-        assistantMessageIndex !== undefined &&
-        bufferedAssistantMessageIndex !== undefined &&
-        assistantMessageIndex !== bufferedAssistantMessageIndex &&
-        coalescer.hasBuffered()
-      ) {
-        flushBufferedAssistantBlock();
-      }
-      const payloadKey = createBlockReplyPayloadKey(payload);
-      if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
-        return;
-      }
-      seenKeys.add(payloadKey);
-      bufferedKeys.add(payloadKey);
-      bufferedAssistantMessageIndex = assistantMessageIndex;
-      coalescer.enqueue(payload);
+      enqueueCoalescedPayload(payload);
       return;
     }
     if (reply.hasMedia || hasNonTextContent) {
@@ -273,26 +283,7 @@ export function createBlockReplyPipeline(params: {
       return;
     }
     if (coalescer) {
-      const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-      if (
-        assistantMessageIndex !== undefined &&
-        bufferedAssistantMessageIndex !== undefined &&
-        assistantMessageIndex !== bufferedAssistantMessageIndex &&
-        coalescer.hasBuffered()
-      ) {
-        // Logical assistant blocks must not be merged together by the generic
-        // coalescer. Force-flush the previous buffered block before starting a
-        // new assistant-message block.
-        flushBufferedAssistantBlock();
-      }
-      const payloadKey = createBlockReplyPayloadKey(payload);
-      if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
-        return;
-      }
-      seenKeys.add(payloadKey);
-      bufferedKeys.add(payloadKey);
-      bufferedAssistantMessageIndex = assistantMessageIndex;
-      coalescer.enqueue(payload);
+      enqueueCoalescedPayload(payload);
       return;
     }
     sendPayload(payload, /* bypassSeenCheck */ false);

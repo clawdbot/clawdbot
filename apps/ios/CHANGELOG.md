@@ -5,6 +5,8 @@
 Maintenance update for the current OpenClaw release.
 
 - Added hosted push relay defaults, realtime Talk playback, and safer WebSocket ping handling for mobile sessions.
+- Updated App Store screenshots to cover Gateway pairing, Command, Chat, Talk, Agent, and Settings flows.
+- Highlighted realtime Talk relay, Gateway connection status, node capabilities, push wake, and privacy controls.
 
 ## 2026.5.28 - 2026-05-28
 

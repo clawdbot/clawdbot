@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
@@ -14,8 +16,6 @@ import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -519,5 +519,366 @@ export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
   if (result.warnings.length > 0) {
     note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
+  return result;
+}
+
+const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_PROVIDER_ID = "openai";
+
+function isLegacyOpenAICodexProvider(value: unknown): boolean {
+  return (
+    typeof value === "string" && value.trim().toLowerCase() === LEGACY_OPENAI_CODEX_PROVIDER_ID
+  );
+}
+
+function isLegacyOpenAICodexProfileId(profileId: string): boolean {
+  return profileId.trim().toLowerCase().startsWith(`${LEGACY_OPENAI_CODEX_PROVIDER_ID}:`);
+}
+
+function canonicalOpenAIProfileSuffix(profileId: string): string {
+  return profileId.slice(profileId.indexOf(":") + 1).trim() || "default";
+}
+
+function allocateOpenAIProfileId(legacyProfileId: string, occupied: Set<string>): string {
+  const suffix = canonicalOpenAIProfileSuffix(legacyProfileId);
+  const direct = `${OPENAI_PROVIDER_ID}:${suffix}`;
+  if (!occupied.has(direct)) {
+    occupied.add(direct);
+    return direct;
+  }
+  const chatgpt = `${OPENAI_PROVIDER_ID}:chatgpt-${suffix}`;
+  if (!occupied.has(chatgpt)) {
+    occupied.add(chatgpt);
+    return chatgpt;
+  }
+  for (let index = 2; ; index += 1) {
+    const candidate = `${chatgpt}-${index}`;
+    if (!occupied.has(candidate)) {
+      occupied.add(candidate);
+      return candidate;
+    }
+  }
+}
+
+function canonicalizeOpenAIProfileEntries(
+  profiles: Record<string, unknown>,
+  options?: { profileIdMap?: ReadonlyMap<string, string> },
+): {
+  profileIdMap: Map<string, string>;
+  changed: boolean;
+} {
+  const occupied = new Set(Object.keys(profiles).filter((id) => !isLegacyOpenAICodexProfileId(id)));
+  const reservedMappedIds = new Set(options?.profileIdMap?.values() ?? []);
+  const profileIdMap = new Map<string, string>();
+  let changed = false;
+
+  for (const [profileId, rawProfile] of Object.entries({ ...profiles })) {
+    if (!isRecord(rawProfile)) {
+      continue;
+    }
+    const legacyId = isLegacyOpenAICodexProfileId(profileId);
+    const legacyProvider = isLegacyOpenAICodexProvider(rawProfile.provider);
+    if (!legacyId && !legacyProvider) {
+      continue;
+    }
+    const mappedProfileId = legacyId ? options?.profileIdMap?.get(profileId) : undefined;
+    const nextProfileId =
+      mappedProfileId && !occupied.has(mappedProfileId)
+        ? mappedProfileId
+        : legacyId
+          ? allocateOpenAIProfileId(profileId, new Set([...occupied, ...reservedMappedIds]))
+          : profileId;
+    occupied.add(nextProfileId);
+    const nextProfile = {
+      ...rawProfile,
+      provider: OPENAI_PROVIDER_ID,
+    };
+    if (nextProfileId !== profileId) {
+      delete profiles[profileId];
+      profileIdMap.set(profileId, nextProfileId);
+    }
+    profiles[nextProfileId] = nextProfile;
+    changed = true;
+  }
+
+  return { profileIdMap, changed };
+}
+
+function replaceMappedProfileId(value: unknown, profileIdMap: Map<string, string>): unknown {
+  if (typeof value === "string") {
+    return profileIdMap.get(value) ?? value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const replaced = replaceMappedProfileId(entry, profileIdMap);
+      changed ||= replaced !== entry;
+      return replaced;
+    });
+    return changed ? next : value;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  let changed = false;
+  for (const [key, entry] of Object.entries(value)) {
+    const replaced = replaceMappedProfileId(entry, profileIdMap);
+    if (replaced !== entry) {
+      value[key] = replaced;
+      changed = true;
+    }
+  }
+  return changed ? value : value;
+}
+
+const AUTH_PROFILE_REF_KEYS = new Set(["authProfileId"]);
+
+function rewriteMappedAuthProfileRefs(
+  value: unknown,
+  profileIdMap: ReadonlyMap<string, string>,
+): boolean {
+  if (Array.isArray(value)) {
+    return value.reduce(
+      (changed, entry) => rewriteMappedAuthProfileRefs(entry, profileIdMap) || changed,
+      false,
+    );
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  let changed = false;
+  for (const [key, entry] of Object.entries(value)) {
+    if (AUTH_PROFILE_REF_KEYS.has(key) && typeof entry === "string") {
+      const replaced = profileIdMap.get(entry);
+      if (replaced && replaced !== entry) {
+        value[key] = replaced;
+        changed = true;
+      }
+      continue;
+    }
+    changed = rewriteMappedAuthProfileRefs(entry, profileIdMap) || changed;
+  }
+  return changed;
+}
+
+function canonicalizeOpenAIAuthOrder(
+  auth: Record<string, unknown>,
+  profileIdMap: Map<string, string>,
+): boolean {
+  if (!isRecord(auth.order)) {
+    return false;
+  }
+  const order = auth.order;
+  let changed = false;
+  const existingCanonicalOrder = Array.isArray(order[OPENAI_PROVIDER_ID])
+    ? [...(order[OPENAI_PROVIDER_ID] as unknown[])]
+    : [];
+  const legacyOrder = Array.isArray(order[LEGACY_OPENAI_CODEX_PROVIDER_ID])
+    ? (order[LEGACY_OPENAI_CODEX_PROVIDER_ID] as unknown[])
+    : [];
+  const canonicalOrder = [...legacyOrder, ...existingCanonicalOrder];
+  const occupiedProfileIds = new Set(
+    canonicalOrder.filter(
+      (entry): entry is string => typeof entry === "string" && !isLegacyOpenAICodexProfileId(entry),
+    ),
+  );
+  for (const profileId of profileIdMap.values()) {
+    occupiedProfileIds.add(profileId);
+  }
+
+  if (legacyOrder.length > 0) {
+    delete order[LEGACY_OPENAI_CODEX_PROVIDER_ID];
+    changed = true;
+  }
+
+  const rewritten = canonicalOrder
+    .map((entry) => {
+      if (typeof entry !== "string") {
+        return entry;
+      }
+      const mapped = profileIdMap.get(entry);
+      if (mapped) {
+        return mapped;
+      }
+      if (!isLegacyOpenAICodexProfileId(entry)) {
+        return entry;
+      }
+      const canonicalProfileId = allocateOpenAIProfileId(entry, occupiedProfileIds);
+      profileIdMap.set(entry, canonicalProfileId);
+      return canonicalProfileId;
+    })
+    .filter(
+      (entry, index, entries) => typeof entry !== "string" || entries.indexOf(entry) === index,
+    );
+  if (rewritten.length > 0) {
+    order[OPENAI_PROVIDER_ID] = rewritten;
+  } else if (OPENAI_PROVIDER_ID in order) {
+    delete order[OPENAI_PROVIDER_ID];
+  }
+  return changed || rewritten.some((entry, index) => entry !== canonicalOrder[index]);
+}
+
+function renameMappedProfileIdKeys(
+  record: Record<string, unknown>,
+  profileIdMap: Map<string, string>,
+): boolean {
+  let changed = false;
+  for (const [key, value] of Object.entries({ ...record })) {
+    const nextKey = profileIdMap.get(key);
+    if (!nextKey || nextKey === key) {
+      continue;
+    }
+    delete record[key];
+    record[nextKey] = value;
+    changed = true;
+  }
+  return changed;
+}
+
+export function maybeRepairOpenAICodexAuthConfig(
+  cfg: OpenClawConfig,
+  options?: { profileIdMap?: ReadonlyMap<string, string> },
+): {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+} {
+  const config = structuredClone(cfg);
+  const root = config as Record<string, unknown>;
+  const auth = isRecord(root.auth) ? root.auth : undefined;
+  const profileIdMap = new Map<string, string>(options?.profileIdMap);
+  let changed = false;
+  if (isRecord(auth?.profiles)) {
+    const rewrite = canonicalizeOpenAIProfileEntries(auth.profiles, { profileIdMap });
+    for (const [from, to] of rewrite.profileIdMap) {
+      profileIdMap.set(from, to);
+    }
+    changed ||= rewrite.changed;
+  }
+  if (auth) {
+    const orderChanged = canonicalizeOpenAIAuthOrder(auth, profileIdMap);
+    changed ||= orderChanged;
+  }
+  if (profileIdMap.size > 0 && rewriteMappedAuthProfileRefs(config, profileIdMap)) {
+    changed = true;
+  }
+  if (!changed) {
+    return { config, changes: [], warnings: [] };
+  }
+  return {
+    config,
+    changes: ["Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider."],
+    warnings: [],
+  };
+}
+
+type OpenAICodexAuthStoreRepair = {
+  authPath: string;
+  raw: Record<string, unknown>;
+  profileIdMap: Map<string, string>;
+  changed: boolean;
+};
+
+function resolveOpenAICodexAuthStoreRepair(
+  candidate: AuthProfileRepairCandidate,
+  profileIdMap?: ReadonlyMap<string, string>,
+): OpenAICodexAuthStoreRepair | null {
+  if (!fs.existsSync(candidate.authPath)) {
+    return null;
+  }
+  const raw = loadJsonFile(candidate.authPath);
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return null;
+  }
+  const rewrite = canonicalizeOpenAIProfileEntries(raw.profiles, { profileIdMap });
+  const orderChanged = canonicalizeOpenAIAuthOrder(raw, rewrite.profileIdMap);
+  const usageChanged = isRecord(raw.usageStats)
+    ? renameMappedProfileIdKeys(raw.usageStats, rewrite.profileIdMap)
+    : false;
+  if (rewrite.profileIdMap.size > 0) {
+    replaceMappedProfileId(raw, rewrite.profileIdMap);
+  }
+  const changed = rewrite.changed || orderChanged || usageChanged;
+  return changed
+    ? {
+        authPath: candidate.authPath,
+        raw,
+        profileIdMap: rewrite.profileIdMap,
+        changed,
+      }
+    : null;
+}
+
+export function collectOpenAICodexAuthProfileStoreIdMap(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Map<string, string> {
+  const env = params.env ?? process.env;
+  const occupiedProfileIds = new Set<string>();
+  const legacyProfileIds = new Set<string>();
+  const profileIdMap = new Map<string, string>();
+  for (const candidate of listAuthProfileRepairCandidates(params.cfg, env)) {
+    if (!fs.existsSync(candidate.authPath)) {
+      continue;
+    }
+    const raw = loadJsonFile(candidate.authPath);
+    if (!isRecord(raw) || !isRecord(raw.profiles)) {
+      continue;
+    }
+    for (const profileId of Object.keys(raw.profiles)) {
+      if (isLegacyOpenAICodexProfileId(profileId)) {
+        legacyProfileIds.add(profileId);
+      } else {
+        occupiedProfileIds.add(profileId);
+      }
+    }
+  }
+  for (const profileId of [...legacyProfileIds].toSorted((a, b) => a.localeCompare(b))) {
+    profileIdMap.set(profileId, allocateOpenAIProfileId(profileId, occupiedProfileIds));
+  }
+  return profileIdMap;
+}
+
+function backupOpenAIProviderUnification(authPath: string, now: () => number): string {
+  const backupPath = `${authPath}.openai-provider-unification.${now()}.bak`;
+  fs.copyFileSync(authPath, backupPath);
+  return backupPath;
+}
+
+export async function maybeRepairOpenAICodexAuthProfileStores(params: {
+  cfg: OpenClawConfig;
+  now?: () => number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<LegacyFlatAuthProfileRepairResult> {
+  const now = params.now ?? Date.now;
+  const env = params.env ?? process.env;
+  const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
+  const repairs = listAuthProfileRepairCandidates(params.cfg, env)
+    .map((candidate) => resolveOpenAICodexAuthStoreRepair(candidate, profileIdMap))
+    .filter((entry): entry is OpenAICodexAuthStoreRepair => entry !== null);
+  const result: LegacyFlatAuthProfileRepairResult = {
+    detected: repairs.map((entry) => entry.authPath),
+    changes: [],
+    warnings: [],
+  };
+  if (repairs.length === 0) {
+    return result;
+  }
+  for (const entry of repairs) {
+    try {
+      const backupPath = backupOpenAIProviderUnification(entry.authPath, now);
+      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
+      const movedCount = entry.profileIdMap.size;
+      result.changes.push(
+        `Migrated ${movedCount} OpenAI Codex auth profile(s) in ${shortenHomePath(entry.authPath)} to provider "openai" (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(
+        `Failed to migrate OpenAI Codex auth profiles in ${shortenHomePath(entry.authPath)}: ${String(err)}`,
+      );
+    }
+  }
+  clearRuntimeAuthProfileStoreSnapshots();
   return result;
 }

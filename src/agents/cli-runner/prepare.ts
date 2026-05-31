@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assertContextEngineHostSupport,
@@ -20,7 +21,6 @@ import type {
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -516,11 +516,21 @@ export async function prepareCliRunContext(
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
-  preparedPrompt = buildCurrentInboundPrompt({
+  const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
     context: params.currentInboundContext,
     prompt: preparedPrompt,
   });
-  preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
+  const runCurrentInboundPrompt = buildCurrentInboundPrompt({
+    context: params.currentInboundContext,
+    prompt: preparedPrompt,
+    preferResumableText:
+      params.currentInboundEventKind === "room_event" && Boolean(reusableCliSession.sessionId),
+  });
+  const historyPromptCurrentTurn = annotateInterSessionPromptText(
+    fullCurrentInboundPrompt,
+    params.inputProvenance,
+  );
+  preparedPrompt = annotateInterSessionPromptText(runCurrentInboundPrompt, params.inputProvenance);
   const allowRawTranscriptReseed =
     backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
   const rawTranscriptReseedReason = reusableCliSession.sessionId
@@ -539,7 +549,7 @@ export async function prepareCliRunContext(
           allowRawTranscriptReseed,
           rawTranscriptReseedReason,
         }),
-        prompt: preparedPrompt,
+        prompt: historyPromptCurrentTurn,
         maxHistoryChars: autoReseedHistoryChars,
       })
     : undefined;

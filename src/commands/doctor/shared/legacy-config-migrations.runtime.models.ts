@@ -1,5 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -121,7 +121,7 @@ function getLegacyVllmQwenThinkingFormat(params: Record<string, unknown>):
     }
   | undefined {
   for (const key of LEGACY_VLLM_QWEN_THINKING_FORMAT_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(params, key)) {
+    if (Object.hasOwn(params, key)) {
       return {
         key,
         value: params[key],

@@ -1,8 +1,8 @@
-import {
-  type APIApplicationCommandInteractionDataBasicOption,
-  type APIApplicationCommandInteractionDataOption,
-  type APIChannel,
-  type APIInteractionDataResolvedChannel,
+import type {
+  APIApplicationCommandInteractionDataBasicOption,
+  APIApplicationCommandInteractionDataOption,
+  APIChannel,
+  APIInteractionDataResolvedChannel,
 } from "discord-api-types/v10";
 import { channelFactory, type DiscordChannel, type StructureClient } from "./structures.js";
 

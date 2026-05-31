@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
+import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
@@ -8,7 +9,6 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -54,10 +54,7 @@ function createApprovalRuntime(params: {
   }
   return {
     async request(input) {
-      const timeoutMs =
-        typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
-          ? input.timeoutMs
-          : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: input.title.slice(0, 80),

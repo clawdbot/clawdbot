@@ -1,9 +1,9 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 export function modelSupportsInput(
   entry: ModelCatalogEntry | undefined,

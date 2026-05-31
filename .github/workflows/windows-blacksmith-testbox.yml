@@ -197,4 +197,4 @@ jobs:
 
       - name: Testbox action marker
         if: ${{ false }}
-        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d

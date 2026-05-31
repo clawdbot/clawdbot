@@ -3,6 +3,10 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
@@ -123,7 +127,7 @@ export function createSlackMessageHandler(params: {
           pruneAppMentionRetryKeys(Date.now());
           if (last.opts.source === "app_mention") {
             // If app_mention wins the race and dispatches first, drop the later message dispatch.
-            appMentionDispatchedKeys.set(seenMessageKey, Date.now() + APP_MENTION_RETRY_TTL_MS);
+            rememberExpiringAppMentionKey(appMentionDispatchedKeys, seenMessageKey);
           } else if (
             last.opts.source === "message" &&
             appMentionDispatchedKeys.has(seenMessageKey)
@@ -176,28 +180,46 @@ export function createSlackMessageHandler(params: {
   const appMentionRetryKeys = new Map<string, number>();
   const appMentionDispatchedKeys = new Map<string, number>();
 
-  const pruneAppMentionRetryKeys = (now: number) => {
+  const pruneAppMentionRetryKeys = (rawNow: number): boolean => {
+    const now = asDateTimestampMs(rawNow);
+    if (now === undefined) {
+      appMentionRetryKeys.clear();
+      appMentionDispatchedKeys.clear();
+      return false;
+    }
     for (const [key, expiresAt] of appMentionRetryKeys) {
-      if (expiresAt <= now) {
+      if (asDateTimestampMs(expiresAt) === undefined || expiresAt <= now) {
         appMentionRetryKeys.delete(key);
       }
     }
     for (const [key, expiresAt] of appMentionDispatchedKeys) {
-      if (expiresAt <= now) {
+      if (asDateTimestampMs(expiresAt) === undefined || expiresAt <= now) {
         appMentionDispatchedKeys.delete(key);
       }
+    }
+    return true;
+  };
+
+  const rememberExpiringAppMentionKey = (map: Map<string, number>, key: string): void => {
+    const now = Date.now();
+    if (!pruneAppMentionRetryKeys(now)) {
+      return;
+    }
+    const expiresAt = resolveExpiresAtMsFromDurationMs(APP_MENTION_RETRY_TTL_MS, { nowMs: now });
+    if (expiresAt !== undefined) {
+      map.set(key, expiresAt);
     }
   };
 
   const rememberAppMentionRetryKey = (key: string) => {
-    const now = Date.now();
-    pruneAppMentionRetryKeys(now);
-    appMentionRetryKeys.set(key, now + APP_MENTION_RETRY_TTL_MS);
+    rememberExpiringAppMentionKey(appMentionRetryKeys, key);
   };
 
   const consumeAppMentionRetryKey = (key: string) => {
     const now = Date.now();
-    pruneAppMentionRetryKeys(now);
+    if (!pruneAppMentionRetryKeys(now)) {
+      return false;
+    }
     if (!appMentionRetryKeys.has(key)) {
       return false;
     }

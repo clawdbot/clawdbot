@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Template interpolation for response prefix.
@@ -12,7 +12,7 @@ export type ResponsePrefixContext = {
   model?: string;
   /** Full model ID including provider (e.g., "openai/gpt-5.5") */
   modelFull?: string;
-  /** Provider name (e.g., "openai-codex", "anthropic") */
+  /** Provider name (e.g., "openai", "anthropic") */
   provider?: string;
   /** Current thinking level (e.g., "high", "low", "off") */
   thinkingLevel?: string;

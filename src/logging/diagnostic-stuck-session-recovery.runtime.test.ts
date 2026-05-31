@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { saveCronStore } from "../cron/store.js";
 
 const mocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn(),
@@ -230,13 +231,23 @@ describe("stuck session recovery", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
     try {
       process.env.OPENCLAW_STATE_DIR = tempDir;
-      fs.mkdirSync(path.join(tempDir, "cron"), { recursive: true });
-      fs.writeFileSync(
-        path.join(tempDir, "cron", "jobs.json"),
-        JSON.stringify({
-          jobs: [{ id: "job-123", name: "Twitter Mention Moderation Agent" }],
-        }),
-      );
+      await saveCronStore(path.join(tempDir, "cron", "jobs.json"), {
+        version: 1,
+        jobs: [
+          {
+            id: "job-123",
+            name: "Twitter Mention Moderation Agent",
+            enabled: true,
+            createdAtMs: 1_700_000_000_000,
+            updatedAtMs: 1_700_000_000_000,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "tick" },
+            state: {},
+          },
+        ],
+      });
       fs.mkdirSync(path.join(tempDir, "agents", "clawblocker", "sessions"), {
         recursive: true,
       });

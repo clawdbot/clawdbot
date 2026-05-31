@@ -11,8 +11,25 @@ export type BundleMcpToolRuntime = {
 
 export type McpServerCatalog = {
   serverName: string;
+  safeServerName?: string;
   launchSummary: string;
   toolCount: number;
+  resources?: {
+    listChanged?: boolean;
+  };
+  prompts?: {
+    listChanged?: boolean;
+  };
+  tools?: {
+    listChanged?: boolean;
+    filteredCount?: number;
+  };
+  requestTimeoutMs?: number;
+  supportsParallelToolCalls?: boolean;
+  toolFilter?: {
+    include?: string[];
+    exclude?: string[];
+  };
 };
 
 export type McpCatalogTool = {
@@ -55,6 +72,10 @@ export type SessionMcpRuntime = {
   peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  listResources?: (serverName: string) => Promise<unknown>;
+  readResource?: (serverName: string, uri: string) => Promise<unknown>;
+  listPrompts?: (serverName: string) => Promise<unknown>;
+  getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;
 };
 

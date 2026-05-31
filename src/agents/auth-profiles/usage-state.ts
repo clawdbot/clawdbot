@@ -1,4 +1,5 @@
-import { normalizeProviderId } from "../provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
@@ -10,8 +11,8 @@ export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "blockedUntil" | "cooldownUntil" | "disabledUntil">,
 ): number | null {
   const values = [stats.blockedUntil, stats.cooldownUntil, stats.disabledUntil]
-    .filter((value): value is number => typeof value === "number")
-    .filter((value) => Number.isFinite(value) && value > 0);
+    .map((value) => asDateTimestampMs(value))
+    .filter((value): value is number => value !== undefined && value > 0);
   if (values.length === 0) {
     return null;
   }
@@ -19,7 +20,8 @@ export function resolveProfileUnusableUntil(
 }
 
 export function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
-  return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
+  const timestamp = asDateTimestampMs(until);
+  return timestamp !== undefined && timestamp > 0 && now < timestamp;
 }
 
 function shouldBypassModelScopedCooldown(
@@ -27,12 +29,12 @@ function shouldBypassModelScopedCooldown(
   now: number,
   forModel?: string,
 ): boolean {
-  return !!(
+  return Boolean(
     forModel &&
     stats.cooldownReason === "rate_limit" &&
     stats.cooldownModel &&
     stats.cooldownModel !== forModel &&
-    !isActiveUnusableWindow(stats.disabledUntil, now)
+    !isActiveUnusableWindow(stats.disabledUntil, now),
   );
 }
 

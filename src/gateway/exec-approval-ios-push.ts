@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   hasEffectivePairedDeviceRole,
@@ -20,7 +21,6 @@ import {
   type ApnsRelayConfig,
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";

@@ -59,6 +59,29 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/llm-core/types": ["../dist/plugin-sdk/packages/llm-core/src/types.d.ts"],
   "@openclaw/llm-core/validation": ["../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"],
   "@openclaw/llm-core/*": ["../dist/plugin-sdk/packages/llm-core/src/*.d.ts"],
+  "@openclaw/model-catalog-core": ["../dist/plugin-sdk/packages/model-catalog-core/src/index.d.ts"],
+  "@openclaw/model-catalog-core/configured-model-refs": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-refs": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-normalize": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-types": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  ],
+  "@openclaw/model-catalog-core/provider-id": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
+  ],
+  "@openclaw/model-catalog-core/provider-model-id-normalization": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
+  ],
+  "@openclaw/model-catalog-core/provider-model-id-normalize": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  ],
+  "@openclaw/model-catalog-core/*": ["../dist/plugin-sdk/packages/model-catalog-core/src/*.d.ts"],
   "@openclaw/markdown-core": ["../dist/plugin-sdk/packages/markdown-core/src/index.d.ts"],
   "@openclaw/markdown-core/code-spans": [
     "../dist/plugin-sdk/packages/markdown-core/src/code-spans.d.ts",
@@ -93,6 +116,45 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-generation-core/*": [
     "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
   ],
+  "@openclaw/terminal-core": ["../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"],
+  "@openclaw/terminal-core/ansi": ["../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"],
+  "@openclaw/terminal-core/decorative-emoji": [
+    "../dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts",
+  ],
+  "@openclaw/terminal-core/health-style": [
+    "../dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts",
+  ],
+  "@openclaw/terminal-core/links": ["../dist/plugin-sdk/packages/terminal-core/src/links.d.ts"],
+  "@openclaw/terminal-core/note": ["../dist/plugin-sdk/packages/terminal-core/src/note.d.ts"],
+  "@openclaw/terminal-core/osc-progress": [
+    "../dist/plugin-sdk/packages/terminal-core/src/osc-progress.d.ts",
+  ],
+  "@openclaw/terminal-core/palette": ["../dist/plugin-sdk/packages/terminal-core/src/palette.d.ts"],
+  "@openclaw/terminal-core/progress-line": [
+    "../dist/plugin-sdk/packages/terminal-core/src/progress-line.d.ts",
+  ],
+  "@openclaw/terminal-core/prompt-select-styled": [
+    "../dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled.d.ts",
+  ],
+  "@openclaw/terminal-core/prompt-select-styled-params": [
+    "../dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled-params.d.ts",
+  ],
+  "@openclaw/terminal-core/prompt-style": [
+    "../dist/plugin-sdk/packages/terminal-core/src/prompt-style.d.ts",
+  ],
+  "@openclaw/terminal-core/restore": ["../dist/plugin-sdk/packages/terminal-core/src/restore.d.ts"],
+  "@openclaw/terminal-core/safe-text": [
+    "../dist/plugin-sdk/packages/terminal-core/src/safe-text.d.ts",
+  ],
+  "@openclaw/terminal-core/stream-writer": [
+    "../dist/plugin-sdk/packages/terminal-core/src/stream-writer.d.ts",
+  ],
+  "@openclaw/terminal-core/table": ["../dist/plugin-sdk/packages/terminal-core/src/table.d.ts"],
+  "@openclaw/terminal-core/terminal-link": [
+    "../dist/plugin-sdk/packages/terminal-core/src/terminal-link.d.ts",
+  ],
+  "@openclaw/terminal-core/theme": ["../dist/plugin-sdk/packages/terminal-core/src/theme.d.ts"],
+  "@openclaw/terminal-core/*": ["../dist/plugin-sdk/packages/terminal-core/src/*.d.ts"],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "openclaw/plugin-sdk/qa-channel": ["../dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts"],

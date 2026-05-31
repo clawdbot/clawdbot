@@ -18,7 +18,7 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
   if (!tts) {
     return false;
   }
-  return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key));
+  return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.hasOwn(tts, key));
 }
 
 function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
@@ -44,7 +44,7 @@ function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
       return false;
     }
     return Object.values(channels).some((channel) =>
-      Object.prototype.hasOwnProperty.call(asObjectRecord(channel) ?? {}, "allow"),
+      Object.hasOwn(asObjectRecord(channel) ?? {}, "allow"),
     );
   });
 }
@@ -60,7 +60,7 @@ function hasLegacyDiscordGuildChannelAgentId(value: unknown): boolean {
       return false;
     }
     return Object.values(channels).some((channel) =>
-      Object.prototype.hasOwnProperty.call(asObjectRecord(channel) ?? {}, "agentId"),
+      Object.hasOwn(asObjectRecord(channel) ?? {}, "agentId"),
     );
   });
 }
@@ -284,7 +284,7 @@ function normalizeDiscordGuildChannelAllowAliases(params: {
     const nextChannels = { ...channels };
     for (const [channelId, channelValue] of Object.entries(channels)) {
       const channel = asObjectRecord(channelValue);
-      if (!channel || !Object.prototype.hasOwnProperty.call(channel, "allow")) {
+      if (!channel || !Object.hasOwn(channel, "allow")) {
         continue;
       }
       const nextChannel = { ...channel };
@@ -359,7 +359,7 @@ function normalizeDiscordGuildChannelAgentIds(params: {
     const nextChannels = { ...channels };
     for (const [channelId, channelValue] of Object.entries(channels)) {
       const channel = asObjectRecord(channelValue);
-      if (!channel || !Object.prototype.hasOwnProperty.call(channel, "agentId")) {
+      if (!channel || !Object.hasOwn(channel, "agentId")) {
         continue;
       }
       const nextChannel = { ...channel };

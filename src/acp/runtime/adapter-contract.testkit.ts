@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect } from "vitest";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { toAcpRuntimeError } from "./errors.js";
 import type { AcpRuntime, AcpRuntimeEvent } from "./types.js";
 

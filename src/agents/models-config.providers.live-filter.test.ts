@@ -150,17 +150,17 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
     ).toEqual(["openai"]);
   });
 
-  it("maps scoped startup provider aliases through model catalog owners", () => {
+  it("maps scoped startup provider ids through model catalog owners", () => {
     const snapshot = {
       owners: metadataOwners({
-        modelCatalogProviders: new Map([["openai-codex", ["codex"]]]),
+        modelCatalogProviders: new Map([["openai", ["codex"]]]),
       }),
     };
 
     expect(
       resolveProviderDiscoveryFilterForTest({
         env: liveFilterEnv({}),
-        providerIds: ["OpenAI-Codex"],
+        providerIds: ["OpenAI"],
         resolveOwners: (provider) => resolvePluginMetadataProviderOwnersForTest(snapshot, provider),
       }),
     ).toEqual(["codex"]);

@@ -1,7 +1,7 @@
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionSkillPromptRef } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -35,6 +35,7 @@ type SessionStoreSnapshotCacheEntry = {
 type SerializedSessionStoreCacheEntry = {
   serialized: string;
   sizeBytes: number;
+  promptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
 };
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
@@ -210,7 +211,7 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const key in value as Record<string, unknown>) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!Object.hasOwn(value, key)) {
       continue;
     }
     const child = (value as Record<string, unknown>)[key];
@@ -315,10 +316,30 @@ export function getSerializedSessionStore(storePath: string): string | undefined
   return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.serialized;
 }
 
+export function getSerializedSessionStorePromptRefs(
+  storePath: string,
+): ReadonlyMap<string, SessionSkillPromptRef> | undefined {
+  pruneSerializedSessionStoreCache();
+  return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.promptRefs;
+}
+
+export function setSerializedSessionStorePromptRefs(
+  storePath: string,
+  promptRefs: ReadonlyMap<string, SessionSkillPromptRef>,
+): void {
+  pruneSerializedSessionStoreCache();
+  const cached = SESSION_STORE_SERIALIZED_CACHE.get(storePath);
+  if (!cached) {
+    return;
+  }
+  cached.promptRefs = promptRefs;
+}
+
 export function setSerializedSessionStore(
   storePath: string,
   serialized?: string,
   sizeBytesHint?: number,
+  promptRefs?: ReadonlyMap<string, SessionSkillPromptRef>,
 ): void {
   deleteSerializedSessionStore(storePath);
   if (serialized === undefined) {
@@ -333,7 +354,7 @@ export function setSerializedSessionStore(
   if (maxEntries <= 0 || maxBytes <= 0 || sizeBytes > maxBytes) {
     return;
   }
-  SESSION_STORE_SERIALIZED_CACHE.set(storePath, { serialized, sizeBytes });
+  SESSION_STORE_SERIALIZED_CACHE.set(storePath, { serialized, sizeBytes, promptRefs });
   sessionStoreSerializedCacheBytes += sizeBytes;
   pruneSerializedSessionStoreCache();
 }
@@ -422,6 +443,7 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
   cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
@@ -437,5 +459,10 @@ export function writeSessionStoreCache(params: {
     sizeBytes: params.sizeBytes,
     serialized: params.cloneSerialized,
   });
-  setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
+  setSerializedSessionStore(
+    params.storePath,
+    params.serialized,
+    params.sizeBytes,
+    params.serializedPromptRefs,
+  );
 }

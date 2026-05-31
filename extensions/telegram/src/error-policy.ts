@@ -4,6 +4,11 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 
 type TelegramErrorPolicy = "always" | "once" | "silent";
 
@@ -18,7 +23,7 @@ const DEFAULT_ERROR_COOLDOWN_MS = 14400000;
 
 function pruneExpiredCooldowns(messageStore: Map<string, number>, now: number) {
   for (const [message, expiresAt] of messageStore) {
-    if (expiresAt <= now) {
+    if (!isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
       messageStore.delete(message);
     }
   }
@@ -67,9 +72,13 @@ export function shouldSuppressTelegramError(params: {
   errorMessage?: string;
 }): boolean {
   const { scopeKey, cooldownMs, errorMessage } = params;
-  const now = Date.now();
+  const now = asDateTimestampMs(Date.now());
   const messageKey = errorMessage ?? "";
   const scopeStore = errorCooldownStore.get(scopeKey);
+  if (now === undefined) {
+    errorCooldownStore.delete(scopeKey);
+    return false;
+  }
 
   if (scopeStore) {
     pruneExpiredCooldowns(scopeStore, now);
@@ -88,12 +97,17 @@ export function shouldSuppressTelegramError(params: {
   }
 
   const expiresAt = scopeStore?.get(messageKey);
-  if (typeof expiresAt === "number" && expiresAt > now) {
+  if (isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
     return true;
   }
 
+  const nextExpiresAt = resolveExpiresAtMsFromDurationMs(cooldownMs, { nowMs: now });
+  if (nextExpiresAt === undefined) {
+    scopeStore?.delete(messageKey);
+    return false;
+  }
   const nextScopeStore = scopeStore ?? new Map<string, number>();
-  nextScopeStore.set(messageKey, now + cooldownMs);
+  nextScopeStore.set(messageKey, nextExpiresAt);
   errorCooldownStore.set(scopeKey, nextScopeStore);
   return false;
 }

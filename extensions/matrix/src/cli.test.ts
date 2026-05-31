@@ -950,6 +950,28 @@ describe("matrix CLI verification commands", () => {
     expect(console.log).toHaveBeenCalledWith("- BritdXC6iL (OpenClaw Gateway)");
   });
 
+  it("omits invalid matrix device last seen timestamps", async () => {
+    listMatrixOwnDevicesMock.mockResolvedValue([
+      {
+        deviceId: "DEVICE123",
+        displayName: "OpenClaw Gateway",
+        lastSeenIp: "127.0.0.1",
+        lastSeenTs: 8_700_000_000_000_000,
+        current: true,
+      },
+    ]);
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "devices", "list", "--account", "poe"], { from: "user" });
+
+    expect(console.log).toHaveBeenCalledWith("Account: poe");
+    expect(console.log).toHaveBeenCalledWith("- DEVICE123 (current, OpenClaw Gateway)");
+    expect(console.log).toHaveBeenCalledWith("  Last IP: 127.0.0.1");
+    expect(
+      consoleLogMock.mock.calls.some(([message]) => String(message).startsWith("  Last seen:")),
+    ).toBe(false);
+  });
+
   it("prunes stale matrix gateway devices", async () => {
     pruneMatrixStaleGatewayDevicesMock.mockResolvedValue({
       before: [

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { humanSize, readBoolean } from "../shared/params.js";

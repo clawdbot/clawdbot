@@ -1,4 +1,13 @@
 import { createHmac, createHash } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -10,15 +19,6 @@ import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import {
-  normalizeStringEntries,
-  normalizeStringEntriesLower,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -41,6 +41,10 @@ import {
   shouldRenderOpenClawToolWorkflowHints,
 } from "./prompt-surface.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import {
+  buildSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME,
+} from "./skill-workshop-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import type {
   ProviderSystemPromptContribution,
@@ -392,7 +396,8 @@ function buildAssistantOutputDirectivesSection(params: {
     return [
       "## Assistant Output Directives",
       "- Visible source-channel output is delivered through `message(action=send)`.",
-      "- Attach media with message-tool attachment fields such as `media`, `path`, or `filePath`; do not use legacy `MEDIA:` directives for source-channel delivery.",
+      "- Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
+      "- Do not use legacy `MEDIA:` directives for source-channel delivery.",
       "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
       "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
       "",
@@ -400,7 +405,8 @@ function buildAssistantOutputDirectivesSection(params: {
   }
   return [
     "## Assistant Output Directives",
-    "- Attach media: `MEDIA:<path-or-url>` on its own line.",
+    "- Attach media in the final visible reply with `MEDIA:<path-or-url>` on its own line.",
+    "- Tool/generated media paths are attachments, not prose; emit each as its own `MEDIA:<path-or-url>` line.",
     "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- Voice-note audio hint: `[[audio_as_voice]]` when audio is attached.",
     "- Native quote/reply: first token `[[reply_to_current]]`; use `[[reply_to:<id>]]` only with an explicit id.",
@@ -423,7 +429,7 @@ function buildWebchatCanvasSection(params: {
     "- Do not use `[embed ...]` for non-web channels.",
     params.sourceMessageToolOnly
       ? "- `[embed ...]` is separate from message-tool attachments; use message-tool attachment fields for files and `[embed ...]` for web-only rich rendering."
-      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for final-reply attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
@@ -750,6 +756,8 @@ export function buildAgentSystemPrompt(params: {
       "On-demand list/status visibility for sub-agent runs in this requester session; do not use for wait loops",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    skill_workshop:
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -780,6 +788,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_yield",
     "subagents",
     "session_status",
+    "skill_workshop",
     "image",
     "image_generate",
   ];
@@ -920,6 +929,9 @@ export function buildAgentSystemPrompt(params: {
     skillsPrompt,
     readToolName,
   });
+  const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
+    ? buildSkillWorkshopPromptSection()
+    : [];
   const memorySection = buildMemorySection({
     isMinimal,
     includeMemorySection: params.includeMemorySection,
@@ -1082,6 +1094,7 @@ export function buildAgentSystemPrompt(params: {
       "`restart`, not stop+start.",
       "",
       ...skillsSection,
+      ...skillWorkshopSection,
       ...memorySection,
       hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
       hasGateway && !isMinimal

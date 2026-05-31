@@ -15,6 +15,7 @@ import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   parseAndSendMediaTags,
   sendPlainReply,
+  sendTextOnlyReply,
   type DeliverDeps,
 } from "../messaging/outbound-deliver.js";
 import {
@@ -68,7 +69,33 @@ type ReplyDeliverPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   audioAsVoice?: boolean;
+  isError?: boolean;
 };
+
+function shouldDeliverToolProgressImmediately(
+  account: GatewayAccount,
+  useOfficialC2cStream: boolean,
+): boolean {
+  if (useOfficialC2cStream) {
+    return true;
+  }
+  const streaming = account.config?.streaming;
+  if (streaming === true) {
+    return true;
+  }
+  return typeof streaming === "object" && streaming !== null && streaming.mode !== "off";
+}
+
+function immediateToolProgressText(payload: ReplyDeliverPayload): string | undefined {
+  const text = (payload.text ?? "").trim();
+  if (!text || payload.isError || payload.audioAsVoice) {
+    return undefined;
+  }
+  if (payload.mediaUrl || payload.mediaUrls?.length) {
+    return undefined;
+  }
+  return text;
+}
 
 // ============ dispatchOutbound ============
 
@@ -155,6 +182,31 @@ export async function dispatchOutbound(
     }
   };
 
+  const hasPendingToolFallbackPayload = (): boolean =>
+    toolTexts.length > 0 || toolMediaUrls.length > 0;
+
+  const renewToolOnlyFallback = (): boolean => {
+    if (toolFallbackSent) {
+      return false;
+    }
+    if (toolOnlyTimeoutId) {
+      if (toolRenewalCount >= MAX_TOOL_RENEWALS) {
+        return false;
+      }
+      clearTimeout(toolOnlyTimeoutId);
+      toolRenewalCount++;
+    }
+    toolOnlyTimeoutId = setTimeout(async () => {
+      if (!hasBlockResponse && !toolFallbackSent) {
+        toolFallbackSent = true;
+        try {
+          await sendToolFallback();
+        } catch {}
+      }
+    }, TOOL_ONLY_TIMEOUT);
+    return true;
+  };
+
   // ---- Timeout promise ----
   // #85267: derive watchdog from existing agent / provider timeout config so
   // a longer configured ceiling (e.g. slow local ollama models) is not
@@ -208,6 +260,10 @@ export async function dispatchOutbound(
         ? ("group" as const)
         : ("channel" as const);
   const useOfficialC2cStream = shouldUseOfficialC2cStream(account, targetType);
+  const deliverToolProgressImmediately = shouldDeliverToolProgressImmediately(
+    account,
+    useOfficialC2cStream,
+  );
   let streamingController: StreamingController | null = null;
   if (useOfficialC2cStream) {
     streamingController = new StreamingController({
@@ -275,6 +331,29 @@ export async function dispatchOutbound(
                 if (info.kind === "tool") {
                   toolDeliverCount++;
                   const toolText = (payload.text ?? "").trim();
+                  const textOnlyProgress = immediateToolProgressText(payload);
+                  if (!hasBlockResponse && deliverToolProgressImmediately && textOnlyProgress) {
+                    if (toolOnlyTimeoutId || hasPendingToolFallbackPayload()) {
+                      renewToolOnlyFallback();
+                    }
+                    await sendTextOnlyReply(
+                      textOnlyProgress,
+                      {
+                        type: event.type,
+                        senderId: event.senderId,
+                        messageId: event.messageId,
+                        channelId: event.channelId,
+                        groupOpenid: event.groupOpenid,
+                        msgIdx: event.msgIdx,
+                      },
+                      { account, qualifiedTarget, log },
+                      sendWithRetry,
+                      () => undefined,
+                      deliverDeps,
+                    );
+                    recordOutbound();
+                    return;
+                  }
                   if (toolText) {
                     toolTexts.push(toolText);
                   }
@@ -305,22 +384,7 @@ export async function dispatchOutbound(
                   if (toolFallbackSent) {
                     return;
                   }
-                  if (toolOnlyTimeoutId) {
-                    if (toolRenewalCount < MAX_TOOL_RENEWALS) {
-                      clearTimeout(toolOnlyTimeoutId);
-                      toolRenewalCount++;
-                    } else {
-                      return;
-                    }
-                  }
-                  toolOnlyTimeoutId = setTimeout(async () => {
-                    if (!hasBlockResponse && !toolFallbackSent) {
-                      toolFallbackSent = true;
-                      try {
-                        await sendToolFallback();
-                      } catch {}
-                    }
-                  }, TOOL_ONLY_TIMEOUT);
+                  renewToolOnlyFallback();
                   return;
                 }
 

@@ -224,7 +224,6 @@ function createElevenLabsRealtimeTranscriptionSession(
         if (event.message_type?.includes("error")) {
           config.onError?.(new Error(readErrorDetail(event)));
         }
-        return;
     }
   };
 

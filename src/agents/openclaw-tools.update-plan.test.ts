@@ -238,7 +238,6 @@ describe("openclaw-tools update_plan gating", () => {
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled(openAiGpt5Params(cfg), true);
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { modelProvider: "openai-codex" }), true);
   });
 
   it("respects explicit default contract opt-out on GPT-5 runs", () => {

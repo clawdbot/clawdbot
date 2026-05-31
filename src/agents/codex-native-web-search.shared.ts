@@ -1,5 +1,5 @@
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 export type CodexNativeSearchMode = "cached" | "live";

@@ -1159,7 +1159,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
     }
 
-    const result = await deliverWithFinalizableLivePreviewAdapter({
+    await deliverWithFinalizableLivePreviewAdapter({
       kind: info.kind,
       payload,
       adapter: defineFinalizableLivePreviewAdapter({
@@ -1245,10 +1245,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
       },
     });
-
-    if (result.kind === "preview-finalized") {
-      return;
-    }
   };
   const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
     runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));

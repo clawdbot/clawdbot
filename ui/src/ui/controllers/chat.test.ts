@@ -812,7 +812,7 @@ describe("handleChatEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "error",
-      errorMessage: 'No API key found for provider "openai-codex".',
+      errorMessage: 'No API key found for provider "openai".',
     };
 
     expect(handleChatEvent(state, payload)).toBe("error");
@@ -821,9 +821,9 @@ describe("handleChatEvent", () => {
     expectTextChatMessage(
       state.chatMessages[1],
       "assistant",
-      'Error: No API key found for provider "openai-codex".',
+      'Error: No API key found for provider "openai".',
     );
-    expect(state.lastError).toBe('No API key found for provider "openai-codex".');
+    expect(state.lastError).toBe('No API key found for provider "openai".');
   });
 
   it("prefers server-provided assistant error messages", () => {

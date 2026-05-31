@@ -200,7 +200,7 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsFetch.run).not.toContain("StandardError.ReadToEnd()");
     expect(hydrateWindowsFetch.run).toContain("git fetch failed with exit code $($fetch.ExitCode)");
     expect(hydrateWindowsFetch.run).toContain(
-      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+      "--no-tags --no-progress --prune --no-recurse-submodules --depth=50",
     );
     expect(hydrateWindowsFetch.run).toContain('"+refs/heads/main:refs/remotes/origin/main"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
@@ -219,6 +219,26 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
+  });
+
+  it("keeps default Crabbox capacity fail-closed and provider-neutral", () => {
+    const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
+      aws?: { region?: string };
+      capacity?: {
+        availabilityZones?: string[];
+        fallback?: string;
+        market?: string;
+        regions?: string[];
+      };
+      provider?: string;
+    };
+
+    expect(crabboxConfig.provider).toBe("azure");
+    expect(crabboxConfig.capacity?.market).toBe("spot");
+    expect(crabboxConfig.capacity?.fallback).toBe("spot-only");
+    expect(crabboxConfig.capacity?.regions).toBeUndefined();
+    expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
+    expect(crabboxConfig.aws?.region).toBe("eu-west-1");
   });
 
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
@@ -740,7 +760,7 @@ describe("package artifact reuse", () => {
     );
     expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
     expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
-    expect(liveDockerAuth).toContain("codex-cli | openai | openai-codex)");
+    expect(liveDockerAuth).toContain("codex-cli | openai)");
     expect(liveDockerAuth).toContain("openclaw_live_init_docker_run_args()");
     expect(liveDockerAuth).toContain(
       'timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"',
@@ -912,10 +932,14 @@ describe("package artifact reuse", () => {
   });
 
   it("fails Testbox changed-check delegation when the remote command fails", () => {
+    const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const runTestboxStep = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check").steps?.find(
       (step) => step.name === "Run Testbox",
     );
 
+    expect(workflow).toContain('PNPM_CONFIG_MODULES_DIR: "/tmp/openclaw-pnpm-node-modules"');
+    expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
+    expect(workflow).toContain('PNPM_CONFIG_VIRTUAL_STORE_DIR: "/tmp/openclaw-pnpm-virtual-store"');
     expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
     expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
   });
@@ -1345,6 +1369,7 @@ describe("package artifact reuse", () => {
     const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -1402,9 +1427,14 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(clawHubWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(openclawNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
-    expect(pluginNpmWorkflow).toContain("must still be in_progress");
-    expect(clawHubWorkflow).toContain("must still be in_progress");
-    expect(openclawNpmWorkflow).toContain("must still be in_progress");
+    expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release recovery");
+    expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release recovery");
+    expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm recovery");
+    expect(pluginNpmWorkflow).toContain("validate-release-publish-approval.mjs");
+    expect(clawHubWorkflow).toContain("validate-release-publish-approval.mjs");
+    expect(openclawNpmWorkflow).toContain("validate-release-publish-approval.mjs");
+    expect(approvalScript).toContain("must still be in_progress");
+    expect(approvalScript).toContain("completed with success/failure");
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(openclawNpmWorkflow).toContain("environment: npm-release");

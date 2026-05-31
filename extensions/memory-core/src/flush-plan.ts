@@ -6,6 +6,7 @@ import {
   type MemoryFlushPlan,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveMemoryCoreNowMs } from "./time.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
@@ -53,7 +54,7 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
   if (year && month && day) {
     return `${year}-${month}-${day}`;
   }
-  return new Date(nowMs).toISOString().slice(0, 10);
+  return new Date(resolveMemoryCoreNowMs(nowMs)).toISOString().slice(0, 10);
 }
 
 function normalizeNonNegativeInt(value: unknown): number | null {
@@ -99,7 +100,7 @@ export function buildMemoryFlushPlan(
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
-  const nowMs = Number.isFinite(resolved.nowMs) ? (resolved.nowMs as number) : Date.now();
+  const nowMs = resolveMemoryCoreNowMs(resolved.nowMs);
   const cfg = resolved.cfg;
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   if (defaults?.enabled === false) {

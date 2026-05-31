@@ -140,8 +140,8 @@ export function assistantMessage(text: string, timestamp: number) {
   return {
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     model: "gpt-5.4-codex",
     usage: {
       input: 0,

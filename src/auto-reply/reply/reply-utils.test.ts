@@ -620,8 +620,8 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "modelFull",
         template: "[{modelFull}]",
-        values: { modelFull: "openai-codex/gpt-5.4" },
-        expected: "[openai-codex/gpt-5.4]",
+        values: { modelFull: "openai/gpt-5.4" },
+        expected: "[openai/gpt-5.4]",
       },
       {
         name: "provider",
@@ -1236,6 +1236,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("does not emit padding before a buffered trailing reply tag", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("Hello [[");
+    expect(first?.text).toBe("Hello");
+
+    const second = accumulator.consume("", { final: true });
+    expect(second?.text).toBe("[[");
+  });
+
   it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1281,49 +1291,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.text).toBe("NO_REPLY: explanation");
   });
 
-  it("reassembles MEDIA: directives split between the token and the colon", () => {
+  it("buffers split final media directive text until final parsing", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
     const first = accumulator.consume("这次直接发图。\n\nMEDIA");
-    expect(first?.text).toBe("这次直接发图。");
+    expect(first?.text).toBe("这次直接发图。\n\n");
     expect(first?.mediaUrls).toBeUndefined();
 
     const second = accumulator.consume(":/tmp/spy-family.png");
-    expect(second).toBeNull();
-
-    const finalResult = accumulator.consume("", { final: true });
-    expect(finalResult?.mediaUrls).toEqual(["/tmp/spy-family.png"]);
-    expect((finalResult?.text ?? "").includes("MEDIA")).toBe(false);
-  });
-
-  it("reassembles MEDIA: directives split inside the URL path", () => {
-    const accumulator = createStreamingDirectiveAccumulator();
-
-    const first = accumulator.consume("Preview below.\n\nMEDIA:/var/folders/tool-image");
-    expect(first?.text).toBe("Preview below.");
-    expect(first?.mediaUrls).toBeUndefined();
-
-    const second = accumulator.consume("-generation/cover.png");
-    expect(second).toBeNull();
-
-    const finalResult = accumulator.consume("", { final: true });
-    expect(finalResult?.mediaUrls).toEqual(["/var/folders/tool-image-generation/cover.png"]);
-  });
-
-  it("buffers partial MEDIA prefixes (M/ME/MED/MEDI) across chunk boundaries", () => {
-    for (const prefix of ["M", "ME", "MED", "MEDI"]) {
-      const accumulator = createStreamingDirectiveAccumulator();
-      const head = `Here is the file.\n\n${prefix}`;
-      const headResult = accumulator.consume(head);
-      expect(headResult?.text, `prefix=${prefix} head emits text`).toBe("Here is the file.");
-
-      const rest = `MEDIA:/tmp/file.png`.slice(prefix.length);
-      const restResult = accumulator.consume(rest);
-      expect(restResult, `prefix=${prefix} mid returns null`).toBeNull();
-
-      const finalResult = accumulator.consume("", { final: true });
-      expect(finalResult?.mediaUrls, `prefix=${prefix} final mediaUrls`).toEqual(["/tmp/file.png"]);
-    }
+    expect(second?.text ?? "").toBe("");
+    expect(second?.mediaUrls).toBeUndefined();
   });
 
   it("does not buffer a trailing letter that appears mid-line", () => {
@@ -1341,32 +1318,29 @@ describe("createStreamingDirectiveAccumulator", () => {
   it("does not buffer prose that merely contains the token MEDIA:", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
-    // Matches what upstream `splitMediaFromOutput` considers a directive:
-    // only lines whose trimmed start is `MEDIA:`. A line that merely
-    // contains "MEDIA:" mid-sentence is ordinary prose and must flush
-    // immediately — otherwise on a stream-item boundary (which may call
-    // `reset()` without a preceding `consume("", { final: true })`) the
-    // buffered prose would be silently dropped.
     const result = accumulator.consume("See the MEDIA: section for details");
     expect(result?.text).toBe("See the MEDIA: section for details");
     expect(result?.mediaUrls).toBeUndefined();
   });
 
-  it("still buffers an indented MEDIA directive line that is mid-stream", () => {
+  it("strips audio voice tags from streamed chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
-    // Upstream parser treats `line.trimStart().startsWith("MEDIA:")` as a
-    // directive, so the guard must also buffer the indented form across
-    // a chunk boundary.
+    const result = accumulator.consume("Hello\n[[audio_as_voice]]");
+    expect(result?.text).toBe("Hello");
+    expect(result?.audioAsVoice).toBe(true);
+  });
+
+  it("buffers an indented media-looking line for final parsing", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
     const first = accumulator.consume("Preview:\n  MEDIA:/tmp/cover");
-    expect(first?.text).toBe("Preview:");
+    expect(first?.text).toBe("Preview:\n");
     expect(first?.mediaUrls).toBeUndefined();
 
     const second = accumulator.consume(".png");
-    expect(second).toBeNull();
-
-    const finalResult = accumulator.consume("", { final: true });
-    expect(finalResult?.mediaUrls).toEqual(["/tmp/cover.png"]);
+    expect(second?.text ?? "").toBe("");
+    expect(second?.mediaUrls).toBeUndefined();
   });
 
   it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
@@ -1395,12 +1369,12 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.mediaUrls).toBeUndefined();
   });
 
-  it("keeps MEDIA directives that arrive in a single complete chunk working", () => {
+  it("keeps media-looking lines as text in streaming chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
     const result = accumulator.consume("Here it is.\n\nMEDIA:/tmp/complete.png\n");
-    expect(result?.text.includes("MEDIA")).toBe(false);
-    expect(result?.mediaUrls).toEqual(["/tmp/complete.png"]);
+    expect(result?.text).toBe("Here it is.\n\nMEDIA:/tmp/complete.png\n");
+    expect(result?.mediaUrls).toBeUndefined();
   });
 
   it("does not strip a complete final MEDIA line when parsing final text", () => {
@@ -1414,7 +1388,7 @@ describe("createStreamingDirectiveAccumulator", () => {
 describe("extractShortModelName", () => {
   it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
     const cases = [
-      ["openai-codex/gpt-5.4", "gpt-5.4"],
+      ["openai/gpt-5.4", "gpt-5.4"],
       ["claude-opus-4-6-20251101", "claude-opus-4-6"],
       ["gpt-5.4-latest", "gpt-5.4"],
       // Date suffix must be exactly 8 digits at the end.

@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   CodexAppInventoryCache,
@@ -69,6 +70,31 @@ describe("Codex app inventory cache", () => {
 
     const refreshed = await cache.refreshNow({ key, request, nowMs: 11 });
     expect(refreshed.apps.map((item) => item.id)).toEqual(["app-2"]);
+  });
+
+  it("marks inventory stale when the expiry would exceed the Date range", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async () => {
+      return {
+        data: [app("app-overflow")],
+        nextCursor: null,
+      } satisfies v2.AppsListResponse;
+    });
+    const key = "runtime";
+    const snapshot = await cache.refreshNow({
+      key,
+      request,
+      nowMs: MAX_DATE_TIMESTAMP_MS,
+    });
+
+    expect(snapshot.expiresAtMs).toBe(0);
+    const read = cache.read({
+      key,
+      request,
+      nowMs: Date.parse("2026-05-29T12:00:00.000Z"),
+    });
+    expect(read.state).toBe("stale");
+    expect(read.snapshot?.apps.map((item) => item.id)).toEqual(["app-overflow"]);
   });
 
   it("records refresh errors without discarding the last successful snapshot", async () => {

@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
 export const TOOL_NAME_SEPARATOR = "__";

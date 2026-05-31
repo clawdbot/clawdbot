@@ -133,7 +133,7 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
 function hasConfiguredTelegramAccounts(cfg: OpenClawConfig): boolean {
   const accounts = cfg.channels?.telegram?.accounts;
   return (
-    !!accounts &&
+    Boolean(accounts) &&
     typeof accounts === "object" &&
     !Array.isArray(accounts) &&
     Object.keys(accounts).length > 0
@@ -152,7 +152,7 @@ function inspectTelegramAccountPrimary(params: {
   const accountConfig = resolveTelegramAccountConfig(params.cfg, accountId);
   const allowChannelCredentialFallback =
     accountId === DEFAULT_ACCOUNT_ID ||
-    !!accountConfig ||
+    Boolean(accountConfig) ||
     !hasConfiguredTelegramAccounts(params.cfg);
   const accountTokenFile = inspectTokenFile(accountConfig?.tokenFile);
   if (accountTokenFile) {

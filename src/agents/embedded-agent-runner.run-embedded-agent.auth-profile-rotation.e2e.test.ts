@@ -372,9 +372,9 @@ const writeOpenAiCodexAuthStore = async (agentDir: string) => {
   const payload = {
     version: 1,
     profiles: {
-      "openai-codex:work": {
+      "openai:work": {
         type: "api_key",
-        provider: "openai-codex",
+        provider: "openai",
         key: "sk-codex",
       },
     },
@@ -1224,7 +1224,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         prompt: "hello",
         provider: "codex-cli",
         model: "gpt-5.4",
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         authProfileIdSource: "user",
         timeoutMs: 5_000,
         runId: "run:user-auth-alias",
@@ -1235,7 +1235,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         runEmbeddedAttemptMock.mock.calls.at(0)?.[0],
         "embedded attempt params",
       );
-      expect(attemptParams.authProfileId).toBe("openai-codex:work");
+      expect(attemptParams.authProfileId).toBe("openai:work");
       expect(attemptParams.authProfileIdSource).toBe("user");
       expect(attemptParams.provider).toBe("codex-cli");
     });

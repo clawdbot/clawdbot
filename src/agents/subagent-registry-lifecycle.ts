@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
@@ -6,7 +7,6 @@ import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
@@ -53,6 +53,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type CaptureSubagentCompletionReply =
@@ -73,27 +74,6 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
-}
-
-function resolveSubagentRunDeadlineMs(
-  entry: SubagentRunRecord,
-  observedStartedAt?: number,
-): number | undefined {
-  const timeoutSeconds = entry.runTimeoutSeconds;
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    return undefined;
-  }
-  const startedAt =
-    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
-      ? observedStartedAt
-      : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
-        ? entry.startedAt
-        : entry.createdAt;
-  return Number.isFinite(startedAt) ? startedAt + Math.floor(timeoutSeconds * 1000) : undefined;
 }
 
 function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
@@ -1247,20 +1227,29 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    try {
-      const cleanupBrowserSessions =
-        params.cleanupBrowserSessionsForLifecycleEnd ??
-        (await loadCleanupBrowserSessionsForLifecycleEnd());
-      await cleanupBrowserSessions({
-        sessionKeys: [entry.childSessionKey],
-        onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-      });
-    } catch (error) {
-      params.warn("failed to cleanup browser sessions for completed subagent", {
-        error: buildSafeLifecycleErrorMeta(error),
-        runId: maskRunId(completeParams.runId),
-        childSessionKey: maskSessionKey(entry.childSessionKey),
-      });
+    // registerSubagentRun fires both an in-process listener and a gateway
+    // waitForSubagentCompletion RPC; both can reach this point for the same
+    // runId in embedded mode. Dedupe only the browser driver tab-close IPC
+    // with a sync check-then-set. The retire + announce tail below must still
+    // run for every caller, so a slow or held first browser cleanup cannot
+    // strand a duplicate caller's completion behind it.
+    if (entry.browserCleanupDispatchedAt === undefined) {
+      entry.browserCleanupDispatchedAt = Date.now();
+      try {
+        const cleanupBrowserSessions =
+          params.cleanupBrowserSessionsForLifecycleEnd ??
+          (await loadCleanupBrowserSessionsForLifecycleEnd());
+        await cleanupBrowserSessions({
+          sessionKeys: [entry.childSessionKey],
+          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+        });
+      } catch (error) {
+        params.warn("failed to cleanup browser sessions for completed subagent", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(completeParams.runId),
+          childSessionKey: maskSessionKey(entry.childSessionKey),
+        });
+      }
     }
 
     try {

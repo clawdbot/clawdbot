@@ -1,5 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 

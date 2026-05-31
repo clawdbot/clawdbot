@@ -127,9 +127,9 @@ describe("resolveModelAuthLabel", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -137,9 +137,9 @@ describe("resolveModelAuthLabel", () => {
       },
     } as never);
     mocks.resolveAuthProfileOrder.mockImplementation(({ provider }: { provider?: string }) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
+      provider === "openai" ? ["openai:user@example.com"] : [],
     );
-    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai-codex:user@example.com");
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai:user@example.com");
     mocks.resolveEnvApiKey.mockReturnValue({
       apiKey: "env-key-placeholder",
       source: "env: OPENAI_API_KEY",
@@ -147,11 +147,11 @@ describe("resolveModelAuthLabel", () => {
 
     const label = resolveModelAuthLabel({
       provider: "openai",
-      acceptedProviderIds: ["openai-codex"],
+      acceptedProviderIds: ["openai"],
       cfg: {},
     });
 
-    expect(label).toBe("oauth (openai-codex:user@example.com)");
+    expect(label).toBe("oauth (openai:user@example.com)");
     expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
   });
 
@@ -163,7 +163,7 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "token",
       refresh: "refresh",
       expires: Date.now() + 60_000,

@@ -187,9 +187,7 @@ export function transformMessages<TApi extends Api>(
     }
   };
 
-  for (let i = 0; i < transformed.length; i++) {
-    const msg = transformed[i];
-
+  for (const msg of transformed) {
     if (msg.role === "assistant") {
       // If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
       insertSyntheticToolResults();

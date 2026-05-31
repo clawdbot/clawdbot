@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import net from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Hoist the factory so vi.mock can access it.
 const mockCreateServer = vi.hoisted(() => vi.fn());
@@ -11,6 +11,10 @@ vi.mock("node:net", async () => {
 });
 
 import { probePortFree, waitForPortBindable } from "./ports.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Build a minimal fake net.Server that emits a given error code on listen(). */
 function makeErrServer(code: string): net.Server {
@@ -128,5 +132,17 @@ describe("waitForPortBindable", () => {
     await expectRejectCode(waitForPortBindable(80, { timeoutMs: 5000, intervalMs: 50 }), "EACCES");
     // Only one probe should have been attempted — no spinning through the retry loop.
     expect(mockCreateServer).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized bindability intervals by the remaining timeout", async () => {
+    mockCreateServer.mockReturnValue(makeErrServer("EADDRINUSE"));
+
+    await expect(
+      waitForPortBindable(9999, {
+        timeoutMs: 1,
+        intervalMs: Number.MAX_SAFE_INTEGER,
+        host: "127.0.0.1",
+      }),
+    ).rejects.toThrow(/still not bindable after 1ms/);
   });
 });

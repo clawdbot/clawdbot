@@ -1,4 +1,4 @@
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,

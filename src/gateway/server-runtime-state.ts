@@ -64,6 +64,8 @@ type GatewayPluginUpgradeHandler = (
   },
 ) => Promise<boolean>;
 
+const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-http.js");
+
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
   bindHost: string;
@@ -168,7 +170,7 @@ export async function createGatewayRuntimeState(params: {
         return false;
       }
       if (!loadedPluginRequestHandler) {
-        const { createGatewayPluginRequestHandler } = await import("./server/plugins-http.js");
+        const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
         loadedPluginRequestHandler = createGatewayPluginRequestHandler({
           registry: params.pluginRegistry,
           getRouteRegistry: resolvePluginRouteRegistry,
@@ -190,7 +192,7 @@ export async function createGatewayRuntimeState(params: {
         return false;
       }
       if (!loadedPluginUpgradeHandler) {
-        const { createGatewayPluginUpgradeHandler } = await import("./server/plugins-http.js");
+        const { createGatewayPluginUpgradeHandler } = await loadGatewayPluginsHttpModule();
         loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
           registry: params.pluginRegistry,
           getRouteRegistry: resolvePluginRouteRegistry,

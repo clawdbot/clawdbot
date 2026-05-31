@@ -13,8 +13,8 @@ import "./doctor.fast-path-mocks.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
-const CODEX_PROVIDER_ID = "openai-codex";
-const CODEX_PROFILE_ID = "openai-codex:user@example.com";
+const CODEX_PROVIDER_ID = "openai";
+const CODEX_PROFILE_ID = "openai:user@example.com";
 const CODEX_PROFILE_EMAIL = "user@example.com";
 
 function configCodexOAuthProfile() {
@@ -194,7 +194,7 @@ describe("doctor command", () => {
     expect(warned).toBe(true);
   });
 
-  it("warns when a legacy openai-codex provider override shadows configured Codex OAuth", async () => {
+  it("warns when a legacy OpenAI provider override shadows configured Codex OAuth", async () => {
     mockCodexProviderSnapshot({
       provider: {
         api: "openai-responses",
@@ -206,10 +206,10 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    expect(hasCodexOAuthWarning("models.providers.openai-codex")).toBe(true);
+    expect(hasCodexOAuthWarning("models.providers.openai")).toBe(true);
   });
 
-  it("warns when a legacy openai-codex provider override shadows stored Codex OAuth", async () => {
+  it("warns when a legacy OpenAI provider override shadows stored Codex OAuth", async () => {
     mockCodexProviderSnapshot({
       provider: {
         api: "openai-responses",
@@ -222,10 +222,10 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    expect(hasCodexOAuthWarning("models.providers.openai-codex")).toBe(true);
+    expect(hasCodexOAuthWarning("models.providers.openai")).toBe(true);
   });
 
-  it("warns when an inline openai-codex model keeps the legacy OpenAI transport", async () => {
+  it("warns when an inline OpenAI model keeps the legacy OpenAI transport", async () => {
     mockCodexProviderSnapshot({
       provider: {
         models: [
@@ -244,7 +244,7 @@ describe("doctor command", () => {
     expect(hasCodexOAuthWarning("legacy transport override")).toBe(true);
   });
 
-  it("does not warn for a custom openai-codex proxy override", async () => {
+  it("does not warn for a custom OpenAI proxy override", async () => {
     mockCodexProviderSnapshot({
       provider: {
         api: "openai-responses",
@@ -259,7 +259,7 @@ describe("doctor command", () => {
     expect(hasCodexOAuthWarning()).toBe(false);
   });
 
-  it("does not warn for header-only openai-codex overrides", async () => {
+  it("does not warn for header-only OpenAI overrides", async () => {
     mockCodexProviderSnapshot({
       provider: {
         baseUrl: "https://custom.example.com",
@@ -275,7 +275,7 @@ describe("doctor command", () => {
     expect(hasCodexOAuthWarning()).toBe(false);
   });
 
-  it("does not warn about an openai-codex provider override without Codex OAuth", async () => {
+  it("does not warn about an OpenAI provider override without Codex OAuth", async () => {
     mockCodexProviderSnapshot({
       provider: {
         api: "openai-responses",

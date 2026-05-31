@@ -74,6 +74,7 @@ export const testing = {
   parseVoiceCallIntOption,
   resolveGatewayContinueTimeoutMs,
   resolveGatewayOperationTimeoutMs,
+  readGatewayPollTimeoutMs,
   resolveVoiceCallDeadlineMs,
 };
 
@@ -170,7 +171,7 @@ function readGatewayOperationId(payload: unknown): string {
 
 function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
   if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
-    return Math.max(1, Math.ceil(payload.pollTimeoutMs));
+    return clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs;
   }
   return fallbackTimeoutMs;
 }

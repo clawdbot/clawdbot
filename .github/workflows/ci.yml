@@ -601,7 +601,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
+          key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v3-
 
@@ -834,10 +834,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -1151,6 +1151,7 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
           OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |
@@ -1403,7 +1404,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/auto-reply/**', 'packages/llm-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -1420,14 +1421,22 @@ jobs:
           find src \
             -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
             -exec touch -t 200001010000 {} +
-          find packages/llm-core/src \
-            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
-            -exec touch -t 200001010000 {} +
-          touch -t 200001010000 \
+          if [ -d packages/llm-core/src ]; then
+            find packages/llm-core/src \
+              -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
+              -exec touch -t 200001010000 {} +
+          fi
+          if [ -d packages/model-catalog-core/src ]; then
+            find packages/model-catalog-core/src \
+              -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
+              -exec touch -t 200001010000 {} +
+          fi
+          cache_inputs=(
             tsconfig.json \
             tsconfig.plugin-sdk.dts.json \
             packages/plugin-sdk/tsconfig.json \
             packages/llm-core/package.json \
+            packages/model-catalog-core/package.json \
             scripts/check-extension-package-tsc-boundary.mjs \
             scripts/prepare-extension-package-boundary-artifacts.mjs \
             scripts/write-plugin-sdk-entry-dts.ts \
@@ -1435,6 +1444,12 @@ jobs:
             scripts/lib/plugin-sdk-entries.mjs \
             package.json \
             pnpm-lock.yaml
+          )
+          for cache_input in "${cache_inputs[@]}"; do
+            if [ -e "$cache_input" ]; then
+              touch -t 200001010000 "$cache_input"
+            fi
+          done
 
       - name: Run additional check shard
         env:
@@ -1956,6 +1971,21 @@ jobs:
             sleep $((attempt * 20))
           done
           exit 1
+
+      - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
+        run: |
+          set -euo pipefail
+          # Guard: chat-only consumers build OpenClawKit with the Talk trait
+          # disabled and must NOT link ElevenLabsKit. Assert that future sources
+          # under OpenClawKit cannot silently reintroduce an unconditional
+          # ElevenLabsKit dependency while the manifest still looks correct.
+          deps="$(swift package --package-path apps/shared/OpenClawKit show-dependencies --disable-default-traits)"
+          echo "$deps"
+          if grep -qi 'elevenlabs' <<<"$deps"; then
+            echo "::error::ElevenLabsKit resolved with the Talk trait disabled; keep it gated behind the Talk trait."
+            exit 1
+          fi
+          swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
       - name: Swift test
         run: |

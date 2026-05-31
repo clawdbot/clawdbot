@@ -9,7 +9,7 @@ import {
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
 
-let tempDirs: string[] = [];
+const tempDirs: string[] = [];
 
 function writeModelsJson(contents: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-model-registry-"));

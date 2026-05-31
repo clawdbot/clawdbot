@@ -47,6 +47,7 @@ const hoisted = vi.hoisted(() => {
     inCatalog: true,
   }));
   const ensureOpenClawModelsJson = vi.fn(async () => {});
+  const ensureRuntimePluginsLoaded = vi.fn();
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthStateOffMainThread = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
@@ -82,6 +83,7 @@ const hoisted = vi.hoisted(() => {
     loadModelCatalog,
     getModelRefStatus,
     ensureOpenClawModelsJson,
+    ensureRuntimePluginsLoaded,
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthStateOffMainThread,
     setAuthProfileFailureHook,
@@ -177,6 +179,10 @@ vi.mock("../agents/model-selection.js", () => ({
 
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
+}));
+
+vi.mock("../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: hoisted.ensureRuntimePluginsLoaded,
 }));
 
 vi.mock("../agents/model-provider-auth.js", () => ({
@@ -294,6 +300,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     hoisted.ensureOpenClawModelsJson.mockReset();
     hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
+    hoisted.ensureRuntimePluginsLoaded.mockReset();
     hoisted.clearCurrentProviderAuthState.mockClear();
     hoisted.warmCurrentProviderAuthStateOffMainThread.mockReset();
     hoisted.warmCurrentProviderAuthStateOffMainThread.mockResolvedValue(undefined);
@@ -926,7 +933,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
       expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(0);
-      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(1);
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
@@ -940,6 +947,34 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("uses current config when agent runtime plugin prewarm runs", async () => {
+    const startupConfig = { marker: "startup" } as never;
+    const currentConfig = { marker: "current" } as never;
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams({
+        gatewayPluginConfigAtStart: startupConfig,
+      }),
+      providerAuthPrewarm: { enabled: false },
+      agentRuntimePluginPrewarm: {
+        enabled: true,
+        delayMs: 0,
+        getConfig: () => currentConfig,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+        config: currentConfig,
+        workspaceDir: "/tmp/openclaw-workspace",
+        allowGatewaySubagentBinding: true,
+      });
+    });
+    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalledWith(
+      expect.objectContaining({ config: startupConfig }),
+    );
   });
 
   it("keeps provider auth prewarm alive when Gmail post-ready sidecars stop", async () => {
@@ -985,7 +1020,7 @@ describe("startGatewayPostAttachRuntime", () => {
         | { stop: () => void }[]
         | undefined;
       expect(gmailSidecars).toHaveLength(1);
-      expect(lifetimeSidecars).toHaveLength(1);
+      expect(lifetimeSidecars).toHaveLength(2);
 
       for (const sidecar of gmailSidecars ?? []) {
         sidecar.stop();
@@ -1045,7 +1080,7 @@ describe("startGatewayPostAttachRuntime", () => {
       | Array<{ stop: () => Promise<void> | void }>
       | undefined;
     expect(gmailSidecars).toHaveLength(1);
-    expect(lifetimeSidecars).toHaveLength(1);
+    expect(lifetimeSidecars).toHaveLength(2);
 
     await vi.waitFor(() => {
       expect(hoisted.transcriptsAutoStartService.start).toHaveBeenCalledTimes(1);
@@ -1056,7 +1091,9 @@ describe("startGatewayPostAttachRuntime", () => {
     }
     expect(hoisted.transcriptsAutoStartService.stop).not.toHaveBeenCalled();
 
-    await lifetimeSidecars?.[0]?.stop();
+    for (const sidecar of lifetimeSidecars ?? []) {
+      await sidecar.stop();
+    }
     expect(hoisted.transcriptsAutoStartService.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -1440,7 +1477,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 0],
+        ["postReadySidecarCount", 1],
       ],
     });
   });

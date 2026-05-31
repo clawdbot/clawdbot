@@ -28,6 +28,11 @@ function readJsonLog(runtime: RuntimeEnv): unknown {
   return JSON.parse(String(call[0]));
 }
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 async function withTaskJsonStateDir(run: () => Promise<void>): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-json-command-" },
@@ -84,7 +89,7 @@ describe("tasks JSON commands", () => {
         count: 1,
         runtime: "cli",
         status: "running",
-        tasks: [JSON.parse(JSON.stringify(cliTask))],
+        tasks: [jsonRoundTrip(cliTask)],
       });
     });
   });
@@ -170,7 +175,7 @@ describe("tasks JSON commands", () => {
             ageMs: 45 * 60_000,
             status: "running",
             token: runningFlow.flowId,
-            flow: JSON.parse(JSON.stringify(runningFlow)),
+            flow: jsonRoundTrip(runningFlow),
           },
         ],
       });

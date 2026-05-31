@@ -3,6 +3,7 @@ import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
@@ -237,7 +238,6 @@ function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Err
 function loadStoredOAuthRefreshStore(agentDir?: string): AuthProfileStore {
   return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: true,
-    resolveLegacyOAuthSidecars: true,
   });
 }
 
@@ -326,13 +326,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         allowKeychainPrompt: false,
       });
       const mainCred = mainStore.profiles[params.profileId];
+      if (mainCred?.type !== "oauth") {
+        return null;
+      }
+      const mainExpires = asDateTimestampMs(mainCred.expires);
+      const localExpires = asDateTimestampMs(params.credential.expires);
       if (
-        mainCred?.type === "oauth" &&
         mainCred.provider === params.credential.provider &&
         hasUsableOAuthCredential(mainCred) &&
-        Number.isFinite(mainCred.expires) &&
-        (!Number.isFinite(params.credential.expires) ||
-          mainCred.expires > params.credential.expires) &&
+        mainExpires !== undefined &&
+        (localExpires === undefined || mainExpires > localExpires) &&
         isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
       ) {
         params.store.profiles[params.profileId] = { ...mainCred };

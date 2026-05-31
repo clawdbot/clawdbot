@@ -7,6 +7,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
 import { resolveTelegramMessageCachePath } from "./message-cache.js";
+import { resolveTelegramMessageDispatchLegacyPath } from "./message-dispatch-dedupe.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import {
   resolveTopicNameCacheNamespace,
@@ -274,6 +275,263 @@ describe("telegram state migrations", () => {
           },
         },
       ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects remaining Telegram JSON sidecars for plugin-state import", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const storePath = resolveStorePath(undefined, { env });
+    const now = Date.now();
+    const updateOffsetPath = path.join(dir, "telegram", "update-offset-ops.json");
+    const stickerCachePath = path.join(dir, "telegram", "sticker-cache.json");
+    const sentMessagePath = `${storePath}.telegram-sent-messages.json`;
+    const threadBindingsPath = path.join(dir, "telegram", "thread-bindings-ops.json");
+    const dispatchPath = resolveTelegramMessageDispatchLegacyPath({
+      storePath,
+      namespace: "ops",
+    });
+    try {
+      await mkdir(path.dirname(updateOffsetPath), { recursive: true });
+      await mkdir(path.dirname(sentMessagePath), { recursive: true });
+      await writeFile(
+        updateOffsetPath,
+        JSON.stringify({
+          version: 3,
+          lastUpdateId: 12345,
+          botId: "123456",
+          tokenFingerprint: "token:fingerprint",
+        }),
+      );
+      await writeFile(
+        stickerCachePath,
+        JSON.stringify({
+          version: 1,
+          stickers: {
+            unique_sticker: {
+              fileId: "file-1",
+              fileUniqueId: "unique_sticker",
+              description: "Deploy sticker",
+              cachedAt: "2026-05-24T12:00:00.000Z",
+            },
+          },
+        }),
+      );
+      await writeFile(sentMessagePath, JSON.stringify({ 7: { 42: now } }));
+      await writeFile(
+        threadBindingsPath,
+        JSON.stringify({
+          version: 1,
+          bindings: [
+            {
+              accountId: "ops",
+              conversationId: "-100:topic:7",
+              targetKind: "subagent",
+              targetSessionKey: "agent:main:subagent:child",
+              boundAt: now,
+              lastActivityAt: now,
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        dispatchPath,
+        JSON.stringify({ [JSON.stringify(["message", "7", 42])]: now }),
+      );
+
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "123456:secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+
+      const byLabel = new Map(plans.map((plan) => [plan.label, plan]));
+      expect(byLabel.get("Telegram update offset")).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: updateOffsetPath,
+        namespace: "telegram.update-offsets",
+      });
+      expect(byLabel.get("Telegram sticker cache")).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: stickerCachePath,
+        namespace: "telegram.sticker-cache",
+      });
+      expect(byLabel.get("Telegram sent-message cache")).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: sentMessagePath,
+        namespace: "telegram.sent-messages",
+      });
+      expect(byLabel.get("Telegram thread bindings")).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: threadBindingsPath,
+        namespace: "telegram.thread-bindings",
+      });
+      expect(byLabel.get("Telegram message dispatch dedupe")).toMatchObject({
+        kind: "plugin-state-import",
+        sourcePath: dispatchPath,
+        namespace: "telegram.message-dispatch-dedupe",
+      });
+
+      for (const label of [
+        "Telegram update offset",
+        "Telegram sticker cache",
+        "Telegram sent-message cache",
+        "Telegram thread bindings",
+        "Telegram message dispatch dedupe",
+      ]) {
+        const plan = byLabel.get(label);
+        if (!plan || plan.kind !== "plugin-state-import") {
+          throw new Error(`expected plugin-state import plan: ${label}`);
+        }
+        expect(await plan.readEntries()).toHaveLength(1);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects Telegram account sidecars even after the account was removed from config", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const updateOffsetPath = path.join(dir, "telegram", "update-offset-oldbot.json");
+    const threadBindingsPath = path.join(dir, "telegram", "thread-bindings-oldbot.json");
+    const now = Date.now();
+    try {
+      await mkdir(path.dirname(updateOffsetPath), { recursive: true });
+      await writeFile(
+        updateOffsetPath,
+        JSON.stringify({
+          version: 3,
+          lastUpdateId: 12345,
+          botId: "123456",
+          tokenFingerprint: "token:fingerprint",
+        }),
+      );
+      await writeFile(
+        threadBindingsPath,
+        JSON.stringify({
+          version: 1,
+          bindings: [
+            {
+              accountId: "oldbot",
+              conversationId: "-100:topic:7",
+              targetKind: "subagent",
+              targetSessionKey: "agent:main:subagent:child",
+              boundAt: now,
+              lastActivityAt: now,
+            },
+          ],
+        }),
+      );
+
+      const plans = await detectTelegramLegacyStateMigrations({ cfg: {}, env });
+      const updateOffsetPlan = plans.find((plan) => plan.sourcePath === updateOffsetPath);
+      const threadBindingsPlan = plans.find((plan) => plan.sourcePath === threadBindingsPath);
+
+      expect(updateOffsetPlan).toMatchObject({
+        kind: "plugin-state-import",
+        label: "Telegram update offset",
+        namespace: "telegram.update-offsets",
+      });
+      expect(threadBindingsPlan).toMatchObject({
+        kind: "plugin-state-import",
+        label: "Telegram thread bindings",
+        namespace: "telegram.thread-bindings",
+      });
+      if (!updateOffsetPlan || updateOffsetPlan.kind !== "plugin-state-import") {
+        throw new Error("expected orphaned update offset import plan");
+      }
+      if (!threadBindingsPlan || threadBindingsPlan.kind !== "plugin-state-import") {
+        throw new Error("expected orphaned thread bindings import plan");
+      }
+      expect(await updateOffsetPlan.readEntries()).toHaveLength(1);
+      expect(await threadBindingsPlan.readEntries()).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("imports legacy session-store sidecars into the current runtime scope", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const storePath = resolveStorePath(undefined, { env });
+    const legacyStorePath = path.join(dir, "sessions", "sessions.json");
+    const currentSentPath = `${storePath}.telegram-sent-messages.json`;
+    const legacySentPath = `${legacyStorePath}.telegram-sent-messages.json`;
+    const currentDispatchPath = resolveTelegramMessageDispatchLegacyPath({
+      storePath,
+      namespace: "ops",
+    });
+    const legacyDispatchPath = resolveTelegramMessageDispatchLegacyPath({
+      storePath: legacyStorePath,
+      namespace: "ops",
+    });
+    const now = Date.now();
+    try {
+      await mkdir(path.dirname(currentSentPath), { recursive: true });
+      await mkdir(path.dirname(legacySentPath), { recursive: true });
+      const sentPayload = JSON.stringify({ 7: { 42: now } });
+      const dispatchPayload = JSON.stringify({ [JSON.stringify(["message", "7", 42])]: now });
+      await writeFile(currentSentPath, sentPayload);
+      await writeFile(legacySentPath, sentPayload);
+      await writeFile(currentDispatchPath, dispatchPayload);
+      await writeFile(legacyDispatchPath, dispatchPayload);
+
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "123456:secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const importPlans = plans.filter((plan) => plan.kind === "plugin-state-import");
+      const currentSentPlan = importPlans.find(
+        (plan) =>
+          plan.label === "Telegram sent-message cache" && plan.sourcePath === currentSentPath,
+      );
+      const legacySentPlan = importPlans.find(
+        (plan) =>
+          plan.label === "Telegram sent-message cache" && plan.sourcePath === legacySentPath,
+      );
+      const currentDispatchPlan = importPlans.find(
+        (plan) =>
+          plan.label === "Telegram message dispatch dedupe" &&
+          plan.sourcePath === currentDispatchPath,
+      );
+      const legacyDispatchPlan = importPlans.find(
+        (plan) =>
+          plan.label === "Telegram message dispatch dedupe" &&
+          plan.sourcePath === legacyDispatchPath,
+      );
+      if (!currentSentPlan || !legacySentPlan || !currentDispatchPlan || !legacyDispatchPlan) {
+        throw new Error("expected current and legacy session-store import plans");
+      }
+
+      const stripTtl = (entries: Awaited<ReturnType<typeof currentSentPlan.readEntries>>) =>
+        entries.map(({ ttlMs: _ttlMs, ...entry }) => entry);
+      expect(stripTtl(await legacySentPlan.readEntries())).toStrictEqual(
+        stripTtl(await currentSentPlan.readEntries()),
+      );
+      const stripDispatchSourceKey = (
+        entries: Awaited<ReturnType<typeof currentDispatchPlan.readEntries>>,
+      ) => entries.map(({ key: _key, ttlMs: _ttlMs, ...entry }) => entry);
+      expect(stripDispatchSourceKey(await legacyDispatchPlan.readEntries())).toStrictEqual(
+        stripDispatchSourceKey(await currentDispatchPlan.readEntries()),
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
@@ -15,8 +20,6 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
-import { isRecord as isPlainObject } from "../../shared/record-coerce.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { optionalNonNegativeIntegerSchema, stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,

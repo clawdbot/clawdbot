@@ -55,7 +55,10 @@ const fakeApi = { config: {} } as never;
 function registerHandlersForTest(config: Record<string, unknown> = {}) {
   return registerHookHandlersForTest<MatrixEntryPluginApi>({
     config,
-    register: registerMatrixSubagentHooks,
+    register: (api) => {
+      registerMatrixSubagentHooks(api);
+      api.on("subagent_spawning", (event) => handleMatrixSubagentSpawning(api, event));
+    },
   });
 }
 

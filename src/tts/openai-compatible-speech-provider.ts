@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
@@ -7,7 +8,6 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { asFiniteNumber, asObject, trimToUndefined } from "../agents/provider-http-errors.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,

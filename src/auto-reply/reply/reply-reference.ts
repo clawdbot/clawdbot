@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyReferencePlanner = {
   /** Returns the effective reply/thread id for the next send without updating state. */

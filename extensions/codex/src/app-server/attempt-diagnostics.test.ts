@@ -51,11 +51,11 @@ describe("Codex app-server attempt diagnostics", () => {
       pluginAppCacheKey: buildCodexPluginAppCacheKey({
         appServer,
         agentDir: "/tmp/agent",
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         accountId: "account-work",
         envApiKeyFingerprint: "env-key",
       }),
-      startupAuthProfileId: "openai-codex:work",
+      startupAuthProfileId: "openai:work",
       appServer,
     });
 
@@ -69,7 +69,7 @@ describe("Codex app-server attempt diagnostics", () => {
         pluginConfigKeys: ["google-calendar"],
         enabledPluginConfigKeys: ["google-calendar"],
         appCacheKeyFingerprint: expect.stringMatching(/^sha256:/),
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         appServerTransport: "websocket",
         appServerCommandSource: "config",
       }),

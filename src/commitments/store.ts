@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { privateFileStore } from "../infra/private-file-store.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,

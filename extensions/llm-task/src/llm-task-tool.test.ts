@@ -50,13 +50,13 @@ function fakeApi(overrides: any = {}) {
     name: "llm-task",
     source: "test",
     config: {
-      agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } },
+      agents: { defaults: { workspace: "/tmp", model: { primary: "openai/gpt-5.5" } } },
     },
     pluginConfig: {},
     runtime: {
       version: "test",
       agent: {
-        defaults: { provider: "openai-codex", model: "gpt-5.2" },
+        defaults: { provider: "openai", model: "gpt-5.5" },
         runEmbeddedAgent,
         resolveThinkingPolicy,
         normalizeThinkingLevel,
@@ -157,7 +157,7 @@ describe("llm-task tool (json-only)", () => {
       }),
     ).resolves.toEqual({
       content: [{ type: "text", text: '{\n  "foo": "bar"\n}' }],
-      details: { json: { foo: "bar" }, provider: "openai-codex", model: "gpt-5.2" },
+      details: { json: { foo: "bar" }, provider: "openai", model: "gpt-5.5" },
     });
 
     await expect(
@@ -173,7 +173,7 @@ describe("llm-task tool (json-only)", () => {
       }),
     ).resolves.toEqual({
       content: [{ type: "text", text: '{\n  "count": 1\n}' }],
-      details: { json: { count: 1 }, provider: "openai-codex", model: "gpt-5.2" },
+      details: { json: { count: 1 }, provider: "openai", model: "gpt-5.5" },
     });
   });
 
@@ -248,8 +248,8 @@ describe("llm-task tool (json-only)", () => {
     const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
     expect(call.thinkLevel).toBe("high");
     expect(resolveThinkingPolicy).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      model: "gpt-5.2",
+      provider: "openai",
+      model: "gpt-5.5",
     });
   });
 
@@ -283,7 +283,7 @@ describe("llm-task tool (json-only)", () => {
   it("enforces allowedModels", async () => {
     mockEmbeddedRunJson({ ok: true });
     const tool = createLlmTaskTool(
-      fakeApi({ pluginConfig: { allowedModels: ["openai-codex/gpt-5.2"] } }),
+      fakeApi({ pluginConfig: { allowedModels: ["openai/gpt-5.5"] } }),
     );
     await expect(
       tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" }),

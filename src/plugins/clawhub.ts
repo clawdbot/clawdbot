@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import JSZip from "jszip";
 import {
   ARCHIVE_LIMIT_ERROR_CODE,
@@ -31,31 +32,15 @@ import {
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
-export const CLAWHUB_INSTALL_ERROR_CODE = {
-  INVALID_SPEC: "invalid_spec",
-  PACKAGE_NOT_FOUND: "package_not_found",
-  VERSION_NOT_FOUND: "version_not_found",
-  NO_INSTALLABLE_VERSION: "no_installable_version",
-  SKILL_PACKAGE: "skill_package",
-  UNSUPPORTED_FAMILY: "unsupported_family",
-  PRIVATE_PACKAGE: "private_package",
-  INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
-  INCOMPATIBLE_GATEWAY: "incompatible_gateway",
-  ARTIFACT_UNAVAILABLE: "artifact_unavailable",
-  MISSING_ARCHIVE_INTEGRITY: "missing_archive_integrity",
-  ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
-  ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
-} as const;
-
-export type ClawHubInstallErrorCode =
-  (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
+export { CLAWHUB_INSTALL_ERROR_CODE };
+export type { ClawHubInstallErrorCode };
 
 type PluginInstallLogger = {
   info?: (message: string) => void;

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 
 type TimeoutCallback = Parameters<typeof setTimeout>[0];
@@ -57,5 +58,30 @@ describe("ExecApprovalManager", () => {
 
     const cleanupTimer = timers.find((timer) => timer.delay === 15_000);
     expect(cleanupTimer?.handle.unref).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps oversized approval timers instead of letting Node fire them immediately", () => {
+    const timers = installTimerMocks();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      { command: "echo ok" },
+      MAX_TIMER_TIMEOUT_MS + 1,
+      "approval-long",
+    );
+
+    void manager.register(record, MAX_TIMER_TIMEOUT_MS + 1);
+
+    expect(record.expiresAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+    expect(timers[0]?.delay).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("rejects approval records when expiry would exceed the Date range", () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const manager = new ExecApprovalManager();
+
+    expect(() => manager.create({ command: "echo ok" }, 1, "approval-overflow")).toThrow(
+      "approval expiry is unavailable",
+    );
   });
 });

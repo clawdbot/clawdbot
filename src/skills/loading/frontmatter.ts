@@ -1,3 +1,4 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { parseFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
@@ -11,7 +12,6 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../../shared/frontmatter.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -201,7 +201,7 @@ export function resolveOpenClawMetadata(
     skillKey: readStringValue(metadataObj.skillKey),
     primaryEnv: readStringValue(metadataObj.primaryEnv),
     os: osRaw.length > 0 ? osRaw : undefined,
-    requires: requires,
+    requires,
     install: install.length > 0 ? install : undefined,
   };
 }

@@ -202,8 +202,9 @@ export class CodexAppServerClient {
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    optionsInput?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<T> {
+    let options = optionsInput;
     options ??= {};
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));

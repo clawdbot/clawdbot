@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -61,6 +62,88 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("opens databases with early cron tables before creating cron indexes", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE cron_jobs (
+        store_key TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        schedule_kind TEXT NOT NULL,
+        session_target TEXT NOT NULL,
+        wake_mode TEXT NOT NULL,
+        payload_kind TEXT NOT NULL,
+        job_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (store_key, job_id)
+      );
+    `);
+    db.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(() =>
+      database.db.prepare("SELECT session_key FROM cron_jobs LIMIT 1").all(),
+    ).not.toThrow();
+  });
+
+  it("opens databases with early cron run-log tables before creating cron indexes", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE cron_run_logs (
+        store_key TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        ts INTEGER NOT NULL,
+        PRIMARY KEY (store_key, job_id, seq)
+      );
+    `);
+    db.prepare("INSERT INTO cron_run_logs (store_key, job_id, seq, ts) VALUES (?, ?, ?, ?)").run(
+      path.join(stateDir, "cron", "jobs.json"),
+      "legacy-job",
+      1,
+      12345,
+    );
+    db.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(() =>
+      database.db.prepare("SELECT status, entry_json FROM cron_run_logs LIMIT 1").all(),
+    ).not.toThrow();
+
+    const previousStateDir = process.env["OPENCLAW_STATE_DIR"];
+    process.env["OPENCLAW_STATE_DIR"] = stateDir;
+    try {
+      expect(
+        readCronRunLogEntriesSync({
+          storePath: path.join(stateDir, "cron", "jobs.json"),
+          jobId: "legacy-job",
+        }),
+      ).toMatchObject([{ action: "finished", jobId: "legacy-job", ts: 12345 }]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env["OPENCLAW_STATE_DIR"];
+      } else {
+        process.env["OPENCLAW_STATE_DIR"] = previousStateDir;
+      }
+    }
   });
 
   it("configures durable SQLite connection pragmas", () => {

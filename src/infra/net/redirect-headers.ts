@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 
 const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([

@@ -26,7 +26,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     maxTokens: 16384,
     cost: {
       input: 0.25,
-      output: 1.0,
+      output: 1,
       cacheRead: 0.25,
       cacheWrite: 0.25,
     },

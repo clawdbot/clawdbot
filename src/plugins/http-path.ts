@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export function normalizePluginHttpPath(
   path?: string | null,

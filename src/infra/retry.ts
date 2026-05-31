@@ -1,6 +1,6 @@
-import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { generateSecureFraction } from "./secure-random.js";
 
 export type RetryConfig = {
@@ -49,9 +49,9 @@ function resolveAttemptCount(value: unknown, fallback: number): number {
 
 function resolveRetryDelayMs(value: number): number {
   if (value === Number.POSITIVE_INFINITY) {
-    return MAX_SAFE_TIMEOUT_DELAY_MS;
+    return MAX_TIMER_TIMEOUT_MS;
   }
-  return resolveSafeTimeoutDelayMs(value, { minMs: 0 });
+  return resolveTimerTimeoutMs(value, 0, 0);
 }
 
 export function resolveRetryConfig(

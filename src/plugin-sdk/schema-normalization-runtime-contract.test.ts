@@ -26,9 +26,9 @@ describe("OpenAI-family schema normalization runtime contract", () => {
 
   it("normalizes parameter-free schemas for native OpenAI Codex Responses tools", () => {
     const normalized = hooks.normalizeToolSchemas({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: createNativeOpenAICodexResponsesModel() as never,
       tools: [createParameterFreeTool()] as never,
     });
@@ -52,9 +52,9 @@ describe("OpenAI-family schema normalization runtime contract", () => {
   it("keeps permissive schemas observable for transport strict:false downgrade", () => {
     const tool = createPermissiveTool();
     const normalized = hooks.normalizeToolSchemas({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: createNativeOpenAICodexResponsesModel() as never,
       tools: [tool] as never,
     });
@@ -62,9 +62,9 @@ describe("OpenAI-family schema normalization runtime contract", () => {
     expect(normalized[0]?.parameters).toEqual(tool.parameters);
     expect(
       hooks.inspectToolSchemas({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
-        modelApi: "openai-codex-responses",
+        modelApi: "openai-chatgpt-responses",
         model: createNativeOpenAICodexResponsesModel() as never,
         tools: [tool] as never,
       }),

@@ -202,7 +202,7 @@ describe("buildAgentContext", () => {
         workspace: "/tmp/agent-workspace",
         model: {
           primary: "openai/gpt-5.5",
-          fallbacks: ["openai-codex/gpt-5.2-codex"],
+          fallbacks: ["openai/gpt-5.2-codex"],
         },
         agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
       },
@@ -227,7 +227,7 @@ describe("buildAgentContext", () => {
             workspace: "/tmp/default-workspace",
             model: {
               primary: "openai/gpt-5.5",
-              fallbacks: ["openai-codex/gpt-5.2-codex"],
+              fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
           list: [{ id: "main" }],

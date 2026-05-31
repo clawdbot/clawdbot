@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
 function resolveThreadCreateRequest(opts: Record<string, unknown>) {

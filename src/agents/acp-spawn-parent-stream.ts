@@ -1,5 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -12,8 +14,6 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { appendRegularFile } from "../infra/regular-file.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 

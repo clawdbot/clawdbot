@@ -5,10 +5,10 @@ describe("resolveLoginProfiles", () => {
   it("returns original profiles when --profile-id is not provided", () => {
     const profiles = [
       {
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         credential: {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "a",
           refresh: "r",
           expires: Date.now() + 60_000,
@@ -25,14 +25,14 @@ describe("resolveLoginProfiles", () => {
 
   it("overrides profile id when exactly one profile is returned", () => {
     const resolved = resolveLoginProfiles({
-      requestedProfileId: "openai-codex:work",
+      requestedProfileId: "openai:work",
       result: {
         profiles: [
           {
-            profileId: "openai-codex:default",
+            profileId: "openai:default",
             credential: {
               type: "oauth" as const,
-              provider: "openai-codex",
+              provider: "openai",
               access: "a",
               refresh: "r",
               expires: Date.now() + 60_000,
@@ -43,7 +43,7 @@ describe("resolveLoginProfiles", () => {
     });
 
     expect(resolved).toHaveLength(1);
-    expect(resolved[0]?.profileId).toBe("openai-codex:work");
+    expect(resolved[0]?.profileId).toBe("openai:work");
   });
 
   it("throws when --profile-id is used with multi-profile auth responses", () => {

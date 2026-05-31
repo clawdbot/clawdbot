@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type {
   ElevatedLevel,
@@ -25,7 +26,6 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
@@ -172,7 +172,8 @@ function listImplicitDefaultDirectFallbackKeys(params: {
   if (parts.length < 4 || parts[1] !== "default" || parts[2] !== "direct") {
     return [];
   }
-  const [channel, , , ...peerParts] = parts;
+  const channel = parts[0];
+  const peerParts = parts.slice(3);
   if (!channel || peerParts.length === 0) {
     return [];
   }

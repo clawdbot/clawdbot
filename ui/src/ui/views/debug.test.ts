@@ -72,4 +72,26 @@ describe("renderDebug", () => {
     );
     expect(command.textContent).toBe("openclaw security audit --deep");
   });
+
+  it("does not render Invalid Date for Date-invalid event timestamps", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderDebug(
+        createProps({
+          eventLog: [
+            {
+              ts: 8_640_000_000_000_001,
+              event: "gateway",
+              payload: { ok: true },
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("gateway");
+    expect(container.textContent).not.toContain("Invalid Date");
+  });
 });

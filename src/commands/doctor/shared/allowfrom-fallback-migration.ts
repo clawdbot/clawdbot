@@ -1,8 +1,8 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.js";
 import { normalizeAnyChannelId } from "../../../channels/registry.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeUniqueStringEntries } from "../../../shared/string-normalization.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import { asObjectRecord } from "./object.js";
 
@@ -86,11 +86,7 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
   const [segment, ...rest] = path;
   const properties = asObjectRecord(node.properties);
-  if (
-    segment !== ACCOUNT_SCHEMA_WILDCARD &&
-    properties &&
-    Object.prototype.hasOwnProperty.call(properties, segment)
-  ) {
+  if (segment !== ACCOUNT_SCHEMA_WILDCARD && properties && Object.hasOwn(properties, segment)) {
     return schemaAllowsConfigPath(properties[segment], rest);
   }
 

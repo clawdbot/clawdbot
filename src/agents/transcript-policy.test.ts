@@ -24,7 +24,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           "mistral",
           "moonshot",
           "openai",
-          "openai-codex",
+          "openai",
           "opencode",
           "opencode-go",
           "ollama",
@@ -132,7 +132,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 toolCallIdMode: "strict9",
               };
             case "openai":
-            case "openai-codex":
               return {
                 sanitizeMode: "images-only",
                 sanitizeToolCallIds: context?.modelApi === "openai-completions",

@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
@@ -182,6 +186,11 @@ const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
+let cdpConnectRetryDelayMsForTests: number | undefined;
+
+export function setCdpConnectRetryDelayMsForTests(delayMs?: number): void {
+  cdpConnectRetryDelayMsForTests = delayMs;
+}
 
 function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
   const parsed = parseFiniteNumber(timeoutMs);
@@ -190,6 +199,10 @@ function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function resolveCdpConnectRetryDelayMs(attempt: number): number {
+  return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
 }
 
 function buildManagedDownloadPath(fileName: string): string {
@@ -354,7 +367,7 @@ function observeDialog(pageState: PageState, dialog: Dialog): void {
   pageState.pendingDialogs.push(pending);
 
   const armed = pageState.armedDialogResponse;
-  if (armed && armed.expiresAt >= Date.now()) {
+  if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
     clearArmedDialogResponse(pageState);
     void settleObservedDialog({
       state: pageState,
@@ -791,9 +804,13 @@ export function armObservedDialogResponseOnPage(opts: {
   const state = ensurePageState(opts.page);
   clearArmedDialogResponse(state);
   const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
+  if (expiresAt === undefined) {
+    return;
+  }
   const response: ArmedDialogResponse = {
     accept: opts.accept,
-    expiresAt: Date.now() + timeoutMs,
+    expiresAt,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
@@ -929,7 +946,7 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = 250 + attempt * 250;
+        const delay = resolveCdpConnectRetryDelayMs(attempt);
         await new Promise((r) => setTimeout(r, delay));
       }
     }
@@ -1789,7 +1806,6 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
           await send("Page.bringToFront");
         },
       });
-      return;
     } catch {
       throw err;
     }

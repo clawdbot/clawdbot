@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { TtsAutoMode } from "../config/types.tts.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 

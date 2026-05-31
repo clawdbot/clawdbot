@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginPackageInstall } from "./manifest.js";
 
 export type PluginInstallSourceWarning =

@@ -50,6 +50,7 @@ Options:
 }
 
 export function parseArgs(argv: string[]): Options {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -59,25 +60,25 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--beta":
-        options.beta = requireValue(argv, ++i, arg);
+        options.beta = requireValue(args, ++i, arg);
         break;
       case "--model":
-        options.model = requireValue(argv, ++i, arg);
+        options.model = requireValue(args, ++i, arg);
         break;
       case "--provider-mode":
-        options.providerMode = requireValue(argv, ++i, arg);
+        options.providerMode = requireValue(args, ++i, arg);
         break;
       case "--ref":
-        options.ref = requireValue(argv, ++i, arg);
+        options.ref = requireValue(args, ++i, arg);
         break;
       case "--repo":
-        options.repo = requireValue(argv, ++i, arg);
+        options.repo = requireValue(args, ++i, arg);
         break;
       case "--skip-parallels":
         options.skipParallels = true;
@@ -97,6 +98,10 @@ export function parseArgs(argv: string[]): Options {
     throw new Error("--skip-parallels and --skip-telegram cannot be used together");
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 function requireValue(argv: string[], index: number, flag: string): string {

@@ -1,4 +1,4 @@
-import { asFiniteNumber } from "../../shared/number-coercion.js";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
 type EmptyAssistantTurnLike = {
   content?: unknown;

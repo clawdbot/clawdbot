@@ -1,28 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
 
 describe("qa-otel-smoke receiver bounds", () => {
-  it("parses body-size limit env values as strict positive integers", () => {
-    expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
-    expect(
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: " 128 " }),
-    ).toBe(128);
+  let configuredBodyLimitLoad: ReturnType<typeof spawnSync>;
 
-    expect(() =>
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1e3" }),
-    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
-    expect(() =>
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1024bytes" }),
-    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
-    expect(() =>
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "0" }),
-    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
-  });
-
-  it("loads with configured body-size limit env values", () => {
-    const result = spawnSync(
+  beforeAll(() => {
+    configuredBodyLimitLoad = spawnSync(
       process.execPath,
       [
         "--import",
@@ -41,9 +26,46 @@ describe("qa-otel-smoke receiver bounds", () => {
         },
       },
     );
+  });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("ReferenceError");
+  it("accepts package-manager forwarded arguments", () => {
+    expect(
+      testing.parseArgs([
+        "--",
+        "--collector",
+        "docker",
+        "--provider-mode",
+        "mock-openai",
+        "--scenario",
+        "otel-trace-smoke",
+      ]),
+    ).toMatchObject({
+      collectorMode: "docker",
+      providerMode: "mock-openai",
+      scenarioId: "otel-trace-smoke",
+    });
+  });
+
+  it("parses body-size limit env values as strict positive integers", () => {
+    expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
+    expect(
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: " 128 " }),
+    ).toBe(128);
+
+    expect(() =>
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1e3" }),
+    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
+    expect(() =>
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1024bytes" }),
+    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
+    expect(() =>
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "0" }),
+    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
+  });
+
+  it("loads with configured body-size limit env values", () => {
+    expect(configuredBodyLimitLoad.status).toBe(0);
+    expect(configuredBodyLimitLoad.stderr).not.toContain("ReferenceError");
   });
 
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {

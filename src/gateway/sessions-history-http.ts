@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -230,12 +230,6 @@ export async function handleSessionHistoryHttpRequest(
 
   let cleanedUp = false;
   let streamQueue = Promise.resolve();
-  // Forward-declared so `cleanup` can reference them without relying on
-  // Temporal-Dead-Zone leniency. A future refactor that wires the close event
-  // listeners before the `setInterval` / `onSessionTranscriptUpdate` calls
-  // would otherwise hit a `ReferenceError` on the first cleanup invocation.
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
-  let unsubscribe: (() => void) | undefined;
 
   const cleanup = () => {
     if (cleanedUp) {
@@ -294,7 +288,7 @@ export async function handleSessionHistoryHttpRequest(
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 
-  heartbeat = setInterval(() => {
+  const heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
     queueStreamWork(async () => {
       if (!(await isStreamStillAuthorized())) {
         closeStream();
@@ -306,7 +300,7 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
-  unsubscribe = onSessionTranscriptUpdate((update) => {
+  const unsubscribe: (() => void) | undefined = onSessionTranscriptUpdate((update) => {
     // Filter to candidate sessions synchronously before enqueueing any async
     // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
     // transcript write in the gateway would otherwise append a Promise-chain

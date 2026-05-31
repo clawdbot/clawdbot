@@ -384,7 +384,7 @@ function resolveBundledStaticCompressionModelPolicy(params: {
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
   });
-  return (model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
+  return model?.mediaInput?.image ?? {};
 }
 
 function providerUsesRuntimeModelAugment(params: {

@@ -77,7 +77,8 @@ export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
 
 type ProviderRuntimeHooks = {
   classifyProviderFailoverReasonWithPlugin: (params: {
-    context: { errorMessage: string };
+    provider?: string;
+    context: ProviderSpecificErrorContext;
   }) => FailoverReason | null;
   matchesProviderContextOverflowWithPlugin: (params: {
     context: { errorMessage: string };
@@ -105,8 +106,8 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
       "../../plugins/provider-runtime.js",
     ) as unknown as ProviderRuntimeHooks;
     cachedProviderRuntimeHooks = {
-      classifyProviderFailoverReasonWithPlugin: ({ context }) =>
-        loaded.classifyProviderFailoverReasonWithPlugin({ context }) ?? null,
+      classifyProviderFailoverReasonWithPlugin: ({ provider, context }) =>
+        loaded.classifyProviderFailoverReasonWithPlugin({ provider, context }) ?? null,
       matchesProviderContextOverflowWithPlugin: loaded.matchesProviderContextOverflowWithPlugin,
     };
   } catch {
@@ -121,6 +122,25 @@ function looksLikeProviderContextOverflowCandidate(errorMessage: string): boolea
     PROVIDER_CONTEXT_OVERFLOW_ACTION_RE.test(errorMessage)
   );
 }
+
+export type ProviderSpecificErrorContext = {
+  provider?: string;
+  modelId?: string;
+  errorMessage: string;
+  status?: number;
+  code?: string;
+  errorType?: string;
+};
+
+function normalizeProviderSpecificErrorContext(
+  input: string | ProviderSpecificErrorContext,
+): ProviderSpecificErrorContext {
+  return typeof input === "string" ? { errorMessage: input } : input;
+}
+
+type ProviderSpecificErrorOptions = {
+  includePluginHooks?: boolean;
+};
 
 /**
  * Check if an error message matches any provider-specific context overflow pattern.
@@ -138,21 +158,36 @@ export function matchesProviderContextOverflow(errorMessage: string): boolean {
   );
 }
 
+export function classifyProviderPluginError(
+  input: string | ProviderSpecificErrorContext,
+): FailoverReason | null {
+  const context = normalizeProviderSpecificErrorContext(input);
+  const runtimeHooks = resolveProviderRuntimeHooks();
+  return (
+    runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
+      provider: context.provider,
+      context,
+    }) ?? null
+  );
+}
+
 /**
  * Try to classify an error using provider-specific patterns.
  * Returns null if no provider-specific pattern matches (fall through to generic classification).
  */
-export function classifyProviderSpecificError(errorMessage: string): FailoverReason | null {
-  const runtimeHooks = resolveProviderRuntimeHooks();
-  const pluginReason =
-    runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
-      context: { errorMessage },
-    }) ?? null;
-  if (pluginReason) {
-    return pluginReason;
+export function classifyProviderSpecificError(
+  input: string | ProviderSpecificErrorContext,
+  opts?: ProviderSpecificErrorOptions,
+): FailoverReason | null {
+  const context = normalizeProviderSpecificErrorContext(input);
+  if (opts?.includePluginHooks !== false) {
+    const pluginReason = classifyProviderPluginError(context);
+    if (pluginReason) {
+      return pluginReason;
+    }
   }
   for (const pattern of PROVIDER_SPECIFIC_PATTERNS) {
-    if (pattern.test.test(errorMessage)) {
+    if (pattern.test.test(context.errorMessage)) {
       return pattern.reason;
     }
   }

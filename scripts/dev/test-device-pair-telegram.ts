@@ -55,12 +55,12 @@ const result = await executePluginCommand({
   config: cfg,
   from: `telegram:${chatId}`,
   to: `telegram:${chatId}`,
-  accountId: accountId,
+  accountId,
 });
 
 if (result.text) {
   await sendMessageTelegram(chatId, result.text, {
-    accountId: accountId,
+    accountId,
   });
 }
 

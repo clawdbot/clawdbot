@@ -62,6 +62,14 @@ export function parseSessionStoreJson5(raw: string): {
   ok: boolean;
 } {
   try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { store: parsed as Record<string, SessionEntryLike>, ok: true };
+    }
+  } catch {
+    // Fall through to JSON5 for legacy/operator-edited stores.
+  }
+  try {
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return { store: parsed as Record<string, SessionEntryLike>, ok: true };

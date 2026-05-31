@@ -153,4 +153,12 @@ describe("qa channel transport", () => {
       "ok",
     );
   });
+
+  it("keeps oversized wait helper intervals within the timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+
+    await expect(
+      transport.capabilities.waitForCondition(async () => undefined, 5, Number.MAX_SAFE_INTEGER),
+    ).rejects.toThrow("timed out after 5ms");
+  });
 });

@@ -17,6 +17,7 @@ describe("commitment extraction", () => {
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
@@ -111,6 +112,38 @@ describe("commitment extraction", () => {
     expect(prompt).not.toContain("account-secret");
     expect(prompt).not.toContain("+15551234567");
     expect(prompt).not.toContain("thread-secret");
+  });
+
+  it("does not throw on out-of-range extraction prompt timestamps", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
+
+    const prompt = buildCommitmentExtractionPrompt({
+      items: [
+        item({
+          nowMs: 8_640_000_000_000_001,
+          existingPending: [
+            {
+              kind: "event_check_in",
+              reason: "valid pending",
+              dedupeKey: "valid",
+              earliestMs: Date.parse("2026-05-31T12:00:00.000Z"),
+              latestMs: Date.parse("2026-05-31T13:00:00.000Z"),
+            },
+            {
+              kind: "open_loop",
+              reason: "invalid pending",
+              dedupeKey: "invalid",
+              earliestMs: 8_640_000_000_000_001,
+              latestMs: 8_640_000_000_000_001,
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(prompt).toContain('"now": "2026-05-30T12:00:00.000Z"');
+    expect(prompt).toContain('"dedupeKey": "valid"');
+    expect(prompt).not.toContain('"dedupeKey": "invalid"');
   });
 
   it("rejects disabled, low-confidence, and non-future candidates", () => {

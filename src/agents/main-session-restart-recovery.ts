@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -22,8 +23,13 @@ import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { resolveSendPolicy } from "../sessions/send-policy.js";
+import {
+  deliveryContextFromSession,
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -272,6 +278,8 @@ async function markSessionFailed(params: {
       entry.pendingFinalDeliveryAttemptCount = undefined;
       entry.pendingFinalDeliveryLastError = undefined;
       entry.pendingFinalDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryRunId = undefined;
       store[params.sessionKey] = entry;
     },
     { skipMaintenance: true },
@@ -280,19 +288,23 @@ async function markSessionFailed(params: {
 }
 
 async function sendUnresumableSessionNotice(params: {
+  cfg?: OpenClawConfig;
   entry: SessionEntry;
   reason: string;
   sessionKey: string;
 }): Promise<boolean> {
-  const deliveryContext = deliveryContextFromSession(params.entry);
-  const channel = normalizeOptionalString(deliveryContext?.channel);
-  const to = normalizeOptionalString(deliveryContext?.to);
-  if (!channel || !to) {
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    includeSessionDeliveryFallback: true,
+    sessionKey: params.sessionKey,
+  });
+  if (!deliveryContext) {
     return false;
   }
 
   const messageParams: Record<string, unknown> = {
-    to,
+    to: deliveryContext.to,
     message: UNRESUMABLE_SESSION_NOTICE,
     bestEffort: true,
   };
@@ -300,7 +312,7 @@ async function sendUnresumableSessionNotice(params: {
     messageParams.threadId = deliveryContext.threadId;
   }
   const actionParams: Record<string, unknown> = {
-    channel,
+    channel: deliveryContext.channel,
     action: "send",
     sessionKey: params.sessionKey,
     sessionId: params.entry.sessionId,
@@ -330,7 +342,43 @@ async function sendUnresumableSessionNotice(params: {
   }
 }
 
+function resolveRestartRecoveryDeliveryContext(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  includeSessionDeliveryFallback?: boolean;
+  sessionKey: string;
+}): DeliveryContext | undefined {
+  const deliveryContext =
+    normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
+    normalizeDeliveryContext(params.entry.restartRecoveryDeliveryContext) ??
+    (params.includeSessionDeliveryFallback ? deliveryContextFromSession(params.entry) : undefined);
+  const channel = normalizeOptionalString(deliveryContext?.channel);
+  const to = normalizeOptionalString(deliveryContext?.to);
+  if (!channel || !to || !isDeliverableMessageChannel(channel)) {
+    return undefined;
+  }
+  if (
+    params.cfg &&
+    resolveSendPolicy({
+      cfg: params.cfg,
+      entry: params.entry,
+      sessionKey: params.sessionKey,
+      channel,
+      chatType: params.entry.chatType,
+    }) === "deny"
+  ) {
+    return undefined;
+  }
+  return {
+    ...deliveryContext,
+    channel,
+    to,
+  };
+}
+
 async function resumeMainSession(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
   storePath: string;
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
@@ -339,16 +387,33 @@ async function resumeMainSession(params: {
     typeof params.pendingFinalDeliveryText === "string"
       ? sanitizePendingFinalDeliveryText(params.pendingFinalDeliveryText)
       : "";
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    sessionKey: params.sessionKey,
+  });
   try {
+    const agentParams: Record<string, unknown> = {
+      message: buildResumeMessage(sanitizedPendingText),
+      sessionKey: params.sessionKey,
+      idempotencyKey: crypto.randomUUID(),
+      deliver: Boolean(deliveryContext),
+      lane: CommandLane.Main,
+    };
+    if (deliveryContext) {
+      agentParams.channel = deliveryContext.channel;
+      agentParams.to = deliveryContext.to;
+      agentParams.bestEffortDeliver = true;
+      if (deliveryContext.accountId) {
+        agentParams.accountId = deliveryContext.accountId;
+      }
+      if (deliveryContext.threadId != null) {
+        agentParams.threadId = String(deliveryContext.threadId);
+      }
+    }
     await callGateway<{ runId: string }>({
       method: "agent",
-      params: {
-        message: buildResumeMessage(sanitizedPendingText),
-        sessionKey: params.sessionKey,
-        idempotencyKey: crypto.randomUUID(),
-        deliver: false,
-        lane: CommandLane.Main,
-      },
+      params: agentParams,
       timeoutMs: 10_000,
     });
     await updateSessionStore(
@@ -440,6 +505,7 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
 }
 
 async function recoverStore(params: {
+  cfg?: OpenClawConfig;
   storePath: string;
   resumedSessionKeys: Set<string>;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
@@ -489,6 +555,7 @@ async function recoverStore(params: {
     const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
     if (resumeBlockReason) {
       await sendUnresumableSessionNotice({
+        cfg: params.cfg,
         entry,
         sessionKey,
         reason: resumeBlockReason,
@@ -503,6 +570,8 @@ async function recoverStore(params: {
     }
 
     const resumed = await resumeMainSession({
+      cfg: params.cfg,
+      entry,
       storePath: params.storePath,
       sessionKey,
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
@@ -548,6 +617,7 @@ export async function recoverRestartAbortedMainSessions(
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await recoverStore({
+      cfg: params.cfg,
       storePath,
       resumedSessionKeys,
     });

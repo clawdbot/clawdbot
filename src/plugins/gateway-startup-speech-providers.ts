@@ -1,6 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
 
 const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([

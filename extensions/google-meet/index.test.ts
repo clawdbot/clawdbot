@@ -2272,7 +2272,7 @@ describe("google-meet plugin", () => {
       expectRespondedOk(respond);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
       const openCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => requireRecord(request, "browser request").path === "/tabs/open",
+        (call) => requireRecord(call[2], "browser request").path === "/tabs/open",
       );
       if (!openCall) {
         throw new Error("Expected browser /tabs/open request");
@@ -2287,7 +2287,7 @@ describe("google-meet plugin", () => {
       expect(openCall[3]).toEqual({ progress: false });
       expect(
         callGatewayFromCli.mock.calls.some(
-          ([, , request]) => (request as { path?: string }).path === "/permissions/grant",
+          (call) => (call[2] as { path?: string }).path === "/permissions/grant",
         ),
       ).toBe(false);
       const payload = requireRespondPayload(respond, "join response payload");
@@ -2305,7 +2305,7 @@ describe("google-meet plugin", () => {
       expect(transcriptLine.speaker).toBe("Alice");
       expect(transcriptLine.text).toBe("Can everyone hear the agent?");
       const actCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => (request as { path?: string }).path === "/act",
+        (call) => (call[2] as { path?: string }).path === "/act",
       );
       expect(String((actCall?.[2] as { body?: { fn?: string } } | undefined)?.body?.fn)).toContain(
         "const allowMicrophone = false",
@@ -2351,7 +2351,7 @@ describe("google-meet plugin", () => {
 
       expectRespondedOk(respond);
       const grantCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => requireRecord(request, "browser request").path === "/permissions/grant",
+        (call) => requireRecord(call[2], "browser request").path === "/permissions/grant",
       );
       if (!grantCall) {
         throw new Error("Expected browser /permissions/grant request");
@@ -2643,7 +2643,7 @@ describe("google-meet plugin", () => {
     expect(status.session?.chrome?.health?.transcriptLines).toBe(1);
     expect(status.session?.chrome?.health?.lastCaptionText).toBe("Please capture this.");
     const focusCall = callGatewayFromCli.mock.calls.find(
-      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
+      (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
     if (!focusCall) {
       throw new Error("Expected browser /tabs/focus request");
@@ -3447,7 +3447,7 @@ describe("google-meet plugin", () => {
     expect(browser.manualActionRequired).toBe(true);
     expect(browser.manualActionReason).toBe("meet-admission-required");
     const focusCall = callGatewayFromCli.mock.calls.find(
-      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
+      (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
     if (!focusCall) {
       throw new Error("Expected browser /tabs/focus request");

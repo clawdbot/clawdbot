@@ -1,5 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
@@ -108,13 +108,13 @@ describe("provider usage fetch shared helpers", () => {
 
   it("maps configured status codes to token expired", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
+      provider: "openai",
       status: 401,
       tokenExpiredStatuses: [401, 403],
     });
 
     expect(snapshot.error).toBe("Token expired");
-    expect(snapshot.provider).toBe("openai-codex");
+    expect(snapshot.provider).toBe("openai");
     expect(snapshot.windows).toHaveLength(0);
   });
 

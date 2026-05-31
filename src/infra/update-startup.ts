@@ -1,11 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { writeJson } from "./json-files.js";
@@ -188,6 +192,18 @@ function resolveStableJitterMs(params: {
   return bucket % (Math.floor(params.jitterWindowMs) + 1);
 }
 
+function resolveUpdateCheckNowMs(valueMs: unknown): number {
+  return asDateTimestampMs(valueMs) ?? asDateTimestampMs(Date.now()) ?? 0;
+}
+
+function resolveUpdateCheckTimestamp(valueMs: unknown): string {
+  return (
+    timestampMsToIsoString(valueMs) ??
+    timestampMsToIsoString(resolveUpdateCheckNowMs(Date.now())) ??
+    new Date().toISOString()
+  );
+}
+
 function resolveStableAutoApplyAtMs(params: {
   state: UpdateCheckState;
   nextState: UpdateCheckState;
@@ -208,16 +224,17 @@ function resolveStableAutoApplyAtMs(params: {
   if (!matchesExisting) {
     params.nextState.autoFirstSeenVersion = params.version;
     params.nextState.autoFirstSeenTag = params.tag;
-    params.nextState.autoFirstSeenAt = new Date(params.nowMs).toISOString();
+    params.nextState.autoFirstSeenAt = resolveUpdateCheckTimestamp(params.nowMs);
   } else {
     params.nextState.autoFirstSeenVersion = params.state.autoFirstSeenVersion;
     params.nextState.autoFirstSeenTag = params.state.autoFirstSeenTag;
     params.nextState.autoFirstSeenAt = params.state.autoFirstSeenAt;
   }
 
-  const firstSeenMs = params.nextState.autoFirstSeenAt
+  const parsedFirstSeenMs = params.nextState.autoFirstSeenAt
     ? Date.parse(params.nextState.autoFirstSeenAt)
     : params.nowMs;
+  const firstSeenMs = Number.isFinite(parsedFirstSeenMs) ? parsedFirstSeenMs : params.nowMs;
   const baseDelayMs = Math.max(0, params.stableDelayHours) * ONE_HOUR_MS;
   const jitterWindowMs = Math.max(0, params.stableJitterHours) * ONE_HOUR_MS;
   const jitterMs = resolveStableJitterMs({
@@ -327,7 +344,9 @@ export async function runGatewayUpdateCheck(params: {
 
   const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
   const state = await readState(statePath);
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = resolveUpdateCheckNowMs(rawNow);
+  const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   if (shouldRunUpdateHints) {
     const persistedAvailable = resolvePersistedUpdateAvailable(state);
@@ -344,7 +363,7 @@ export async function runGatewayUpdateCheck(params: {
   const checkIntervalMs = shouldRunAutoUpdate
     ? resolveCheckIntervalMs(params.cfg)
     : UPDATE_CHECK_INTERVAL_MS;
-  if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
+  if (rawNowIsValid && lastCheckedAt && Number.isFinite(lastCheckedAt)) {
     if (now - lastCheckedAt < checkIntervalMs) {
       return;
     }
@@ -364,7 +383,7 @@ export async function runGatewayUpdateCheck(params: {
 
   const nextState: UpdateCheckState = {
     ...state,
-    lastCheckedAt: new Date(now).toISOString(),
+    lastCheckedAt: resolveUpdateCheckTimestamp(now),
   };
 
   if (status.installKind !== "package") {
@@ -451,7 +470,7 @@ export async function runGatewayUpdateCheck(params: {
         params.log.info("auto-update deferred (stable rollout window active)", {
           version: resolved.version,
           tag,
-          applyAfter: applyAfterMs ? new Date(applyAfterMs).toISOString() : undefined,
+          applyAfter: applyAfterMs ? resolveUpdateCheckTimestamp(applyAfterMs) : undefined,
         });
       } else if (recentAttemptForSameVersion) {
         params.log.info("auto-update deferred (recent attempt exists)", {
@@ -460,7 +479,7 @@ export async function runGatewayUpdateCheck(params: {
         });
       } else {
         nextState.autoLastAttemptVersion = resolved.version;
-        nextState.autoLastAttemptAt = new Date(now).toISOString();
+        nextState.autoLastAttemptAt = resolveUpdateCheckTimestamp(now);
         const outcome = await runAuto({
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
@@ -468,7 +487,7 @@ export async function runGatewayUpdateCheck(params: {
         });
         if (outcome.ok) {
           nextState.autoLastSuccessVersion = resolved.version;
-          nextState.autoLastSuccessAt = new Date(now).toISOString();
+          nextState.autoLastSuccessAt = resolveUpdateCheckTimestamp(now);
           params.log.info("auto-update applied", {
             channel,
             version: resolved.version,

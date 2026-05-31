@@ -72,6 +72,8 @@ function levelIds(profile: unknown): Array<unknown> {
   return (levels as Array<{ id?: unknown }>).map((level) => level.id);
 }
 
+const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
+
 describe("anthropic provider replay hooks", () => {
   it("registers the claude-cli backend", () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
@@ -162,7 +164,7 @@ describe("anthropic provider replay hooks", () => {
 
     expect(
       provider.normalizeConfig?.({
-        provider: "openai-codex",
+        provider: "openai",
         providerConfig,
       } as never),
     ).toBe(providerConfig);
@@ -682,6 +684,61 @@ describe("anthropic provider replay hooks", () => {
     } as never);
 
     expect(normalized).toBeUndefined();
+  });
+
+  it("stores setup-token expiry from a bounded duration", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+      if (!setupTokenAuth) {
+        throw new Error("expected Anthropic setup-token auth method");
+      }
+
+      const result = await setupTokenAuth.run({
+        opts: {
+          token: ANTHROPIC_SETUP_TOKEN,
+          tokenExpiresIn: "1h",
+        },
+      } as never);
+
+      expect(result?.profiles[0]?.credential).toMatchObject({
+        type: "token",
+        provider: "anthropic",
+        token: ANTHROPIC_SETUP_TOKEN,
+        expires: 3_601_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits setup-token expiry when duration overflows the Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(8_640_000_000_000_000);
+    try {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+      if (!setupTokenAuth) {
+        throw new Error("expected Anthropic setup-token auth method");
+      }
+
+      const result = await setupTokenAuth.run({
+        opts: {
+          token: ANTHROPIC_SETUP_TOKEN,
+          tokenExpiresIn: "1h",
+        },
+      } as never);
+
+      expect(result?.profiles[0]?.credential).toEqual({
+        type: "token",
+        provider: "anthropic",
+        token: ANTHROPIC_SETUP_TOKEN,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {

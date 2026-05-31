@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
@@ -14,7 +15,6 @@ import {
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
-import { normalizeProviderId } from "./provider-id.js";
 import {
   AuthStorage,
   ModelRegistry,

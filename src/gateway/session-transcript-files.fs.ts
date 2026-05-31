@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -13,7 +14,6 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 type ArchiveFileReason = SessionArchiveReason;
 export type ArchivedSessionTranscript = {

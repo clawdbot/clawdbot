@@ -220,7 +220,7 @@ describe("handleAgentEnd", () => {
     const ctx = createContext({
       role: "assistant",
       stopReason: "error",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       errorMessage:
         '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
@@ -256,7 +256,7 @@ describe("handleAgentEnd", () => {
       const ctx = createContext({
         role: "assistant",
         stopReason: "error",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         errorMessage,
         content: [{ type: "text", text: "" }],

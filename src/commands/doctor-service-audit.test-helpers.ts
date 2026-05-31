@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isEnvironmentFileOnlySource } from "../daemon/service-managed-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const testServiceAuditCodes = {
   gatewayCommandMissing: "gateway-command-missing",

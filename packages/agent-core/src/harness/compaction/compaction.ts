@@ -12,10 +12,12 @@ import {
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
+  asAgentMessage,
   convertToLlm,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   createCustomMessage,
+  type HarnessMessage,
 } from "../messages.js";
 import { buildSessionContext } from "../session/session.js";
 import {
@@ -83,19 +85,23 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
     return entry.message;
   }
   if (entry.type === "custom_message") {
-    return createCustomMessage(
-      entry.customType,
-      entry.content,
-      entry.display,
-      entry.details,
-      entry.timestamp,
+    return asAgentMessage(
+      createCustomMessage(
+        entry.customType,
+        entry.content,
+        entry.display,
+        entry.details,
+        entry.timestamp,
+      ),
     );
   }
   if (entry.type === "branch_summary") {
-    return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+    return asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
   }
   if (entry.type === "compaction") {
-    return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
+    return asAgentMessage(
+      createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+    );
   }
   return undefined;
 }
@@ -238,11 +244,13 @@ export function shouldCompact(
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
+  const harnessMessage = message as HarnessMessage;
 
-  switch (message.role) {
+  switch (harnessMessage.role) {
     case "user": {
-      const content = (message as { content: string | Array<{ type: string; text?: string }> })
-        .content;
+      const content = (
+        harnessMessage as { content: string | Array<{ type: string; text?: string }> }
+      ).content;
       if (typeof content === "string") {
         chars = content.length;
       } else if (Array.isArray(content)) {
@@ -255,7 +263,7 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / 4);
     }
     case "assistant": {
-      const assistant = message;
+      const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
           chars += block.text.length;
@@ -269,10 +277,10 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "custom":
     case "toolResult": {
-      if (typeof message.content === "string") {
-        chars = message.content.length;
+      if (typeof harnessMessage.content === "string") {
+        chars = harnessMessage.content.length;
       } else {
-        for (const block of message.content) {
+        for (const block of harnessMessage.content) {
           if (block.type === "text" && block.text) {
             chars += block.text.length;
           }
@@ -284,12 +292,12 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / 4);
     }
     case "bashExecution": {
-      chars = message.command.length + message.output.length;
+      chars = harnessMessage.command.length + harnessMessage.output.length;
       return Math.ceil(chars / 4);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = message.summary.length;
+      chars = harnessMessage.summary.length;
       return Math.ceil(chars / 4);
     }
   }
@@ -306,7 +314,7 @@ function findValidCutPoints(
     const entry = entries[i];
     switch (entry.type) {
       case "message": {
-        const role = entry.message.role;
+        const role = (entry.message as HarnessMessage).role;
         switch (role) {
           case "bashExecution":
           case "custom":
@@ -351,7 +359,7 @@ export function findTurnStartIndex(
       return i;
     }
     if (entry.type === "message") {
-      const role = entry.message.role;
+      const role = (entry.message as HarnessMessage).role;
       if (role === "user" || role === "bashExecution") {
         return i;
       }
@@ -393,9 +401,9 @@ export function findCutPoint(
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
-      for (let c = 0; c < cutPoints.length; c++) {
-        if (cutPoints[c] >= i) {
-          cutIndex = cutPoints[c];
+      for (const cutPoint of cutPoints) {
+        if (cutPoint >= i) {
+          cutIndex = cutPoint;
           break;
         }
       }

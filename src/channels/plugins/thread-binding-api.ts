@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type ThreadBindingPlacement = "current" | "child";
 

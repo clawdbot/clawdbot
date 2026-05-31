@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -129,7 +129,7 @@ function findSessionEntryInStore(
     const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
     if (
-      Object.prototype.hasOwnProperty.call(store, normalized) &&
+      Object.hasOwn(store, normalized) &&
       !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[normalized]), normalized)
     ) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
@@ -139,7 +139,7 @@ function findSessionEntryInStore(
     }
     for (const foldedLegacyKey of foldedLegacyKeys) {
       if (
-        !Object.prototype.hasOwnProperty.call(store, foldedLegacyKey) ||
+        !Object.hasOwn(store, foldedLegacyKey) ||
         !isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
       ) {
         continue;
@@ -152,7 +152,7 @@ function findSessionEntryInStore(
     }
     if (
       trimmed !== normalized &&
-      Object.prototype.hasOwnProperty.call(store, trimmed) &&
+      Object.hasOwn(store, trimmed) &&
       !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[trimmed]), normalized)
     ) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(

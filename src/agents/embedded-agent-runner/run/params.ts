@@ -33,6 +33,7 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 
 export type CurrentInboundPromptContext = {
   text: string;
+  resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
 };
 

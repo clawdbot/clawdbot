@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type TelegramAccountLike = {

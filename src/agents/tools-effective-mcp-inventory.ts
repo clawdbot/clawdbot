@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
@@ -69,14 +69,17 @@ function buildMcpToolInventoryEntries(
 ): EffectiveToolInventoryEntry[] {
   return disambiguateLabels(
     tools
-      .map((tool) => ({
-        id: tool.name,
-        label: resolveMcpToolLabel(tool),
-        description: summarizeToolDescription(tool),
-        rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
-        source: "mcp",
-        pluginId: BUNDLE_MCP_PLUGIN_ID,
-      }) satisfies EffectiveToolInventoryEntry)
+      .map(
+        (tool) =>
+          ({
+            id: tool.name,
+            label: resolveMcpToolLabel(tool),
+            description: summarizeToolDescription(tool),
+            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+            source: "mcp",
+            pluginId: BUNDLE_MCP_PLUGIN_ID,
+          }) satisfies EffectiveToolInventoryEntry,
+      )
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
 }

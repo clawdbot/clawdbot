@@ -804,8 +804,8 @@ function classifyRuntimeParityCells(params: {
     : 0;
   if (
     openclawTranscriptLines !== codexTranscriptLines ||
-    (!params.openclaw.finalText && !!params.codex.finalText) ||
-    (!!params.openclaw.finalText && !params.codex.finalText)
+    (!params.openclaw.finalText && Boolean(params.codex.finalText)) ||
+    (Boolean(params.openclaw.finalText) && !params.codex.finalText)
   ) {
     return {
       drift: "structural",

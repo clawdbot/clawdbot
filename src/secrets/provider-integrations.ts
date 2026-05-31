@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ManualExecSecretProviderConfig,
@@ -10,7 +11,6 @@ import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestSecretProviderIntegration } from "../plugins/manifest.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 
 export type SecretProviderIntegrationPreset = {

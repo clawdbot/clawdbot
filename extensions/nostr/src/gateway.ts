@@ -6,7 +6,7 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
-import { type ChannelOutboundAdapter, type ChannelPlugin } from "./channel-api.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";

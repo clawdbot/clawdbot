@@ -951,6 +951,39 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
 
+  it("keeps invalid clocks out of refreshed Gemini CLI credential expiry", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: 3600,
+        }),
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+      const result = await refreshTokensForGeminiCli({
+        refresh: "refresh-token",
+        email: "lobster@openclaw.ai",
+      });
+
+      expect(result.expires).toBe(0);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("keeps unsafe token expiry values out of refreshed Gemini CLI credentials", async () => {
     mockSettingsExistsSync.mockReturnValue(true);
     mockSettingsReadFileSync.mockReturnValue(

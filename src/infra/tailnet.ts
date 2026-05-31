@@ -1,5 +1,5 @@
 import { isIpInCidr } from "@openclaw/net-policy/ip";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
 
 type TailnetAddresses = {

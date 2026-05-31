@@ -211,10 +211,19 @@ export type DreamingState = {
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   applySessionKey: string;
+  selectedAgentId: string | null;
+  dreamingStatusRequestAgentId?: string | null;
+  dreamingStatusRequestGeneration?: number;
+  dreamingStatusActiveRequestGeneration?: number | null;
+  dreamingStatusAgentId?: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamDiaryRequestAgentId?: string | null;
+  dreamDiaryRequestGeneration?: number;
+  dreamDiaryActiveRequestGeneration?: number | null;
+  dreamDiaryAgentId?: string | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
   dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
@@ -324,6 +333,22 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveSelectedAgentId(state: DreamingState): string | null {
+  return normalizeTrimmedString(state.selectedAgentId) ?? null;
+}
+
+function buildSelectedAgentPayloadForAgentId(
+  agentId: string | null,
+): { agentId: string } | Record<string, never> {
+  return agentId ? { agentId } : {};
+}
+
+function buildSelectedAgentPayload(
+  state: DreamingState,
+): { agentId: string } | Record<string, never> {
+  return buildSelectedAgentPayloadForAgentId(resolveSelectedAgentId(state));
 }
 
 function normalizeBoolean(value: unknown, fallback = false): boolean {
@@ -775,35 +800,83 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
 }
 
 export async function loadDreamingStatus(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.dreamingStatusLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.dreamingStatusLoading && state.dreamingStatusRequestAgentId === agentId) {
+    return;
+  }
+  if (state.dreamingStatusAgentId !== agentId) {
+    state.dreamingStatus = null;
+  }
+  const requestGeneration = (state.dreamingStatusRequestGeneration ?? 0) + 1;
+  state.dreamingStatusRequestGeneration = requestGeneration;
+  state.dreamingStatusActiveRequestGeneration = requestGeneration;
+  state.dreamingStatusRequestAgentId = agentId;
   state.dreamingStatusLoading = true;
   state.dreamingStatusError = null;
   try {
     const payload = await state.client.request<DoctorMemoryStatusPayload>(
       "doctor.memory.status",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.dreamingStatusActiveRequestGeneration !== requestGeneration ||
+      state.dreamingStatusRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.dreamingStatus = normalizeDreamingStatus(payload?.dreaming);
+    state.dreamingStatusAgentId = agentId;
   } catch (err) {
-    state.dreamingStatusError = String(err);
+    if (
+      state.dreamingStatusActiveRequestGeneration === requestGeneration &&
+      state.dreamingStatusRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.dreamingStatusError = String(err);
+    }
   } finally {
-    state.dreamingStatusLoading = false;
+    if (state.dreamingStatusActiveRequestGeneration === requestGeneration) {
+      state.dreamingStatusLoading = false;
+      state.dreamingStatusRequestAgentId = null;
+      state.dreamingStatusActiveRequestGeneration = null;
+    }
   }
 }
 
 export async function loadDreamDiary(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.dreamDiaryLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.dreamDiaryLoading && state.dreamDiaryRequestAgentId === agentId) {
+    return;
+  }
+  if (state.dreamDiaryAgentId !== agentId) {
+    state.dreamDiaryPath = null;
+    state.dreamDiaryContent = null;
+  }
+  const requestGeneration = (state.dreamDiaryRequestGeneration ?? 0) + 1;
+  state.dreamDiaryRequestGeneration = requestGeneration;
+  state.dreamDiaryActiveRequestGeneration = requestGeneration;
+  state.dreamDiaryRequestAgentId = agentId;
   state.dreamDiaryLoading = true;
   state.dreamDiaryError = null;
   try {
     const payload = await state.client.request<DoctorMemoryDreamDiaryPayload>(
       "doctor.memory.dreamDiary",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.dreamDiaryActiveRequestGeneration !== requestGeneration ||
+      state.dreamDiaryRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     const path = normalizeTrimmedString(payload?.path) ?? DEFAULT_DREAM_DIARY_PATH;
     const found = payload?.found === true;
     if (found) {
@@ -813,10 +886,21 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
       state.dreamDiaryPath = path;
       state.dreamDiaryContent = null;
     }
+    state.dreamDiaryAgentId = agentId;
   } catch (err) {
-    state.dreamDiaryError = String(err);
+    if (
+      state.dreamDiaryActiveRequestGeneration === requestGeneration &&
+      state.dreamDiaryRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.dreamDiaryError = String(err);
+    }
   } finally {
-    state.dreamDiaryLoading = false;
+    if (state.dreamDiaryActiveRequestGeneration === requestGeneration) {
+      state.dreamDiaryLoading = false;
+      state.dreamDiaryRequestAgentId = null;
+      state.dreamDiaryActiveRequestGeneration = null;
+    }
   }
 }
 
@@ -902,7 +986,10 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
-    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(
+      method,
+      buildSelectedAgentPayload(state),
+    );
     if (options?.reloadDiary !== false) {
       await loadDreamDiary(state);
     }

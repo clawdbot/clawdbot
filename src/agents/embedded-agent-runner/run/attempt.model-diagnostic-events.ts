@@ -111,7 +111,8 @@ function cloneDiagnosticContentValue(value: unknown): unknown {
     return structuredClone(value);
   } catch {
     try {
-      return JSON.parse(JSON.stringify(value)) as unknown;
+      const serialized = JSON.stringify(value);
+      return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
     } catch {
       return String(value);
     }

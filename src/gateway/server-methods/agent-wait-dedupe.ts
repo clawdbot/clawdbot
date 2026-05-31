@@ -1,3 +1,5 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildAgentRunTerminalOutcome,
   isStickyAgentRunTerminalOutcome,
@@ -6,8 +8,6 @@ import {
 } from "../../agents/agent-run-terminal-outcome.js";
 import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
-import { asFiniteNumber } from "../../shared/number-coercion.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
@@ -254,9 +254,6 @@ export async function waitForTerminalGatewayDedupe(params: {
 
   return await new Promise((resolve) => {
     let settled = false;
-    let timeoutHandle: NodeJS.Timeout | undefined;
-    let onAbort: (() => void) | undefined;
-    let removeWaiter: (() => void) | undefined;
 
     const finish = (snapshot: AgentWaitTerminalSnapshot | null) => {
       if (settled) {
@@ -280,16 +277,19 @@ export async function waitForTerminalGatewayDedupe(params: {
       }
     };
 
-    removeWaiter = addWaiter(params.runId, onWake);
+    const removeWaiter: (() => void) | undefined = addWaiter(params.runId, onWake);
     onWake();
     if (settled) {
       return;
     }
 
-    timeoutHandle = setSafeTimeout(() => finish(null), params.timeoutMs);
+    const timeoutHandle: NodeJS.Timeout | undefined = setSafeTimeout(
+      () => finish(null),
+      params.timeoutMs,
+    );
     timeoutHandle.unref?.();
 
-    onAbort = () => finish(null);
+    const onAbort: (() => void) | undefined = () => finish(null);
     params.signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

@@ -212,9 +212,9 @@ describe("installed plugin index", () => {
     const records = readPersistedInstalledPluginIndexInstallRecordsSync({ filePath });
 
     expect(records?.safe).toEqual({ source: "npm", spec: "safe" });
-    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "constructor")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "prototype")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(records ?? {}, "constructor")).toBe(false);
+    expect(Object.hasOwn(records ?? {}, "prototype")).toBe(false);
+    expect(Object.hasOwn(records ?? {}, "__proto__")).toBe(false);
   });
 
   it("builds a runtime-free installed plugin snapshot from manifest and package metadata", () => {
@@ -676,7 +676,7 @@ describe("installed plugin index", () => {
     const config = {
       plugins: {
         entries: {
-          "openai-codex": {
+          openai: {
             enabled: false,
           },
         },

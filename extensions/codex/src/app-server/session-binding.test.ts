@@ -19,7 +19,7 @@ const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"
     profiles: {
       work: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -237,7 +237,7 @@ describe("codex app-server session binding", () => {
       {
         threadId: "thread-123",
         cwd: tempDir,
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         model: "gpt-5.4-mini",
         modelProvider: "openai",
       },
@@ -245,7 +245,7 @@ describe("codex app-server session binding", () => {
         authProfileStore: {
           version: 1,
           profiles: {
-            "openai-codex:work": {
+            "openai:work": {
               type: "api_key",
               provider: "openai",
               key: "sk-test",
@@ -259,7 +259,7 @@ describe("codex app-server session binding", () => {
       authProfileStore: {
         version: 1,
         profiles: {
-          "openai-codex:work": {
+          "openai:work": {
             type: "api_key",
             provider: "openai",
             key: "sk-test",
@@ -283,7 +283,7 @@ describe("codex app-server session binding", () => {
       {
         threadId: "thread-123",
         cwd: tempDir,
-        authProfileId: "openai-codex:default",
+        authProfileId: "openai:default",
         model: "gpt-5.4-mini",
         modelProvider: "openai",
       },
@@ -294,7 +294,7 @@ describe("codex app-server session binding", () => {
     const binding = await readCodexAppServerBinding(sessionFile, { agentDir });
 
     expect(raw).not.toContain('"modelProvider": "openai"');
-    expect(binding?.authProfileId).toBe("openai-codex:default");
+    expect(binding?.authProfileId).toBe("openai:default");
     expect(binding?.modelProvider).toBeUndefined();
   });
 

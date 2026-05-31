@@ -304,66 +304,66 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "oauth",
             },
           },
           order: {
-            "openai-codex": ["openai-codex:default"],
+            openai: ["openai:default"],
           },
         },
       },
       store: {
         version: 1,
         profiles: {
-          "openai-codex:user@example.com": {
+          "openai:user@example.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
           },
         },
       },
-      provider: "openai-codex",
+      provider: "openai",
     });
-    expect(order).toEqual(["openai-codex:user@example.com"]);
+    expect(order).toEqual(["openai:user@example.com"]);
   });
   it("does not bypass explicit ids when the configured profile exists but is invalid", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "token",
             },
           },
           order: {
-            "openai-codex": ["openai-codex:default"],
+            openai: ["openai:default"],
           },
         },
       },
       store: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "expired-token",
             expires: Date.now() - 1_000,
           },
-          "openai-codex:user@example.com": {
+          "openai:user@example.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
           },
         },
       },
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(order).toStrictEqual([]);
   });

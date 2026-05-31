@@ -25,7 +25,26 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node ./server.mjs",
       connectionTimeoutMs: 12_345,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
+  });
+
+  it("resolves operator timeout aliases and parallel capability", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      timeout: 7,
+      connectTimeout: 2,
+      supportsParallelToolCalls: true,
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        connectionTimeoutMs: 2_000,
+        requestTimeoutMs: 7_000,
+        supportsParallelToolCalls: true,
+      }),
+    );
   });
 
   it("drops dangerous env overrides from stdio config", () => {
@@ -58,6 +77,8 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
     expect(logWarn).toHaveBeenCalledWith(
       'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
@@ -88,6 +109,8 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -123,6 +146,8 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -143,6 +168,8 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -159,6 +186,8 @@ describe("resolveMcpTransportConfig", () => {
       headers: undefined,
       description: "https://mcp.example.com/http",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -175,6 +204,8 @@ describe("resolveMcpTransportConfig", () => {
       headers: undefined,
       description: "https://mcp.example.com/http",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 });

@@ -289,8 +289,6 @@ export async function runWatchMain(params = {}) {
     let watcher = null;
     let lockHandle = null;
     let autoDoctorAttempted = false;
-    let onSigInt;
-    let onSigTerm;
 
     const settle = (code) => {
       if (settled) {
@@ -448,14 +446,14 @@ export async function runWatchMain(params = {}) {
       void resolveCreateWatcher().then(attachWatcher).catch(rejectWatcherStartupError);
     };
 
-    onSigInt = () => {
+    const onSigInt = () => {
       shuttingDown = true;
       if (watchProcess && typeof watchProcess.kill === "function") {
         watchProcess.kill(WATCH_RESTART_SIGNAL);
       }
       settle(130);
     };
-    onSigTerm = () => {
+    const onSigTerm = () => {
       shuttingDown = true;
       if (watchProcess && typeof watchProcess.kill === "function") {
         watchProcess.kill(WATCH_RESTART_SIGNAL);

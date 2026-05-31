@@ -214,12 +214,17 @@ def run_with_stream(
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
-    return run(["git", *args], repo, check=check).stdout
+    return run([resolve_command("git", repo), *args], repo, check=check).stdout
 
 
 def repo_root() -> Path:
+    start = Path.cwd().resolve()
+    unsafe_root = discover_repo_root(start) or start
+    git_bin = find_command("git", unsafe_root)
+    if not git_bin:
+        raise SystemExit("git executable not found. Install Git or add it to PATH.")
     result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
+        [git_bin, "rev-parse", "--show-toplevel"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -227,6 +232,16 @@ def repo_root() -> Path:
     if result.returncode != 0:
         raise SystemExit("autoreview must run inside a git repository")
     return Path(result.stdout.strip()).resolve()
+
+
+def discover_repo_root(start: Path) -> Path | None:
+    current = start
+    while True:
+        if (current / ".git").exists():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent
 
 
 def current_branch(repo: Path) -> str:
@@ -250,17 +265,70 @@ def choose_target(repo: Path, mode: str, base_ref: str | None) -> tuple[str, str
 
 
 def detect_pr_base(repo: Path) -> str | None:
-    if not shutil_which("gh"):
+    gh_bin = find_command("gh", repo)
+    if not gh_bin:
         return None
-    result = run(["gh", "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"], repo, check=False)
+    result = run([gh_bin, "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"], repo, check=False)
     base = result.stdout.strip()
     return f"origin/{base}" if result.returncode == 0 and base else None
 
 
-def shutil_which(name: str) -> str | None:
+def resolve_command(name: str, repo: Path) -> str:
+    resolved = find_command(name, repo)
+    if resolved:
+        return resolved
+    raise SystemExit(f"executable not found: {name}. Install it or pass an explicit trusted path when supported.")
+
+
+def find_command(name: str, repo: Path) -> str | None:
+    command = Path(name)
+    if has_directory_component(name, command):
+        base = command if command.is_absolute() else repo / command
+        return first_executable_candidate(base)
     for part in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(part) / name
-        if candidate.exists() and os.access(candidate, os.X_OK):
+        if not part or part == ".":
+            continue
+        path_part = Path(part)
+        if not path_part.is_absolute():
+            continue
+        try:
+            resolved_part = path_part.resolve()
+            resolved_repo = repo.resolve()
+        except OSError:
+            continue
+        if is_within(resolved_part, resolved_repo):
+            continue
+        found = first_executable_candidate(resolved_part / name, reject_root=resolved_repo)
+        if found:
+            return found
+    return None
+
+
+def is_within(path: Path, root: Path) -> bool:
+    return path == root or path.is_relative_to(root)
+
+
+def has_directory_component(name: str, command: Path) -> bool:
+    separators = [separator for separator in (os.sep, os.altsep) if separator]
+    return command.is_absolute() or bool(command.drive) or any(separator in name for separator in separators)
+
+
+def first_executable_candidate(path: Path, *, reject_root: Path | None = None) -> str | None:
+    if os.name == "nt" and not path.suffix:
+        extensions = [ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if ext]
+        candidates = [path.with_suffix(ext.lower()) for ext in extensions]
+        candidates.extend(path.with_suffix(ext.upper()) for ext in extensions)
+        candidates.append(path)
+    else:
+        candidates = [path]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            if reject_root is not None:
+                try:
+                    if is_within(candidate.resolve(), reject_root):
+                        continue
+                except OSError:
+                    continue
             return str(candidate)
     return None
 
@@ -419,7 +487,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
     schema_path = write_json_temp(SCHEMA)
     output_path = Path(tempfile.NamedTemporaryFile("w", suffix=".json", delete=False).name)
-    cmd = [args.codex_bin, "--ask-for-approval", "never"]
+    cmd = [resolve_command(args.codex_bin, repo), "--ask-for-approval", "never"]
     if args.web_search:
         cmd.append("--search")
     if args.model:
@@ -463,7 +531,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     cmd = [
-        args.claude_bin,
+        resolve_command(args.claude_bin, repo),
         "--print",
         "--no-session-persistence",
         "--output-format",
@@ -500,7 +568,7 @@ def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     prompt_path = Path(tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False).name)
     prompt_path.write_text(prompt)
     cmd = [
-        args.droid_bin,
+        resolve_command(args.droid_bin, repo),
         "exec",
         "--cwd",
         str(repo),
@@ -530,7 +598,7 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         prompt_path.write_text(prompt)
         os.chmod(prompt_path, 0o600)
         cmd = [
-            args.copilot_bin,
+            resolve_command(args.copilot_bin, repo),
             "-C",
             tempdir,
             "-p",
@@ -877,9 +945,23 @@ def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     print(report["overall_explanation"])
 
 
-def start_parallel_tests(command: str, repo: Path) -> tuple[subprocess.Popen, float]:
+def start_parallel_tests(command: str, repo: Path, shell_kind: str) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
-    return subprocess.Popen(command, cwd=repo, shell=True), time.time()
+    if shell_kind == "default" or shell_kind == "cmd":
+        return subprocess.Popen(command, cwd=repo, shell=True), time.time()
+    if shell_kind == "powershell":
+        powershell = resolve_command("powershell", repo)
+        return subprocess.Popen(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=repo,
+        ), time.time()
+    if shell_kind == "pwsh":
+        pwsh = resolve_command("pwsh", repo)
+        return subprocess.Popen(
+            [pwsh, "-NoProfile", "-Command", command],
+            cwd=repo,
+        ), time.time()
+    raise SystemExit(f"invalid --parallel-tests-shell/AUTOREVIEW_PARALLEL_TESTS_SHELL: {shell_kind}")
 
 
 def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
@@ -924,6 +1006,12 @@ def parse_args() -> argparse.Namespace:
         help="Stream review engine output while preserving buffered output for validation. Codex output is filtered to hide tool/file chatter.",
     )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
+    parser.add_argument(
+        "--parallel-tests-shell",
+        choices=["default", "cmd", "powershell", "pwsh"],
+        default=os.environ.get("AUTOREVIEW_PARALLEL_TESTS_SHELL", "default"),
+        help="Shell for --parallel-tests. Default preserves Python shell=True platform behavior; use powershell or pwsh for PowerShell-specific commands.",
+    )
     parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
     parser.add_argument("--dry-run", action="store_true")
@@ -1129,7 +1217,7 @@ def main() -> int:
 
     tests_proc: tuple[subprocess.Popen, float] | None = None
     if args.parallel_tests:
-        tests_proc = start_parallel_tests(args.parallel_tests, repo)
+        tests_proc = start_parallel_tests(args.parallel_tests, repo, args.parallel_tests_shell)
     try:
         if len(reviewers) == 1:
             report = run_reviewer(reviewers[0], repo, prompt, changed_paths, args.require_finding)

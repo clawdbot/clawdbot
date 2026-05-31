@@ -4,6 +4,10 @@ import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
   createRealtimeVoiceForcedConsultCoordinator,
   createTalkSessionController,
@@ -502,9 +506,13 @@ export class RealtimeCallHandler {
 
   private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
     const token = randomUUID();
-    this.pendingStreamTokens.set(token, { expiry: Date.now() + STREAM_TOKEN_TTL_MS, ...meta });
+    const now = Date.now();
+    const expiry = resolveExpiresAtMsFromDurationMs(STREAM_TOKEN_TTL_MS, { nowMs: now });
+    if (expiry !== undefined) {
+      this.pendingStreamTokens.set(token, { expiry, ...meta });
+    }
     for (const [candidate, entry] of this.pendingStreamTokens) {
-      if (Date.now() > entry.expiry) {
+      if (!isFutureDateTimestampMs(entry.expiry, { nowMs: now })) {
         this.pendingStreamTokens.delete(candidate);
       }
     }
@@ -517,7 +525,7 @@ export class RealtimeCallHandler {
       return null;
     }
     this.pendingStreamTokens.delete(token);
-    if (Date.now() > entry.expiry) {
+    if (!isFutureDateTimestampMs(entry.expiry)) {
       return null;
     }
     return {

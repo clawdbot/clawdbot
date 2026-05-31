@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { type NodeMatchCandidate, resolveNodeIdFromCandidates } from "./node-match.js";
-import { normalizeOptionalString } from "./string-coerce.js";
 
 type ResolveNodeFromListOptions<TNode extends NodeMatchCandidate> = {
   allowDefault?: boolean;

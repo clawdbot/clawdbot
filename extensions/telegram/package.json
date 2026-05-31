@@ -8,7 +8,7 @@
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "grammy": "1.43.0",
-    "typebox": "1.1.38",
+    "typebox": "1.1.39",
     "undici": "8.3.0"
   },
   "devDependencies": {

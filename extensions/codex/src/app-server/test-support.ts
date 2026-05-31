@@ -4,12 +4,12 @@ import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 
-export function createCodexTestModel(provider = "openai-codex", input = ["text"]): Model {
+export function createCodexTestModel(provider = "openai", input = ["text"]): Model {
   return {
     id: "gpt-5.4-codex",
     name: "gpt-5.4-codex",
     provider,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     input,
     reasoning: true,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -21,12 +21,18 @@ export function createCodexTestModel(provider = "openai-codex", input = ["text"]
 export function createClientHarness() {
   const stdout = new PassThrough();
   const writes: string[] = [];
+  let stdinDestroyed = false;
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
       callback();
     },
   });
+  const destroyStdin = stdin.destroy.bind(stdin);
+  stdin.destroy = ((error?: Error) => {
+    stdinDestroyed = true;
+    return destroyStdin(error);
+  }) as typeof stdin.destroy;
   const process = Object.assign(new EventEmitter(), {
     stdin,
     stdout,
@@ -41,6 +47,9 @@ export function createClientHarness() {
     client,
     process,
     writes,
+    get stdinDestroyed() {
+      return stdinDestroyed;
+    },
     send(message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },

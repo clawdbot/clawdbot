@@ -11,11 +11,11 @@
       "license": "MIT",
       "dependencies": {
         "@agentclientprotocol/sdk": "0.22.1",
-        "@anthropic-ai/sdk": "0.98.0",
+        "@anthropic-ai/sdk": "0.100.1",
         "@clack/core": "1.3.1",
         "@clack/prompts": "1.4.0",
-        "@earendil-works/pi-tui": "0.76.0",
-        "@google/genai": "2.6.0",
+        "@earendil-works/pi-tui": "0.78.0",
+        "@google/genai": "2.7.0",
         "@grammyjs/runner": "2.0.3",
         "@grammyjs/transformer-throttler": "1.2.1",
         "@homebridge/ciao": "1.3.9",
@@ -25,10 +25,9 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
-        "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
-        "clawpdf": "0.2.0",
+        "clawpdf": "0.3.0",
         "commander": "14.0.3",
         "croner": "10.0.1",
         "cross-spawn": "7.0.6",
@@ -39,7 +38,7 @@
         "glob": "13.0.6",
         "grammy": "1.43.0",
         "highlight.js": "11.11.1",
-        "hosted-git-info": "9.0.3",
+        "hosted-git-info": "10.1.1",
         "ignore": "7.0.5",
         "jiti": "2.7.0",
         "json5": "2.2.3",
@@ -48,17 +47,17 @@
         "linkedom": "0.18.12",
         "minimatch": "10.2.5",
         "node-edge-tts": "1.2.10",
-        "openai": "6.39.0",
+        "openai": "6.39.1",
         "partial-json": "0.1.7",
         "playwright-core": "1.60.0",
         "proper-lockfile": "4.1.2",
         "qrcode": "1.5.4",
         "quickjs-wasi": "3.0.0",
-        "rastermill": "0.3.0",
+        "rastermill": "0.3.1",
         "tar": "7.5.15",
         "tree-sitter-bash": "0.25.1",
         "tslog": "4.10.2",
-        "typebox": "1.1.38",
+        "typebox": "1.1.39",
         "typescript": "6.0.3",
         "undici": "8.3.0",
         "web-push": "3.6.7",
@@ -74,7 +73,6 @@
         "node": ">=22.19.0"
       },
       "optionalDependencies": {
-        "sharp": "0.34.5",
         "sqlite-vec": "0.1.9"
       }
     },
@@ -88,9 +86,9 @@
       }
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.98.0",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.98.0.tgz",
-      "integrity": "sha512-N7aXtCvC5g6T1Y4V29lJjceu/zTkVkIZF0jdBvagr0TRFHuKeImffalGWEfqZKrvjH+IQbzJWw6TmSmUzrlMgg==",
+      "version": "0.100.1",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.100.1.tgz",
+      "integrity": "sha512-RANcEe7LpiLczkKGOwoXOTuFdPhuubS0i4xaAKOMpcqc55YO0mukgxppV7eygx3DXNjxWT6RYOLPyOy0aIAmwg==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
@@ -109,9 +107,9 @@
       }
     },
     "node_modules/@babel/runtime": {
-      "version": "7.29.2",
-      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.2.tgz",
-      "integrity": "sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==",
+      "version": "7.29.7",
+      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz",
+      "integrity": "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==",
       "license": "MIT",
       "engines": {
         "node": ">=6.9.0"
@@ -156,9 +154,9 @@
       }
     },
     "node_modules/@earendil-works/pi-tui": {
-      "version": "0.76.0",
-      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.76.0.tgz",
-      "integrity": "sha512-TWQEWqc38gVRYr/VTrlfePQPpJk938gNNLL1xuv0M+9cTkVr880/Q3baZQrxKoLrmN/MmVx7TyR8knYZGxTqqg==",
+      "version": "0.78.0",
+      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.78.0.tgz",
+      "integrity": "sha512-3a705FnsVVUhAyceShNB3kS2rpxcxLcx+hqB0u6MMMpHwQGbW+m++MqA6r7eOzq/8FLx5e3vDh38h/SVTk2qzw==",
       "license": "MIT",
       "dependencies": {
         "get-east-asian-width": "1.6.0",
@@ -168,20 +166,10 @@
         "node": ">=22.19.0"
       }
     },
-    "node_modules/@emnapi/runtime": {
-      "version": "1.10.0",
-      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.10.0.tgz",
-      "integrity": "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==",
-      "license": "MIT",
-      "optional": true,
-      "dependencies": {
-        "tslib": "^2.4.0"
-      }
-    },
     "node_modules/@google/genai": {
-      "version": "2.6.0",
-      "resolved": "https://registry.npmjs.org/@google/genai/-/genai-2.6.0.tgz",
-      "integrity": "sha512-HjoW3mPuEn7pnuKABJl9VbDoWDSF4nbwYKYvYYor7YjPeDxrrBxHzu2d1Prcd+BAuC4w+85UP6y7ZdcrQAoO7g==",
+      "version": "2.7.0",
+      "resolved": "https://registry.npmjs.org/@google/genai/-/genai-2.7.0.tgz",
+      "integrity": "sha512-tv0DRtcndt2oEhBYy+5mA0TaXH98+L1Gt0AP9unBfH7DP20KhB7+O3QqAN1Lz+laMARGTHS7BFQSNpLbl4gm1g==",
       "hasInstallScript": true,
       "license": "Apache-2.0",
       "dependencies": {
@@ -263,472 +251,6 @@
       },
       "peerDependencies": {
         "hono": "^4"
-      }
-    },
-    "node_modules/@img/colour": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/@img/colour/-/colour-1.1.0.tgz",
-      "integrity": "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==",
-      "license": "MIT",
-      "optional": true,
-      "engines": {
-        "node": ">=18"
-      }
-    },
-    "node_modules/@img/sharp-darwin-arm64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.34.5.tgz",
-      "integrity": "sha512-imtQ3WMJXbMY4fxb/Ndp6HBTNVtWCUI0WdobyheGf5+ad6xX8VIDO8u2xE4qc/fr08CKG/7dDseFtn6M6g/r3w==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "darwin"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-darwin-arm64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-darwin-x64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.34.5.tgz",
-      "integrity": "sha512-YNEFAF/4KQ/PeW0N+r+aVVsoIY0/qxxikF2SWdp+NRkmMB7y9LBZAVqQ4yhGCm/H3H270OSykqmQMKLBhBJDEw==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "darwin"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-darwin-x64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-libvips-darwin-arm64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.2.4.tgz",
-      "integrity": "sha512-zqjjo7RatFfFoP0MkQ51jfuFZBnVE2pRiaydKJ1G/rHZvnsrHAOcQALIi9sA5co5xenQdTugCvtb1cuf78Vf4g==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "darwin"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-darwin-x64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.2.4.tgz",
-      "integrity": "sha512-1IOd5xfVhlGwX+zXv2N93k0yMONvUlANylbJw1eTah8K/Jtpi15KC+WSiaX/nBmbm2HxRM1gZ0nSdjSsrZbGKg==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "darwin"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linux-arm": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.2.4.tgz",
-      "integrity": "sha512-bFI7xcKFELdiNCVov8e44Ia4u2byA+l3XtsAj+Q8tfCwO6BQ8iDojYdvoPMqsKDkuoOo+X6HZA0s0q11ANMQ8A==",
-      "cpu": [
-        "arm"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linux-arm64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.2.4.tgz",
-      "integrity": "sha512-excjX8DfsIcJ10x1Kzr4RcWe1edC9PquDRRPx3YVCvQv+U5p7Yin2s32ftzikXojb1PIFc/9Mt28/y+iRklkrw==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linux-ppc64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.2.4.tgz",
-      "integrity": "sha512-FMuvGijLDYG6lW+b/UvyilUWu5Ayu+3r2d1S8notiGCIyYU/76eig1UfMmkZ7vwgOrzKzlQbFSuQfgm7GYUPpA==",
-      "cpu": [
-        "ppc64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linux-riscv64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.2.4.tgz",
-      "integrity": "sha512-oVDbcR4zUC0ce82teubSm+x6ETixtKZBh/qbREIOcI3cULzDyb18Sr/Wcyx7NRQeQzOiHTNbZFF1UwPS2scyGA==",
-      "cpu": [
-        "riscv64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linux-s390x": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.2.4.tgz",
-      "integrity": "sha512-qmp9VrzgPgMoGZyPvrQHqk02uyjA0/QrTO26Tqk6l4ZV0MPWIW6LTkqOIov+J1yEu7MbFQaDpwdwJKhbJvuRxQ==",
-      "cpu": [
-        "s390x"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linux-x64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
-      "integrity": "sha512-tJxiiLsmHc9Ax1bz3oaOYBURTXGIRDODBqhveVHonrHJ9/+k89qbLl0bcJns+e4t4rvaNBxaEZsFtSfAdquPrw==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linuxmusl-arm64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.2.4.tgz",
-      "integrity": "sha512-FVQHuwx1IIuNow9QAbYUzJ+En8KcVm9Lk5+uGUQJHaZmMECZmOlix9HnH7n1TRkXMS0pGxIJokIVB9SuqZGGXw==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-libvips-linuxmusl-x64": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.2.4.tgz",
-      "integrity": "sha512-+LpyBk7L44ZIXwz/VYfglaX/okxezESc6UxDSoyo2Ks6Jxc4Y7sGjpgU9s4PMgqgjj1gZCylTieNamqA1MF7Dg==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-linux-arm": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.34.5.tgz",
-      "integrity": "sha512-9dLqsvwtg1uuXBGZKsxem9595+ujv0sJ6Vi8wcTANSFpwV/GONat5eCkzQo/1O6zRIkh0m/8+5BjrRr7jDUSZw==",
-      "cpu": [
-        "arm"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linux-arm": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linux-arm64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.34.5.tgz",
-      "integrity": "sha512-bKQzaJRY/bkPOXyKx5EVup7qkaojECG6NLYswgktOZjaXecSAeCWiZwwiFf3/Y+O1HrauiE3FVsGxFg8c24rZg==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linux-arm64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linux-ppc64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.34.5.tgz",
-      "integrity": "sha512-7zznwNaqW6YtsfrGGDA6BRkISKAAE1Jo0QdpNYXNMHu2+0dTrPflTLNkpc8l7MUP5M16ZJcUvysVWWrMefZquA==",
-      "cpu": [
-        "ppc64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linux-ppc64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linux-riscv64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.34.5.tgz",
-      "integrity": "sha512-51gJuLPTKa7piYPaVs8GmByo7/U7/7TZOq+cnXJIHZKavIRHAP77e3N2HEl3dgiqdD/w0yUfiJnII77PuDDFdw==",
-      "cpu": [
-        "riscv64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linux-riscv64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linux-s390x": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.34.5.tgz",
-      "integrity": "sha512-nQtCk0PdKfho3eC5MrbQoigJ2gd1CgddUMkabUj+rBevs8tZ2cULOx46E7oyX+04WGfABgIwmMC0VqieTiR4jg==",
-      "cpu": [
-        "s390x"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linux-s390x": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linux-x64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz",
-      "integrity": "sha512-MEzd8HPKxVxVenwAa+JRPwEC7QFjoPWuS5NZnBt6B3pu7EG2Ge0id1oLHZpPJdn3OQK+BQDiw9zStiHBTJQQQQ==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linux-x64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linuxmusl-arm64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.34.5.tgz",
-      "integrity": "sha512-fprJR6GtRsMt6Kyfq44IsChVZeGN97gTD331weR1ex1c1rypDEABN6Tm2xa1wE6lYb5DdEnk03NZPqA7Id21yg==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linuxmusl-arm64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-linuxmusl-x64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.34.5.tgz",
-      "integrity": "sha512-Jg8wNT1MUzIvhBFxViqrEhWDGzqymo3sV7z7ZsaWbZNDLXRJZoRGrjulp60YYtV4wfY8VIKcWidjojlLcWrd8Q==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "Apache-2.0",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-libvips-linuxmusl-x64": "1.2.4"
-      }
-    },
-    "node_modules/@img/sharp-wasm32": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.34.5.tgz",
-      "integrity": "sha512-OdWTEiVkY2PHwqkbBI8frFxQQFekHaSSkUIJkwzclWZe64O1X4UlUjqqqLaPbUpMOQk6FBu/HtlGXNblIs0huw==",
-      "cpu": [
-        "wasm32"
-      ],
-      "license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
-      "optional": true,
-      "dependencies": {
-        "@emnapi/runtime": "^1.7.0"
-      },
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-win32-arm64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.34.5.tgz",
-      "integrity": "sha512-WQ3AgWCWYSb2yt+IG8mnC6Jdk9Whs7O0gxphblsLvdhSpSTtmu69ZG1Gkb6NuvxsNACwiPV6cNSZNzt0KPsw7g==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "Apache-2.0 AND LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "win32"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-win32-ia32": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.34.5.tgz",
-      "integrity": "sha512-FV9m/7NmeCmSHDD5j4+4pNI8Cp3aW+JvLoXcTUo0IqyjSfAZJ8dIUmijx1qaJsIiU+Hosw6xM5KijAWRJCSgNg==",
-      "cpu": [
-        "ia32"
-      ],
-      "license": "Apache-2.0 AND LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "win32"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      }
-    },
-    "node_modules/@img/sharp-win32-x64": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.34.5.tgz",
-      "integrity": "sha512-+29YMsqY2/9eFEiW93eqWnuLcWcufowXewwSNIT6UwZdUUCrM3oFjMWH/Z6/TMmb4hlFenmfAVbpWeup2jryCw==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "Apache-2.0 AND LGPL-3.0-or-later",
-      "optional": true,
-      "os": [
-        "win32"
-      ],
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
       }
     },
     "node_modules/@isaacs/fs-minipass": {
@@ -956,9 +478,9 @@
       "license": "MIT"
     },
     "node_modules/@types/retry": {
-      "version": "0.12.0",
-      "resolved": "https://registry.npmjs.org/@types/retry/-/retry-0.12.0.tgz",
-      "integrity": "sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==",
+      "version": "0.12.5",
+      "resolved": "https://registry.npmjs.org/@types/retry/-/retry-0.12.5.tgz",
+      "integrity": "sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==",
       "license": "MIT"
     },
     "node_modules/abort-controller": {
@@ -1252,10 +774,13 @@
       }
     },
     "node_modules/clawpdf": {
-      "version": "0.2.0",
-      "resolved": "https://registry.npmjs.org/clawpdf/-/clawpdf-0.2.0.tgz",
-      "integrity": "sha512-Za4HD3CMRHNqOXOOyVJiQLnEuezRZR/oXiBzraTwL5XEQZuBwFxnyC1UzN4AjQWV2JrLN3ItbzfPRGE0gGOVwg==",
+      "version": "0.3.0",
+      "resolved": "https://registry.npmjs.org/clawpdf/-/clawpdf-0.3.0.tgz",
+      "integrity": "sha512-41+3AnKk9yek2sm+/9XvUlDTN8Wi+ag7fmxZuqw+ySn4lqaf/fCgLeamqPLiXY4gVbizKEHGoTG/JrIIFNE2rw==",
       "license": "MIT",
+      "bin": {
+        "clawpdf": "dist/cli.js"
+      },
       "engines": {
         "node": ">=20"
       }
@@ -1475,16 +1000,6 @@
         "node": ">= 0.8"
       }
     },
-    "node_modules/detect-libc": {
-      "version": "2.1.2",
-      "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
-      "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
-      "license": "Apache-2.0",
-      "optional": true,
-      "engines": {
-        "node": ">=8"
-      }
-    },
     "node_modules/diff": {
       "version": "9.0.0",
       "resolved": "https://registry.npmjs.org/diff/-/diff-9.0.0.tgz",
@@ -1642,9 +1157,9 @@
       }
     },
     "node_modules/es-object-atoms": {
-      "version": "1.1.1",
-      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.1.tgz",
-      "integrity": "sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==",
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
+      "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0"
@@ -1699,9 +1214,9 @@
       }
     },
     "node_modules/eventsource-parser": {
-      "version": "3.0.8",
-      "resolved": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.0.8.tgz",
-      "integrity": "sha512-70QWGkr4snxr0OXLRWsFLeRBIRPuQOvt4s8QYjmUlmlkyTZkRqS7EDVRZtzU3TiyDbXSzaOeF0XUKy8PchzukQ==",
+      "version": "3.1.0",
+      "resolved": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.1.0.tgz",
+      "integrity": "sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==",
       "license": "MIT",
       "engines": {
         "node": ">=18.0.0"
@@ -2135,9 +1650,9 @@
       }
     },
     "node_modules/hasown": {
-      "version": "2.0.3",
-      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.3.tgz",
-      "integrity": "sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==",
+      "version": "2.0.4",
+      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
+      "integrity": "sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==",
       "license": "MIT",
       "dependencies": {
         "function-bind": "^1.1.2"
@@ -2165,15 +1680,15 @@
       }
     },
     "node_modules/hosted-git-info": {
-      "version": "9.0.3",
-      "resolved": "https://registry.npmjs.org/hosted-git-info/-/hosted-git-info-9.0.3.tgz",
-      "integrity": "sha512-Hc+ghLoSt6QaYZUv0WBiIvmMDZuZZ7oaDvdH8MbfOO4lOsxdXLEvuC6ePoGs9H1X9oCLyq6+NVN0MKqD+ydxyg==",
+      "version": "10.1.1",
+      "resolved": "https://registry.npmjs.org/hosted-git-info/-/hosted-git-info-10.1.1.tgz",
+      "integrity": "sha512-DeOnSPAvOndYKfw075gt8yZzQ7S2hNztw34zBTfhIzLhmBTswIBg5/y+pqu/VD5cYWm5goAFTusDmUEmKZ0PEQ==",
       "license": "ISC",
       "dependencies": {
         "lru-cache": "^11.1.0"
       },
       "engines": {
-        "node": "^20.17.0 || >=22.9.0"
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
       }
     },
     "node_modules/html-escaper": {
@@ -2515,9 +2030,9 @@
       "license": "Apache-2.0"
     },
     "node_modules/lru-cache": {
-      "version": "11.5.0",
-      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.0.tgz",
-      "integrity": "sha512-5YgH9UJd7wVb9hIouI2adWpgqrrICkt070Dnj8EUY1+B4B2P9eRLPAkAAo6NICA7CEhOIeBHl46u9zSNpNu7zA==",
+      "version": "11.5.1",
+      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
+      "integrity": "sha512-RPimw/7aMdv2oqRrxKwvZXcPfwBrn/JZ2xYcY9Hus/6LaS3VOAKVWKWgNLCFSiOm1ESXinjsDlidVU7JlnCN2A==",
       "license": "BlueOak-1.0.0",
       "engines": {
         "node": "20 || >=22"
@@ -2657,9 +2172,9 @@
       }
     },
     "node_modules/node-addon-api": {
-      "version": "8.7.0",
-      "resolved": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-8.7.0.tgz",
-      "integrity": "sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==",
+      "version": "8.8.0",
+      "resolved": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-8.8.0.tgz",
+      "integrity": "sha512-c5Ko1fZJIJmzhFIkhRN76WTq+fC6tWnGy9CXA0fA+XygsWZmEwG8vmbkNqxMyoaa0Tin4djul49NzdVcJJcjeA==",
       "license": "MIT",
       "engines": {
         "node": "^18 || ^20 || >= 21"
@@ -2773,9 +2288,9 @@
       }
     },
     "node_modules/openai": {
-      "version": "6.39.0",
-      "resolved": "https://registry.npmjs.org/openai/-/openai-6.39.0.tgz",
-      "integrity": "sha512-O61LIsimY3acVabwvomwFhwrnN36yvHY2quIfy9keEcFytGgWeV35yLHQ6NVMLSBxRpHmcg2yuhCnlu2HT4pLQ==",
+      "version": "6.39.1",
+      "resolved": "https://registry.npmjs.org/openai/-/openai-6.39.1.tgz",
+      "integrity": "sha512-z3dO9fEWOXBzlXynVb/xZ/tujzUjFWQWn3C0n0mw6Vo0zJTbEkaN4b2cLWjhJ6haJQx8LlREoafHRl+Gu/Hl+A==",
       "license": "Apache-2.0",
       "bin": {
         "openai": "bin/cli"
@@ -3103,15 +2618,15 @@
       }
     },
     "node_modules/rastermill": {
-      "version": "0.3.0",
-      "resolved": "https://registry.npmjs.org/rastermill/-/rastermill-0.3.0.tgz",
-      "integrity": "sha512-4g2i0I7M5sba//lFBh19Wi0hDGw8o+isnt/BtEyqQXIZaYclhcNBwL/Fw/6gDCp7aaLwQHADuUvyHCB0Oat5Vw==",
+      "version": "0.3.1",
+      "resolved": "https://registry.npmjs.org/rastermill/-/rastermill-0.3.1.tgz",
+      "integrity": "sha512-CX4nij6+ZLHYIaojJNfLTr7W+AiH/IPJi6E9Aw1br2///1KZL2KBOHd68rkcLedc47MPvb4hhH+fzYeGFa4A/Q==",
       "license": "MIT",
       "dependencies": {
         "@silvia-odwyer/photon-node": "0.3.4"
       },
       "engines": {
-        "node": ">=20"
+        "node": ">=22"
       }
     },
     "node_modules/raw-body": {
@@ -3238,19 +2753,6 @@
       "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==",
       "license": "MIT"
     },
-    "node_modules/semver": {
-      "version": "7.8.1",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.1.tgz",
-      "integrity": "sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==",
-      "license": "ISC",
-      "optional": true,
-      "bin": {
-        "semver": "bin/semver.js"
-      },
-      "engines": {
-        "node": ">=10"
-      }
-    },
     "node_modules/send": {
       "version": "1.2.1",
       "resolved": "https://registry.npmjs.org/send/-/send-1.2.1.tgz",
@@ -3313,51 +2815,6 @@
       "resolved": "https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz",
       "integrity": "sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==",
       "license": "ISC"
-    },
-    "node_modules/sharp": {
-      "version": "0.34.5",
-      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
-      "integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg==",
-      "hasInstallScript": true,
-      "license": "Apache-2.0",
-      "optional": true,
-      "dependencies": {
-        "@img/colour": "^1.0.0",
-        "detect-libc": "^2.1.2",
-        "semver": "^7.7.3"
-      },
-      "engines": {
-        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
-      },
-      "funding": {
-        "url": "https://opencollective.com/libvips"
-      },
-      "optionalDependencies": {
-        "@img/sharp-darwin-arm64": "0.34.5",
-        "@img/sharp-darwin-x64": "0.34.5",
-        "@img/sharp-libvips-darwin-arm64": "1.2.4",
-        "@img/sharp-libvips-darwin-x64": "1.2.4",
-        "@img/sharp-libvips-linux-arm": "1.2.4",
-        "@img/sharp-libvips-linux-arm64": "1.2.4",
-        "@img/sharp-libvips-linux-ppc64": "1.2.4",
-        "@img/sharp-libvips-linux-riscv64": "1.2.4",
-        "@img/sharp-libvips-linux-s390x": "1.2.4",
-        "@img/sharp-libvips-linux-x64": "1.2.4",
-        "@img/sharp-libvips-linuxmusl-arm64": "1.2.4",
-        "@img/sharp-libvips-linuxmusl-x64": "1.2.4",
-        "@img/sharp-linux-arm": "0.34.5",
-        "@img/sharp-linux-arm64": "0.34.5",
-        "@img/sharp-linux-ppc64": "0.34.5",
-        "@img/sharp-linux-riscv64": "0.34.5",
-        "@img/sharp-linux-s390x": "0.34.5",
-        "@img/sharp-linux-x64": "0.34.5",
-        "@img/sharp-linuxmusl-arm64": "0.34.5",
-        "@img/sharp-linuxmusl-x64": "0.34.5",
-        "@img/sharp-wasm32": "0.34.5",
-        "@img/sharp-win32-arm64": "0.34.5",
-        "@img/sharp-win32-ia32": "0.34.5",
-        "@img/sharp-win32-x64": "0.34.5"
-      }
     },
     "node_modules/shebang-command": {
       "version": "2.0.0",
@@ -3762,9 +3219,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     },
     "node_modules/typescript": {

@@ -6,6 +6,15 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../../packages/terminal-core/src/prompt-style.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -47,11 +56,6 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../../shared/string-coerce.js";
-import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
@@ -61,6 +65,20 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+const LEGACY_OPENAI_AUTH_PROVIDER_ID = ["openai", "codex"].join("-");
+
+function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
+  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
+  if (!normalizedExpiresIn) {
+    return undefined;
+  }
+  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
+  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
+  if (expires === undefined) {
+    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
+  }
+  return expires;
+}
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -132,8 +150,15 @@ function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
-function isOpenAICodexProvider(provider: string): boolean {
-  return normalizeProviderId(provider) === "openai-codex";
+function normalizeManualAuthProvider(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  return normalized === "openai" || normalized === LEGACY_OPENAI_AUTH_PROVIDER_ID
+    ? "openai"
+    : normalized;
+}
+
+function isOpenAIProvider(provider: string): boolean {
+  return normalizeManualAuthProvider(provider) === "openai";
 }
 
 function stripBearerPrefix(value: string): string {
@@ -167,7 +192,7 @@ function validateOpenAICodexApiKeyInput(value: string): string | undefined {
     return undefined;
   }
   if (looksLikeJwtToken(trimmed) || looksLikeStructuredCredential(trimmed)) {
-    return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai-codex")} for token auth material.`;
+    return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai")} for token auth material.`;
   }
   return "That does not look like an OpenAI API key.";
 }
@@ -219,7 +244,9 @@ function preferSetupAuthProviders(params: {
   workspaceDir: string;
   requestedProvider?: string;
 }): ProviderPlugin[] {
-  const requestedProvider = params.requestedProvider?.trim();
+  const requestedProvider = params.requestedProvider
+    ? normalizeManualAuthProvider(params.requestedProvider)
+    : undefined;
   if (requestedProvider) {
     const setupProvider = resolvePluginSetupProvider({
       provider: requestedProvider,
@@ -248,15 +275,18 @@ async function resolveModelsAuthContext(params?: {
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const requestedProvider = params?.requestedProvider?.trim();
+  const providerRef = requestedProvider
+    ? normalizeManualAuthProvider(requestedProvider)
+    : undefined;
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
     bundledProviderVitestCompat: true,
-    ...(requestedProvider
+    ...(providerRef
       ? {
-          providerRefs: [requestedProvider],
+          providerRefs: [providerRef],
           activate: true,
         }
       : {}),
@@ -265,7 +295,7 @@ async function resolveModelsAuthContext(params?: {
     providers,
     config,
     workspaceDir,
-    requestedProvider: params?.requestedProvider,
+    requestedProvider: providerRef,
   });
   return {
     config,
@@ -591,7 +621,7 @@ export async function modelsAuthPasteTokenCommand(
       `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
     );
   }
-  const provider = normalizeProviderId(rawProvider);
+  const provider = normalizeManualAuthProvider(rawProvider);
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
@@ -603,8 +633,8 @@ export async function modelsAuthPasteTokenCommand(
     if (provider === "anthropic") {
       return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
     }
-    if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
-      return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
+    if (isOpenAIProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+      return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai")} for API-key auth.`;
     }
     return undefined;
   };
@@ -618,12 +648,7 @@ export async function modelsAuthPasteTokenCommand(
       ? tokenInput.replaceAll(/\s+/g, "").trim()
       : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
-    ? Date.now() +
-      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
-        defaultUnit: "d",
-      })
-    : undefined;
+  const expires = resolveManualTokenExpiryMs(opts.expiresIn);
 
   await upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -662,7 +687,7 @@ export async function modelsAuthPasteApiKeyCommand(
       `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
     );
   }
-  const provider = normalizeProviderId(rawProvider);
+  const provider = normalizeManualAuthProvider(rawProvider);
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
@@ -674,7 +699,7 @@ export async function modelsAuthPasteApiKeyCommand(
       if (!trimmed) {
         return "Required";
       }
-      if (isOpenAICodexProvider(provider)) {
+      if (isOpenAIProvider(provider)) {
         return validateOpenAICodexApiKeyInput(trimmed);
       }
       return undefined;
@@ -877,7 +902,7 @@ export function resolveLoginProfiles(params: {
 }
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
-  if (providerId !== "openai-codex") {
+  if (providerId !== "openai") {
     return;
   }
   runtime.log(
@@ -904,7 +929,10 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  const requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, opts.provider);
+  const requestedProvider = resolveRequestedLoginProviderOrThrow(
+    authProviders,
+    opts.provider ? normalizeManualAuthProvider(opts.provider) : undefined,
+  );
   const selectedProvider =
     requestedProvider ??
     (await prompter

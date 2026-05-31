@@ -193,7 +193,7 @@ describe("discord config schema", () => {
     const cfg = expectValidDiscordConfig({
       voice: {
         mode: "agent-proxy",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         followUsersEnabled: true,
         followUsers: ["58398277829140480"],
         realtime: {
@@ -219,7 +219,7 @@ describe("discord config schema", () => {
     });
 
     expect(cfg.voice?.mode).toBe("agent-proxy");
-    expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
+    expect(cfg.voice?.model).toBe("openai/gpt-5.5");
     expect(cfg.voice?.followUsersEnabled).toBe(true);
     expect(cfg.voice?.followUsers).toEqual(["58398277829140480"]);
     expect(cfg.voice?.realtime?.provider).toBe("openai");

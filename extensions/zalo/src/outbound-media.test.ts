@@ -151,6 +151,50 @@ describe("zalo outbound hosted media", () => {
     expect(secondResponse.res.statusCode).toBe(404);
   });
 
+  it("rejects hosted media preparation when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      await expect(
+        prepareHostedZaloMediaUrl({
+          mediaUrl: "https://example.com/photo.png",
+          webhookUrl: "https://gateway.example.com/zalo-webhook",
+          maxBytes: 1024,
+        }),
+      ).rejects.toThrow(/expiry/);
+
+      expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not serve hosted media when the current clock is invalid", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const { pathname, search } = new URL(hostedUrl);
+    const response = createMockResponse();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const handled = await tryHandleHostedZaloMediaRequest(
+        {
+          method: "GET",
+          url: `${pathname}${search}`,
+        } as never,
+        response.res as never,
+      );
+
+      expect(handled).toBe(true);
+      expect(response.res.statusCode).toBe(410);
+      expect(response.res.end).toHaveBeenCalledWith("Expired");
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("rejects hosted media requests with the wrong token", async () => {
     const hostedUrl = await prepareHostedZaloMediaUrl({
       mediaUrl: "https://example.com/photo.png",

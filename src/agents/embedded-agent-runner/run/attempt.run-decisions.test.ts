@@ -23,14 +23,14 @@ describe("resolveAttemptStreamAuthProfileId", () => {
   it("uses only the runtime-forwarded auth profile for stream provenance", () => {
     expect(
       resolveAttemptStreamAuthProfileId({
-        authProfileId: "openai-codex:raw-session-profile",
+        authProfileId: "openai:raw-session-profile",
         runtimePlan: {
           auth: {
-            forwardedAuthProfileId: "openai-codex:forwarded-profile",
+            forwardedAuthProfileId: "openai:forwarded-profile",
           },
         } as never,
       }),
-    ).toBe("openai-codex:forwarded-profile");
+    ).toBe("openai:forwarded-profile");
 
     expect(
       resolveAttemptStreamAuthProfileId({

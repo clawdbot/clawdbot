@@ -1,4 +1,4 @@
-import { lowercasePreservingWhitespace } from "../../shared/string-coerce.js";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -37,6 +37,7 @@ type DynamicModelContext = {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistryLike;
+  providerConfig?: { api?: string | null; baseUrl?: string };
 };
 
 type ResolvedModelLike = Record<string, unknown>;
@@ -79,6 +80,13 @@ function cloneTemplate(
   } as ResolvedModelLike;
 }
 
+function isOpenAIChatGptModelTemplate(model: ResolvedModelLike | null | undefined): boolean {
+  return (
+    model?.api === "openai-chatgpt-responses" ||
+    isNativeOpenAICodexBaseUrl(typeof model?.baseUrl === "string" ? model.baseUrl : undefined)
+  );
+}
+
 function isNativeOpenAICodexBaseUrl(baseUrl?: string): boolean {
   return baseUrl === OPENAI_CODEX_BASE_URL || baseUrl === OPENAI_CODEX_LEGACY_BASE_URL;
 }
@@ -119,18 +127,17 @@ function normalizeDynamicModel(params: { provider: string; model: ResolvedModelL
     }
     return undefined;
   }
-  if (params.provider !== "openai-codex") {
+  if (params.provider !== "openai") {
     return undefined;
   }
   const baseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
   const useCodexTransport =
-    !baseUrl || baseUrl === OPENAI_BASE_URL || isNativeOpenAICodexBaseUrl(baseUrl);
-  const nextApi =
-    useCodexTransport && (!params.model.api || params.model.api === "openai-responses")
-      ? "openai-codex-responses"
-      : params.model.api;
+    (params.model.api === "openai-chatgpt-responses" &&
+      (!baseUrl || baseUrl === OPENAI_BASE_URL || isNativeOpenAICodexBaseUrl(baseUrl))) ||
+    isNativeOpenAICodexBaseUrl(baseUrl);
+  const nextApi = useCodexTransport ? "openai-chatgpt-responses" : params.model.api;
   const nextBaseUrl =
-    nextApi === "openai-codex-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : baseUrl;
+    nextApi === "openai-chatgpt-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : baseUrl;
   if (nextApi !== params.model.api || nextBaseUrl !== baseUrl) {
     return { ...params.model, api: nextApi, baseUrl: nextBaseUrl };
   }
@@ -150,13 +157,12 @@ function normalizeTransport(params: {
     (params.context.baseUrl === XAI_BASE_URL ||
       (params.provider === "xai" && !params.context.baseUrl));
   const isNativeOpenAICodexTransport =
-    params.provider === "openai-codex" &&
-    ((!params.context.api &&
-      (!params.context.baseUrl || isNativeOpenAICodexBaseUrl(params.context.baseUrl))) ||
-      (params.context.api === "openai-responses" &&
-        (!params.context.baseUrl ||
-          params.context.baseUrl === OPENAI_BASE_URL ||
-          isNativeOpenAICodexBaseUrl(params.context.baseUrl))));
+    params.provider === "openai" &&
+    ((params.context.api === "openai-chatgpt-responses" &&
+      (!params.context.baseUrl ||
+        params.context.baseUrl === OPENAI_BASE_URL ||
+        isNativeOpenAICodexBaseUrl(params.context.baseUrl))) ||
+      isNativeOpenAICodexBaseUrl(params.context.baseUrl));
   if (
     params.context.api === "google-generative-ai" &&
     params.context.baseUrl === "https://generativelanguage.googleapis.com"
@@ -180,7 +186,7 @@ function normalizeTransport(params: {
   }
   if (isNativeOpenAICodexTransport) {
     return {
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: OPENAI_CODEX_BASE_URL,
     };
   }
@@ -258,13 +264,17 @@ function buildDynamicModel(
         maxTokens: DEFAULT_MAX_TOKENS,
       };
     }
-    case "openai-codex": {
+    case "openai": {
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
-      if (lower === "gpt-5.5") {
-        const model = params.modelRegistry.find(
-          "openai-codex",
-          modelId,
-        ) as ResolvedModelLike | null;
+      const exactModel = params.modelRegistry.find("openai", modelId) as ResolvedModelLike | null;
+      const providerConfigSelectsChatGpt =
+        params.providerConfig?.api === "openai-chatgpt-responses" ||
+        isNativeOpenAICodexBaseUrl(params.providerConfig?.baseUrl);
+      if (
+        lower === "gpt-5.5" &&
+        (providerConfigSelectsChatGpt || isOpenAIChatGptModelTemplate(exactModel))
+      ) {
+        const model = exactModel;
         if (model) {
           const modelContextTokens = model.contextTokens;
           const modelContextWindow = model.contextWindow;
@@ -281,8 +291,8 @@ function buildDynamicModel(
           undefined,
           modelId,
           {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
+            provider: "openai",
+            api: "openai-chatgpt-responses",
             baseUrl: OPENAI_CODEX_BASE_URL,
             reasoning: true,
             input: ["text", "image"],
@@ -294,111 +304,121 @@ function buildDynamicModel(
           {},
         );
       }
-      const template =
+      const codexTemplate =
         lower === "gpt-5.5-pro"
-          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
+          ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
           : lower === "gpt-5.4" ||
               isLegacyGpt54Alias ||
               lower === "gpt-5.4-pro" ||
               lower === "gpt-5.4-mini"
-            ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
+            ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
             : lower === "gpt-5.3-codex-spark"
-              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
-              : findTemplate(params, "openai-codex", ["gpt-5.4"]);
-      const fallback = {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        baseUrl: OPENAI_CODEX_BASE_URL,
-        reasoning: true,
-        input: ["text", "image"],
-        cost: OPENROUTER_FALLBACK_COST,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_CONTEXT_WINDOW,
-      };
-      if (lower === "gpt-5.5-pro") {
-        return cloneTemplate(
-          template,
-          modelId,
-          {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-            baseUrl: OPENAI_CODEX_BASE_URL,
-            cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 1_000_000,
-            contextTokens: 272_000,
-            maxTokens: 128_000,
-          },
-          fallback,
-        );
+              ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
+              : findTemplate(params, "openai", ["gpt-5.4"]);
+      if (
+        isLegacyGpt54Alias ||
+        lower.includes("-codex") ||
+        providerConfigSelectsChatGpt ||
+        isOpenAIChatGptModelTemplate(codexTemplate)
+      ) {
+        const templateBaseUrl =
+          typeof codexTemplate?.baseUrl === "string" ? codexTemplate.baseUrl : undefined;
+        const chatGptBaseUrl = isNativeOpenAICodexBaseUrl(templateBaseUrl)
+          ? OPENAI_CODEX_BASE_URL
+          : (templateBaseUrl ?? OPENAI_CODEX_BASE_URL);
+        const fallback = {
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+          baseUrl: chatGptBaseUrl,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: DEFAULT_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_CONTEXT_WINDOW,
+        };
+        if (lower === "gpt-5.5-pro") {
+          return cloneTemplate(
+            codexTemplate,
+            modelId,
+            {
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: chatGptBaseUrl,
+              cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1_000_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            },
+            fallback,
+          );
+        }
+        if (lower === "gpt-5.4" || isLegacyGpt54Alias) {
+          return cloneTemplate(
+            codexTemplate,
+            "gpt-5.4",
+            {
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: chatGptBaseUrl,
+              cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+              contextWindow: 1_050_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            },
+            fallback,
+          );
+        }
+        if (lower === "gpt-5.4-pro") {
+          return cloneTemplate(
+            codexTemplate,
+            modelId,
+            {
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: chatGptBaseUrl,
+              cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1_050_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            },
+            fallback,
+          );
+        }
+        if (lower === "gpt-5.4-mini") {
+          return cloneTemplate(
+            codexTemplate,
+            modelId,
+            {
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: chatGptBaseUrl,
+              cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+              contextWindow: 400_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            },
+            fallback,
+          );
+        }
+        if (lower === "gpt-5.3-codex-spark") {
+          return cloneTemplate(
+            codexTemplate,
+            modelId,
+            {
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: chatGptBaseUrl,
+              reasoning: true,
+              input: ["text"],
+              cost: OPENROUTER_FALLBACK_COST,
+              contextWindow: 128_000,
+              maxTokens: 128_000,
+            },
+            fallback,
+          );
+        }
+        return undefined;
       }
-      if (lower === "gpt-5.4" || isLegacyGpt54Alias) {
-        return cloneTemplate(
-          template,
-          "gpt-5.4",
-          {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-            baseUrl: OPENAI_CODEX_BASE_URL,
-            cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-            contextWindow: 1_050_000,
-            contextTokens: 272_000,
-            maxTokens: 128_000,
-          },
-          fallback,
-        );
-      }
-      if (lower === "gpt-5.4-pro") {
-        return cloneTemplate(
-          template,
-          modelId,
-          {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-            baseUrl: OPENAI_CODEX_BASE_URL,
-            cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 1_050_000,
-            contextTokens: 272_000,
-            maxTokens: 128_000,
-          },
-          fallback,
-        );
-      }
-      if (lower === "gpt-5.4-mini") {
-        return cloneTemplate(
-          template,
-          modelId,
-          {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-            baseUrl: OPENAI_CODEX_BASE_URL,
-            cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-            contextWindow: 400_000,
-            contextTokens: 272_000,
-            maxTokens: 128_000,
-          },
-          fallback,
-        );
-      }
-      if (lower === "gpt-5.3-codex-spark") {
-        return cloneTemplate(
-          template,
-          modelId,
-          {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-            baseUrl: OPENAI_CODEX_BASE_URL,
-            reasoning: true,
-            input: ["text"],
-            cost: OPENROUTER_FALLBACK_COST,
-            contextWindow: 128_000,
-            maxTokens: 128_000,
-          },
-          fallback,
-        );
-      }
-      return undefined;
-    }
-    case "openai": {
       const templateIds =
         lower === "gpt-5.5"
           ? ["gpt-5.5", "gpt-5.4", "gpt-5.4-pro"]
@@ -415,6 +435,10 @@ function buildDynamicModel(
         return undefined;
       }
       const template = findTemplate(params, "openai", templateIds);
+      const preserveTemplateTransport =
+        template?.api === "openai-completions" &&
+        typeof template.baseUrl === "string" &&
+        template.baseUrl !== OPENAI_BASE_URL;
       const patch =
         lower === "gpt-5.5"
           ? {
@@ -439,7 +463,7 @@ function buildDynamicModel(
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-                contextWindow: 272_000,
+                contextWindow: 1_050_000,
                 maxTokens: 128_000,
               }
             : lower === "gpt-5.4-pro"
@@ -474,16 +498,24 @@ function buildDynamicModel(
                     contextWindow: 400_000,
                     maxTokens: 128_000,
                   };
-      return cloneTemplate(template, modelId, patch, {
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: OPENAI_BASE_URL,
-        reasoning: true,
-        input: ["text", "image"],
-        cost: OPENROUTER_FALLBACK_COST,
-        contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-        maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_WINDOW,
-      });
+      return cloneTemplate(
+        template,
+        modelId,
+        {
+          ...patch,
+          ...(preserveTemplateTransport ? { api: template.api, baseUrl: template.baseUrl } : {}),
+        },
+        {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: OPENAI_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+          maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_WINDOW,
+        },
+      );
     }
     case "anthropic":
     case "claude-cli": {
@@ -578,7 +610,6 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
     options.handledDynamicProviders ?? [
       "openrouter",
       "github-copilot",
-      "openai-codex",
       "openai",
       "xai",
       "anthropic",
@@ -631,7 +662,11 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
         : undefined,
     runProviderDynamicModel: (params: {
       provider: string;
-      context: { modelId: string; modelRegistry: ModelRegistryLike };
+      context: {
+        modelId: string;
+        modelRegistry: ModelRegistryLike;
+        providerConfig?: { api?: string | null; baseUrl?: string };
+      };
     }) =>
       handledDynamicProviders.has(params.provider)
         ? buildDynamicModel(
@@ -639,6 +674,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
               provider: params.provider,
               modelId: params.context.modelId,
               modelRegistry: params.context.modelRegistry,
+              providerConfig: params.context.providerConfig,
             },
             {
               getOpenRouterModelCapabilities,
@@ -650,7 +686,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       provider: string;
       context: { modelId: string };
     }) =>
-      params.provider === "openai-codex" &&
+      params.provider === "openai" &&
       ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),

@@ -198,28 +198,20 @@ vi.mock("../../runtime-api.js", () => {
       wildcardKey: string;
     }) => {
       for (const key of keys) {
-        if (Object.prototype.hasOwnProperty.call(entries, key)) {
+        if (Object.hasOwn(entries, key)) {
           return {
             entry: entries[key],
             key,
-            wildcardEntry: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-              ? entries[wildcardKey]
-              : undefined,
-            wildcardKey: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-              ? wildcardKey
-              : undefined,
+            wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
+            wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
           };
         }
       }
       return {
         entry: undefined,
         key: undefined,
-        wildcardEntry: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-          ? entries[wildcardKey]
-          : undefined,
-        wildcardKey: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-          ? wildcardKey
-          : undefined,
+        wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
+        wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
       };
     },
     resolveDefaultGroupPolicy: () => "allowlist",

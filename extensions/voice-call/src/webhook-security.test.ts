@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   verifyPlivoWebhook,
   verifyTelnyxWebhook,
@@ -241,6 +242,34 @@ describe("skip verification request keys", () => {
       expect(second.isReplay).toBe(true);
     },
   );
+
+  it("does not keep replay keys whose expiry would exceed the Date range", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    const verify = () =>
+      verifyTwilioWebhook(
+        {
+          headers: {},
+          rawBody: "CallSid=CS-overflow&CallStatus=completed",
+          url: "https://example.com/voice/webhook",
+          method: "POST" as const,
+        },
+        "token",
+        { skipVerification: true },
+      );
+
+    try {
+      const first = verify();
+      expect(first.ok).toBe(true);
+      expect(first.isReplay).not.toBe(true);
+
+      dateNow.mockReturnValue(Date.parse("2026-05-29T12:00:00.000Z"));
+      const second = verify();
+      expect(second.ok).toBe(true);
+      expect(second.isReplay).not.toBe(true);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
 });
 
 const verifiedReplayRequestCases: Array<{

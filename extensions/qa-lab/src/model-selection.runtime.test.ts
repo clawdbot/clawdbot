@@ -27,7 +27,9 @@ describe("qa model selection runtime", () => {
     vi.clearAllMocks();
     resolveEnvApiKey.mockReturnValue(undefined);
     loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
-    listProfilesForProvider.mockReturnValue([]);
+    listProfilesForProvider.mockImplementation((store: { profiles?: Record<string, unknown> }) =>
+      Object.keys(store.profiles ?? {}),
+    );
   });
 
   it("keeps the OpenAI live default when an API key is configured", () => {
@@ -39,33 +41,39 @@ describe("qa model selection runtime", () => {
   });
 
   it("prefers the Codex OAuth live default when only Codex auth profiles are available", () => {
-    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
-    );
+    loadAuthProfileStoreForRuntime.mockReturnValue({
+      profiles: {
+        "openai:user@example.com": {
+          provider: "openai",
+          type: "oauth",
+        },
+      },
+    });
 
     expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.5");
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
     expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai"],
     });
   });
 
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
-    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai" || provider === "openai-codex" ? [`${provider}:user@example.com`] : [],
-    );
+    loadAuthProfileStoreForRuntime.mockReturnValue({
+      profiles: {
+        "openai:api-key": {
+          provider: "openai",
+          type: "api_key",
+        },
+      },
+    });
 
     expect(resolveQaPreferredLiveModel()).toBeUndefined();
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
   });
 
   it("leaves mock defaults unchanged", () => {
-    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
-    );
-
     expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.5");
     expect(defaultQaRuntimeModelForMode("mock-openai", { alternate: true })).toBe(
       "mock-openai/gpt-5.5-alt",

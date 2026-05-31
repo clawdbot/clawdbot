@@ -1,3 +1,4 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
   type GuardedFetchOptions,
@@ -9,7 +10,6 @@ import {
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type SsrFPolicy,
 } from "../../infra/net/ssrf.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { readPositiveIntegerParam } from "./common.js";
 
 const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {

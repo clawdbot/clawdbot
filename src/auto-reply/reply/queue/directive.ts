@@ -1,6 +1,6 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";

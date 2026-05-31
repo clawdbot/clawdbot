@@ -287,22 +287,53 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface BashExecutionMessage {
+  role: "bashExecution";
+  command: string;
+  output: string;
+  exitCode: number | undefined;
+  cancelled: boolean;
+  truncated: boolean;
+  fullOutputPath?: string;
+  timestamp: number;
+  excludeFromContext?: boolean;
+}
+
+export interface CustomMessage<T = unknown> {
+  role: "custom";
+  customType: string;
+  content: string | (TextContent | ImageContent)[];
+  display: boolean;
+  details?: T;
+  timestamp: number;
+}
+
+export interface BranchSummaryMessage {
+  role: "branchSummary";
+  summary: string;
+  fromId: string;
+  timestamp: number;
+}
+
+export interface CompactionSummaryMessage {
+  role: "compactionSummary";
+  summary: string;
+  tokensBefore: number;
+  timestamp: number | string;
+  tokensAfter?: number;
+  firstKeptEntryId?: string;
+  details?: unknown;
+}
+
 /**
- * Extensible interface for custom app messages.
- * Apps can extend via declaration merging:
- *
- * @example
- * ```typescript
- * declare module "@mariozechner/agent" {
- *   interface CustomAgentMessages {
- *     artifact: ArtifactMessage;
- *     notification: NotificationMessage;
- *   }
- * }
- * ```
+ * Extensible interface for custom app and harness messages.
+ * Apps can extend via declaration merging.
  */
-export interface CustomAgentMessages extends Record<never, never> {
-  // Empty by default - apps extend via declaration merging
+export interface CustomAgentMessages {
+  bashExecution: BashExecutionMessage;
+  custom: CustomMessage;
+  branchSummary: BranchSummaryMessage;
+  compactionSummary: CompactionSummaryMessage;
 }
 
 /**

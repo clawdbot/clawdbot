@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { stripPlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
 const DISCORD_INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
@@ -64,8 +65,10 @@ function collapseExcessBlankLines(text: string): string {
 }
 
 export function sanitizeDiscordFrontChannelText(text: string): string {
-  const withoutAssistantScaffolding = sanitizeAssistantVisibleText(text);
-  const withoutTraceLines = stripDiscordInternalTraceLines(withoutAssistantScaffolding);
+  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text);
+  const withoutAssistantScaffolding = sanitizeAssistantVisibleText(withoutToolCallBlocks);
+  const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding);
+  const withoutTraceLines = stripDiscordInternalTraceLines(withoutResidualToolCallBlocks);
   return collapseExcessBlankLines(withoutTraceLines).trim();
 }
 

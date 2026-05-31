@@ -1,5 +1,6 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import type {
   MigrationDetection,
   MigrationItem,
@@ -8,7 +9,6 @@ import type {
   MigrationProviderPlugin,
   MigrationSummary,
 } from "../plugins/types.js";
-import { isRecord } from "../shared/record-coerce.js";
 
 export type {
   MigrationDetection,

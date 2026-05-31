@@ -1,0 +1,39 @@
+{
+  "name": "@openclaw/sms",
+  "version": "2026.5.30",
+  "description": "OpenClaw SMS channel plugin for Twilio text messages.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "sms",
+      "label": "SMS",
+      "selectionLabel": "SMS (Twilio)",
+      "detailLabel": "Twilio SMS",
+      "docsPath": "/channels/sms",
+      "docsLabel": "sms",
+      "blurb": "Twilio-backed SMS with inbound webhooks and outbound replies.",
+      "order": 88,
+      "quickstartAllowFrom": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.30"
+    },
+    "build": {
+      "openclawVersion": "2026.5.30"
+    }
+  }
+}

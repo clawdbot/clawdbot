@@ -43,6 +43,7 @@ node "$probe" assert-version "$plugin_id" 1.0.0
 node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
 
 run_measured inspect-v1 bash -c 'node "$1" plugins inspect "$2" --runtime --json >/tmp/plugin-lifecycle-inspect-v1.json' bash "$entry" "$plugin_id"
+node "$probe" assert-inspect-loaded "$plugin_id" /tmp/plugin-lifecycle-inspect-v1.json
 
 run_measured disable node "$entry" plugins disable "$plugin_id"
 node "$probe" assert-enabled "$plugin_id" false

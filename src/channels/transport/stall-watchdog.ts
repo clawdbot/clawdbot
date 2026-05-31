@@ -1,5 +1,5 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { RuntimeEnv } from "../../runtime.js";
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
 export type StallWatchdogTimeoutMeta = {
   idleMs: number;

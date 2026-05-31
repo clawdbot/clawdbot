@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const QA_CODEX_OAUTH_PROFILE_ID = "openai-codex:qa-oauth";
+export const QA_CODEX_OAUTH_PROFILE_ID = "openai:qa-oauth";
 export const QA_OPENAI_API_KEY_PROFILE_ID = "openai:media-api";
 export const QA_AUTH_PROFILE_STORE_VERSION = 1;
 
@@ -16,7 +16,7 @@ export type QaApiKeyAuthProfile = {
 
 export type QaOAuthAuthProfile = {
   type: "oauth";
-  provider: "openai-codex";
+  provider: "openai";
   access: string;
   refresh: string;
   expires: number;
@@ -35,7 +35,7 @@ export type QaCodexAuthProfileSelection =
   | {
       status: "ready";
       profileId: string;
-      provider: "openai-codex";
+      provider: "openai";
       mode: "oauth";
     }
   | {
@@ -52,7 +52,7 @@ function authProfilesPath(agentDir: string) {
 function buildCodexOAuthProfile(): QaOAuthAuthProfile {
   return {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access: "qa-codex-oauth-access-placeholder",
     refresh: "qa-codex-oauth-refresh-placeholder",
     expires: QA_FIXED_OAUTH_EXPIRY_MS,
@@ -96,7 +96,7 @@ function isQaAuthProfile(value: unknown): value is QaAuthProfile {
   }
   const record = value as Record<string, unknown>;
   return (
-    (record.type === "oauth" && record.provider === "openai-codex") ||
+    (record.type === "oauth" && record.provider === "openai") ||
     (record.type === "api_key" && record.provider === "openai")
   );
 }
@@ -157,21 +157,21 @@ export function resolveCodexAuthProfile(
     .toSorted((left, right) => left.localeCompare(right))
     .find((candidate) => {
       const profile = snapshot.profiles[candidate];
-      return profile?.type === "oauth" && profile.provider === "openai-codex";
+      return profile?.type === "oauth" && profile.provider === "openai";
     });
 
   if (!profileId) {
     return {
       status: "blocked",
       remediation:
-        'Codex app-server auth requires an openai-codex OAuth profile. Run "openclaw doctor --fix" to repair Codex auth routing before retrying.',
+        'Codex app-server auth requires an openai OAuth profile. Run "openclaw doctor --fix" to repair Codex auth routing before retrying.',
     };
   }
 
   return {
     status: "ready",
     profileId,
-    provider: "openai-codex",
+    provider: "openai",
     mode: "oauth",
   };
 }

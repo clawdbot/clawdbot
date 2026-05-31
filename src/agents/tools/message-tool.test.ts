@@ -1075,6 +1075,25 @@ describe("message tool explicit target guard", () => {
 });
 
 describe("message tool path passthrough", () => {
+  it("advertises canonical media params without compat aliases", () => {
+    const properties = getToolProperties(createMessageTool());
+    const attachments = properties.attachments as
+      | { items?: { properties?: Record<string, unknown> } }
+      | undefined;
+    const attachmentProperties = attachments?.items?.properties ?? {};
+
+    expect(properties).toHaveProperty("media");
+    expect(properties).not.toHaveProperty("mediaUrl");
+    expect(properties).not.toHaveProperty("mediaUrls");
+    expect(properties).not.toHaveProperty("path");
+    expect(properties).not.toHaveProperty("filePath");
+    expect(properties).not.toHaveProperty("fileUrl");
+    expect(attachmentProperties).toHaveProperty("media");
+    for (const name of ["mediaUrl", "path", "filePath", "fileUrl", "url"]) {
+      expect(attachmentProperties).not.toHaveProperty(name);
+    }
+  });
+
   it.each([
     { field: "path", value: "~/Downloads/voice.ogg" },
     { field: "filePath", value: "./tmp/note.m4a" },

@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -42,7 +42,7 @@ export function normalizeResolvedTransportApi(
     case "google-generative-ai":
     case "google-vertex":
     case "ollama":
-    case "openai-codex-responses":
+    case "openai-chatgpt-responses":
     case "openai-completions":
     case "openai-responses":
     case "azure-openai-responses":

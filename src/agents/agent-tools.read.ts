@@ -188,7 +188,7 @@ function stripReadTruncationContentDetails(
   }
 
   const truncation = truncationRaw as Record<string, unknown>;
-  if (!Object.prototype.hasOwnProperty.call(truncation, "content")) {
+  if (!Object.hasOwn(truncation, "content")) {
     return result;
   }
 
@@ -374,7 +374,7 @@ async function normalizeReadImageResult(
 
   const image = content.find(
     (b): b is ImageContentBlock =>
-      !!b &&
+      Boolean(b) &&
       typeof b === "object" &&
       (b as { type?: unknown }).type === "image" &&
       typeof (b as { data?: unknown }).data === "string" &&

@@ -219,6 +219,103 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("renders terminal lifecycle errors after retry grace and clears the active run", () => {
+    vi.useFakeTimers();
+    const { state, chatLog, tui, setActivityStatus, loadHistory, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-error" },
+      });
+
+    handleAgentEvent({
+      runId: "run-error",
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
+    });
+
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-error");
+    expect(setActivityStatus).toHaveBeenCalledWith("error");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(15_000);
+
+    expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-error");
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("deduplicates delayed chat errors after terminal lifecycle errors", () => {
+    vi.useFakeTimers();
+    const { state, chatLog, tui, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-error" },
+    });
+
+    handleAgentEvent({
+      runId: "run-error",
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
+    });
+    vi.advanceTimersByTime(15_000);
+
+    handleChatEvent({
+      runId: "run-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "provider exploded",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
+    expect(state.activeChatRunId).toBeNull();
+    expect(tui.requestRender).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("cancels pending terminal lifecycle errors when a retry starts", () => {
+    vi.useFakeTimers();
+    const { state, chatLog, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-retry" },
+    });
+
+    handleAgentEvent({
+      runId: "run-retry",
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
+    });
+
+    handleAgentEvent({
+      runId: "run-retry",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Date.now() },
+    });
+
+    vi.advanceTimersByTime(15_000);
+
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("run error: provider exploded");
+    expect(state.activeChatRunId).toBe("run-retry");
+    expect(setActivityStatus).toHaveBeenCalledWith("running");
+    vi.useRealTimers();
+  });
+
+  it("keeps retryable lifecycle errors active until a terminal lifecycle event arrives", () => {
+    const { state, chatLog, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-retryable" },
+    });
+
+    handleAgentEvent({
+      runId: "run-retryable",
+      stream: "lifecycle",
+      data: { phase: "error", error: "primary model timed out" },
+    });
+
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("run error: primary model timed out");
+    expect(state.activeChatRunId).toBe("run-retryable");
+    expect(setActivityStatus).toHaveBeenCalledWith("error");
+  });
+
   it("updates the displayed model from fallback lifecycle steps", () => {
     const { state, tui, handleAgentEvent } = createHandlersHarness({
       state: {
@@ -237,7 +334,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: {
         phase: "fallback_step",
         fallbackStepFinalOutcome: "next_fallback",
-        fallbackStepFromModel: "openai-codex/gpt-5.5",
+        fallbackStepFromModel: "openai/gpt-5.5",
         fallbackStepToModel: "openrouter/meta-llama/llama-3.1-70b",
       },
     });
@@ -1076,7 +1173,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       localMode: true,
       state: {
         activeChatRunId: null,
-        sessionInfo: { modelProvider: "openai-codex" },
+        sessionInfo: { modelProvider: "openai" },
       },
     });
 
@@ -1089,7 +1186,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.addSystem).toHaveBeenCalledWith(
-      "auth or provider access failed for openai-codex. Run /auth openai-codex to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
+      "auth or provider access failed for openai. Run /auth openai to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
     );
   });
 

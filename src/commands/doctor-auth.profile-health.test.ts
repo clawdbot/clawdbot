@@ -32,9 +32,9 @@ vi.mock("../agents/auth-profiles.js", () => ({
   resolveProfileUnusableUntilForDisplay: authProfileMocks.resolveProfileUnusableUntilForDisplay,
 }));
 
-vi.mock("../terminal/note.js", () => ({ note: vi.fn() }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
-import { note } from "../terminal/note.js";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { noteAuthProfileHealth } from "./doctor-auth.js";
 
 const noteMock = vi.mocked(note);

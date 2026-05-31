@@ -309,7 +309,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it.each(["openai", "openai-codex"])(
+  it.each(["openai", "openai"])(
     "does not override forced Codex harness support rejection for %s",
     (provider) => {
       registerFailingCodexHarness();

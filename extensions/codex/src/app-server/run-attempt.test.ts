@@ -2735,17 +2735,18 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not drop turn completion notifications emitted while turn/start is in flight", async () => {
-    let harness: ReturnType<typeof createAppServerHarness>;
-    harness = createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        return turnStartResult("turn-1", "completed");
-      }
-      return {};
-    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+          return turnStartResult("turn-1", "completed");
+        }
+        return {};
+      },
+    );
 
     const result = await runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
@@ -2755,30 +2756,31 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not fail when a buffered terminal notification is followed by client close", async () => {
-    let harness: ReturnType<typeof createAppServerHarness>;
     let resolveBufferedTerminal!: () => void;
     const bufferedTerminal = new Promise<void>((resolve) => {
       resolveBufferedTerminal = resolve;
     });
-    harness = createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        await harness.notify({
-          method: "item/started",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: { id: "tool-1", type: "commandExecution" },
-          },
-        });
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        resolveBufferedTerminal();
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { id: "tool-1", type: "commandExecution" },
+            },
+          });
+          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+          resolveBufferedTerminal();
+          return turnStartResult("turn-1", "inProgress");
+        }
+        return {};
+      },
+    );
 
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
@@ -2795,24 +2797,25 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not time out when turn progress arrives before turn/start returns", async () => {
-    let harness: ReturnType<typeof createAppServerHarness>;
-    harness = createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        await harness.notify({
-          method: "turn/started",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            turn: { id: "turn-1", status: "inProgress" },
-          },
-        });
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "turn/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: { id: "turn-1", status: "inProgress" },
+            },
+          });
+          return turnStartResult("turn-1", "inProgress");
+        }
+        return {};
+      },
+    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -3353,7 +3356,7 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    const authProfileId = "openai-codex:work";
+    const authProfileId = "openai:work";
     const pluginConfig = {
       codexPlugins: {
         enabled: true,
@@ -3468,7 +3471,7 @@ describe("runCodexAppServerAttempt", () => {
       profiles: {
         [authProfileId]: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -3667,11 +3670,11 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.authProfileId = "openai-codex:work";
+    params.authProfileId = "openai:work";
     params.agentDir = path.join(tempDir, "agent");
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:work"]), {
+    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai:work"]), {
       interval: 1,
     });
     await waitForMethod("turn/start");
@@ -3679,7 +3682,7 @@ describe("runCodexAppServerAttempt", () => {
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(seenAuthProfileIds).toEqual(["openai-codex:work"]);
+    expect(seenAuthProfileIds).toEqual(["openai:work"]);
     expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
   });
@@ -3871,7 +3874,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, {
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       dynamicToolsFingerprint: "[]",
     });
     await fs.writeFile(
@@ -3921,7 +3924,7 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
-    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:work"]), {
+    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai:work"]), {
       interval: 1,
     });
     await waitForMethod("turn/start");
@@ -3930,9 +3933,9 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(requests.map((entry) => entry.method)).toContain("thread/start");
     expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
-    expect(seenAuthProfileIds).toEqual(["openai-codex:work"]);
+    expect(seenAuthProfileIds).toEqual(["openai:work"]);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding?.authProfileId).toBe("openai-codex:work");
+    expect(savedBinding?.authProfileId).toBe("openai:work");
     expect(savedBinding?.threadId).toBe("thread-1");
   });
 
@@ -4246,7 +4249,7 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, {
-      authProfileId: "openai-codex:bound",
+      authProfileId: "openai:bound",
       dynamicToolsFingerprint: "[]",
     });
     const seenAuthProfileIds: Array<string | undefined> = [];
@@ -4273,7 +4276,7 @@ describe("runCodexAppServerAttempt", () => {
     params.agentDir = path.join(tempDir, "agent");
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]), {
+    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai:bound"]), {
       interval: 1,
     });
     await waitForMethod("turn/start");
@@ -4281,7 +4284,7 @@ describe("runCodexAppServerAttempt", () => {
     await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 
-    expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]);
+    expect(seenAuthProfileIds).toEqual(["openai:bound"]);
     expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
   });

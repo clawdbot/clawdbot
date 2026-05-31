@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
-import { parseModelRefProvider } from "./openai-codex-routing.js";
+import { parseModelRefProvider } from "./openai-routing.js";
 
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 

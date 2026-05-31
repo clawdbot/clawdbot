@@ -225,7 +225,8 @@ export function convertPcmToMulaw8k(pcm: Buffer, inputSampleRate: number): Buffe
   return pcmToMulaw(resamplePcmTo8k(pcm, inputSampleRate));
 }
 
-function linearToMulaw(sample: number): number {
+function linearToMulaw(sampleInput: number): number {
+  let sample = sampleInput;
   const BIAS = 132;
   const CLIP = 32635;
 

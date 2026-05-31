@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -36,6 +37,44 @@ describe("session-delivery queue recovery", () => {
       expect(summary.recovered).toBe(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
     });
+  });
+
+  it("defers recovery when the recovery budget would exceed the date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "leave queued",
+        },
+        tempDir,
+      );
+
+      const deliver = vi.fn(async () => undefined);
+      const warn = vi.fn();
+      const summary = await recoverPendingSessionDeliveries({
+        deliver,
+        stateDir: tempDir,
+        maxRecoveryMs: 1,
+        log: {
+          info: vi.fn(),
+          warn,
+          error: vi.fn(),
+        },
+      });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "Session delivery recovery time budget exceeded — remaining entries deferred",
+      );
+      expect(summary.recovered).toBe(0);
+      expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(1);
+    });
+
+    vi.useRealTimers();
   });
 
   it("keeps failed entries queued with retry metadata for later recovery", async () => {

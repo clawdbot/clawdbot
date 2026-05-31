@@ -65,8 +65,7 @@ export function resolveDiscordToken(
   const discordCfg = selectedCfg?.channels?.discord;
   const accountCfg = resolveAccountEntry(discordCfg?.accounts, accountId);
   const hasAccountToken = Boolean(
-    accountCfg &&
-    Object.prototype.hasOwnProperty.call(accountCfg as Record<string, unknown>, "token"),
+    accountCfg && Object.hasOwn(accountCfg as Record<string, unknown>, "token"),
   );
   const accountToken = resolveDiscordTokenValue({
     cfg: selectedCfg,

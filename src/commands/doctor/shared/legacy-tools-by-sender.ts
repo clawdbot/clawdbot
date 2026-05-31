@@ -1,6 +1,6 @@
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
 

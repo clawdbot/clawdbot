@@ -40,6 +40,19 @@ function isTypeOnlyImportDeclaration(node) {
   );
 }
 
+function isTypeOnlyExportDeclaration(node) {
+  if (node.isTypeOnly === true) {
+    return true;
+  }
+  const clause = node.exportClause;
+  return (
+    Boolean(clause) &&
+    ts.isNamedExports(clause) &&
+    clause.elements.length > 0 &&
+    clause.elements.every((element) => element.isTypeOnly)
+  );
+}
+
 function readDeclarationName(node) {
   if (
     (ts.isFunctionDeclaration(node) ||
@@ -100,6 +113,15 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
       ts.isImportDeclaration(node) &&
       ts.isStringLiteral(node.moduleSpecifier) &&
       !isTypeOnlyImportDeclaration(node)
+    ) {
+      addLine(staticRuntimeImports, node.moduleSpecifier.text, toLine(sourceFile, node));
+    }
+
+    if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      !isTypeOnlyExportDeclaration(node)
     ) {
       addLine(staticRuntimeImports, node.moduleSpecifier.text, toLine(sourceFile, node));
     }

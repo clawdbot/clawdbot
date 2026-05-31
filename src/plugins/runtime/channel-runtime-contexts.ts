@@ -1,10 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelRuntimeContextEvent,
   ChannelRuntimeContextKey,
   ChannelRuntimeContextRegistry,
 } from "../../channels/plugins/channel-runtime-surface.types.js";
 import { createSubsystemLogger } from "../../logging.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type StoredRuntimeContext = {
   token: symbol;

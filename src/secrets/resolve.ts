@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   FileSecretProviderConfig,
@@ -18,7 +19,6 @@ import {
 } from "../plugins/manifest-registry.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
@@ -34,7 +34,12 @@ import {
   secretRefKey,
 } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
-import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
+import {
+  isNonEmptyString,
+  isRecord,
+  normalizePositiveInt,
+  normalizePositiveTimerMs,
+} from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
 const DEFAULT_MAX_REFS_PER_PROVIDER = 512;
@@ -329,7 +334,7 @@ async function readFileProviderPayload(params: {
 
   const filePath = resolveUserPath(params.providerConfig.path);
   const readPromise = (async () => {
-    const timeoutMs = normalizePositiveInt(
+    const timeoutMs = normalizePositiveTimerMs(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
     );
@@ -734,8 +739,11 @@ async function resolveExecRefs(params: {
     childEnv[key] = value;
   }
 
-  const timeoutMs = normalizePositiveInt(params.providerConfig.timeoutMs, DEFAULT_EXEC_TIMEOUT_MS);
-  const noOutputTimeoutMs = normalizePositiveInt(
+  const timeoutMs = normalizePositiveTimerMs(
+    params.providerConfig.timeoutMs,
+    DEFAULT_EXEC_TIMEOUT_MS,
+  );
+  const noOutputTimeoutMs = normalizePositiveTimerMs(
     params.providerConfig.noOutputTimeoutMs,
     timeoutMs,
   );

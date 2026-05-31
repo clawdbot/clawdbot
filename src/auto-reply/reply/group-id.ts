@@ -1,3 +1,8 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -6,11 +11,6 @@ import {
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../../infra/outbound/channel-target-prefix.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
 
 function extractInferredGroupTargetId(params: {

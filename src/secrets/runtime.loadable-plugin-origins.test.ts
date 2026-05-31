@@ -102,9 +102,11 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
 
   it("carries the shared manifest registry into plugin-managed SecretRef resolution", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-runtime-secret-provider-"));
+    fs.chmodSync(rootDir, 0o700);
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    const resolverPath = path.join(rootDir, "resolve.mjs");
     fs.writeFileSync(
-      path.join(rootDir, "resolve.mjs"),
+      resolverPath,
       [
         "import process from 'node:process';",
         "let input = '';",
@@ -118,6 +120,7 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
       ].join("\n"),
       "utf8",
     );
+    fs.chmodSync(resolverPath, 0o600);
     const plugin: PluginManifestRecord = {
       id: "vault-secrets",
       rootDir,

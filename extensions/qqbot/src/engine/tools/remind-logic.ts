@@ -1,3 +1,5 @@
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
+
 /**
  * QQBot reminder tool core logic.
  * QQBot 提醒工具核心逻辑。
@@ -186,8 +188,7 @@ export function buildReminderPrompt(content: string): string {
 }
 
 /** Build cron job params for a one-shot delayed reminder. */
-function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
-  const atMs = Date.now() + delayMs;
+function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
   return {
@@ -322,11 +323,15 @@ export function prepareRemindCronAction(
   if (delayMs < 30_000) {
     return { ok: false, error: "Reminder delay must be at least 30 seconds" };
   }
+  const atMs = resolveExpiresAtMsFromDurationMs(delayMs);
+  if (atMs === undefined) {
+    return { ok: false, error: "Reminder time is outside the supported Date range" };
+  }
 
   return {
     ok: true,
     action: "add",
-    cronAction: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
+    cronAction: buildOnceJob(params, atMs, resolvedTo, resolvedAccountId),
     summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
   };
 }

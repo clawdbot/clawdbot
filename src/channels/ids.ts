@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
 export type ChatChannelId = string;

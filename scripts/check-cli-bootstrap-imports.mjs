@@ -67,8 +67,7 @@ function walkStaticImportGraph(params) {
   const visited = new Set();
   const errors = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const filePath = queue[index];
+  for (const filePath of queue) {
     if (!filePath || visited.has(filePath)) {
       continue;
     }

@@ -508,7 +508,7 @@ function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPT
     let count = 0;
     let truncated = false;
     for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      if (!Object.hasOwn(value, key)) {
         continue;
       }
       if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {

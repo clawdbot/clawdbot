@@ -1,6 +1,7 @@
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 export type ModelListSourcePlanKind =
   | "registry"
@@ -17,6 +18,12 @@ export type ModelListSourcePlan = {
   skipRuntimeModelSuppression: boolean;
   fallbackToRegistryWhenEmpty: boolean;
 };
+
+type ProviderIndexCatalogModule = typeof import("./list.provider-index-catalog.js");
+
+const providerIndexCatalogLoader = createLazyImportLoader<ProviderIndexCatalogModule>(
+  () => import("./list.provider-index-catalog.js"),
+);
 
 function createSourcePlan(params: {
   kind: ModelListSourcePlanKind;
@@ -58,8 +65,7 @@ export async function planAllModelListSources(params: {
   const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
     await import("./list.manifest-catalog.js");
   if (!params.providerFilter) {
-    const { loadProviderIndexCatalogRowsForList } =
-      await import("./list.provider-index-catalog.js");
+    const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
     return createSourcePlan({
       kind: "registry",
       manifestCatalogRows: loadSupplementalManifestCatalogRowsForList({
@@ -102,7 +108,7 @@ export async function planAllModelListSources(params: {
     });
   }
 
-  const { loadProviderIndexCatalogRowsForList } = await import("./list.provider-index-catalog.js");
+  const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
   const providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,

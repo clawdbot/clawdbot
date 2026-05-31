@@ -1,4 +1,4 @@
-import { readStringValue } from "../shared/string-coerce.js";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
 type OpenAITransportKind = "stream" | "websocket";
@@ -31,7 +31,6 @@ function resolvesToNativeOpenAIStrictTools(
   }
   return (
     capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
     capabilities.provider === "azure-openai" ||
     capabilities.provider === "azure-openai-responses"
   );

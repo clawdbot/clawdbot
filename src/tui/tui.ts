@@ -12,6 +12,7 @@ import {
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -25,7 +26,6 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -78,7 +78,7 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
   new URL("../../dist/entry.mjs", import.meta.url),
 );
 
-const OPENAI_CODEX_PROVIDER = "openai-codex";
+const OPENAI_CODEX_PROVIDER = "openai";
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;

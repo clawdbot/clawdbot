@@ -141,7 +141,7 @@ export function applyResolvedAssignments(params: {
 }
 
 export function hasOwnProperty(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 export function isEnabledFlag(value: unknown): boolean {

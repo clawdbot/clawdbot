@@ -966,7 +966,8 @@ async function waitForSlackNoReply(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
+  let elapsedMs = Date.now() - startedAt;
+  while (elapsedMs < params.timeoutMs) {
     const messages = await listSlackMessages({
       channelId: params.channelId,
       client: params.client,
@@ -999,7 +1000,12 @@ async function waitForSlackNoReply(params: {
         throw new Error("unexpected Slack SUT reply observed");
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    elapsedMs = Date.now() - startedAt;
+    const remainingMs = params.timeoutMs - elapsedMs;
+    if (remainingMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remainingMs)));
+    }
+    elapsedMs = Date.now() - startedAt;
   }
 }
 

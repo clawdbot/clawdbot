@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { beforeAll, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   BACKEND_GATEWAY_CLIENT,
@@ -74,6 +74,7 @@ export function registerControlUiAndPairingSuite(): void {
       expectedErrorSubstring: "unauthorized",
     },
   ];
+  const trustedProxyControlUiResults = new Map<string, Awaited<ReturnType<typeof connectReq>>>();
 
   const buildSignedDeviceForIdentity = async (params: {
     identityPath: string;
@@ -241,7 +242,7 @@ export function registerControlUiAndPairingSuite(): void {
     return { identityPath, identity: { deviceId: identity.deviceId } };
   };
 
-  test("rejects untrusted trusted-proxy control ui device identity states", async () => {
+  beforeAll(async () => {
     await configureTrustedProxyControlUiAuth();
     await withControlUiGatewayServer(async ({ port }) => {
       for (const tc of trustedProxyControlUiCases) {
@@ -263,29 +264,39 @@ export function registerControlUiAndPairingSuite(): void {
               nonce: challengeNonce,
             }));
           }
-          const res = await connectReq(ws, {
-            skipDefaultAuth: true,
-            role: tc.role,
-            scopes,
-            device,
-            client: { ...CONTROL_UI_CLIENT },
-          });
-          expect(res.ok, tc.name).toBe(tc.expectedOk);
-          if (!tc.expectedOk) {
-            if (tc.expectedErrorSubstring) {
-              expect(res.error?.message ?? "", tc.name).toContain(tc.expectedErrorSubstring);
-            }
-            if (tc.expectedErrorCode) {
-              expect((res.error?.details as { code?: string } | undefined)?.code, tc.name).toBe(
-                tc.expectedErrorCode,
-              );
-            }
-          }
+          trustedProxyControlUiResults.set(
+            tc.name,
+            await connectReq(ws, {
+              skipDefaultAuth: true,
+              role: tc.role,
+              scopes,
+              device,
+              client: { ...CONTROL_UI_CLIENT },
+            }),
+          );
         } finally {
           ws.close();
         }
       }
     });
+  });
+
+  test.each(trustedProxyControlUiCases)("$name", (tc) => {
+    const res = trustedProxyControlUiResults.get(tc.name);
+    if (!res) {
+      throw new Error(`missing trusted-proxy result for ${tc.name}`);
+    }
+    expect(res.ok, tc.name).toBe(tc.expectedOk);
+    if (!tc.expectedOk) {
+      if (tc.expectedErrorSubstring) {
+        expect(res.error?.message ?? "", tc.name).toContain(tc.expectedErrorSubstring);
+      }
+      if (tc.expectedErrorCode) {
+        expect((res.error?.details as { code?: string } | undefined)?.code, tc.name).toBe(
+          tc.expectedErrorCode,
+        );
+      }
+    }
   });
 
   test("rejects trusted-proxy control ui without device identity even with self-declared scopes", async () => {

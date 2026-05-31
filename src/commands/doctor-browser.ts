@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
-import { note } from "../terminal/note.js";
 import { resolveConfigDir } from "../utils.js";
 
 type BrowserDoctorDeps = {

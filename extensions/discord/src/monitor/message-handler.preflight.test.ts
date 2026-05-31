@@ -2252,4 +2252,40 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       }),
     ).toBe(true);
   });
+
+  it("does not suppress unbound thread webhook echoes when echo expiry overflows", async () => {
+    const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    const binding = await manager.bindTarget({
+      threadId: "thread-overflow",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child-1",
+      agentId: "main",
+      webhookId: "wh-overflow",
+      webhookToken: "tok-1",
+    });
+    expect(binding).not.toBeNull();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      manager.unbindThread({
+        threadId: "thread-overflow",
+        sendFarewell: false,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(
+      shouldIgnoreBoundThreadWebhookMessage({
+        accountId: "default",
+        threadId: "thread-overflow",
+        webhookId: "wh-overflow",
+      }),
+    ).toBe(false);
+  });
 });

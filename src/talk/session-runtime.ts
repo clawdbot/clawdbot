@@ -59,12 +59,12 @@ export type RealtimeVoiceBridgeSessionParams = {
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
-  let bridge: RealtimeVoiceBridge | undefined;
+  const bridgeRef: { current?: RealtimeVoiceBridge } = {};
   const requireBridge = () => {
-    if (!bridge) {
+    if (!bridgeRef.current) {
       throw new Error("Realtime voice bridge is not ready");
     }
-    return bridge;
+    return bridgeRef.current;
   };
   const session: RealtimeVoiceBridgeSession = {
     get bridge() {
@@ -82,7 +82,7 @@ export function createRealtimeVoiceBridgeSession(
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
-  bridge = params.provider.createBridge({
+  const bridge = params.provider.createBridge({
     cfg: params.cfg,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
@@ -105,7 +105,7 @@ export function createRealtimeVoiceBridgeSession(
         return;
       }
       if (params.markStrategy === "ack-immediately") {
-        bridge?.acknowledgeMark();
+        bridgeRef.current?.acknowledgeMark();
         return;
       }
       if (params.markStrategy === undefined || params.markStrategy === "transport") {
@@ -115,23 +115,24 @@ export function createRealtimeVoiceBridgeSession(
     onTranscript: params.onTranscript,
     onEvent: params.onEvent,
     onToolCall: (event) => {
-      if (!bridge) {
+      if (!bridgeRef.current) {
         return;
       }
       params.onToolCall?.(event, session);
     },
     onReady: () => {
-      if (!bridge) {
+      if (!bridgeRef.current) {
         return;
       }
       if (params.triggerGreetingOnReady) {
-        bridge.triggerGreeting?.(params.initialGreetingInstructions);
+        bridgeRef.current.triggerGreeting?.(params.initialGreetingInstructions);
       }
       params.onReady?.(session);
     },
     onError: params.onError,
     onClose: params.onClose,
   });
+  bridgeRef.current = bridge;
 
   return session;
 }

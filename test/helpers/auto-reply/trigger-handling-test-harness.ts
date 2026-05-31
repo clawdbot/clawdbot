@@ -113,7 +113,7 @@ const DEFAULT_MODEL_CATALOG = [
   },
   { provider: "openai", id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
   { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
-  { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
+  { provider: "openai", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
   { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
 ];
 

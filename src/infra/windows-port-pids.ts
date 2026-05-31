@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;

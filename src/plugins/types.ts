@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -34,7 +38,6 @@ import type {
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -487,6 +490,7 @@ export type UnifiedModelCatalogProviderPlugin = {
 export type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
   api?: ModelProviderConfig["api"];
+  auth?: ModelProviderConfig["auth"];
   models?: ModelProviderConfig["models"];
   headers?: unknown;
 };
@@ -507,6 +511,8 @@ export type ProviderResolveDynamicModelContext = {
   modelId: string;
   modelRegistry: ModelRegistry;
   providerConfig?: ProviderRuntimeProviderConfig;
+  authProfileId?: string;
+  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
 };
 
 /**
@@ -695,6 +701,7 @@ export type ProviderPrepareExtraParamsContext = {
   workspaceDir?: string;
   provider: string;
   modelId: string;
+  model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
 };
@@ -953,6 +960,9 @@ export type ProviderFailoverErrorContext = {
   provider?: string;
   modelId?: string;
   errorMessage: string;
+  status?: number;
+  code?: string;
+  errorType?: string;
 };
 
 /**

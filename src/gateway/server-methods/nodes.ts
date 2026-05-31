@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type ConnectParams,
   ErrorCodes,
@@ -38,12 +44,6 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,

@@ -1,9 +1,9 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActivePluginChannelRegistration,
   ActivePluginChannelRegistry,
 } from "../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: ActivePluginChannelRegistration["plugin"] & {

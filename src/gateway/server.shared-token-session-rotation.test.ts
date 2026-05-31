@@ -21,6 +21,10 @@ const NEW_TOKEN = "shared-token-session-new";
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let port = 0;
+let configSetRotationCase: {
+  closed: Awaited<ReturnType<typeof waitForGatewayWsClose>>;
+  setOk: boolean;
+};
 
 beforeAll(async () => {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -49,6 +53,23 @@ beforeAll(async () => {
     "utf-8",
   );
   server = await startGatewayServer(port, { controlUiEnabled: true });
+
+  const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
+  try {
+    const current = await loadGatewayConfig(ws);
+    const nextConfig = buildConfigSetWithRotatedToken(current.config);
+    const closed = waitForGatewayWsClose(ws, 30_000);
+    const setRes = await rpcReq(ws, "config.set", {
+      baseHash: current.hash,
+      raw: JSON.stringify(nextConfig, null, 2),
+    });
+    configSetRotationCase = {
+      closed: await closed,
+      setOk: setRes.ok,
+    };
+  } finally {
+    ws.close();
+  }
 });
 
 afterAll(async () => {
@@ -75,23 +96,10 @@ function buildConfigSetWithRotatedToken(config: Record<string, unknown>): Record
 
 describe("gateway shared token session rotation", () => {
   it("invalidates shared-token websocket sessions after config.set rotation even with reload mode off", async () => {
-    const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
-    try {
-      const current = await loadGatewayConfig(ws);
-      const nextConfig = buildConfigSetWithRotatedToken(current.config);
-      const closed = waitForGatewayWsClose(ws, 30_000);
-      const setRes = await rpcReq(ws, "config.set", {
-        baseHash: current.hash,
-        raw: JSON.stringify(nextConfig, null, 2),
-      });
-      expect(setRes.ok).toBe(true);
-
-      await expect(closed).resolves.toEqual({
-        code: 4001,
-        reason: "gateway auth changed",
-      });
-    } finally {
-      ws.close();
-    }
+    expect(configSetRotationCase.setOk).toBe(true);
+    expect(configSetRotationCase.closed).toEqual({
+      code: 4001,
+      reason: "gateway auth changed",
+    });
   });
 });

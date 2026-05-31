@@ -1,19 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { Insertable, Selectable } from "kysely";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { normalizeCronJobIdentityFields } from "./normalize-job-identity.js";
+import { normalizeCronJobInput } from "./normalize.js";
+import { getInvalidPersistedCronJobReason } from "./persisted-shape.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
-import type { CronStoreFile } from "./types.js";
-
-type SerializedStoreCacheEntry = {
-  configJson?: string;
-  stateJson?: string;
-  needsSplitMigration: boolean;
-};
+import type {
+  CronDelivery,
+  CronFailureAlert,
+  CronJob,
+  CronJobState,
+  CronPayload,
+  CronSchedule,
+  CronStoreFile,
+} from "./types.js";
 
 export type QuarantinedCronConfigJob = {
   sourceIndex: number;
@@ -38,30 +51,12 @@ export type LoadedCronStore = {
   invalidConfigRows: QuarantinedCronConfigJob[];
 };
 
-const serializedStoreCache = new Map<string, SerializedStoreCacheEntry>();
-
-function getSerializedStoreCache(storePath: string): SerializedStoreCacheEntry {
-  let entry = serializedStoreCache.get(storePath);
-  if (!entry) {
-    entry = { needsSplitMigration: false };
-    serializedStoreCache.set(storePath, entry);
-  }
-  return entry;
-}
-
 function resolveDefaultCronDir(): string {
   return path.join(resolveConfigDir(), "cron");
 }
 
 function resolveDefaultCronStorePath(): string {
   return path.join(resolveDefaultCronDir(), "jobs.json");
-}
-
-function resolveStatePath(storePath: string): string {
-  if (storePath.endsWith(".json")) {
-    return storePath.replace(/\.json$/, "-state.json");
-  }
-  return `${storePath}-state.json`;
 }
 
 export function resolveCronQuarantinePath(storePath: string): string {
@@ -79,75 +74,641 @@ type CronStateFileEntry = {
 
 export type CronConfigJobRuntimeEntry = CronStateFileEntry;
 
-type CronStateFile = {
-  version: 1;
-  jobs: Record<string, CronStateFileEntry>;
-};
+type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
+type CronStoreDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs">;
+type CronJobRow = Selectable<CronJobsTable>;
+type CronJobInsert = Insertable<CronJobsTable>;
 
-function parseCronStateFile(raw: string): CronStateFile | null {
+function cronStoreKey(storePath: string): string {
+  return path.resolve(storePath);
+}
+
+function getCronStoreKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<CronStoreDatabase>(db);
+}
+
+function parseJsonObject<T>(raw: string, fallback: T): T {
   try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as T) : fallback;
   } catch {
-    return null;
+    return fallback;
   }
 }
 
-function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
-  const rawJobs = getRawCronJobs(parsed);
+function parseJsonValue<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+
+function booleanToInteger(value: boolean | undefined): number | null {
+  return typeof value === "boolean" ? (value ? 1 : 0) : null;
+}
+
+function integerToBoolean(value: number | bigint | null): boolean | undefined {
+  const normalized = normalizeNumber(value);
+  return normalized == null ? undefined : normalized !== 0;
+}
+
+function serializeJson(value: unknown): string | null {
+  return value == null ? null : JSON.stringify(value);
+}
+
+function parseJsonArray(raw: string | null): string[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseJsonObject<unknown>(raw, undefined);
+  return Array.isArray(parsed)
+    ? parsed.filter((item): item is string => typeof item === "string")
+    : undefined;
+}
+
+function optionalStringFromRecord(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function optionalBooleanFromRecord(
+  record: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalNumberFromRecord(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalStringArrayFromRecord(
+  record: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const value = record[key];
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+}
+
+function parseExternalContentSource(
+  raw: string | null,
+  fallback: unknown,
+): "gmail" | "webhook" | undefined {
+  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : fallback;
+  return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
+}
+
+function bindScheduleColumns(
+  schedule: CronSchedule,
+): Pick<
+  CronJobInsert,
+  "anchor_ms" | "at" | "every_ms" | "schedule_expr" | "schedule_kind" | "schedule_tz" | "stagger_ms"
+> {
+  if (schedule.kind === "at") {
+    return {
+      schedule_kind: "at",
+      at: schedule.at,
+      every_ms: null,
+      anchor_ms: null,
+      schedule_expr: null,
+      schedule_tz: null,
+      stagger_ms: null,
+    };
+  }
+  if (schedule.kind === "every") {
+    return {
+      schedule_kind: "every",
+      at: null,
+      every_ms: schedule.everyMs,
+      anchor_ms: schedule.anchorMs ?? null,
+      schedule_expr: null,
+      schedule_tz: null,
+      stagger_ms: null,
+    };
+  }
   return {
-    version: 1,
-    jobs: rawJobs.filter(isRecord) as never as CronStoreFile["jobs"],
+    schedule_kind: "cron",
+    at: null,
+    every_ms: null,
+    anchor_ms: null,
+    schedule_expr: schedule.expr,
+    schedule_tz: schedule.tz ?? null,
+    stagger_ms: schedule.staggerMs ?? null,
   };
 }
 
-function getRawCronJobs(parsed: unknown): unknown[] {
-  return Array.isArray(parsed)
-    ? parsed
-    : isRecord(parsed) && Array.isArray(parsed.jobs)
-      ? parsed.jobs
-      : [];
+function bindPayloadColumns(
+  payload: CronPayload,
+): Pick<
+  CronJobInsert,
+  | "payload_allow_unsafe_external_content"
+  | "payload_external_content_source_json"
+  | "payload_fallbacks_json"
+  | "payload_kind"
+  | "payload_light_context"
+  | "payload_message"
+  | "payload_model"
+  | "payload_thinking"
+  | "payload_timeout_seconds"
+  | "payload_tools_allow_json"
+> {
+  if (payload.kind === "systemEvent") {
+    return {
+      payload_kind: "systemEvent",
+      payload_message: payload.text,
+      payload_model: null,
+      payload_fallbacks_json: null,
+      payload_thinking: null,
+      payload_timeout_seconds: null,
+      payload_allow_unsafe_external_content: null,
+      payload_external_content_source_json: null,
+      payload_light_context: null,
+      payload_tools_allow_json: null,
+    };
+  }
+  return {
+    payload_kind: "agentTurn",
+    payload_message: payload.message,
+    payload_model: payload.model ?? null,
+    payload_fallbacks_json: serializeJson(payload.fallbacks),
+    payload_thinking: payload.thinking ?? null,
+    payload_timeout_seconds: payload.timeoutSeconds ?? null,
+    payload_allow_unsafe_external_content: booleanToInteger(payload.allowUnsafeExternalContent),
+    payload_external_content_source_json: serializeJson(payload.externalContentSource),
+    payload_light_context: booleanToInteger(payload.lightContext),
+    payload_tools_allow_json: serializeJson(payload.toolsAllow),
+  };
 }
 
-function cloneConfigJobs(jobs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  return jobs.map((job) => structuredClone(job));
+function bindDeliveryColumns(
+  delivery: CronDelivery | undefined,
+): Pick<
+  CronJobInsert,
+  | "delivery_account_id"
+  | "delivery_best_effort"
+  | "delivery_channel"
+  | "delivery_mode"
+  | "delivery_thread_id"
+  | "delivery_to"
+  | "failure_delivery_account_id"
+  | "failure_delivery_channel"
+  | "failure_delivery_mode"
+  | "failure_delivery_to"
+> {
+  return {
+    delivery_mode: delivery?.mode ?? null,
+    delivery_channel: delivery?.channel ?? null,
+    delivery_to: delivery?.to ?? null,
+    delivery_thread_id:
+      delivery?.threadId === undefined || delivery.threadId === null
+        ? null
+        : String(delivery.threadId),
+    delivery_account_id: delivery?.accountId ?? null,
+    delivery_best_effort: booleanToInteger(delivery?.bestEffort),
+    failure_delivery_mode: delivery?.failureDestination?.mode ?? null,
+    failure_delivery_channel: delivery?.failureDestination?.channel ?? null,
+    failure_delivery_to: delivery?.failureDestination?.to ?? null,
+    failure_delivery_account_id: delivery?.failureDestination?.accountId ?? null,
+  };
+}
+
+function bindFailureAlertColumns(
+  failureAlert: CronFailureAlert | false | undefined,
+): Pick<
+  CronJobInsert,
+  | "failure_alert_account_id"
+  | "failure_alert_after"
+  | "failure_alert_channel"
+  | "failure_alert_cooldown_ms"
+  | "failure_alert_disabled"
+  | "failure_alert_include_skipped"
+  | "failure_alert_mode"
+  | "failure_alert_to"
+> {
+  if (failureAlert === false) {
+    return {
+      failure_alert_disabled: 1,
+      failure_alert_after: null,
+      failure_alert_channel: null,
+      failure_alert_to: null,
+      failure_alert_cooldown_ms: null,
+      failure_alert_include_skipped: null,
+      failure_alert_mode: null,
+      failure_alert_account_id: null,
+    };
+  }
+  return {
+    failure_alert_disabled: failureAlert ? 0 : null,
+    failure_alert_after: failureAlert?.after ?? null,
+    failure_alert_channel: failureAlert?.channel ?? null,
+    failure_alert_to: failureAlert?.to ?? null,
+    failure_alert_cooldown_ms: failureAlert?.cooldownMs ?? null,
+    failure_alert_include_skipped: booleanToInteger(failureAlert?.includeSkipped),
+    failure_alert_mode: failureAlert?.mode ?? null,
+    failure_alert_account_id: failureAlert?.accountId ?? null,
+  };
+}
+
+function bindStateColumns(
+  state: CronJobState,
+): Pick<
+  CronJobInsert,
+  | "consecutive_errors"
+  | "consecutive_skipped"
+  | "last_delivered"
+  | "last_delivery_error"
+  | "last_delivery_status"
+  | "last_duration_ms"
+  | "last_error"
+  | "last_failure_alert_at_ms"
+  | "last_run_at_ms"
+  | "last_run_status"
+  | "next_run_at_ms"
+  | "running_at_ms"
+  | "schedule_error_count"
+> {
+  return {
+    next_run_at_ms: state.nextRunAtMs ?? null,
+    running_at_ms: state.runningAtMs ?? null,
+    last_run_at_ms: state.lastRunAtMs ?? null,
+    last_run_status: state.lastRunStatus ?? state.lastStatus ?? null,
+    last_error: state.lastError ?? null,
+    last_duration_ms: state.lastDurationMs ?? null,
+    consecutive_errors: state.consecutiveErrors ?? null,
+    consecutive_skipped: state.consecutiveSkipped ?? null,
+    schedule_error_count: state.scheduleErrorCount ?? null,
+    last_delivery_status: state.lastDeliveryStatus ?? null,
+    last_delivery_error: state.lastDeliveryError ?? null,
+    last_delivered: booleanToInteger(state.lastDelivered),
+    last_failure_alert_at_ms: state.lastFailureAlertAtMs ?? null,
+  };
+}
+
+function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): CronJobInsert {
+  return {
+    store_key: storeKey,
+    job_id: job.id,
+    name: job.name,
+    description: job.description ?? null,
+    enabled: job.enabled ? 1 : 0,
+    delete_after_run: booleanToInteger(job.deleteAfterRun),
+    created_at_ms: job.createdAtMs,
+    updated_at: job.updatedAtMs,
+    agent_id: job.agentId ?? null,
+    session_key: job.sessionKey ?? null,
+    session_target: job.sessionTarget,
+    wake_mode: job.wakeMode,
+    ...bindScheduleColumns(job.schedule),
+    ...bindPayloadColumns(job.payload),
+    ...bindDeliveryColumns(job.delivery),
+    ...bindFailureAlertColumns(job.failureAlert),
+    ...bindStateColumns(job.state ?? {}),
+    job_json: JSON.stringify(stripJobRuntimeFields(job)),
+    state_json: JSON.stringify(job.state ?? {}),
+    runtime_updated_at_ms: job.updatedAtMs,
+    schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>) ?? null,
+    sort_order: sortOrder,
+  };
+}
+
+function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronJob | null {
+  const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
+  normalizeCronJobIdentityFields(raw);
+  const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
+  if (!normalized || getInvalidPersistedCronJobReason(normalized)) {
+    return null;
+  }
+  if (!hadDeleteAfterRun) {
+    delete normalized.deleteAfterRun;
+  }
+  const createdAtMs =
+    typeof normalized.createdAtMs === "number" && Number.isFinite(normalized.createdAtMs)
+      ? normalized.createdAtMs
+      : Date.now();
+  const updatedAtMs =
+    typeof normalized.updatedAtMs === "number" && Number.isFinite(normalized.updatedAtMs)
+      ? normalized.updatedAtMs
+      : createdAtMs;
+  return {
+    ...normalized,
+    createdAtMs,
+    updatedAtMs,
+    state: isRecord(normalized.state) ? (normalized.state as CronJobState) : {},
+  } as CronJob;
+}
+
+function countUnpersistableCronJobs(store: CronStoreFile): number {
+  return store.jobs.reduce((count, job) => count + (normalizeCronJobForSqlite(job) ? 0 : 1), 0);
+}
+
+function assertCronStoreCanPersist(store: CronStoreFile): void {
+  const invalidJobs = countUnpersistableCronJobs(store);
+  if (invalidJobs > 0) {
+    throw new Error(`Cannot persist cron store with ${invalidJobs} invalid job(s)`);
+  }
+}
+
+function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+  if (row.schedule_kind === "at" && row.at) {
+    return { kind: "at", at: row.at };
+  }
+  if (row.schedule_kind === "every" && row.every_ms != null) {
+    return {
+      kind: "every",
+      everyMs: normalizeNumber(row.every_ms) ?? 0,
+      ...(row.anchor_ms != null ? { anchorMs: normalizeNumber(row.anchor_ms) } : {}),
+    };
+  }
+  if (row.schedule_kind === "cron" && row.schedule_expr) {
+    return {
+      kind: "cron",
+      expr: row.schedule_expr,
+      ...(row.schedule_tz ? { tz: row.schedule_tz } : {}),
+      ...(row.stagger_ms != null ? { staggerMs: normalizeNumber(row.stagger_ms) } : {}),
+    };
+  }
+  return null;
+}
+
+function payloadFromRow(row: CronJobRow, fallback: unknown): CronPayload | null {
+  const fallbackRecord = isRecord(fallback) ? fallback : {};
+  if (row.payload_kind === "systemEvent") {
+    const text = row.payload_message ?? optionalStringFromRecord(fallbackRecord, "text");
+    return text == null ? null : { kind: "systemEvent", text };
+  }
+  if (row.payload_kind === "agentTurn") {
+    const message = row.payload_message ?? optionalStringFromRecord(fallbackRecord, "message");
+    if (message == null) {
+      return null;
+    }
+    const model = row.payload_model ?? optionalStringFromRecord(fallbackRecord, "model");
+    const fallbacks = row.payload_fallbacks_json
+      ? parseJsonArray(row.payload_fallbacks_json)
+      : optionalStringArrayFromRecord(fallbackRecord, "fallbacks");
+    const thinking = row.payload_thinking ?? optionalStringFromRecord(fallbackRecord, "thinking");
+    const timeoutSeconds =
+      row.payload_timeout_seconds != null
+        ? normalizeNumber(row.payload_timeout_seconds)
+        : optionalNumberFromRecord(fallbackRecord, "timeoutSeconds");
+    const allowUnsafeExternalContent =
+      row.payload_allow_unsafe_external_content != null
+        ? integerToBoolean(row.payload_allow_unsafe_external_content)
+        : optionalBooleanFromRecord(fallbackRecord, "allowUnsafeExternalContent");
+    const externalContentSource = parseExternalContentSource(
+      row.payload_external_content_source_json,
+      fallbackRecord.externalContentSource,
+    );
+    const lightContext =
+      row.payload_light_context != null
+        ? integerToBoolean(row.payload_light_context)
+        : optionalBooleanFromRecord(fallbackRecord, "lightContext");
+    const toolsAllow = row.payload_tools_allow_json
+      ? parseJsonArray(row.payload_tools_allow_json)
+      : optionalStringArrayFromRecord(fallbackRecord, "toolsAllow");
+    return {
+      kind: "agentTurn",
+      message,
+      ...(model ? { model } : {}),
+      ...(fallbacks ? { fallbacks } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
+      ...(allowUnsafeExternalContent != null ? { allowUnsafeExternalContent } : {}),
+      ...(externalContentSource ? { externalContentSource } : {}),
+      ...(lightContext != null ? { lightContext } : {}),
+      ...(toolsAllow ? { toolsAllow } : {}),
+    };
+  }
+  return null;
+}
+
+function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
+  if (!row.delivery_mode) {
+    return undefined;
+  }
+  return {
+    mode: row.delivery_mode as CronDelivery["mode"],
+    ...(row.delivery_channel ? { channel: row.delivery_channel as CronDelivery["channel"] } : {}),
+    ...(row.delivery_to ? { to: row.delivery_to } : {}),
+    ...(row.delivery_thread_id ? { threadId: row.delivery_thread_id } : {}),
+    ...(row.delivery_account_id ? { accountId: row.delivery_account_id } : {}),
+    ...(row.delivery_best_effort != null
+      ? { bestEffort: integerToBoolean(row.delivery_best_effort) }
+      : {}),
+    ...(row.failure_delivery_channel ||
+    row.failure_delivery_to ||
+    row.failure_delivery_mode ||
+    row.failure_delivery_account_id
+      ? {
+          failureDestination: {
+            ...(row.failure_delivery_channel
+              ? { channel: row.failure_delivery_channel as CronDelivery["channel"] }
+              : {}),
+            ...(row.failure_delivery_to ? { to: row.failure_delivery_to } : {}),
+            ...(row.failure_delivery_mode
+              ? { mode: row.failure_delivery_mode as "announce" | "webhook" }
+              : {}),
+            ...(row.failure_delivery_account_id
+              ? { accountId: row.failure_delivery_account_id }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false | undefined {
+  if (row.failure_alert_disabled === 1) {
+    return false;
+  }
+  if (
+    row.failure_alert_after == null &&
+    !row.failure_alert_channel &&
+    !row.failure_alert_to &&
+    row.failure_alert_cooldown_ms == null &&
+    row.failure_alert_include_skipped == null &&
+    !row.failure_alert_mode &&
+    !row.failure_alert_account_id
+  ) {
+    return undefined;
+  }
+  return {
+    ...(row.failure_alert_after != null ? { after: normalizeNumber(row.failure_alert_after) } : {}),
+    ...(row.failure_alert_channel
+      ? { channel: row.failure_alert_channel as CronFailureAlert["channel"] }
+      : {}),
+    ...(row.failure_alert_to ? { to: row.failure_alert_to } : {}),
+    ...(row.failure_alert_cooldown_ms != null
+      ? { cooldownMs: normalizeNumber(row.failure_alert_cooldown_ms) }
+      : {}),
+    ...(row.failure_alert_include_skipped != null
+      ? { includeSkipped: integerToBoolean(row.failure_alert_include_skipped) }
+      : {}),
+    ...(row.failure_alert_mode ? { mode: row.failure_alert_mode as "announce" | "webhook" } : {}),
+    ...(row.failure_alert_account_id ? { accountId: row.failure_alert_account_id } : {}),
+  };
+}
+
+function stateFromRow(row: CronJobRow): CronJobState {
+  return {
+    ...parseJsonObject<CronJobState>(row.state_json, {}),
+    ...(row.next_run_at_ms != null ? { nextRunAtMs: normalizeNumber(row.next_run_at_ms) } : {}),
+    ...(row.running_at_ms != null ? { runningAtMs: normalizeNumber(row.running_at_ms) } : {}),
+    ...(row.last_run_at_ms != null ? { lastRunAtMs: normalizeNumber(row.last_run_at_ms) } : {}),
+    ...(row.last_run_status
+      ? { lastRunStatus: row.last_run_status as CronJobState["lastRunStatus"] }
+      : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    ...(row.last_duration_ms != null
+      ? { lastDurationMs: normalizeNumber(row.last_duration_ms) }
+      : {}),
+    ...(row.consecutive_errors != null
+      ? { consecutiveErrors: normalizeNumber(row.consecutive_errors) }
+      : {}),
+    ...(row.consecutive_skipped != null
+      ? { consecutiveSkipped: normalizeNumber(row.consecutive_skipped) }
+      : {}),
+    ...(row.schedule_error_count != null
+      ? { scheduleErrorCount: normalizeNumber(row.schedule_error_count) }
+      : {}),
+    ...(row.last_delivery_status
+      ? { lastDeliveryStatus: row.last_delivery_status as CronJobState["lastDeliveryStatus"] }
+      : {}),
+    ...(row.last_delivery_error ? { lastDeliveryError: row.last_delivery_error } : {}),
+    ...(row.last_delivered != null ? { lastDelivered: integerToBoolean(row.last_delivered) } : {}),
+    ...(row.last_failure_alert_at_ms != null
+      ? { lastFailureAlertAtMs: normalizeNumber(row.last_failure_alert_at_ms) }
+      : {}),
+  };
+}
+
+function rowToCronJob(row: CronJobRow): CronJob | null {
+  const base = parseJsonObject<Partial<CronJob>>(row.job_json, {});
+  const schedule = scheduleFromRow(row) ?? base.schedule;
+  const payload = payloadFromRow(row, base.payload) ?? base.payload;
+  if (!schedule || !payload) {
+    return null;
+  }
+  return {
+    ...base,
+    id: row.job_id,
+    name: row.name,
+    ...(row.description ? { description: row.description } : {}),
+    enabled: row.enabled !== 0,
+    ...(row.delete_after_run != null
+      ? { deleteAfterRun: integerToBoolean(row.delete_after_run) }
+      : {}),
+    createdAtMs: normalizeNumber(row.created_at_ms) ?? base.createdAtMs ?? Date.now(),
+    updatedAtMs:
+      normalizeNumber(row.runtime_updated_at_ms) ??
+      normalizeNumber(row.updated_at) ??
+      base.updatedAtMs ??
+      Date.now(),
+    ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    ...(row.session_key ? { sessionKey: row.session_key } : {}),
+    schedule,
+    sessionTarget: row.session_target as CronJob["sessionTarget"],
+    wakeMode: row.wake_mode as CronJob["wakeMode"],
+    payload,
+    ...(deliveryFromRow(row) ? { delivery: deliveryFromRow(row) } : {}),
+    ...(failureAlertFromRow(row) !== undefined ? { failureAlert: failureAlertFromRow(row) } : {}),
+    state: stateFromRow(row),
+  };
+}
+
+function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
+  return executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .selectAll()
+      .where("store_key", "=", storeKey)
+      .orderBy("sort_order", "asc")
+      .orderBy("updated_at", "asc")
+      .orderBy("job_id", "asc"),
+  ).rows;
+}
+
+function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db).deleteFrom("cron_jobs").where("store_key", "=", storeKey),
+  );
+  for (const [index, job] of store.jobs.entries()) {
+    const normalized = normalizeCronJobForSqlite(job);
+    if (!normalized) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .insertInto("cron_jobs")
+        .values(bindCronJobRow(storeKey, normalized, index)),
+    );
+  }
+}
+
+function updateCronRuntimeRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
+  for (const job of store.jobs) {
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({
+          ...bindStateColumns(job.state ?? {}),
+          state_json: JSON.stringify(job.state ?? {}),
+          runtime_updated_at_ms: job.updatedAtMs,
+          schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
+        })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", job.id),
+    );
+  }
+}
+
+function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
+  const jobs = rows.map(rowToCronJob).filter((job): job is CronJob => job !== null);
+  const configJobs = rows.map((row) =>
+    parseJsonObject<Record<string, unknown>>(
+      row.job_json,
+      stripJobRuntimeFields(rowToCronJob(row) ?? ({} as CronJob)),
+    ),
+  );
+  const configJobRuntimeEntries = rows.map((row) => ({
+    updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
+    scheduleIdentity: row.schedule_identity ?? undefined,
+    state: stateFromRow(row) as Record<string, unknown>,
+  }));
+  return {
+    store: { version: 1, jobs },
+    configJobs,
+    configJobIndexes: rows.map((_row, index) => index),
+    configJobRuntimeEntries,
+    invalidConfigRows: [],
+  };
 }
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
   return { ...rest, state: {} };
-}
-
-function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
-  const jobs = store.jobs.map(stripJobRuntimeFields);
-  return {
-    version: store.version,
-    jobs,
-  };
-}
-
-function extractStateFile(store: CronStoreFile): CronStateFile {
-  const jobs: Record<string, CronStateFileEntry> = {};
-  for (const job of store.jobs) {
-    jobs[job.id] = {
-      updatedAtMs: job.updatedAtMs,
-      scheduleIdentity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
-      state: job.state ?? {},
-    };
-  }
-  return { version: 1, jobs };
 }
 
 export function resolveCronStorePath(storePath?: string) {
@@ -161,176 +722,21 @@ export function resolveCronStorePath(storePath?: string) {
   return resolveDefaultCronStorePath();
 }
 
-async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(statePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
-      cause: err,
-    });
-  }
-
-  return parseCronStateFile(raw);
-}
-
-function loadStateFileSync(statePath: string): CronStateFile | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
-      cause: err,
-    });
-  }
-
-  return parseCronStateFile(raw);
-}
-
-function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
-  return jobs.some(
-    (job) => job != null && isRecord(job.state) && Object.keys(job.state).length > 0,
-  );
-}
-
-function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
-  if (!isRecord(job.state)) {
-    job.state = {} as never;
-  }
-}
-
-function backfillMissingRuntimeFields(job: CronStoreFile["jobs"][number]): void {
-  ensureJobStateObject(job);
-  if (typeof job.updatedAtMs !== "number") {
-    job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
-  }
-}
-
-function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unknown): number {
-  if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
-    return updatedAtMs;
-  }
-  if (typeof job.updatedAtMs === "number" && Number.isFinite(job.updatedAtMs)) {
-    return job.updatedAtMs;
-  }
-  return typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
-    ? job.createdAtMs
-    : Date.now();
-}
-
-function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown): void {
-  if (!isRecord(entry)) {
-    backfillMissingRuntimeFields(job);
-    return;
-  }
-  job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-  job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
-  if (
-    typeof entry.scheduleIdentity === "string" &&
-    entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
-  ) {
-    ensureJobStateObject(job);
-    job.state.nextRunAtMs = undefined;
-  }
-}
-
-function resolveCronStateId(job: Record<string, unknown>): string | undefined {
-  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-}
-
 export async function loadCronStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
-  try {
-    const raw = await fs.promises.readFile(storePath, "utf-8");
-    let parsed: unknown;
-    try {
-      parsed = parseJsonWithJson5Fallback(raw);
-    } catch (err) {
-      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
-        cause: err,
-      });
-    }
-    const rawJobs = getRawCronJobs(parsed);
-    const configJobIndexes: number[] = [];
-    const configRows: Array<Record<string, unknown>> = [];
-    const configJobRuntimeEntries: CronConfigJobRuntimeEntry[] = [];
-    const invalidConfigRows: QuarantinedCronConfigJob[] = [];
-    for (const [index, row] of rawJobs.entries()) {
-      if (isRecord(row)) {
-        configJobIndexes.push(index);
-        configRows.push(row);
-      } else {
-        invalidConfigRows.push({
-          sourceIndex: index,
-          reason: "non-object-row",
-          raw: structuredClone(row),
-        });
-      }
-    }
-    const store: CronStoreFile = {
-      version: 1,
-      jobs: configRows as never as CronStoreFile["jobs"],
-    };
-    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
-    const configJobs = cloneConfigJobs(configRows);
-
-    // Load state file and merge.
-    const statePath = resolveStatePath(storePath);
-    const stateFile = await loadStateFile(statePath);
-    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
-
-    if (stateFile) {
-      // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
-      for (const job of store.jobs) {
-        const stateId = resolveCronStateId(job as unknown as Record<string, unknown>);
-        const entry = stateId ? stateFile.jobs[stateId] : undefined;
-        configJobRuntimeEntries.push(isRecord(entry) ? structuredClone(entry) : {});
-        if (entry) {
-          mergeStateFileEntry(job, entry);
-        } else {
-          backfillMissingRuntimeFields(job);
-        }
-      }
-    } else if (!hasLegacyInlineState) {
-      // No state file, no inline state: fresh clone or first run.
-      for (const job of store.jobs) {
-        backfillMissingRuntimeFields(job);
-      }
-    }
-    // else: migration mode — no state file but jobs.json has inline state. Use as-is.
-
-    // Ensure every job has a state object (defensive).
-    for (const job of store.jobs) {
-      ensureJobStateObject(job);
-    }
-
-    const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
-    const stateJson = JSON.stringify(extractStateFile(store), null, 2);
-    serializedStoreCache.set(storePath, {
-      configJson,
-      stateJson,
-      needsSplitMigration: hasLegacyInlineState,
-    });
-
-    return { store, configJobs, configJobIndexes, configJobRuntimeEntries, invalidConfigRows };
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      serializedStoreCache.delete(storePath);
-      return {
-        store: { version: 1, jobs: [] },
-        configJobs: [],
-        configJobIndexes: [],
-        configJobRuntimeEntries: [],
-        invalidConfigRows: [],
-      };
-    }
-    throw err;
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  const database = openOpenClawStateDatabase().db;
+  const rows = loadCronRows(database, storeKey);
+  if (rows.length > 0) {
+    return loadedCronStoreFromRows(rows);
   }
+  return {
+    store: { version: 1, jobs: [] },
+    configJobs: [],
+    configJobIndexes: [],
+    configJobRuntimeEntries: [],
+    invalidConfigRows: [],
+  };
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
@@ -338,59 +744,19 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 }
 
 export function loadCronStoreSync(storePath: string): CronStoreFile {
-  try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    let parsed: unknown;
-    try {
-      parsed = parseJsonWithJson5Fallback(raw);
-    } catch (err) {
-      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
-        cause: err,
-      });
-    }
-    const store = normalizeCronStoreFile(parsed);
-    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
-
-    const stateFile = loadStateFileSync(resolveStatePath(storePath));
-    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
-
-    if (stateFile) {
-      for (const job of store.jobs) {
-        const stateId = resolveCronStateId(job as unknown as Record<string, unknown>);
-        const entry = stateId ? stateFile.jobs[stateId] : undefined;
-        if (entry) {
-          mergeStateFileEntry(job, entry);
-        } else {
-          backfillMissingRuntimeFields(job);
-        }
-      }
-    } else if (!hasLegacyInlineState) {
-      for (const job of store.jobs) {
-        backfillMissingRuntimeFields(job);
-      }
-    }
-
-    for (const job of store.jobs) {
-      ensureJobStateObject(job);
-    }
-
-    return store;
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return { version: 1, jobs: [] };
-    }
-    throw err;
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  const database = openOpenClawStateDatabase().db;
+  const rows = loadCronRows(database, storeKey);
+  if (rows.length > 0) {
+    return loadedCronStoreFromRows(rows).store;
   }
+  return { version: 1, jobs: [] };
 }
 
 type SaveCronStoreOptions = {
-  skipBackup?: boolean;
   stateOnly?: boolean;
 };
-
-async function setSecureFileMode(filePath: string): Promise<void> {
-  await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
-}
 
 async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
   await replaceFileAtomic({
@@ -404,76 +770,23 @@ async function atomicWrite(filePath: string, content: string, dirMode = 0o700): 
   });
 }
 
-async function serializedFileNeedsWrite(
-  filePath: string,
-  expectedJson: string,
-  contentChanged: boolean,
-): Promise<boolean> {
-  if (contentChanged) {
-    return true;
-  }
-  try {
-    const diskJson = await fs.promises.readFile(filePath, "utf-8");
-    return diskJson !== expectedJson;
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return true;
-    }
-    throw err;
-  }
-}
-
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
-  const stateOnly = opts?.stateOnly === true;
-  const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
-  const stateFile = extractStateFile(store);
-  const stateJson = JSON.stringify(stateFile, null, 2);
-
-  const statePath = resolveStatePath(storePath);
-  const cache = serializedStoreCache.get(storePath);
-
-  const configChanged = !stateOnly && cache?.configJson !== configJson;
-  const stateChanged = cache?.stateJson !== stateJson;
-  const migrating = cache?.needsSplitMigration === true;
-  const configNeedsWrite = stateOnly
-    ? false
-    : await serializedFileNeedsWrite(storePath, configJson, configChanged);
-  const stateNeedsWrite = await serializedFileNeedsWrite(statePath, stateJson, stateChanged);
-
-  if (
-    stateOnly ? !stateNeedsWrite && !migrating : !configNeedsWrite && !stateNeedsWrite && !migrating
-  ) {
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  if (opts?.stateOnly) {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      updateCronRuntimeRows(db, storeKey, store);
+    });
     return;
   }
-
-  const updatedCache = getSerializedStoreCache(storePath);
-
-  // Write state first so migration never leaves stripped config without runtime state.
-  if (stateNeedsWrite || migrating) {
-    await atomicWrite(statePath, stateJson);
-    updatedCache.stateJson = stateJson;
-  }
-
-  if (!stateOnly && (configNeedsWrite || migrating)) {
-    // Determine backup need: only when config actually changed (not migration-only).
-    const skipBackup = opts?.skipBackup === true || !configChanged;
-    if (!skipBackup) {
-      try {
-        const backupPath = `${storePath}.bak`;
-        await fs.promises.copyFile(storePath, backupPath);
-        await setSecureFileMode(backupPath);
-      } catch {
-        // best-effort
-      }
-    }
-    await atomicWrite(storePath, configJson);
-    updatedCache.configJson = configJson;
-  }
-  updatedCache.needsSplitMigration = stateOnly && migrating;
+  assertCronStoreCanPersist(store);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    replaceCronRows(db, storeKey, store);
+  });
 }
 
 export async function loadCronQuarantineFile(path: string): Promise<CronQuarantineFile> {

@@ -1,8 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -16,6 +16,12 @@ type AgentsIdentityModule = typeof import("../../commands/agents.commands.identi
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
 type GlobalStateModule = typeof import("../../global-state.js");
 
+let agentsBindModulePromise: Promise<AgentsBindModule> | undefined;
+
+function loadAgentsBindModule(): Promise<AgentsBindModule> {
+  return (agentsBindModulePromise ??= import("../../commands/agents.commands.bind.js"));
+}
+
 async function loadAgentCliCommand(): Promise<AgentViaGatewayModule["agentCliCommand"]> {
   return (await import("../../commands/agent-via-gateway.js")).agentCliCommand;
 }
@@ -25,15 +31,15 @@ async function loadAgentsAddCommand(): Promise<AgentsAddModule["agentsAddCommand
 }
 
 async function loadAgentsBindCommand(): Promise<AgentsBindModule["agentsBindCommand"]> {
-  return (await import("../../commands/agents.commands.bind.js")).agentsBindCommand;
+  return (await loadAgentsBindModule()).agentsBindCommand;
 }
 
 async function loadAgentsBindingsCommand(): Promise<AgentsBindModule["agentsBindingsCommand"]> {
-  return (await import("../../commands/agents.commands.bind.js")).agentsBindingsCommand;
+  return (await loadAgentsBindModule()).agentsBindingsCommand;
 }
 
 async function loadAgentsUnbindCommand(): Promise<AgentsBindModule["agentsUnbindCommand"]> {
-  return (await import("../../commands/agents.commands.bind.js")).agentsUnbindCommand;
+  return (await loadAgentsBindModule()).agentsUnbindCommand;
 }
 
 async function loadAgentsDeleteCommand(): Promise<AgentsDeleteModule["agentsDeleteCommand"]> {

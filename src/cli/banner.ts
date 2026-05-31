@@ -1,13 +1,13 @@
-import { resolveCommitHash } from "../infra/git-commit.js";
-import { visibleWidth } from "../terminal/ansi.js";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   decorativePrefix,
   stripDecorativeEmojiForTerminal,
   supportsDecorativeEmoji,
   type DecorativeEmojiOptions,
-} from "../terminal/decorative-emoji.js";
-import { isRich, theme } from "../terminal/theme.js";
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { resolveCommitHash } from "../infra/git-commit.js";
 import { hasRootVersionAlias } from "./argv.js";
 import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";

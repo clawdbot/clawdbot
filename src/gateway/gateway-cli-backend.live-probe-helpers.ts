@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { GatewayClient } from "./client.js";
 import {
   shouldRetryCliCronMcpProbeReply,

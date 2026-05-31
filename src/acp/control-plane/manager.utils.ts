@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
@@ -9,7 +10,6 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionResolution } from "./manager.types.js";
 

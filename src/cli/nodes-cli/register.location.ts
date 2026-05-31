@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
   callGatewayCli,

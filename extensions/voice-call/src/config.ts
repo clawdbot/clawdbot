@@ -573,7 +573,7 @@ export function resolveVoiceCallNumberRouteKey(
   if (!routes) {
     return undefined;
   }
-  if (phone && Object.prototype.hasOwnProperty.call(routes, phone)) {
+  if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
 

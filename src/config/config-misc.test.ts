@@ -76,6 +76,25 @@ describe("model provider localService config", () => {
     }
   });
 
+  it("accepts standalone timeout overlays for Xiaomi Token Plan", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "xiaomi-token-plan": {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.timeoutSeconds).toBe(600);
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.models).toEqual([]);
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.baseUrl).toBe("");
+    }
+  });
+
   it("rejects standalone timeout overlays for unknown model providers", () => {
     const result = OpenClawSchema.safeParse({
       models: {

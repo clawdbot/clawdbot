@@ -496,6 +496,28 @@ describe("control UI routing", () => {
       "First workspace 5m ago",
     ]);
 
+    const recentSection = expectElement(app, ".sidebar-recent-sessions", HTMLElement);
+    const recentToggle = expectElement(
+      recentSection,
+      ".sidebar-recent-sessions__label",
+      HTMLButtonElement,
+    );
+    expect(recentToggle.getAttribute("aria-expanded")).toBe("true");
+
+    recentToggle.click();
+    await app.updateComplete;
+
+    expect(app.settings.recentSessionsCollapsed).toBe(true);
+    expect(recentToggle.getAttribute("aria-expanded")).toBe("false");
+    expect([...recentSection.classList]).toContain("sidebar-recent-sessions--collapsed");
+
+    recentToggle.click();
+    await app.updateComplete;
+
+    expect(app.settings.recentSessionsCollapsed).toBe(false);
+    expect(recentToggle.getAttribute("aria-expanded")).toBe("true");
+    expect([...recentSection.classList]).not.toContain("sidebar-recent-sessions--collapsed");
+
     recent[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 

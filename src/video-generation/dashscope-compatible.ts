@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -11,8 +13,6 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { readResponseWithLimit } from "../media/read-response-with-limit.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProviderCapabilities,

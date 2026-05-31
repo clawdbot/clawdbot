@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 
 const TARGET_KIND_PREFIXES = new Set([

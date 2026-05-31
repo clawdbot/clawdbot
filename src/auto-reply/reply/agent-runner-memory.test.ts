@@ -1296,7 +1296,6 @@ describe("runMemoryFlushIfNeeded", () => {
         models: {
           providers: {
             openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         agents: { defaults: { compaction: { memoryFlush: {} } } },
@@ -1341,8 +1340,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: {
         models: {
           providers: {
-            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         agents: { defaults: { compaction: { memoryFlush: {} } } },
@@ -1388,7 +1386,6 @@ describe("runMemoryFlushIfNeeded", () => {
         models: {
           providers: {
             openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         agents: { defaults: { compaction: { memoryFlush: {} } } },

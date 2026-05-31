@@ -197,7 +197,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
   }
 
   private rejectSessionKey(params: { sessionKey?: string }): void {
-    if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
+    if (Object.hasOwn(params, "sessionKey")) {
       throw new Error("Unrecognized key(s) in object: 'sessionKey'");
     }
   }
@@ -346,10 +346,10 @@ class LegacyAssembleStrictEngine implements ContextEngine {
     prompt?: string;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
-    if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
+    if (Object.hasOwn(params, "sessionKey")) {
       throw new Error("Unrecognized key(s) in object: 'sessionKey'");
     }
-    if (Object.prototype.hasOwnProperty.call(params, "prompt")) {
+    if (Object.hasOwn(params, "prompt")) {
       throw new Error("Unrecognized key(s) in object: 'prompt'");
     }
     return {

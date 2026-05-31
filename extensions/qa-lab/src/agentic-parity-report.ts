@@ -259,7 +259,7 @@ function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParit
     scenario.codexTokens > 0
       ? undefined
       : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => !!entry);
+  ].filter((entry): entry is string => Boolean(entry));
   if (missing.length === 0) {
     return undefined;
   }

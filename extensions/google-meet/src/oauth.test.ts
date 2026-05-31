@@ -7,6 +7,7 @@ import {
 
 describe("Google Meet OAuth", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -72,6 +73,29 @@ describe("Google Meet OAuth", () => {
     expect(params.get("refresh_token")).toBe("refresh-token");
   });
 
+  it("refreshes cached access tokens with Date-invalid expiries", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          access_token: "refreshed-token",
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tokens = await resolveGoogleMeetAccessToken({
+      clientId: "client-id",
+      refreshToken: "refresh-token",
+      accessToken: "cached-token",
+      expiresAt: 8_700_000_000_000_000,
+    });
+
+    expect(tokens.accessToken).toBe("refreshed-token");
+    expect(tokens.refreshed).toBe(true);
+  });
+
   it("falls back when refreshed token lifetimes overflow safe milliseconds", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
@@ -92,6 +116,27 @@ describe("Google Meet OAuth", () => {
     });
 
     expect(tokens.expiresAt).toBe(Date.now() + 3600 * 1000);
+  });
+
+  it("bounds fallback token lifetimes when the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          access_token: "new-access-token",
+          expires_in: Number.MAX_SAFE_INTEGER,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tokens = await refreshGoogleMeetAccessToken({
+      clientId: "client-id",
+      refreshToken: "refresh-token",
+    });
+
+    expect(tokens.expiresAt).toBe(3600 * 1000);
   });
 
   it("keeps explicit zero-second token lifetimes immediately stale", async () => {

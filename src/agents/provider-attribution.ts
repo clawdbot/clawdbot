@@ -1,15 +1,15 @@
-import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ProviderAttributionVerification =
   | "vendor-documented"
@@ -53,7 +53,7 @@ export type ProviderEndpointClass =
   | "modelstudio-native"
   | "nvidia-native"
   | "openai-public"
-  | "openai-codex"
+  | "openai"
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
@@ -134,7 +134,7 @@ const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
 const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
@@ -149,7 +149,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "modelstudio-native",
   "nvidia-native",
   "openai-public",
-  "openai-codex",
+  "openai",
   "opencode-native",
   "azure-openai",
   "openrouter",
@@ -432,7 +432,6 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
   }
   switch (provider) {
     case "openai":
-    case "openai-codex":
     case "azure-openai":
     case "azure-openai-responses":
       return "openai-family";
@@ -444,6 +443,10 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
 function isOpenAIResponsesApi(api: string | null | undefined): boolean {
   const normalizedApi = normalizeOptionalLowercaseString(api);
   return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
+}
+
+function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolean {
+  return provider === "openai";
 }
 
 export function resolveProviderAttributionIdentity(
@@ -512,26 +515,6 @@ function buildOpenAIAttributionPolicy(
   };
 }
 
-function buildOpenAICodexAttributionPolicy(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): ProviderAttributionPolicy {
-  const identity = resolveProviderAttributionIdentity(env);
-  return {
-    provider: "openai-codex",
-    enabledByDefault: true,
-    verification: "vendor-hidden-api-spec",
-    hook: "request-headers",
-    reviewNote:
-      "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
-    ...identity,
-    headers: {
-      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
-      version: identity.version,
-      "User-Agent": formatOpenClawUserAgent(identity.version),
-    },
-  };
-}
-
 function buildXaiAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -575,7 +558,6 @@ export function listProviderAttributionPolicies(
     buildOpenRouterAttributionPolicy(env),
     buildNvidiaAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
-    buildOpenAICodexAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
@@ -615,7 +597,8 @@ export function resolveProviderAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy | undefined {
   const normalized = normalizeProviderId(provider ?? "");
-  return listProviderAttributionPolicies(env).find((policy) => policy.provider === normalized);
+  const canonical = normalized === "openai" ? "openai" : normalized;
+  return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
 }
 
 export function resolveProviderAttributionHeaders(
@@ -640,20 +623,18 @@ export function resolveProviderRequestPolicy(
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "azure-openai";
   const usesOpenAIPublicAttributionHost = endpointClass === "openai-public";
-  const usesOpenAICodexAttributionHost = endpointClass === "openai-codex";
+  const usesOpenAICodexAttributionHost = endpointClass === "openai";
   const usesVerifiedOpenAIAttributionHost =
     usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
   const usesXaiNativeAttributionHost = endpointClass === "xai-native";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
-  if (provider === "openai" && usesOpenAIPublicAttributionHost) {
+  if (isCanonicalOrLegacyOpenAIProvider(provider) && usesVerifiedOpenAIAttributionHost) {
     attributionProvider = "openai";
-  } else if (provider === "openai-codex" && usesOpenAICodexAttributionHost) {
-    attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
     // OpenRouter attribution is documented, but only apply it to known
     // OpenRouter endpoints or the default (unset) baseUrl path.
@@ -690,7 +671,9 @@ export function resolveProviderRequestPolicy(
       attributionPolicy?.verification === "vendor-hidden-api-spec",
     usesKnownNativeOpenAIEndpoint,
     usesKnownNativeOpenAIRoute:
-      endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint,
+      endpointClass === "default"
+        ? isCanonicalOrLegacyOpenAIProvider(provider)
+        : usesKnownNativeOpenAIEndpoint,
     usesVerifiedOpenAIAttributionHost,
     usesExplicitProxyLikeEndpoint,
   };
@@ -723,7 +706,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "modelstudio-native" ||
     endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
@@ -757,21 +740,22 @@ export function resolveProviderRequestCapabilities(
     ...policy,
     isKnownNativeEndpoint,
     allowsOpenAIServiceTier:
-      (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public") ||
-      (provider === "openai-codex" &&
-        (api === "openai-codex-responses" || api === "openai-responses") &&
-        endpointClass === "openai-codex"),
+      (isCanonicalOrLegacyOpenAIProvider(provider) &&
+        api === "openai-responses" &&
+        endpointClass === "openai-public") ||
+      (isCanonicalOrLegacyOpenAIProvider(provider) &&
+        (api === "openai-chatgpt-responses" || api === "openai-responses") &&
+        endpointClass === "openai"),
     supportsOpenAIReasoningCompatPayload:
       provider !== undefined &&
       api !== undefined &&
       !policy.usesExplicitProxyLikeEndpoint &&
-      (provider === "openai" ||
-        provider === "openai-codex" ||
+      (isCanonicalOrLegacyOpenAIProvider(provider) ||
         provider === "azure-openai" ||
         provider === "azure-openai-responses") &&
       (api === "openai-completions" ||
         api === "openai-responses" ||
-        api === "openai-codex-responses" ||
+        api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
     allowsAnthropicServiceTier:
       provider === "anthropic" &&

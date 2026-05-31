@@ -41,7 +41,7 @@ export function extractMentionTargets(
         return false;
       }
       // Must have open_id
-      return !!m.id.open_id;
+      return Boolean(m.id.open_id);
     })
     .map((m) => ({
       openId: m.id.open_id!,

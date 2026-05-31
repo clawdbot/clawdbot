@@ -21,7 +21,7 @@ export {
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
-export { sanitizeTerminalText } from "../terminal/safe-text.js";
+export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { typedCases } from "../test-utils/typed-cases.js";

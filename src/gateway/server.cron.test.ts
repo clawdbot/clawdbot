@@ -5,6 +5,7 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -57,7 +58,6 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_TIMEOUT_MS = 10_000;
-const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;
 
@@ -150,10 +150,14 @@ async function setupCronTestRun(params: {
   testState.cronStorePath = storePath;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
-  await fs.writeFile(
-    testState.cronStorePath,
-    params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
-  );
+  if (params.jobs) {
+    await saveCronStore(testState.cronStorePath, {
+      version: 1,
+      jobs: params.jobs as never,
+    });
+  } else {
+    await saveCronStore(testState.cronStorePath, { version: 1, jobs: [] });
+  }
   return { prevSkipCron, dir };
 }
 
@@ -177,7 +181,7 @@ async function createDirectCronState(params?: {
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),
     }),
-    getRuntimeConfig: getRuntimeConfig,
+    getRuntimeConfig,
   };
 }
 
@@ -553,7 +557,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("cron.add preserves legacy top-level array stores (#60799)", async () => {
+  test("cron.add leaves legacy top-level array stores for doctor migration", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-legacy-array-",
       cronEnabled: false,
@@ -608,25 +612,18 @@ describe("gateway server cron", () => {
       });
       const newJobId = expectCronJobIdFromResponse(addRes);
 
-      const persisted = JSON.parse(await fs.readFile(storePath as string, "utf-8")) as {
-        version?: unknown;
-        jobs?: Array<Record<string, unknown>>;
-      };
+      const persisted = await loadCronStore(storePath as string);
       expect(persisted.version).toBe(1);
-      expect(persisted.jobs?.map((job) => job.id)).toEqual([
-        "gw-legacy-alpha",
-        "gw-legacy-beta",
-        newJobId,
-      ]);
+      expect(persisted.jobs?.map((job) => job.id)).toEqual([newJobId]);
 
       const listRes = await directCronReq(cronState, "cron.list", { includeDisabled: true });
       expect(listRes.ok).toBe(true);
       const listedJobs = (listRes.payload as { jobs?: Array<Record<string, unknown>> } | null)
         ?.jobs;
-      expect(listedJobs?.map((job) => job.id)).toEqual(
-        expect.arrayContaining(["gw-legacy-alpha", "gw-legacy-beta", newJobId]),
-      );
-      expect(listedJobs).toHaveLength(3);
+      expect(listedJobs?.map((job) => job.id)).toEqual([newJobId]);
+
+      const legacyStore = JSON.parse(await fs.readFile(storePath as string, "utf-8")) as unknown;
+      expect(Array.isArray(legacyStore)).toBe(true);
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }

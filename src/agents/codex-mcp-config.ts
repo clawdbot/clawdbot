@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
   applyCommonServerConfig,

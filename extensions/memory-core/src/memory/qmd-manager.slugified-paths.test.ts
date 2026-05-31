@@ -36,12 +36,7 @@ function createMockChild(params?: { autoClose?: boolean }): MockChild {
   return child;
 }
 
-function emitAndClose(
-  child: MockChild,
-  stream: "stdout" | "stderr",
-  data: string,
-  code: number = 0,
-) {
+function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: string, code = 0) {
   queueMicrotask(() => {
     child[stream].emit("data", data);
     child.closeWith(code);

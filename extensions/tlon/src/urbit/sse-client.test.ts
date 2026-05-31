@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { urbitFetch } from "./fetch.js";
 import { UrbitSSEClient } from "./sse-client.js";
@@ -135,6 +136,16 @@ describe("UrbitSSEClient", () => {
         onReconnect,
       });
       expect(client.onReconnect).toBe(onReconnect);
+    });
+
+    it("clamps oversized reconnect delays", () => {
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        reconnectDelay: Number.MAX_SAFE_INTEGER,
+        maxReconnectDelay: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(client.reconnectDelay).toBe(MAX_TIMER_TIMEOUT_MS);
+      expect(client.maxReconnectDelay).toBe(MAX_TIMER_TIMEOUT_MS);
     });
 
     it("resets reconnect attempts on successful connect", async () => {

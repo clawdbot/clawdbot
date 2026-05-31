@@ -86,4 +86,25 @@ describe("QQBot token manager", () => {
       expiresAt: Date.now(),
     });
   });
+
+  it("does not cache fetched tokens when the process clock is outside the Date range", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    mockGuardedTokenResponse('{"access_token":"token-1","expires_in":7200}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const manager = new TokenManager({ logger });
+    try {
+      await expect(manager.getAccessToken("app-id", "secret")).resolves.toBe("token-1");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(manager.getStatus("app-id")).toEqual({ status: "none", expiresAt: null });
+    expect(logger.debug).toHaveBeenCalledWith(
+      "[qqbot:token:app-id] Not cached: invalid process clock",
+    );
+  });
 });

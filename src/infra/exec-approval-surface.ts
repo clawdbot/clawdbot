@@ -1,10 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,
   listChannelPlugins,
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,

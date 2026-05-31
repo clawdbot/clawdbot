@@ -1,6 +1,6 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 import { hashTextSha256 } from "./hash.js";

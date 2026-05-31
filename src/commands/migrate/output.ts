@@ -1,9 +1,9 @@
 import { log } from "@clack/prompts";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { theme } from "../../terminal/theme.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function formatCount(value: number, label: string): string {

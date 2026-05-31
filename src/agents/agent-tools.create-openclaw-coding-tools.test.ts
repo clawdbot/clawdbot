@@ -698,7 +698,7 @@ describe("createOpenClawCodingTools", () => {
 
     const codexTools = createOpenClawCodingTools({
       config: testConfig,
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       modelId: "gpt-5.4",
     });
     expect(toolNameList(codexTools)).toContain("apply_patch");
@@ -1048,6 +1048,14 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(toolNameList(tools)).toContain("heartbeat_respond");
+  });
+
+  it("keeps skill_workshop available under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(toolNameList(tools)).toContain("skill_workshop");
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

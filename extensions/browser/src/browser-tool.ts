@@ -8,7 +8,6 @@ import {
 import {
   type AnyAgentTool,
   type NodeListNode,
-  DEFAULT_UPLOAD_DIR,
   BrowserToolSchema,
   applyBrowserProxyPaths,
   browserAct,
@@ -26,6 +25,7 @@ import {
   browserStatus,
   browserStop,
   callGatewayTool,
+  describeImageFile,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
@@ -37,16 +37,20 @@ import {
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
+  resolveExistingUploadPaths,
   resolveRuntimeImageSanitization,
-  resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
+  saveMediaBuffer,
   selectDefaultNodeFromList,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
+import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
   browserAct,
@@ -63,10 +67,13 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  describeImageFile,
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
   callGatewayTool,
+  normalizeBrowserScreenshot,
+  saveMediaBuffer,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
@@ -89,10 +96,13 @@ export const testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
+      describeImageFile: typeof describeImageFile;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
+      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
+      saveMediaBuffer: typeof saveMediaBuffer;
       touchSessionBrowserTab: typeof touchSessionBrowserTab;
       trackSessionBrowserTab: typeof trackSessionBrowserTab;
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
@@ -114,10 +124,14 @@ export const testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.normalizeBrowserScreenshot =
+      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
+    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
     browserToolDeps.touchSessionBrowserTab =
       overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
     browserToolDeps.trackSessionBrowserTab =
@@ -431,6 +445,17 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -763,11 +788,80 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
+          const screenshotPath = result.path;
+          const screenshotCfg = browserToolDeps.getRuntimeConfig();
+          const imageSanitization = resolveRuntimeImageSanitization();
+          try {
+            const described = await describeBrowserScreenshot(
+              {
+                cfg: screenshotCfg,
+                filePath: screenshotPath,
+                agentDir: opts?.agentDir,
+                workspaceDir: opts?.workspaceDir,
+                activeModel: opts?.activeModel,
+                mediaScope: opts?.mediaScope,
+                imageSanitization,
+              },
+              {
+                describeImageFile: browserToolDeps.describeImageFile,
+                normalizeBrowserScreenshot: browserToolDeps.normalizeBrowserScreenshot,
+                saveMediaBuffer: browserToolDeps.saveMediaBuffer,
+              },
+            );
+            if (described) {
+              const analyzedBy =
+                described.provider && described.model
+                  ? `${described.provider}/${described.model}`
+                  : "media image understanding";
+              const headerLines = [`[analyzed by ${analyzedBy}]`];
+              // Vision model descriptions contain web page content which is
+              // untrusted external input — wrap it the same way snapshot and
+              // tabs results are wrapped to mitigate prompt injection.
+              const wrappedDescription = wrapExternalContent(
+                neutralizeMediaDirectives(described.text.trim()),
+                {
+                  source: "browser",
+                  includeWarning: true,
+                },
+              );
+              const text = `${headerLines.join("\n")}\n${wrappedDescription}`;
+              return {
+                content: [{ type: "text", text }],
+                details: {
+                  ...(result as Record<string, unknown>),
+                  // Do NOT include details.media here — the vision path returns
+                  // a text description as the deliverable output. Exposing the raw
+                  // screenshot as media would cause channel delivery to auto-send
+                  // potentially sensitive page content. The local screenshot file
+                  // is still referenced in result.path for diagnostic purposes.
+                  vision: {
+                    provider: described.provider,
+                    model: described.model,
+                    decision: described.decision,
+                  },
+                },
+              };
+            }
+          } catch (err) {
+            // Fall back to returning the raw image block so the agent loop can
+            // still recover. Provider/runtime error messages are untrusted
+            // input too, so defang line-start final-reply media directives.
+            const rawReason = err instanceof Error ? err.message : String(err);
+            const reason = neutralizeMediaDirectives(rawReason);
+            const extraText = `[browser screenshot vision failed: ${reason}]`;
+            return await browserToolDeps.imageResultFromFile({
+              label: "browser:screenshot",
+              path: screenshotPath,
+              extraText,
+              details: result,
+              imageSanitization,
+            });
+          }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
-            path: result.path,
+            path: screenshotPath,
             details: result,
-            imageSanitization: resolveRuntimeImageSanitization(),
+            imageSanitization,
           });
         }
         case "navigate": {
@@ -821,15 +915,11 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
-          if (!uploadPathsResult.ok) {
-            throw new Error(uploadPathsResult.error);
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            throw new Error(resolvedResult.error);
           }
-          const normalizedPaths = uploadPathsResult.paths;
+          const normalizedPaths = resolvedResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");

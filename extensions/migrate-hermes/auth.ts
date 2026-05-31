@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
+  createMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   markMigrationItemSkipped,
@@ -37,8 +38,9 @@ import {
 import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
 
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
-const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-5.5";
+const OPENAI_PROVIDER_ID = "openai";
+const LEGACY_OPENAI_PROVIDER_ID = ["openai", "codex"].join("-");
+const OPENAI_DEFAULT_MODEL = "openai/gpt-5.5";
 const HERMES_AUTH_DISPLAY_NAME = "Hermes import";
 
 type AgentDefaultModelConfigs = NonNullable<
@@ -50,7 +52,7 @@ type HermesCodexAuthCandidate = {
   access: string;
   accountId?: string;
   refresh: string;
-  sourceKind: "hermes-auth-json" | "opencode-auth-json";
+  sourceKind: "opencode-auth-json";
   sourceCredentialIndex?: number;
   sourceLabel: string;
   sourcePath: string;
@@ -64,14 +66,6 @@ type HermesCodexAuthProfile = {
   sourceProfileId: string;
 };
 
-function readTimestamp(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
   const hash = createHash("sha256");
   for (const part of [
@@ -84,86 +78,6 @@ function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): strin
     hash.update("\0");
   }
   return hash.digest("hex");
-}
-
-function readProviderTokens(
-  auth: Record<string, unknown>,
-  sourcePath: string,
-): HermesCodexAuthCandidate | undefined {
-  const providers = isRecord(auth.providers) ? auth.providers : {};
-  const provider = isRecord(providers[OPENAI_CODEX_PROVIDER_ID])
-    ? providers[OPENAI_CODEX_PROVIDER_ID]
-    : undefined;
-  const tokens = isRecord(provider?.tokens) ? provider.tokens : undefined;
-  const access = readString(tokens?.access_token);
-  const refresh = readString(tokens?.refresh_token);
-  if (!access || !refresh) {
-    return undefined;
-  }
-  return {
-    access,
-    refresh,
-    sourceKind: "hermes-auth-json",
-    sourceLabel: "Hermes active OpenAI Codex provider",
-    sourcePath,
-    updatedAt: readTimestamp(provider?.last_refresh),
-  };
-}
-
-function readPoolTokens(
-  auth: Record<string, unknown>,
-  sourcePath: string,
-): HermesCodexAuthCandidate[] {
-  const pool = isRecord(auth.credential_pool) ? auth.credential_pool : {};
-  const entries = Array.isArray(pool[OPENAI_CODEX_PROVIDER_ID])
-    ? pool[OPENAI_CODEX_PROVIDER_ID]
-    : [];
-  const candidates: HermesCodexAuthCandidate[] = [];
-  for (const entry of entries) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const access = readString(entry.access_token);
-    const refresh = readString(entry.refresh_token);
-    if (!access || !refresh) {
-      continue;
-    }
-    const label = readString(entry.label) ?? "Hermes OpenAI Codex credential pool";
-    candidates.push({
-      access,
-      refresh,
-      sourceKind: "hermes-auth-json",
-      sourceLabel: label,
-      sourcePath,
-      updatedAt: readTimestamp(entry.last_refresh) ?? readTimestamp(entry.last_status_at),
-    });
-  }
-  return candidates;
-}
-
-async function readHermesCodexAuthCandidates(
-  authPath: string | undefined,
-): Promise<HermesCodexAuthCandidate[]> {
-  const raw = await readText(authPath);
-  if (!raw || !authPath) {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed)) {
-    return [];
-  }
-  const candidates = [readProviderTokens(parsed, authPath), ...readPoolTokens(parsed, authPath)]
-    .filter((candidate): candidate is HermesCodexAuthCandidate => candidate !== undefined)
-    .toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-  candidates.forEach((candidate, index) => {
-    candidate.sourceCredentialIndex = index;
-  });
-  return candidates;
 }
 
 async function readOpenCodeOpenAICandidates(
@@ -202,6 +116,48 @@ async function readOpenCodeOpenAICandidates(
   ];
 }
 
+async function hasLegacyHermesAuthJson(authPath: string | undefined): Promise<boolean> {
+  const raw = await readText(authPath);
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return (
+      isRecord(parsed) &&
+      (hasLegacyOpenAIOAuthTokenFields(parsed.providers, "providers") ||
+        hasLegacyOpenAIOAuthTokenFields(parsed.credential_pool, "credential_pool") ||
+        hasLegacyOpenAIOAuthTokenFields(parsed.tokens, "tokens"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasLegacyOpenAIOAuthTokenFields(value: unknown, keyHint = ""): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasLegacyOpenAIOAuthTokenFields(entry, keyHint));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const provider = readString(value.provider)?.toLowerCase();
+  const normalizedKeyHint = keyHint.toLowerCase();
+  const isOpenAIRecord =
+    normalizedKeyHint.includes("openai") ||
+    provider === OPENAI_PROVIDER_ID ||
+    provider === LEGACY_OPENAI_PROVIDER_ID;
+  const hasTokenPair =
+    (readString(value.access) && readString(value.refresh)) ||
+    (readString(value.access_token) && readString(value.refresh_token));
+  if (isOpenAIRecord && hasTokenPair) {
+    return true;
+  }
+  return Object.entries(value).some(([key, entry]) =>
+    hasLegacyOpenAIOAuthTokenFields(entry, keyHint ? `${keyHint}.${key}` : key),
+  );
+}
+
 function buildAuthResult(
   candidate: HermesCodexAuthCandidate,
   fallbackProfileName = "hermes-import",
@@ -211,8 +167,8 @@ function buildAuthResult(
     accountId: candidate.accountId,
   });
   return buildOauthProviderAuthResult({
-    providerId: OPENAI_CODEX_PROVIDER_ID,
-    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    providerId: OPENAI_PROVIDER_ID,
+    defaultModel: OPENAI_DEFAULT_MODEL,
     access: candidate.access,
     refresh: candidate.refresh,
     expires: resolveOpenAICodexAccessTokenExpiry(candidate.access),
@@ -228,7 +184,7 @@ function readProviderAuthModelConfigs(result: ProviderAuthResult): AgentDefaultM
   if (isRecord(models)) {
     return { ...models };
   }
-  const defaultModel = readString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
+  const defaultModel = readString(result.defaultModel) ?? OPENAI_DEFAULT_MODEL;
   return { [defaultModel]: {} };
 }
 
@@ -281,10 +237,9 @@ function authProfileDedupeKey(profile: HermesCodexAuthProfile): string {
 async function readCodexAuthProfilesFromSource(
   source: HermesSource,
 ): Promise<HermesCodexAuthProfile[]> {
-  const candidates = [
-    ...(await readHermesCodexAuthCandidates(source.authPath)),
-    ...(await readOpenCodeOpenAICandidates(source.opencodeAuthPath)),
-  ].toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  const candidates = (await readOpenCodeOpenAICandidates(source.opencodeAuthPath)).toSorted(
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+  );
   const profiles: HermesCodexAuthProfile[] = [];
   const seen = new Set<string>();
   for (const [index, candidate] of candidates.entries()) {
@@ -322,11 +277,7 @@ async function readCodexAuthProfilesFromPath(params: {
       ...(params.sourcePath ? { opencodeAuthPath: params.sourcePath } : {}),
     });
   }
-  return await readCodexAuthProfilesFromSource({
-    root: "",
-    archivePaths: [],
-    ...(params.sourcePath ? { authPath: params.sourcePath } : {}),
-  });
+  return [];
 }
 
 function findMatchingProfile(
@@ -401,56 +352,73 @@ export async function buildAuthItems(params: {
   source: HermesSource;
   targets: PlannedTargets;
 }): Promise<MigrationItem[]> {
+  const items: MigrationItem[] = [];
+  if (await hasLegacyHermesAuthJson(params.source.authPath)) {
+    items.push(
+      createMigrationManualItem({
+        id: "manual:legacy-hermes-auth-json",
+        source: params.source.authPath ?? "auth.json",
+        message:
+          "Hermes auth.json contains legacy OAuth credentials. OpenClaw no longer imports those into live auth during Hermes migration.",
+        recommendation:
+          "Run openclaw models auth login --provider openai after migration, or run openclaw doctor --fix for existing OpenClaw legacy auth state.",
+      }),
+    );
+  }
   const profiles = await readCodexAuthProfilesFromSource(params.source);
   if (profiles.length === 0) {
-    return [];
+    return items;
   }
   const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
-  return profiles.map((profile) => {
-    const matchedProfileId = findMatchingProfile(store, profile.credential);
-    const profileId = matchedProfileId ?? profile.sourceProfileId;
-    const targetExists = Boolean(store.profiles[profileId]);
-    const skipped = !params.ctx.includeSecrets;
-    const configConflict = hasAuthProfileConfigConflict(
-      params.ctx.config,
-      oauthAuthProfileConfig(profileId, profile.credential),
-      Boolean(params.ctx.overwrite),
-    );
-    const conflict =
-      ((targetExists && !matchedProfileId && !params.ctx.overwrite) || configConflict) && !skipped;
-    const itemId =
-      profiles.length === 1
-        ? `auth:${OPENAI_CODEX_PROVIDER_ID}`
-        : `auth:${OPENAI_CODEX_PROVIDER_ID}:${profile.sourceProfileId}`;
-    return createMigrationItem({
-      id: itemId,
-      kind: "auth",
-      action: skipped ? "skip" : "create",
-      source: profile.candidate.sourcePath,
-      target: `${params.targets.agentDir}/auth-profiles.json#${profileId}`,
-      status: skipped ? "skipped" : conflict ? "conflict" : "planned",
-      sensitive: true,
-      reason: skipped
-        ? HERMES_REASON_INCLUDE_SECRETS
-        : conflict
-          ? HERMES_REASON_AUTH_PROFILE_EXISTS
-          : undefined,
-      message: skipped
-        ? "OpenAI Codex OAuth credentials detected in Hermes."
-        : "Import Hermes OpenAI Codex OAuth credentials and configure OpenAI Codex models.",
-      details: {
-        provider: OPENAI_CODEX_PROVIDER_ID,
-        profileId,
-        ...(typeof profile.candidate.sourceCredentialIndex === "number"
-          ? { sourceCredentialIndex: profile.candidate.sourceCredentialIndex }
-          : {}),
-        sourceCredentialFingerprint: sourceCredentialFingerprint(profile.candidate),
-        sourceProfileId: profile.sourceProfileId,
-        sourceKind: profile.candidate.sourceKind,
-        sourceLabel: profile.candidate.sourceLabel,
-      },
-    });
-  });
+  items.push(
+    ...profiles.map((profile) => {
+      const matchedProfileId = findMatchingProfile(store, profile.credential);
+      const profileId = matchedProfileId ?? profile.sourceProfileId;
+      const targetExists = Boolean(store.profiles[profileId]);
+      const skipped = !params.ctx.includeSecrets;
+      const configConflict = hasAuthProfileConfigConflict(
+        params.ctx.config,
+        oauthAuthProfileConfig(profileId, profile.credential),
+        Boolean(params.ctx.overwrite),
+      );
+      const conflict =
+        ((targetExists && !matchedProfileId && !params.ctx.overwrite) || configConflict) &&
+        !skipped;
+      const itemId =
+        profiles.length === 1
+          ? `auth:${OPENAI_PROVIDER_ID}`
+          : `auth:${OPENAI_PROVIDER_ID}:${profile.sourceProfileId}`;
+      return createMigrationItem({
+        id: itemId,
+        kind: "auth",
+        action: skipped ? "skip" : "create",
+        source: profile.candidate.sourcePath,
+        target: `${params.targets.agentDir}/auth-profiles.json#${profileId}`,
+        status: skipped ? "skipped" : conflict ? "conflict" : "planned",
+        sensitive: true,
+        reason: skipped
+          ? HERMES_REASON_INCLUDE_SECRETS
+          : conflict
+            ? HERMES_REASON_AUTH_PROFILE_EXISTS
+            : undefined,
+        message: skipped
+          ? "OpenAI OAuth credentials detected in OpenCode."
+          : "Import OpenAI OAuth credentials and configure OpenAI models.",
+        details: {
+          provider: OPENAI_PROVIDER_ID,
+          profileId,
+          ...(typeof profile.candidate.sourceCredentialIndex === "number"
+            ? { sourceCredentialIndex: profile.candidate.sourceCredentialIndex }
+            : {}),
+          sourceCredentialFingerprint: sourceCredentialFingerprint(profile.candidate),
+          sourceProfileId: profile.sourceProfileId,
+          sourceKind: profile.candidate.sourceKind,
+          sourceLabel: profile.candidate.sourceLabel,
+        },
+      });
+    }),
+  );
+  return items;
 }
 
 export async function applyAuthItem(

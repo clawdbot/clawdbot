@@ -107,6 +107,45 @@ describe("talk handoff store", () => {
     vi.useRealTimers();
   });
 
+  it("expires handoffs immediately when the creation clock is invalid", () => {
+    clearTalkHandoffsForTest();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const handoff = createTalkHandoff({
+        sessionKey: "session:main",
+        ttlMs: 5000,
+      });
+
+      expect(handoff.createdAt).toBe(0);
+      expect(handoff.expiresAt).toBe(0);
+      expect(joinTalkHandoff(handoff.id, handoff.token)).toEqual({
+        ok: false,
+        reason: "expired",
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("expires handoffs immediately when expiry would exceed Date bounds", () => {
+    clearTalkHandoffsForTest();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    const handoff = createTalkHandoff({
+      sessionKey: "session:main",
+      ttlMs: 5000,
+    });
+
+    expect(handoff.expiresAt).toBe(0);
+    expect(joinTalkHandoff(handoff.id, handoff.token)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+
+    vi.useRealTimers();
+  });
+
   it("joins and revokes handoffs with only the bearer token", () => {
     clearTalkHandoffsForTest();
     const handoff = createTalkHandoff({ sessionKey: "session:main" });

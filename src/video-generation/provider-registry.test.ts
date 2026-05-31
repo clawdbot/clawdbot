@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 
 type ProviderRegistryModule = typeof import("./provider-registry.js");
@@ -40,20 +40,34 @@ async function loadProviderRegistry(): Promise<ProviderRegistryModule> {
 }
 
 describe("video-generation provider registry", () => {
+  let delegationCase: {
+    calls: unknown[][];
+    providers: VideoGenerationProviderPlugin[];
+  };
+
+  beforeAll(async () => {
+    const { listVideoGenerationProviders } = await loadProviderRegistry();
+    const providers = listVideoGenerationProviders();
+    delegationCase = {
+      calls: [...resolvePluginCapabilityProvidersMock.mock.calls],
+      providers,
+    };
+  });
+
   beforeEach(() => {
     vi.resetModules();
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
 
-  it("delegates provider resolution to the capability provider boundary", async () => {
-    const { listVideoGenerationProviders } = await loadProviderRegistry();
-
-    expect(listVideoGenerationProviders()).toStrictEqual([]);
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "videoGenerationProviders",
-      cfg: undefined,
-    });
+  it("delegates provider resolution to the capability provider boundary", () => {
+    expect(delegationCase.providers).toStrictEqual([]);
+    expect(delegationCase.calls).toContainEqual([
+      {
+        key: "videoGenerationProviders",
+        cfg: undefined,
+      },
+    ]);
   });
 
   it("uses active plugin providers without loading from disk", async () => {

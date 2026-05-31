@@ -7,8 +7,16 @@ queries:
   - uses: ./.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql
 
 paths:
-  - src
-  - extensions
+  - src/cli/gateway-cli/run-loop.ts
+  - src/infra/gateway-lock.ts
+  - src/infra/jsonl-socket.ts
+  - src/infra/net
+  - src/infra/push-apns-http2.ts
+  - src/infra/ssh-tunnel.ts
+  - src/proxy-capture
+  - extensions/codex-supervisor/src/json-rpc-client.ts
+  - extensions/irc/src
+  - extensions/qa-lab/src
   - packages/net-policy/src
 
 paths-ignore:

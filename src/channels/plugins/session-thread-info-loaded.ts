@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
 
 type SessionConversationHookResult = {

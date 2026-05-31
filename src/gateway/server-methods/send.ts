@@ -1,4 +1,9 @@
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -38,11 +43,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  readStringValue,
-} from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -637,8 +637,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
         const shouldUseDerivedThreadSessionKey =
           channel === "slack" &&
-          !!providedSessionKey &&
-          !!normalizeOptionalString(derivedRoute?.threadId) &&
+          Boolean(providedSessionKey) &&
+          Boolean(normalizeOptionalString(derivedRoute?.threadId)) &&
           normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
             normalizeOptionalLowercaseString(providedSessionBaseKey) &&
           normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
@@ -800,7 +800,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error };
         }
         const resolvedTarget = resolveGatewayOutboundTarget({
-          channel: channel,
+          channel,
           to: request.to.trim(),
           cfg,
           accountId,

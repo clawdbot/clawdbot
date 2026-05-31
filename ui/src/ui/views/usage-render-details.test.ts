@@ -1,8 +1,10 @@
+import { render } from "lit";
 import { describe, it, expect } from "vitest";
 import {
   computeFilteredUsage,
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
+  renderTimeSeriesCompact,
 } from "./usage-render-details.ts";
 import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
@@ -23,7 +25,7 @@ function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
 
 const baseUsage = {
   totalTokens: 1000,
-  totalCost: 1.0,
+  totalCost: 1,
   input: 300,
   output: 400,
   cacheRead: 200,
@@ -143,5 +145,30 @@ describe("chart bar sizing", () => {
         expect(barGap).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+});
+
+describe("renderTimeSeriesCompact", () => {
+  it("does not render Invalid Date for Date-invalid point timestamps", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderTimeSeriesCompact(
+        {
+          points: [
+            makePoint({ timestamp: 8_640_000_000_000_001, totalTokens: 10 }),
+            makePoint({ timestamp: 8_640_000_000_000_002, totalTokens: 20 }),
+          ],
+        },
+        false,
+        "per-turn",
+        () => undefined,
+        "total",
+        () => undefined,
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Invalid Date");
   });
 });

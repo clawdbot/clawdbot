@@ -1,8 +1,9 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
+  couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
   normalizeToolList,
   normalizeToolName,

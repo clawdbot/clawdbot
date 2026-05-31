@@ -1,4 +1,4 @@
-import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export function normalizeNodeApprovalSurfaceList(value: readonly string[] | undefined): string[] {
   return normalizeArrayBackedTrimmedStringList(value) ?? [];

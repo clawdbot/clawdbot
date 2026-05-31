@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   resolveThinkingDefaultWithRuntimeCatalog,
@@ -5,7 +6,6 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -200,6 +200,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (!commandResult.shouldContinue) {
     return { handled: true, reply: commandResult.reply };
   }
+  const continuationTriggerBodyNormalized = command.rawBodyNormalized;
 
   const directiveResult = await resolveReplyDirectives({
     ctx: params.ctx,
@@ -216,7 +217,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionScope: sessionState.sessionScope,
     groupResolution: sessionState.groupResolution,
     isGroup: sessionState.isGroup,
-    triggerBodyNormalized: sessionState.triggerBodyNormalized,
+    triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
     commandAuthorized: params.commandAuthorized,
     defaultProvider: params.defaultProvider,

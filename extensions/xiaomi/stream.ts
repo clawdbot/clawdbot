@@ -4,7 +4,7 @@ import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createThinkingOnlyFinalTextWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { isMiMoReasoningModelRef } from "./thinking.js";
+import { isMiMoProviderId, isMiMoReasoningModelRef } from "./thinking.js";
 
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
@@ -22,7 +22,7 @@ function normalizeMiMoModelId(modelId: unknown): string | undefined {
 
 function shouldPromoteMiMoReasoningToVisibleText(model: Parameters<StreamFn>[0]): boolean {
   return (
-    model.provider === "xiaomi" &&
+    isMiMoProviderId(model.provider) &&
     MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizeMiMoModelId(model.id) ?? "")
   );
 }

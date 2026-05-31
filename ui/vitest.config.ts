@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig, defineProject } from "vitest/config";
 import {
@@ -5,6 +7,8 @@ import {
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "..");
 const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
@@ -15,6 +19,14 @@ const nodeDrivenBrowserLayoutTests = [
 ] as const;
 
 export default defineConfig({
+  resolve: {
+    alias: [
+      {
+        find: /^@openclaw\/normalization-core\/(.+)$/u,
+        replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
+      },
+    ],
+  },
   test: {
     ...sharedUiTestConfig,
     projects: [

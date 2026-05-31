@@ -1,0 +1,71 @@
+{
+  "name": "@openclaw/media-understanding-common",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./active-model": {
+      "types": "./dist/active-model.d.mts",
+      "import": "./dist/active-model.mjs",
+      "default": "./dist/active-model.mjs"
+    },
+    "./defaults": {
+      "types": "./dist/defaults.d.mts",
+      "import": "./dist/defaults.mjs",
+      "default": "./dist/defaults.mjs"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.mts",
+      "import": "./dist/errors.mjs",
+      "default": "./dist/errors.mjs"
+    },
+    "./format": {
+      "types": "./dist/format.d.mts",
+      "import": "./dist/format.mjs",
+      "default": "./dist/format.mjs"
+    },
+    "./openai-compatible-video": {
+      "types": "./dist/openai-compatible-video.d.mts",
+      "import": "./dist/openai-compatible-video.mjs",
+      "default": "./dist/openai-compatible-video.mjs"
+    },
+    "./output-extract": {
+      "types": "./dist/output-extract.d.mts",
+      "import": "./dist/output-extract.mjs",
+      "default": "./dist/output-extract.mjs"
+    },
+    "./provider-id": {
+      "types": "./dist/provider-id.d.mts",
+      "import": "./dist/provider-id.mjs",
+      "default": "./dist/provider-id.mjs"
+    },
+    "./provider-supports": {
+      "types": "./dist/provider-supports.d.mts",
+      "import": "./dist/provider-supports.mjs",
+      "default": "./dist/provider-supports.mjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/types.mjs",
+      "default": "./dist/types.mjs"
+    },
+    "./video": {
+      "types": "./dist/video.d.mts",
+      "import": "./dist/video.mjs",
+      "default": "./dist/video.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/active-model.ts src/defaults.ts src/errors.ts src/format.ts src/openai-compatible-video.ts src/output-extract.ts src/provider-id.ts src/provider-supports.ts src/types.ts src/video.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

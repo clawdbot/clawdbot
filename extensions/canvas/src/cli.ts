@@ -260,7 +260,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
   deps.nodesCallOpts(
     canvas
       .command("snapshot")
-      .description("Capture a canvas snapshot (prints MEDIA:<path>)")
+      .description("Capture a canvas snapshot (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--format <png|jpg|jpeg>", "Image format", "jpg")
       .option("--max-width <px>", "Max width in px (optional)")
@@ -287,7 +287,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
             deps.defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
             return;
           }
-          deps.defaultRuntime.log(`MEDIA:${deps.shortenHomePath(filePath)}`);
+          deps.defaultRuntime.log(deps.shortenHomePath(filePath));
         });
       }),
     { timeoutMs: 60_000 },

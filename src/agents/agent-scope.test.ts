@@ -842,7 +842,7 @@ describe("resolveAgentConfig", () => {
           subagents: {
             model: {
               primary: "kimi/kimi-code",
-              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+              fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
             },
           },
         },
@@ -852,7 +852,7 @@ describe("resolveAgentConfig", () => {
             subagents: {
               model: {
                 primary: "kimi/kimi-code",
-                fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+                fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
               },
             },
           },
@@ -891,21 +891,21 @@ describe("resolveAgentConfig", () => {
     };
 
     expect(resolveSubagentModelFallbacksOverride(cfg, "research")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
       "google/gemini-3-pro",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(
       resolveSubagentModelFallbacksOverride(cfg, "fallback-only-subagent-model"),
     ).toStrictEqual([]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
@@ -921,7 +921,7 @@ describe("resolveAgentConfig", () => {
           subagents: {
             model: {
               primary: "kimi/kimi-code",
-              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+              fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
             },
           },
         },
@@ -955,7 +955,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
+    ).toEqual(["openai/gpt-5.4", "zai/glm-5"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
@@ -996,7 +996,7 @@ describe("resolveAgentConfig", () => {
             subagents: {
               model: {
                 primary: "kimi/kimi-code",
-                fallbacks: ["openai-codex/gpt-5.4"],
+                fallbacks: ["openai/gpt-5.4"],
               },
             },
           },
@@ -1017,7 +1017,7 @@ describe("resolveAgentConfig", () => {
     });
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "subagent-model" })).toEqual({
       primary: "kimi/kimi-code",
-      fallbacks: ["openai-codex/gpt-5.4"],
+      fallbacks: ["openai/gpt-5.4"],
     });
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "fallback-only-subagent" })).toBe(
       "anthropic/claude-sonnet-4-6",

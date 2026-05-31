@@ -1948,6 +1948,128 @@
   color: var(--danger);
 }
 
+/* MCP */
+.mcp-page {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.mcp-page__summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mcp-command-card,
+.mcp-server-list {
+  display: grid;
+  gap: 14px;
+}
+
+.mcp-command-card__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mcp-command-card__grid code,
+.mcp-server-row__actions code {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-server-list__header,
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mcp-server-list__actions,
+.mcp-server-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mcp-server-list__rows {
+  display: grid;
+  gap: 8px;
+}
+
+.mcp-server-row {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.mcp-server-row__main {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.mcp-server-row__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.mcp-server-row__launch {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-server-row__meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mcp-server-row__meta span {
+  padding: 3px 7px;
+  border-radius: var(--radius-full);
+  background: var(--secondary);
+}
+
+@media (max-width: 820px) {
+  .mcp-page__summary,
+  .mcp-command-card__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mcp-server-list__header,
+  .mcp-server-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mcp-server-list__actions,
+  .mcp-server-row__actions {
+    justify-content: flex-start;
+  }
+}
+
 /* ===========================================
    Mobile Responsiveness
    =========================================== */

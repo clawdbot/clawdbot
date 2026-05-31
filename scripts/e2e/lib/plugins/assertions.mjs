@@ -1,23 +1,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
-const CLAWHUB_PREFLIGHT_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS,
-  30_000,
-);
-const CLAWHUB_PREFLIGHT_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES,
-  1024 * 1024,
-);
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function readClawHubPreflightLimits() {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES",
+      1024 * 1024,
+    ),
+    timeoutMs: readPositiveIntEnv(
+      "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS",
+      30_000,
+    ),
+  };
 }
 
 function createTimeoutError(label, timeoutMs) {
@@ -826,6 +827,7 @@ async function assertClawHubPreflight() {
     throw new Error(`expected clawhub: spec, got ${spec}`);
   }
 
+  const limits = readClawHubPreflightLimits();
   const packageName = parseClawHubPackageName(spec);
   const baseUrl = (
     process.env.OPENCLAW_CLAWHUB_URL ||
@@ -840,7 +842,7 @@ async function assertClawHubPreflight() {
   const preflightUrl = `${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`;
   const response = await withTimeout(
     `ClawHub package preflight for ${packageName}`,
-    CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+    limits.timeoutMs,
     (signal) =>
       fetch(preflightUrl, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -850,12 +852,12 @@ async function assertClawHubPreflight() {
   if (!response.ok) {
     const body = await withTimeout(
       `ClawHub package preflight response for ${packageName}`,
-      CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+      limits.timeoutMs,
       () =>
         readBoundedResponseText(
           response,
           `ClawHub package preflight response for ${packageName}`,
-          CLAWHUB_PREFLIGHT_BODY_MAX_BYTES,
+          limits.bodyMaxBytes,
         ),
     );
     throw new Error(
@@ -864,17 +866,17 @@ async function assertClawHubPreflight() {
   }
   const rawDetail = await withTimeout(
     `ClawHub package preflight response for ${packageName}`,
-    CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+    limits.timeoutMs,
     () =>
       readBoundedResponseText(
         response,
         `ClawHub package preflight response for ${packageName}`,
-        CLAWHUB_PREFLIGHT_BODY_MAX_BYTES,
+        limits.bodyMaxBytes,
       ),
   );
   const detail = await withTimeout(
     `ClawHub package preflight JSON for ${packageName}`,
-    CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+    limits.timeoutMs,
     () => JSON.parse(rawDetail),
   );
   const family = detail.package?.family;

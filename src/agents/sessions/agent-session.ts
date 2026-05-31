@@ -1729,7 +1729,7 @@ export class AgentSession {
    * Check if current model supports thinking/reasoning.
    */
   supportsThinking(): boolean {
-    return !!this.model?.reasoning;
+    return Boolean(this.model?.reasoning);
   }
 
   private getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {

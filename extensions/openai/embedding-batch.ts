@@ -211,7 +211,7 @@ export async function runOpenAiEmbeddingBatches(
       maxRequests: OPENAI_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: openai batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitOpenAiBatch({
         openAi: params.openAi,
         requests: group,
@@ -239,8 +239,8 @@ export async function runOpenAiEmbeddingBatches(
             openAi: params.openAi,
             batchId,
             wait: params.wait,
-            pollIntervalMs: params.pollIntervalMs,
-            timeoutMs: params.timeoutMs,
+            pollIntervalMs,
+            timeoutMs,
             debug: params.debug,
             initial: batchInfo,
           }),

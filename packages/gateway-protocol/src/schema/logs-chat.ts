@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
@@ -32,6 +33,32 @@ export const ChatHistoryParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const ChatMessageGetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    messageId: NonEmptyString,
+    maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000_000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ChatMessageGetResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    message: Type.Optional(Type.Unknown()),
+    unavailableReason: Type.Optional(
+      Type.Union([
+        Type.Literal("not_found"),
+        Type.Literal("oversized"),
+        Type.Literal("not_visible"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 
 export const ChatSendParamsSchema = Type.Object(
   {

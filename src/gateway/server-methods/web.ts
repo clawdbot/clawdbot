@@ -1,7 +1,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateWebLoginStartParams,
   validateWebLoginWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -9,6 +8,7 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
@@ -19,6 +19,10 @@ const resolveWebLoginProvider = () =>
       ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
     ].some((method) => WEB_LOGIN_METHODS.has(method)),
   ) ?? null;
+
+type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
+type WebLoginGateway = NonNullable<WebLoginProvider["gateway"]>;
+type WebLoginGatewayMethod = "loginWithQrStart" | "loginWithQrWait";
 
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
@@ -42,6 +46,30 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
   );
 }
 
+function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
+  rawParams: unknown;
+  respond: RespondFn;
+  gatewayMethod: TMethod;
+}): {
+  accountId?: string;
+  provider: WebLoginProvider;
+  run: NonNullable<WebLoginGateway[TMethod]>;
+} | null {
+  const accountId = resolveAccountId(params.rawParams);
+  const provider = resolveWebLoginProvider();
+  if (!provider) {
+    respondProviderUnavailable(params.respond);
+    return null;
+  }
+  const gateway = provider.gateway;
+  const run = gateway?.[params.gatewayMethod];
+  if (!run) {
+    respondProviderUnsupported(params.respond, provider.id);
+    return null;
+  }
+  return { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[TMethod]> };
+}
+
 function wasChannelRunning(params: {
   context: Parameters<GatewayRequestHandlers["web.login.start"]>[0]["context"];
   channelId: ChannelId;
@@ -63,41 +91,29 @@ function wasChannelRunning(params: {
 
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
-    if (!validateWebLoginStartParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid web.login.start params: ${formatValidationErrors(validateWebLoginStartParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWebLoginStartParams, "web.login.start", respond)) {
       return;
     }
     try {
-      const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
-      if (!provider) {
-        respondProviderUnavailable(respond);
+      const request = resolveWebLoginRequest({
+        rawParams: params,
+        respond,
+        gatewayMethod: "loginWithQrStart",
+      });
+      if (!request) {
         return;
       }
-      if (!provider.gateway?.loginWithQrStart) {
-        respondProviderUnsupported(respond, provider.id);
-        return;
-      }
+      const { accountId, provider, run } = request;
       const wasRunning = wasChannelRunning({
         context,
         channelId: provider.id,
         accountId,
       });
       await context.stopChannel(provider.id, accountId);
-      const result = await provider.gateway.loginWithQrStart({
-        force: Boolean((params as { force?: boolean }).force),
-        timeoutMs:
-          typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (params as { timeoutMs?: number }).timeoutMs
-            : undefined,
-        verbose: Boolean((params as { verbose?: boolean }).verbose),
+      const result = await run({
+        force: Boolean(params.force),
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        verbose: Boolean(params.verbose),
         accountId,
       });
       if (result.connected) {
@@ -111,38 +127,24 @@ export const webHandlers: GatewayRequestHandlers = {
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
-    if (!validateWebLoginWaitParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid web.login.wait params: ${formatValidationErrors(validateWebLoginWaitParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWebLoginWaitParams, "web.login.wait", respond)) {
       return;
     }
     try {
-      const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
-      if (!provider) {
-        respondProviderUnavailable(respond);
+      const request = resolveWebLoginRequest({
+        rawParams: params,
+        respond,
+        gatewayMethod: "loginWithQrWait",
+      });
+      if (!request) {
         return;
       }
-      if (!provider.gateway?.loginWithQrWait) {
-        respondProviderUnsupported(respond, provider.id);
-        return;
-      }
-      const result = await provider.gateway.loginWithQrWait({
-        timeoutMs:
-          typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (params as { timeoutMs?: number }).timeoutMs
-            : undefined,
+      const { accountId, provider, run } = request;
+      const result = await run({
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
         accountId,
         currentQrDataUrl:
-          typeof (params as { currentQrDataUrl?: unknown }).currentQrDataUrl === "string"
-            ? (params as { currentQrDataUrl?: string }).currentQrDataUrl
-            : undefined,
+          typeof params.currentQrDataUrl === "string" ? params.currentQrDataUrl : undefined,
       });
       if (result.connected) {
         await context.startChannel(provider.id, accountId);

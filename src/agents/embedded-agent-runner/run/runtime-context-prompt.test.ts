@@ -279,6 +279,18 @@ describe("runtime context prompt submission", () => {
     ).toBe("Conversation info (untrusted metadata):\n```json\n{}\n```");
   });
 
+  it("can use compact current-turn context for resumable backends", () => {
+    expect(
+      buildCurrentInboundPromptContextPrefix(
+        {
+          text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
+          resumableText: "Current event:\nBob: yes",
+        },
+        { preferResumableText: true },
+      ),
+    ).toBe("Current event:\nBob: yes");
+  });
+
   it("omits empty current-turn context", () => {
     expect(buildCurrentInboundPromptContextPrefix(undefined)).toBe("");
     expect(buildCurrentInboundPromptContextPrefix({ text: "   " })).toBe("");
@@ -298,6 +310,17 @@ describe("runtime context prompt submission", () => {
         prompt: "visible ask",
       }),
     ).toBe("Conversation context:\n\nvisible ask");
+
+    expect(
+      buildCurrentInboundPrompt({
+        context: {
+          text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
+          resumableText: "Current event:\nBob: yes",
+        },
+        prompt: "[OpenClaw room event]",
+        preferResumableText: true,
+      }),
+    ).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
   });
 
   it("builds runtime context as prompt-local custom context before the current user prompt", () => {

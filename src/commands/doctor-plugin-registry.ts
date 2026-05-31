@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
@@ -21,8 +23,6 @@ import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -80,7 +80,7 @@ function listManagedPluginNpmRoots(params: PluginRegistryDoctorRepairParams): st
 }
 
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
-  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+  if (!Object.hasOwn(record, key)) {
     return false;
   }
   delete record[key];

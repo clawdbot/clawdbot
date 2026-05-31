@@ -4,14 +4,14 @@
  */
 
 // Internal import for JSON parsing utility
-import {
-  type AssistantMessage,
-  type AssistantMessageEvent,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-  type StopReason,
-  type ToolCall,
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StopReason,
+  ToolCall,
 } from "../../llm/types.js";
 import { EventStream } from "../../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../../llm/utils/json-parse.js";

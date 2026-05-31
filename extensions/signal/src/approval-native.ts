@@ -12,9 +12,9 @@ import {
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
-import {
-  type ExecApprovalRequest,
-  type PluginApprovalRequest,
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ChannelApprovalCapability,

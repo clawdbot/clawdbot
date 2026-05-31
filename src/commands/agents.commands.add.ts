@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -25,10 +29,6 @@ import { saveJsonFile } from "../infra/json-file.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -78,9 +78,7 @@ async function copyPortableAuthProfiles(params: {
   destAuthPath: string;
   sourceAgentDir: string;
 }): Promise<{ copied: number; skipped: number }> {
-  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir, {
-    resolveLegacyOAuthSidecars: false,
-  });
+  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
   if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
     return { copied: 0, skipped: 0 };
   }
@@ -339,9 +337,7 @@ export async function agentsAddCommand(
         (await pathExists(sourceAuthPath)) &&
         !(await pathExists(destAuthPath))
       ) {
-        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir, {
-          resolveLegacyOAuthSidecars: false,
-        });
+        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileSecretsStoreForAgentCopy(sourceStore)
           : undefined;

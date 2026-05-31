@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -6,7 +7,6 @@ import {
   toInternalMessagePreprocessedContext,
   toInternalMessageTranscribedContext,
 } from "../../hooks/message-hook-mappers.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 export function emitPreAgentMessageHooks(params: {

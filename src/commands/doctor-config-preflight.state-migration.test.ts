@@ -34,7 +34,7 @@ vi.mock("../config/io.js", () => ({
   recoverConfigFromLastKnownGood: vi.fn(),
 }));
 
-vi.mock("../terminal/note.js", () => ({ note }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 

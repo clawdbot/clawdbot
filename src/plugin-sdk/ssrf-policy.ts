@@ -1,3 +1,6 @@
+import { asNullableRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
@@ -6,9 +9,6 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -64,7 +64,7 @@ export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
 
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
   const entry = asNullableRecord(value);
-  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
+  return Boolean(entry && Object.hasOwn(entry, "allowPrivateNetwork"));
 }
 
 export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {

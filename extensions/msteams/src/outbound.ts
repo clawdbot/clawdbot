@@ -16,7 +16,7 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
-import { createMSTeamsPollStoreFs } from "./polls.js";
+import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
@@ -180,7 +180,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         options: poll.options,
         maxSelections,
       });
-      const pollStore = createMSTeamsPollStoreFs();
+      const pollStore = createMSTeamsPollStoreState();
       await pollStore.createPoll({
         id: result.pollId,
         question: poll.question,

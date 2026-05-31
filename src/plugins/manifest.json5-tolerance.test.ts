@@ -153,7 +153,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
   id: "openai",
   activation: {
     onStartup: false,
-    onProviders: ["openai", "", "openai-codex"],
+    onProviders: ["openai", "", "openai"],
     onCommands: ["models", ""],
     onChannels: ["web", ""],
     onRoutes: ["gateway-webhook", ""],
@@ -177,7 +177,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     if (result.ok) {
       expect(result.manifest.activation).toEqual({
         onStartup: false,
-        onProviders: ["openai", "openai-codex"],
+        onProviders: ["openai", "openai"],
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],

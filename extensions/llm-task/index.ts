@@ -15,7 +15,7 @@ export default defineToolPlugin({
       defaultAuthProfileId: Type.Optional(Type.String()),
       allowedModels: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Allowlist of provider/model keys like openai-codex/gpt-5.2.",
+          description: "Allowlist of provider/model keys like openai/gpt-5.5.",
         }),
       ),
       maxTokens: optionalPositiveIntegerSchema(),

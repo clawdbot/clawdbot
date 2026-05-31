@@ -352,12 +352,12 @@ describe("handleModelsCommand", () => {
   it("does not re-add the default provider when provider visibility is restricted", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+      { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       { provider: "vllm", id: "llama-local", name: "Llama Local" },
       { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai-codex", "vllm"]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai", "vllm"]);
 
     const result = await handleModelsCommand(
       buildParams("/models", {
@@ -365,7 +365,7 @@ describe("handleModelsCommand", () => {
           defaults: {
             model: { primary: "anthropic/claude-opus-4-5" },
             models: {
-              "openai-codex/*": {},
+              "openai/*": {},
               "vllm/*": {},
             },
           },
@@ -375,7 +375,7 @@ describe("handleModelsCommand", () => {
     );
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
-    expect(result?.reply?.text).toContain("- openai-codex (2)");
+    expect(result?.reply?.text).toContain("- openai (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
     expect(result?.reply?.text).not.toContain("- anthropic");
   });
@@ -744,7 +744,7 @@ describe("handleModelsCommand", () => {
 
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
       { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
       { provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
     ]);
@@ -752,11 +752,11 @@ describe("handleModelsCommand", () => {
       agents: {
         defaults: {
           model: {
-            primary: "openai-codex/gpt-5.4",
+            primary: "openai/gpt-5.4",
             fallbacks: ["deepseek-v4-flash", "deepseek-v4-pro"],
           },
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
@@ -764,7 +764,7 @@ describe("handleModelsCommand", () => {
 
     const data = await buildModelsProviderData(cfg as OpenClawConfig);
 
-    expect([...(data.byProvider.get("openai-codex") ?? [])]).toEqual(["gpt-5.4"]);
+    expect([...(data.byProvider.get("openai") ?? [])]).toEqual(["gpt-5.4"]);
     expect([...(data.byProvider.get("deepseek") ?? [])].toSorted()).toEqual([
       "deepseek-v4-flash",
       "deepseek-v4-pro",
@@ -803,31 +803,27 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
-  it("labels OpenAI provider pages with the effective Codex auth provider set", async () => {
-    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
-      "oauth (openai-codex:user@example.com)",
-    );
+  it("labels OpenAI provider pages with the canonical auth provider id", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("oauth (openai:user@example.com)");
 
     const result = await handleModelsCommand(
       buildParams("/models openai", {
         auth: {
           order: {
-            openai: ["openai-codex:user@example.com"],
+            openai: ["openai:user@example.com"],
           },
         },
       }),
       true,
     );
 
-    expect(result?.reply?.text).toContain(
-      "Models (openai · 🔑 oauth (openai-codex:user@example.com))",
-    );
+    expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (openai:user@example.com))");
     const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
       ([params]) => (params as { provider?: string }).provider === "openai",
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",
-      acceptedProviderIds: ["openai-codex"],
+      acceptedProviderIds: ["openai"],
     });
   });
 

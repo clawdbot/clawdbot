@@ -294,8 +294,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
   let appliedReplyTo = false;
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
+  for (const chunk of chunks) {
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
     const applyQuoteForChunk = !appliedReplyTo;

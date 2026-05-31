@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -371,8 +372,8 @@ async function readHistorySessions(
     if (typeof parsed.text === "string" && parsed.text.trim()) {
       entry.lastMessage = truncateText(parsed.text.trim(), 140);
     }
-    if (typeof parsed.ts === "number" && Number.isFinite(parsed.ts)) {
-      entry.updatedAt = new Date(parsed.ts * 1000).toISOString();
+    if (typeof parsed.ts === "number") {
+      entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
     }
     summaries.set(sessionId, entry);
   }

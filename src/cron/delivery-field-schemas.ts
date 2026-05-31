@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { z, type ZodType } from "zod";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const trimStringPreprocess = (value: unknown) => (typeof value === "string" ? value.trim() : value);
 

@@ -1,4 +1,4 @@
-import { type WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
   createPerplexityWebSearchProviderBase,
   resolvePerplexityWebSearchRuntimeMetadata,

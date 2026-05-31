@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions.js";
@@ -6,7 +7,6 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.js";
 import {
   clearSessionAuthProfileOverrideMock,
@@ -32,9 +32,9 @@ const DEFAULT_TEST_MODEL_CATALOG: Array<{
   { id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai" },
   { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", provider: "openai" },
   { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", provider: "openai" },
-  { id: "gpt-5.4", name: "GPT-5.4 (Codex)", provider: "openai-codex" },
-  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro (Codex)", provider: "openai-codex" },
-  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini (Codex)", provider: "openai-codex" },
+  { id: "gpt-5.4", name: "GPT-5.4 (Codex)", provider: "openai" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro (Codex)", provider: "openai" },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini (Codex)", provider: "openai" },
   { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
 ];
 
@@ -82,7 +82,7 @@ function createDirectiveBehaviorProviderRegistry(): ReturnType<typeof createEmpt
       pluginId: "openai",
       pluginName: "OpenAI Provider",
       source: "test",
-      provider: createThinkingPolicyProvider("openai-codex", OPENAI_CODEX_XHIGH_MODEL_IDS),
+      provider: createThinkingPolicyProvider("openai", OPENAI_CODEX_XHIGH_MODEL_IDS),
     },
   ];
   registry.providers.push(...providers);

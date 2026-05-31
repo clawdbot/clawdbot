@@ -1,12 +1,15 @@
+import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
   type SkillStatusReport,
 } from "../skills/discovery/status.js";
-import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
-import { decorativeEmoji, decorativePrefix } from "../terminal/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 

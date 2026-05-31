@@ -371,7 +371,7 @@ describe("sessions view", () => {
               updatedAt: Date.now(),
             },
             {
-              modelProvider: "openai-codex",
+              modelProvider: "openai",
               model: "gpt-5.5",
               thinkingDefault: "high",
               thinkingLevels: [

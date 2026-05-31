@@ -20,15 +20,11 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
 
 vi.mock("../model-suppression.js", () => ({
   shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
-    (provider === "openai" ||
-      provider === "azure-openai-responses" ||
-      provider === "openai-codex") &&
+    (provider === "openai" || provider === "azure-openai-responses") &&
     id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
   buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
     if (
-      (provider !== "openai" &&
-        provider !== "azure-openai-responses" &&
-        provider !== "openai-codex") ||
+      (provider !== "openai" && provider !== "azure-openai-responses") ||
       id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
     ) {
       return undefined;
@@ -63,7 +59,7 @@ beforeEach(() => {
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: ["google-antigravity", "zai", "openai-codex"],
+    handledDynamicProviders: ["google-antigravity", "zai", "openai"],
   });
 }
 
@@ -131,10 +127,10 @@ describe("resolveModel forward-compat errors and overrides", () => {
     );
   });
 
-  it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
+  it("keeps unknown-model errors for non-gpt-5 openai ids", () => {
     expectUnknownModelErrorResult(
-      resolveModelForTest("openai-codex", "gpt-4.1-mini", "/tmp/agent"),
-      "openai-codex",
+      resolveModelForTest("openai", "gpt-4.1-mini", "/tmp/agent"),
+      "openai",
       "gpt-4.1-mini",
     );
   });
@@ -182,11 +178,12 @@ describe("resolveModel forward-compat errors and overrides", () => {
     );
   });
 
-  it("uses codex fallback even when openai-codex provider is configured", () => {
+  it("uses codex fallback even when openai provider is configured", () => {
     const cfg: OpenClawConfig = {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
+            api: "openai-chatgpt-responses",
             baseUrl: "https://custom.example.com",
           },
         },
@@ -194,11 +191,11 @@ describe("resolveModel forward-compat errors and overrides", () => {
     } as unknown as OpenClawConfig;
 
     expectResolvedForwardCompatFallbackResult({
-      result: resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg),
+      result: resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
       },
     });
   });
@@ -209,7 +206,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
     const cfg: OpenClawConfig = {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://custom.example.com",
             headers: { "X-Custom-Auth": "token-123" },
             models: [{ id: "gpt-5.4" }],
@@ -218,24 +215,24 @@ describe("resolveModel forward-compat errors and overrides", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+    const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
-    expect(result.model?.api).toBe("openai-codex-responses");
+    expect(result.model?.api).toBe("openai-chatgpt-responses");
     expect(result.model?.baseUrl).toBe("https://custom.example.com");
     expect(result.model?.id).toBe("gpt-5.4");
-    expect(result.model?.provider).toBe("openai-codex");
+    expect(result.model?.provider).toBe("openai");
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
     });
   });
 
-  it("normalizes openai-codex gpt-5.4 overrides away from /v1/responses", () => {
+  it("keeps openai gpt-5.4 responses overrides on the OpenAI API transport", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://api.openai.com/v1",
             api: "openai-responses",
           },
@@ -244,23 +241,23 @@ describe("resolveModel forward-compat errors and overrides", () => {
     } as unknown as OpenClawConfig;
 
     expectResolvedForwardCompatFallbackResult({
-      result: resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg),
+      result: resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-codex-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
       },
     });
   });
 
-  it("normalizes openai-codex gpt-5.4 back to codex transport", () => {
+  it("normalizes openai gpt-5.4 completions overrides to the OpenAI API transport", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://api.openai.com/v1",
             api: "openai-completions",
           },
@@ -269,12 +266,12 @@ describe("resolveModel forward-compat errors and overrides", () => {
     } as unknown as OpenClawConfig;
 
     expectResolvedForwardCompatFallbackResult({
-      result: resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg),
+      result: resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-codex-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
       },
     });
   });

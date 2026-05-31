@@ -1,7 +1,7 @@
 import {
   resolveIntegerOption as resolveSharedIntegerOption,
   resolveNonNegativeIntegerOption as resolveSharedNonNegativeIntegerOption,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
 
 export function resolveNonNegativeIntegerOption(value: number, fallback: number): number {
   return resolveSharedNonNegativeIntegerOption(value, fallback);

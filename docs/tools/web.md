@@ -123,7 +123,7 @@ Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatical
 Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
 
 - Configure it under `tools.web.search.openaiCodex`
-- It only activates for Codex-capable models (`openai-codex/*` or providers using `api: "openai-codex-responses"`)
+- It only activates for Codex-capable OpenAI models (`openai/*` models using `api: "openai-chatgpt-responses"`)
 - Managed `web_search` still applies to non-Codex models
 - `mode: "cached"` is the default and recommended setting
 - `tools.web.search.enabled: false` disables both managed and native search

@@ -8,7 +8,7 @@
       "name": "@openclaw/line",
       "version": "2026.5.30",
       "dependencies": {
-        "@line/bot-sdk": "11.0.0",
+        "@line/bot-sdk": "11.0.1",
         "zod": "4.4.3"
       },
       "peerDependencies": {
@@ -21,15 +21,15 @@
       }
     },
     "node_modules/@line/bot-sdk": {
-      "version": "11.0.0",
-      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.0.0.tgz",
-      "integrity": "sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==",
+      "version": "11.0.1",
+      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.0.1.tgz",
+      "integrity": "sha512-De9gBX2JfZs78nDSyzfetHJw0R6hncPVVy3tzPMwYZzgwK06C/tcijGy7Vq28K8uYKGVTSthbtMIoYKNhXISzw==",
       "license": "Apache-2.0",
       "dependencies": {
         "@types/node": "^24.0.0"
       },
       "engines": {
-        "node": ">=20"
+        "node": ">=22"
       }
     },
     "node_modules/@types/node": {

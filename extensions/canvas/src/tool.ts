@@ -54,7 +54,7 @@ async function writeBase64ToTempFile(params: { base64: string; ext: string }): P
 function isPathInsideRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 

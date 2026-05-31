@@ -75,7 +75,7 @@ async function readLeaseFile(filePath: string): Promise<LeaseFile> {
     leases: [],
   });
   const leases = Array.isArray(value.leases)
-    ? value.leases.map(normalizeLease).filter((lease): lease is AcpxProcessLease => !!lease)
+    ? value.leases.map(normalizeLease).filter((lease): lease is AcpxProcessLease => Boolean(lease))
     : [];
   return { version: 1, leases };
 }

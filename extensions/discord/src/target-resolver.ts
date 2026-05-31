@@ -5,7 +5,7 @@ import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 import { allowFromContainsDiscordUserId } from "./normalize.js";
 import { parseDiscordSendTarget } from "./send-target-parsing.js";
-import { type DiscordTargetParseOptions } from "./target-parsing.js";
+import type { DiscordTargetParseOptions } from "./target-parsing.js";
 
 /**
  * Resolve a Discord username to user ID using the directory lookup.

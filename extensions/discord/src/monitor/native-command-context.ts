@@ -1,7 +1,7 @@
 import type { CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
-import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
+import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
 type BuildDiscordNativeCommandContextParams = {

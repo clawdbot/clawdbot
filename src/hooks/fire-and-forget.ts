@@ -1,6 +1,7 @@
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS = 16;
 const DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS = 256;
@@ -36,6 +37,13 @@ const getFireAndForgetHookState = () =>
 
 function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function resolveFireAndForgetHookTimeoutMs(value: number | undefined): number {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return resolveTimerTimeoutMs(value, DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS);
+  }
+  return resolveTimerTimeoutMs(DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS, 1);
 }
 
 function replaceLogControlCharacters(value: string): string {
@@ -133,10 +141,7 @@ export function fireAndForgetBoundedHook(
     options.maxQueue,
     DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS,
   );
-  const timeoutMs = positiveIntegerOrDefault(
-    options.timeoutMs,
-    DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveFireAndForgetHookTimeoutMs(options.timeoutMs);
 
   if (state.active >= maxConcurrency && state.queue.length >= maxQueue) {
     logger(`${label}: queue full; dropping hook`);

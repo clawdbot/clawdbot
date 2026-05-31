@@ -481,6 +481,9 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   if (options.maxTokens !== undefined) {
     generationConfig.maxOutputTokens = options.maxTokens;
   }
+  if (options.stop !== undefined && options.stop.length > 0) {
+    generationConfig.stopSequences = options.stop;
+  }
 
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),

@@ -185,7 +185,7 @@ describe("fallback-state", () => {
         buildFallbackNotice({
           selectedProvider: "openai",
           selectedModel: model,
-          activeProvider: "openai-codex",
+          activeProvider: "openai",
           activeModel: model,
           attempts: [],
         }),
@@ -198,7 +198,7 @@ describe("fallback-state", () => {
       buildFallbackNotice({
         selectedProvider: "openai",
         selectedModel: "gpt-5.5",
-        activeProvider: "openai-codex",
+        activeProvider: "openai",
         activeModel: "gpt-5.4",
         attempts: [],
       }),

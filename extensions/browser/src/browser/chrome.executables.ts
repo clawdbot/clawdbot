@@ -373,8 +373,7 @@ function splitExecLine(line: string): string[] {
   let current = "";
   let inQuotes = false;
   let quoteChar = "";
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
+  for (const ch of line) {
     if ((ch === '"' || ch === "'") && (!inQuotes || ch === quoteChar)) {
       if (inQuotes) {
         inQuotes = false;

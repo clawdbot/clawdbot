@@ -27,6 +27,28 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
 ] as const;
 const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
 
+let migrationProviderRuntimeModulePromise: Promise<
+  typeof import("../plugins/migration-provider-runtime.js")
+> | null = null;
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+
+const loadMigrationProviderRuntimeModule = async () => {
+  migrationProviderRuntimeModulePromise ??= import("../plugins/migration-provider-runtime.js");
+  return await migrationProviderRuntimeModulePromise;
+};
+
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
+};
+
 async function exists(candidate: string): Promise<boolean> {
   try {
     await fs.access(candidate);
@@ -99,9 +121,9 @@ export async function detectSetupMigrationSources(params: {
     { createMigrationLogger },
     { resolveStateDir },
   ] = await Promise.all([
-    import("../plugins/migration-provider-runtime.js"),
-    import("../commands/migrate/context.js"),
-    import("../config/paths.js"),
+    loadMigrationProviderRuntimeModule(),
+    loadMigrationContextModule(),
+    loadConfigPathsModule(),
   ]);
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
   const stateDir = resolveStateDir();
@@ -160,7 +182,7 @@ async function selectSetupMigrationProvider(params: {
     ensureStandaloneMigrationProviderRegistryLoaded,
     resolvePluginMigrationProvider,
     resolvePluginMigrationProviders,
-  } = await import("../plugins/migration-provider-runtime.js");
+  } = await loadMigrationProviderRuntimeModule();
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.baseConfig });
   const providers = resolvePluginMigrationProviders({ cfg: params.baseConfig });
   if (providers.length === 0) {
@@ -218,10 +240,10 @@ export async function runSetupMigrationImport(params: {
     onboardHelpers,
   ] = await Promise.all([
     import("../commands/onboard-config.js"),
-    import("../commands/migrate/context.js"),
+    loadMigrationContextModule(),
     import("../commands/migrate/apply.js"),
     import("../commands/migrate/output.js"),
-    import("../config/paths.js"),
+    loadConfigPathsModule(),
     import("../commands/onboard-helpers.js"),
   ]);
   const { provider, providerId } = await selectSetupMigrationProvider({

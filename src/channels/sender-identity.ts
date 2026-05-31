@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeChatType } from "./chat-type.js";
 
 export function validateSenderIdentity(ctx: MsgContext): string[] {

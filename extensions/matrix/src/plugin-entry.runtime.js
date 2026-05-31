@@ -23,10 +23,10 @@ function normalizeLowercaseStringOrEmpty(value) {
 
 function hasTrustedOpenClawRootIndicator(packageRoot, packageJson) {
   const packageExports = packageJson?.exports ?? {};
-  if (!Object.prototype.hasOwnProperty.call(packageExports, "./plugin-sdk")) {
+  if (!Object.hasOwn(packageExports, "./plugin-sdk")) {
     return false;
   }
-  const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
+  const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof packageJson?.bin === "string" &&
       normalizeLowercaseStringOrEmpty(packageJson.bin).includes("openclaw")) ||

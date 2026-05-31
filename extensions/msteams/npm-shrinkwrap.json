@@ -12,7 +12,7 @@
         "@microsoft/teams.api": "2.0.12",
         "@microsoft/teams.apps": "2.0.12",
         "express": "5.2.1",
-        "typebox": "1.1.38"
+        "typebox": "1.1.39"
       },
       "peerDependencies": {
         "openclaw": ">=2026.5.30"
@@ -635,9 +635,9 @@
       }
     },
     "node_modules/es-object-atoms": {
-      "version": "1.1.1",
-      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.1.tgz",
-      "integrity": "sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==",
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
+      "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0"
@@ -910,9 +910,9 @@
       }
     },
     "node_modules/hasown": {
-      "version": "2.0.3",
-      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.3.tgz",
-      "integrity": "sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==",
+      "version": "2.0.4",
+      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
+      "integrity": "sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==",
       "license": "MIT",
       "dependencies": {
         "function-bind": "^1.1.2"
@@ -1665,9 +1665,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     },
     "node_modules/undici-types": {

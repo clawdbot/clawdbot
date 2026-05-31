@@ -1047,7 +1047,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalled();
     expect(
       loadPluginManifestRegistry.mock.calls.every(
-        ([params]) => !Object.prototype.hasOwnProperty.call(params ?? {}, "cache"),
+        ([params]) => !Object.hasOwn(params ?? {}, "cache"),
       ),
     ).toBe(true);
   });

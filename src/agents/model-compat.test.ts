@@ -386,7 +386,7 @@ describe("isModernModelRef", () => {
         context.modelId,
       )
         ? true
-        : provider === "openai-codex" &&
+        : provider === "openai" &&
             ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
               context.modelId,
             )
@@ -404,11 +404,11 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.5-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-mini" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5-pro" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
@@ -508,9 +508,7 @@ describe("isHighSignalLiveModelRef", () => {
       false,
     );
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2-codex" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
       true,
     );
@@ -660,7 +658,6 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },
       { provider: "openai", id: "gpt-5.5" },
-      { provider: "openai-codex", id: "gpt-5.5" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },

@@ -8,7 +8,7 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "google-generative-ai",
   "openclaw-google-generative-ai-transport",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",
@@ -20,7 +20,7 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 // tool-replay-repair.live.test.ts exercises both paths against real models.
 const CODEX_STYLE_ABORTED_OUTPUT_APIS = new Set<string>([
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",

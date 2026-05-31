@@ -39,7 +39,7 @@ const FEISHU_WS_AUTORECONNECT_DISABLED_ERROR =
   "WebSocket connect failed and autoReconnect is disabled";
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function buildFeishuWebhookEnvelope(
@@ -187,7 +187,6 @@ function waitForFeishuWsCycleEnd(params: {
 
   return new Promise((resolve) => {
     let settled = false;
-    let handleAbort: (() => void) | undefined;
 
     const finish = (result: "abort" | Error) => {
       if (settled) {
@@ -200,7 +199,7 @@ function waitForFeishuWsCycleEnd(params: {
       resolve(result);
     };
 
-    handleAbort = () => finish("abort");
+    const handleAbort: (() => void) | undefined = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");

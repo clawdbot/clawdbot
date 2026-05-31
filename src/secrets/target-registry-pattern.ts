@@ -159,7 +159,7 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
         });
         return;
       }
-      if (!Object.prototype.hasOwnProperty.call(node, token.value)) {
+      if (!Object.hasOwn(node, token.value)) {
         return;
       }
       walk(node[token.value], tokenIndex + 1, [...segments, token.value], captures);

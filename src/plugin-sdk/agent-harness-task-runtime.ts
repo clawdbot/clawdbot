@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -14,7 +15,6 @@ import {
   resolveSubagentCompletionOrigin,
 } from "../agents/subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "../agents/subagent-announce-origin.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,

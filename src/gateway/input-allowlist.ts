@@ -1,4 +1,4 @@
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 /**
  * Normalize optional gateway URL-input hostname allowlists.

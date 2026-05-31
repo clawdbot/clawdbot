@@ -125,8 +125,8 @@ embeddings:
 }
 ```
 
-OpenAI Codex / ChatGPT OAuth (`openai-codex`) is not an OpenAI Platform
-embeddings credential. For OpenAI embeddings, use an OpenAI API key auth profile,
+OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
+For OpenAI embeddings, use an OpenAI API key auth profile,
 `OPENAI_API_KEY`, or `models.providers.openai.apiKey`. OAuth-only users can use
 another embedding-capable provider such as GitHub Copilot or Ollama.
 

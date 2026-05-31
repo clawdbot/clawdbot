@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
@@ -8,8 +10,6 @@ import {
   resolveEffectivePluginActivationState,
 } from "../../../plugins/config-state.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 
 export type ChannelPluginBlockerHit = {
   channelId: string;

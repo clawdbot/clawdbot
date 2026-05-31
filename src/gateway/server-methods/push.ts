@@ -1,3 +1,4 @@
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -22,7 +23,6 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "../../infra/push-web.js";
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";

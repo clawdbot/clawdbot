@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
@@ -173,7 +174,7 @@ export async function resolveDelegatedAccessToken(params: {
   }
 
   // Token still valid (5-min buffer already baked into expiresAt)
-  if (tokens.expiresAt > Date.now()) {
+  if (isFutureDateTimestampMs(tokens.expiresAt)) {
     return tokens.accessToken;
   }
 

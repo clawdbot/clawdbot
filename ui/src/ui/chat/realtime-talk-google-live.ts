@@ -404,7 +404,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 }
 
-async function decodeGoogleLiveMessageData(data: unknown): Promise<string> {
+async function decodeGoogleLiveMessageData(dataInput: unknown): Promise<string> {
+  let data = dataInput;
   if (typeof data === "string") {
     return data;
   }

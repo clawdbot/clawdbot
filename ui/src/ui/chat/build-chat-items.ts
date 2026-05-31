@@ -572,6 +572,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           key: `stream-seg:${props.sessionKey}:${i}`,
           text: visibleText,
           startedAt: segments[i].ts,
+          isStreaming: false,
         });
       }
     }
@@ -595,6 +596,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           key,
           text: visibleText,
           startedAt: props.streamStartedAt ?? Date.now(),
+          isStreaming: true,
         });
       }
     } else if (props.stream.trim().length === 0) {

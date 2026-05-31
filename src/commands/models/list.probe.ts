@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -32,7 +33,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
@@ -522,9 +522,6 @@ async function probeTarget(params: {
       model: target.model.model,
       authProfileId: target.profileId,
       authProfileIdSource: target.profileId ? "user" : undefined,
-      ...(target.provider === "openai-codex"
-        ? { agentHarnessId: "openclaw", agentHarnessRuntimeOverride: "openclaw" }
-        : {}),
       timeoutMs,
       runId: `probe-${crypto.randomUUID()}`,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,

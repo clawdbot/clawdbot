@@ -1,5 +1,5 @@
+import { isRecord as isProxyTlsRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EnvHttpProxyAgent } from "undici";
-import { isRecord as isProxyTlsRecord } from "../../../shared/record-coerce.js";
 import { resolveEnvHttpProxyAgentOptions, resolveEnvHttpProxyUrl } from "../proxy-env.js";
 import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
 import {

@@ -98,7 +98,9 @@ function appendLine(line: RefIndexLine): void {
 
 function shouldCompact(): boolean {
   return (
-    !!cache && totalLinesOnDisk > cache.size * COMPACT_THRESHOLD_RATIO && totalLinesOnDisk > 1000
+    cache !== null &&
+    totalLinesOnDisk > cache.size * COMPACT_THRESHOLD_RATIO &&
+    totalLinesOnDisk > 1000
   );
 }
 

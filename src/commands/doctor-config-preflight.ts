@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
@@ -9,10 +10,18 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
+
+type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
+
+let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
+
+function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
+  doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
+  return doctorStateMigrationsPromise;
+}
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
@@ -107,7 +116,7 @@ export async function runDoctorConfigPreflight(
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   if (options.migrateState !== false) {
-    const { autoMigrateLegacyStateDir } = await import("./doctor-state-migrations.js");
+    const { autoMigrateLegacyStateDir } = await loadDoctorStateMigrations();
     const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
     noteStateMigrationResult(stateDirResult);
   }
@@ -157,7 +166,7 @@ export async function runDoctorConfigPreflight(
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (options.migrateState !== false) {
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
-      await import("./doctor-state-migrations.js");
+      await loadDoctorStateMigrations();
     const stateResult = snapshot.valid
       ? await autoMigrateLegacyState({ cfg: baseConfig, env: process.env })
       : await autoMigrateLegacyTaskStateSidecars({ env: process.env });

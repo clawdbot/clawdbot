@@ -7,8 +7,7 @@ export function createMatrixMonitorTaskRunner(params: {
   const inFlight = new Set<Promise<void>>();
 
   const runDetachedTask = (label: string, task: () => Promise<void>): Promise<void> => {
-    let trackedTask!: Promise<void>;
-    trackedTask = Promise.resolve()
+    const trackedTask: Promise<void> = Promise.resolve()
       .then(task)
       .catch((error) => {
         const message = String(error);

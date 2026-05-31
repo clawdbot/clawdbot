@@ -1,4 +1,4 @@
-import { lowercasePreservingWhitespace } from "./shared/string-coerce.js";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 
 function toSnakeCaseKey(key: string): string {
   const snakeKey = key

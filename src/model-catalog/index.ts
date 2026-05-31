@@ -1,10 +1,4 @@
 export { mergeModelCatalogRowsByAuthority } from "./authority.js";
-export {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-  normalizeModelCatalogProviderId,
-} from "./refs.js";
-export { normalizeModelCatalog, normalizeModelCatalogRows } from "./normalize.js";
 export { loadOpenClawProviderIndex } from "./provider-index/index.js";
 export {
   planManifestModelCatalogRows,
@@ -28,5 +22,5 @@ export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
-} from "./types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type { OpenClawProviderIndexProvider } from "./provider-index/index.js";

@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,

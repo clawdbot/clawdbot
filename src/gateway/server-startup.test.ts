@@ -38,7 +38,7 @@ function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
   expect(agentDir).toBe("/tmp/agent");
   expect(options).toEqual({
     workspaceDir: "/tmp/workspace",
-    providerDiscoveryProviderIds: ["openai-codex"],
+    providerDiscoveryProviderIds: ["openai"],
     providerDiscoveryTimeoutMs: 5000,
     providerDiscoveryEntriesOnly: true,
   });
@@ -61,7 +61,7 @@ describe("gateway startup primary model warmup", () => {
       agents: {
         defaults: {
           model: {
-            primary: "openai-codex/gpt-5.4",
+            primary: "openai/gpt-5.4",
           },
         },
       },

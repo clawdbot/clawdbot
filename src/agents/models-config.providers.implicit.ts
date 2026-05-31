@@ -1,3 +1,11 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -10,7 +18,6 @@ import {
   runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -27,7 +34,6 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 

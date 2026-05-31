@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
@@ -40,6 +40,10 @@ describe("resolveTelegramForumThreadId", () => {
 describe("resolveTelegramForumFlag", () => {
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
@@ -124,6 +128,35 @@ describe("resolveTelegramForumFlag", () => {
     await expect(resolveTelegramForumFlag({ ...params, isForum: false })).resolves.toBe(false);
     await expect(resolveTelegramForumFlag(params)).resolves.toBe(false);
     expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops cached forum metadata when the current clock is not a valid date timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100655,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    nowSpy.mockReturnValue(Number.NaN);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache forum metadata when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100656,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(2);
   });
 
   it("returns false when forum lookup is unavailable", async () => {

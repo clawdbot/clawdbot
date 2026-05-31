@@ -1,8 +1,8 @@
-import { z } from "zod";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as toText,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
 
 export type ClaudeChannelMode = "off" | "on" | "auto";
 

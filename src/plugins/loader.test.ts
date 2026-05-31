@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -14,7 +15,11 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -203,6 +208,14 @@ function writeBundledPlugin(params: {
   delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
   return { bundledDir, plugin };
+}
+
+function makeOpenClawDevSourceRoot() {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  mkdirSafe(path.join(root, "src"));
+  mkdirSafe(path.join(root, "extensions"));
+  return root;
 }
 
 function writeWorkspacePlugin(params: {
@@ -984,6 +997,7 @@ function collectStartupTraceMetrics(
 }
 
 afterEach(() => {
+  resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
   runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
   resetPluginLoaderTestStateForTest();
@@ -1021,6 +1035,103 @@ describe("loadOpenClawPlugins", () => {
     expect(metrics.registerMs).toEqual(expect.any(Number));
     expect(metrics.registerFailedCount).toBe(0);
     expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
+  it("resolves ${ENV_VAR} references in plugin config before handing config to the plugin", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "env-config-probe",
+      filename: "env-config-probe.cjs",
+      // Schema must permit apiKey, otherwise the empty-schema guard rejects the
+      // config before register() runs and the env substitution is never exercised.
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { apiKey: { type: "string" } },
+      },
+      body: `module.exports = {
+  id: "env-config-probe",
+  register(api) {
+    globalThis.envConfigProbeResult = api.pluginConfig;
+  },
+};`,
+    });
+    const probe = globalThis as unknown as Record<string, unknown>;
+    const entries = {
+      "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
+    };
+
+    // Case 1: the referenced variable is present in process.env.
+    delete probe.envConfigProbeResult;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: ["env-config-probe"], entries },
+        options: { resolveRawConfigEnvVars: true },
+      });
+    });
+    // Before the fix, the plugin received the literal "${ENV_CONFIG_PROBE_SECRET}".
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "process-env-secret" });
+
+    // Case 2: the referenced variable lives only in the loader's explicit env,
+    // not in process.env — proving the substitution honors the per-load env.
+    delete probe.envConfigProbeResult;
+    expect(process.env.ENV_CONFIG_PROBE_SECRET).toBeUndefined();
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["env-config-probe"], entries },
+      options: {
+        env: { ...process.env, ENV_CONFIG_PROBE_SECRET: "explicit-env-secret" },
+        resolveRawConfigEnvVars: true,
+      },
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "explicit-env-secret" });
+
+    // Case 3: config.env.vars participates in the same effective env as config IO.
+    delete probe.envConfigProbeResult;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: undefined }, () => {
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          env: {
+            vars: {
+              ENV_CONFIG_PROBE_PLUGIN_FILE: plugin.file,
+              ENV_CONFIG_PROBE_SECRET: "config-env-secret",
+            },
+          },
+          plugins: {
+            load: { paths: ["${ENV_CONFIG_PROBE_PLUGIN_FILE}"] },
+            allow: ["env-config-probe"],
+            entries,
+          },
+        },
+        resolveRawConfigEnvVars: true,
+      });
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "config-env-secret" });
+
+    // Case 4: config that already went through read-time substitution must not
+    // be processed again. Escaped placeholders intentionally become literals.
+    delete probe.envConfigProbeResult;
+    const resolvedEscapedEntries = resolveConfigEnvVars(
+      {
+        "env-config-probe": { config: { apiKey: "$${ENV_CONFIG_PROBE_SECRET}" } },
+      },
+      { ENV_CONFIG_PROBE_SECRET: "should-not-leak" } as NodeJS.ProcessEnv,
+    ) as typeof entries;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["env-config-probe"],
+          entries: structuredClone(resolvedEscapedEntries),
+        },
+      });
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({
+      apiKey: "${ENV_CONFIG_PROBE_SECRET}",
+    });
   });
 
   it("emits loader startup trace failure counts for load and register failures", () => {
@@ -6764,6 +6875,37 @@ module.exports = {
     ).toBe(true);
   });
 
+  it("warns when plugins register deprecated subagent_spawning typed hooks", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-subagent-spawning-hook",
+      filename: "legacy-subagent-spawning-hook.cjs",
+      body: `module.exports = { id: "legacy-subagent-spawning-hook", register(api) {
+  api.on("subagent_spawning", () => ({ status: "ok" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-subagent-spawning-hook"],
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "legacy-subagent-spawning-hook")?.status,
+    ).toBe("loaded");
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["subagent_spawning"]);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "legacy-subagent-spawning-hook" &&
+          diag.message ===
+            'typed hook "subagent_spawning" is deprecated (legacy-subagent-spawning-hook); Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires. Use `subagent_spawned` for observation; core session bindings for routing. This compatibility hook will be removed after 2026-08-30.',
+      ),
+    ).toBe(true);
+  });
+
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -7234,6 +7376,58 @@ module.exports = {
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
         expectDuplicateWarning: false,
+        assert: expectPluginSourcePrecedence,
+      },
+      {
+        label: "dev source bundled beats installed global duplicate",
+        pluginId: "demo-dev-source-duplicate",
+        bundledFilename: "index.cjs",
+        loadRegistry: () => {
+          const devSourceRoot = makeOpenClawDevSourceRoot();
+          const bundledPluginsDir = path.join(devSourceRoot, "extensions");
+          writeBundledPlugin({
+            id: "demo-dev-source-duplicate",
+            body: simplePluginBody("demo-dev-source-duplicate"),
+            bundledDir: path.join(bundledPluginsDir, "demo-dev-source-duplicate"),
+          });
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+          return withEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }, () =>
+            withStateDir((stateDir) => {
+              const globalDir = path.join(stateDir, "extensions", "demo-dev-source-duplicate");
+              mkdirSafe(globalDir);
+              writePlugin({
+                id: "demo-dev-source-duplicate",
+                body: simplePluginBody("demo-dev-source-duplicate"),
+                dir: globalDir,
+                filename: "index.cjs",
+              });
+              writePersistedInstalledPluginIndexInstallRecordsSync(
+                {
+                  "demo-dev-source-duplicate": {
+                    source: "npm",
+                    installPath: globalDir,
+                  },
+                },
+                { stateDir },
+              );
+
+              return loadOpenClawPlugins({
+                cache: false,
+                config: {
+                  plugins: {
+                    allow: ["demo-dev-source-duplicate"],
+                    entries: {
+                      "demo-dev-source-duplicate": { enabled: true },
+                    },
+                  },
+                },
+              });
+            }),
+          );
+        },
+        expectedLoadedOrigin: "bundled",
+        expectedDisabledOrigin: "global",
+        expectedDisabledError: "overridden by bundled plugin",
         assert: expectPluginSourcePrecedence,
       },
       {
@@ -7961,7 +8155,7 @@ module.exports = {
     ).toBe("loaded");
   });
 
-  it("supports legacy plugins subscribing to diagnostic events from the root sdk", () => {
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
     useNoBundledPlugins();
     const seenKey = "__openclawLegacyRootDiagnosticSeen";
     delete (globalThis as Record<string, unknown>)[seenKey];
@@ -8016,6 +8210,7 @@ module.exports = {
         sessionKey: "agent:main:test:dm:peer",
         usage: { total: 1 },
       });
+      await waitForDiagnosticEventsDrained();
 
       expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
         {

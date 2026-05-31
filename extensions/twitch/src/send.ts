@@ -81,7 +81,7 @@ export async function sendMessageTwitchInternal(
   text: string,
   cfg: OpenClawConfig,
   accountId?: string,
-  stripMarkdown: boolean = true,
+  stripMarkdown = true,
   logger: Console = console,
 ): Promise<SendMessageResult> {
   const {

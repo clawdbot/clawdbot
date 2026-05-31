@@ -230,6 +230,32 @@ describe("bedrock mantle discovery", () => {
     expect(getCachedIamToken("us-east-1")).toBeUndefined();
   });
 
+  it("does not cache generated IAM tokens when ttl expiry overflows", async () => {
+    const tokenProvider = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("bedrock-overflow-token-1") // pragma: allowlist secret
+      .mockResolvedValueOnce("bedrock-overflow-token-2"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    await expect(
+      generateBearerTokenFromIam({
+        region: "us-east-1",
+        now: () => 8_640_000_000_000_000,
+        tokenProviderFactory,
+      }),
+    ).resolves.toBe("bedrock-overflow-token-1");
+    expect(getCachedIamToken("us-east-1")).toBeUndefined();
+
+    await expect(
+      generateBearerTokenFromIam({
+        region: "us-east-1",
+        now: () => 8_640_000_000_000_000,
+        tokenProviderFactory,
+      }),
+    ).resolves.toBe("bedrock-overflow-token-2");
+    expect(tokenProvider).toHaveBeenCalledTimes(2);
+  });
+
   // ---------------------------------------------------------------------------
   // Model discovery
   // ---------------------------------------------------------------------------
@@ -534,6 +560,24 @@ describe("bedrock mantle discovery", () => {
     });
     expect(resolved?.apiKey).toBe("bedrock-api-key-fresh");
     expect(resolved?.expiresAt).toBe(5000 + 7200_000);
+    expect(tokenProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits Mantle runtime IAM token expiry when the process clock is invalid", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-invalid-clock"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: MANTLE_IAM_TOKEN_MARKER,
+      env: {
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      now: () => Number.NaN,
+      tokenProviderFactory,
+    });
+    expect(resolved).toEqual({
+      apiKey: "bedrock-api-key-invalid-clock",
+    });
     expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 

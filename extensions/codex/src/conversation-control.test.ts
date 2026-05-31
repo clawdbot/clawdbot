@@ -71,7 +71,7 @@ describe("codex conversation controls", () => {
       profileId: "work",
       credential: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,

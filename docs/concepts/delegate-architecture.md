@@ -127,7 +127,7 @@ See [Sandboxing](/gateway/sandboxing) and [Multi-Agent Sandbox & Tools](/tools/m
 
 Configure logging before the delegate handles any real data:
 
-- Cron run history: `~/.openclaw/cron/runs/<jobId>.jsonl`
+- Cron run history: OpenClaw shared SQLite state database
 - Session transcripts: `~/.openclaw/agents/delegate/sessions`
 - Identity provider audit logs (Exchange, Google Workspace)
 

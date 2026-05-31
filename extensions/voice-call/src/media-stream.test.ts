@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -432,6 +433,30 @@ describe("MediaStreamHandler security hardening", () => {
       expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
+    }
+  });
+
+  it("clamps oversized pre-start connection timeouts", () => {
+    vi.useFakeTimers();
+    try {
+      const handler = new MediaStreamHandler({
+        transcriptionProvider: createStubSttProvider(),
+        providerConfig: {},
+        preStartTimeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const ws = { close: vi.fn() } as unknown as WebSocket;
+
+      const registered = (
+        handler as unknown as {
+          registerPendingConnection(ws: WebSocket, ip: string): boolean;
+        }
+      ).registerPendingConnection(ws, "203.0.113.10");
+
+      expect(registered).toBe(true);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

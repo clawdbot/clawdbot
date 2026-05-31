@@ -287,14 +287,12 @@ export function createWebOnMessageHandler(params: {
       if (!gating.shouldProcess) {
         return;
       }
-    } else {
+    } else if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
       // Ensure `peerId` for DMs is stable and stored as E.164 when possible.
-      if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
-        const normalized = normalizeE164(peerId);
-        if (normalized) {
-          msg.sender = { ...msg.sender, e164: normalized };
-          msg.senderE164 = normalized;
-        }
+      const normalized = normalizeE164(peerId);
+      if (normalized) {
+        msg.sender = { ...msg.sender, e164: normalized };
+        msg.senderE164 = normalized;
       }
     }
 

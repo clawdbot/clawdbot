@@ -1,4 +1,9 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -11,11 +16,6 @@ import {
 } from "../../infra/parse-finite-number.js";
 import { getEnvApiKey } from "../../llm/env-api-keys.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../../terminal/prompt-style.js";
 import { pad, truncate } from "./list.format.js";
 import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";

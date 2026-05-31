@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -20,7 +21,6 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   formatUpdateRestartActionLines,
   formatUpdateRestartStatusValue,

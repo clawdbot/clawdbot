@@ -7,7 +7,7 @@ import {
 describe("OpenAI reasoning effort support", () => {
   it.each([
     { provider: "openai", id: "gpt-5.5" },
-    { provider: "openai-codex", id: "gpt-5.5" },
+    { provider: "openai", id: "gpt-5.5" },
   ])("preserves xhigh for $provider/$id", (model) => {
     expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("xhigh");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
@@ -27,7 +27,7 @@ describe("OpenAI reasoning effort support", () => {
 
   it("does not downgrade xhigh when model compat metadata declares it explicitly", () => {
     const model = {
-      provider: "openai-codex",
+      provider: "openai",
       id: "gpt-5.5",
       compat: {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],

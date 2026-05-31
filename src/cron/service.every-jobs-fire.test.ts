@@ -29,8 +29,9 @@ describe("CronService interval/cron jobs fire on time", () => {
     firstDueAt: number;
   }) => {
     vi.setSystemTime(new Date(firstDueAt + 5));
+    const finishedRun = finished.waitForOk(jobId);
     await vi.runOnlyPendingTimersAsync();
-    await finished.waitForOk(jobId);
+    await finishedRun;
     const jobs = await cron.list({ includeDisabled: true });
     return jobs.find((current) => current.id === jobId);
   };

@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
@@ -14,8 +16,6 @@ import {
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -550,7 +550,7 @@ export async function resolveRuntimeWebTools(params: {
   if (
     legacyXSearchSource &&
     legacyXSearchResolved &&
-    Object.prototype.hasOwnProperty.call(legacyXSearchSource, "apiKey")
+    Object.hasOwn(legacyXSearchSource, "apiKey")
   ) {
     const legacyXSearchSourceRecord = legacyXSearchSource as Record<string, unknown>;
     const legacyXSearchResolvedRecord = legacyXSearchResolved as Record<string, unknown>;

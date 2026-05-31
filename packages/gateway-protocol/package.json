@@ -44,6 +44,6 @@
     "build": "tsdown src/index.ts src/client-info.ts src/connect-error-details.ts src/schema.ts src/startup-unavailable.ts src/version.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
-    "typebox": "1.1.38"
+    "typebox": "1.1.39"
   }
 }

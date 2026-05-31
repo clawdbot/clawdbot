@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../globals.js";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
@@ -90,77 +90,95 @@ function verboseMessages(): string[] {
   return vi.mocked(logVerbose).mock.calls.map(([message]) => message);
 }
 
-describe("getReplyFromConfig message hooks", () => {
-  beforeEach(async () => {
-    await loadGetReplyRuntimeForTest();
-    delete process.env.OPENCLAW_TEST_FAST;
-    mocks.applyMediaUnderstanding.mockReset();
-    mocks.applyLinkUnderstanding.mockReset();
-    mocks.createInternalHookEvent.mockReset();
-    mocks.triggerInternalHook.mockReset();
-    mocks.resolveReplyDirectives.mockReset();
-    mocks.handleInlineActions.mockReset();
-    mocks.initSessionState.mockReset();
-    vi.mocked(resolveDefaultModelMock).mockReset();
-    vi.mocked(runPreparedReplyMock).mockReset();
-    vi.mocked(stageSandboxMediaMock).mockReset();
-    vi.mocked(logVerbose).mockReset();
+async function resetMessageHookTestState() {
+  await loadGetReplyRuntimeForTest();
+  delete process.env.OPENCLAW_TEST_FAST;
+  mocks.applyMediaUnderstanding.mockReset();
+  mocks.applyLinkUnderstanding.mockReset();
+  mocks.createInternalHookEvent.mockReset();
+  mocks.triggerInternalHook.mockReset();
+  mocks.resolveReplyDirectives.mockReset();
+  mocks.handleInlineActions.mockReset();
+  mocks.initSessionState.mockReset();
+  vi.mocked(resolveDefaultModelMock).mockReset();
+  vi.mocked(runPreparedReplyMock).mockReset();
+  vi.mocked(stageSandboxMediaMock).mockReset();
+  vi.mocked(logVerbose).mockReset();
 
-    mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
-      const { ctx } = args[0] as { ctx: MsgContext };
-      ctx.Transcript = "voice transcript";
-      ctx.Body = "[Audio]\nTranscript:\nvoice transcript";
-      ctx.BodyForAgent = "[Audio]\nTranscript:\nvoice transcript";
-    });
-    mocks.applyLinkUnderstanding.mockResolvedValue(undefined);
-    mocks.createInternalHookEvent.mockImplementation(
-      (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
-        type,
-        action,
-        sessionKey,
-        context,
-        timestamp: new Date(),
-        messages: [],
-      }),
-    );
-    mocks.triggerInternalHook.mockResolvedValue(undefined);
-    mocks.handleInlineActions.mockImplementation(async (...args: unknown[]) => {
-      const params = args[0] as {
-        directives?: unknown;
-        cleanedBody?: string;
-        abortedLastRun?: boolean;
-      };
-      return {
-        kind: "continue",
-        directives: params.directives ?? {},
-        cleanedBody: params.cleanedBody ?? "",
-        abortedLastRun: params.abortedLastRun,
-      };
-    });
-    mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-    vi.mocked(resolveDefaultModelMock).mockReturnValue({
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: emptyAliasIndex(),
-    });
-    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
-    vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
-    mocks.initSessionState.mockResolvedValue(
-      createGetReplySessionState({
-        sessionKey: "agent:main:telegram:-100123",
-        sessionScope: "per-chat",
-        isGroup: true,
-      }),
-    );
+  mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
+    const { ctx } = args[0] as { ctx: MsgContext };
+    ctx.Transcript = "voice transcript";
+    ctx.Body = "[Audio]\nTranscript:\nvoice transcript";
+    ctx.BodyForAgent = "[Audio]\nTranscript:\nvoice transcript";
   });
+  mocks.applyLinkUnderstanding.mockResolvedValue(undefined);
+  mocks.createInternalHookEvent.mockImplementation(
+    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
+      type,
+      action,
+      sessionKey,
+      context,
+      timestamp: new Date(),
+      messages: [],
+    }),
+  );
+  mocks.triggerInternalHook.mockResolvedValue(undefined);
+  mocks.handleInlineActions.mockImplementation(async (...args: unknown[]) => {
+    const params = args[0] as {
+      directives?: unknown;
+      cleanedBody?: string;
+      abortedLastRun?: boolean;
+    };
+    return {
+      kind: "continue",
+      directives: params.directives ?? {},
+      cleanedBody: params.cleanedBody ?? "",
+      abortedLastRun: params.abortedLastRun,
+    };
+  });
+  mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+  vi.mocked(resolveDefaultModelMock).mockReturnValue({
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    aliasIndex: emptyAliasIndex(),
+  });
+  vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+  vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
+  mocks.initSessionState.mockResolvedValue(
+    createGetReplySessionState({
+      sessionKey: "agent:main:telegram:-100123",
+      sessionScope: "per-chat",
+      isGroup: true,
+    }),
+  );
+}
 
-  it("emits transcribed + preprocessed hooks with enriched context", async () => {
+describe("getReplyFromConfig message hooks", () => {
+  let enrichedHookCase: {
+    transcribed: ReturnType<typeof hookEventCall>;
+    preprocessed: ReturnType<typeof hookEventCall>;
+    triggerCount: number;
+  };
+
+  beforeAll(async () => {
+    await resetMessageHookTestState();
     const ctx = buildCtx();
 
     await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
-    expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
-    const transcribed = hookEventCall(0);
+    enrichedHookCase = {
+      transcribed: hookEventCall(0),
+      preprocessed: hookEventCall(1),
+      triggerCount: mocks.triggerInternalHook.mock.calls.length,
+    };
+  });
+
+  beforeEach(async () => {
+    await resetMessageHookTestState();
+  });
+
+  it("emits transcribed + preprocessed hooks with enriched context", () => {
+    const { transcribed, preprocessed, triggerCount } = enrichedHookCase;
     expect(transcribed[0]).toBe("message");
     expect(transcribed[1]).toBe("transcribed");
     expect(transcribed[2]).toBe("agent:main:telegram:-100123");
@@ -168,14 +186,13 @@ describe("getReplyFromConfig message hooks", () => {
     expect(transcribed[3].channelId).toBe("telegram");
     expect(transcribed[3].conversationId).toBe("telegram:-100123");
 
-    const preprocessed = hookEventCall(1);
     expect(preprocessed[0]).toBe("message");
     expect(preprocessed[1]).toBe("preprocessed");
     expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
     expect(preprocessed[3].transcript).toBe("voice transcript");
     expect(preprocessed[3].isGroup).toBe(true);
     expect(preprocessed[3].groupId).toBe("telegram:-100123");
-    expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);
+    expect(triggerCount).toBe(2);
   });
 
   it("enriches staged text-only images before reply without switching the reply model", async () => {

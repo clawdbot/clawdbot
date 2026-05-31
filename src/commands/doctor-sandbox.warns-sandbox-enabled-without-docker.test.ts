@@ -26,7 +26,7 @@ vi.mock("../agents/sandbox/registry.js", () => ({
   migrateLegacySandboxRegistryFiles,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 

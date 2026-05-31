@@ -9,7 +9,7 @@
     "commander": "14.0.3",
     "express": "5.2.1",
     "playwright-core": "1.60.0",
-    "typebox": "1.1.38",
+    "typebox": "1.1.39",
     "ws": "8.21.0"
   },
   "devDependencies": {

@@ -7,9 +7,8 @@ import {
 } from "../browser-cli-shared.js";
 import {
   danger,
-  DEFAULT_UPLOAD_DIR,
   defaultRuntime,
-  resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
   shortenHomePath,
 } from "../core-api.js";
 import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./shared.js";
@@ -17,11 +16,7 @@ import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./sh
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 
 async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
-  const result = await resolveExistingPathsWithinRoot({
-    rootDir: DEFAULT_UPLOAD_DIR,
-    requestedPaths: paths,
-    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-  });
+  const result = await resolveExistingUploadPaths({ requestedPaths: paths });
   if (!result.ok) {
     throw new Error(result.error);
   }
@@ -95,7 +90,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .description("Arm file upload for the next file chooser")
     .argument(
       "<paths...>",
-      "File paths to upload (must be within OpenClaw temp uploads dir, e.g. /tmp/openclaw/uploads/file.pdf)",
+      "File paths to upload from OpenClaw temp uploads or managed inbound media (e.g. /tmp/openclaw/uploads/file.pdf or media://inbound/<id>)",
     )
     .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")

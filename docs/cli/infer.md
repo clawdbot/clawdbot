@@ -129,7 +129,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `model run --thinking <level>` to pass a one-shot thinking/reasoning level (`off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`) while keeping the run raw.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
 - For `image describe`, `--file` accepts local paths and HTTP(S) image URLs. Remote URLs use the normal media-fetch SSRF policy.
-- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
+- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai/<model>` uses the OpenAI provider path with either API-key or ChatGPT/Codex OAuth auth.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -172,7 +172,7 @@ Notes:
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because, for non-Codex providers, it sends only the supplied prompt to the selected model.
 - Local `model run --model <provider/model>` can use exact bundled static catalog rows from `models list --all` before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
 - For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` plus `temperature: 0`; use `mistral/mistral-medium-3-5` with default temperature or a non-zero reasoning-mode value such as `0.7`.
-- `openai-codex/*` local probes are the narrow exception: OpenClaw adds a minimal system instruction so the Codex Responses transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
+- Codex Responses local probes are the narrow exception: OpenClaw adds a minimal system instruction so the transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
 - The selected model must support image input; text-only models may reject the request at the provider layer.

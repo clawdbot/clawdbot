@@ -1,4 +1,4 @@
-import { resolveIntegerOption } from "../../../shared/number-coercion.js";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
 export type HandshakeAuthLogDecision = {
   shouldLog: boolean;

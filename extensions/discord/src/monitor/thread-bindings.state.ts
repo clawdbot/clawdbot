@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
@@ -345,9 +349,14 @@ export function rememberRecentUnboundWebhookEcho(record: ThreadBindingRecord) {
   if (!bindingKey) {
     return;
   }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS);
+  if (expiresAt === undefined) {
+    RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.delete(bindingKey);
+    return;
+  }
   RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.set(bindingKey, {
     webhookId,
-    expiresAt: Date.now() + RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS,
+    expiresAt,
   });
 }
 
@@ -408,7 +417,7 @@ export function isRecentlyUnboundThreadWebhookMessage(params: {
   if (!suppressed) {
     return false;
   }
-  if (suppressed.expiresAt <= Date.now()) {
+  if (!isFutureDateTimestampMs(suppressed.expiresAt)) {
     RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.delete(bindingKey);
     return false;
   }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,7 +12,6 @@ import {
   resolveLegacyRootMemoryPath,
   resolveRootMemoryRepairDir,
 } from "../memory/root-memory-files.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 

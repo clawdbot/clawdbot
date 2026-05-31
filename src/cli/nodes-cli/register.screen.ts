@@ -27,7 +27,7 @@ export function registerNodesScreenCommands(nodes: Command) {
   nodesCallOpts(
     screen
       .command("record")
-      .description("Capture a short screen recording from a node (prints MEDIA:<path>)")
+      .description("Capture a short screen recording from a node (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--screen <index>", "Screen index (0 = primary)", "0")
       .option("--duration <ms|10s>", "Clip duration (ms or 10s)", "10000")
@@ -79,7 +79,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             });
             return;
           }
-          defaultRuntime.log(`MEDIA:${shortenHomePath(written.path)}`);
+          defaultRuntime.log(shortenHomePath(written.path));
         });
       }),
     { timeoutMs: 180_000 },

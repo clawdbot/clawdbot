@@ -27,7 +27,7 @@ vi.mock("./configure.shared.js", () => ({
   confirm: mocks.confirm,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 

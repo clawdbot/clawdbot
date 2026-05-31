@@ -174,7 +174,7 @@ function hasPath(root: unknown, segments: string[]): boolean {
     if (!isRecord(cursor)) {
       return false;
     }
-    if (!Object.prototype.hasOwnProperty.call(cursor, segment)) {
+    if (!Object.hasOwn(cursor, segment)) {
       return false;
     }
     if (index === segments.length - 1) {
@@ -204,7 +204,7 @@ export function collectConfigureProviderChanges(params: {
   }
 
   for (const providerAlias of Object.keys(originalProviders)) {
-    if (!Object.prototype.hasOwnProperty.call(nextProviders, providerAlias)) {
+    if (!Object.hasOwn(nextProviders, providerAlias)) {
       deletes.push(providerAlias);
     }
   }

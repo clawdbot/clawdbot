@@ -816,6 +816,13 @@ describe("secrets runtime target coverage", () => {
     ({ collectConfigAssignments } = configCollectors);
     ({ collectAuthStoreAssignments } = authCollectors);
     ({ resolveRuntimeWebTools } = runtimeWebTools);
+
+    const googleChatBatch = OPENCLAW_CORE_COVERAGE_BATCHES.find((batch) =>
+      batch.some((entry) => entry.id === "channels.googlechat.serviceAccount"),
+    );
+    if (googleChatBatch) {
+      await expectOpenClawCoverageBatchResolved("openclaw.json core", googleChatBatch);
+    }
   });
 
   describe("openclaw.json core and channel registry targets", () => {

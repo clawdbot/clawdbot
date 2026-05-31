@@ -23,7 +23,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { type MatrixRawEvent } from "./types.js";
+import type { MatrixRawEvent } from "./types.js";
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => true));
 

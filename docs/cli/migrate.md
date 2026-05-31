@@ -236,7 +236,7 @@ The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file under `skills/<name>/`.
 - Per-skill config values from `skills.config`.
-- Supported OAuth credentials from Hermes `auth.json` and OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
+- OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set. Hermes `auth.json` OAuth entries are legacy state reported for manual OpenAI reauth or doctor repair.
 - Supported API keys and tokens from Hermes `.env` and OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
 ### Supported `.env` keys

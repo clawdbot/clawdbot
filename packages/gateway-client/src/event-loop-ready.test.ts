@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForEventLoopReady } from "./event-loop-ready.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 
 describe("waitForEventLoopReady", () => {
   afterEach(() => {
@@ -23,6 +24,28 @@ describe("waitForEventLoopReady", () => {
     await expect(readiness).resolves.toMatchObject({
       ready: true,
       checks: 2,
+    });
+  });
+
+  it("clamps oversized readiness intervals before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const readiness = waitForEventLoopReady({
+      maxWaitMs: Number.MAX_SAFE_INTEGER,
+      intervalMs: Number.MAX_SAFE_INTEGER,
+      consecutiveReadyChecks: 1,
+    });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS - 1);
+    await expect(readiness).resolves.toMatchObject({
+      ready: true,
+      checks: 1,
     });
   });
 });

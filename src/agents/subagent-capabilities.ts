@@ -1,3 +1,8 @@
+import {
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,11 +11,6 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import {
-  resolveIntegerOption,
-  resolveNonNegativeIntegerOption,
-} from "../shared/number-coercion.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,

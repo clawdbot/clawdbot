@@ -30,9 +30,7 @@ async function main() {
     url: url.toString(),
     onEvent: (evt) => {
       // Ignore noisy connect handshakes.
-      if (evt.event === "connect.challenge") {
-        return;
-      }
+      void evt;
     },
   });
 

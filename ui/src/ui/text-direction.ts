@@ -15,7 +15,7 @@ const RTL_CHAR_REGEX =
  */
 export function detectTextDirection(
   text: string | null,
-  skipPattern: RegExp = /[\s\p{P}\p{S}]/u,
+  skipPattern = /[\s\p{P}\p{S}]/u,
 ): "rtl" | "ltr" {
   if (!text) {
     return "ltr";

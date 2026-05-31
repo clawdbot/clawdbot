@@ -33,6 +33,20 @@ type ResolvedProviderCandidate = {
   source?: string;
 };
 
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
+};
+
 async function resolveCandidates(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -49,8 +63,8 @@ async function resolveCandidates(params: {
   ] = await Promise.all([
     import("../plugins/migration-provider-runtime.js"),
     import("../plugins/manifest-contract-runtime.js"),
-    import("../commands/migrate/context.js"),
-    import("../config/paths.js"),
+    loadMigrationContextModule(),
+    loadConfigPathsModule(),
   ]);
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
   const installedIds = new Set(params.installedPluginIds);
@@ -194,8 +208,8 @@ export async function offerPostInstallMigrations(
       const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
         await Promise.all([
           import("../commands/migrate.js"),
-          import("../commands/migrate/context.js"),
-          import("../config/paths.js"),
+          loadMigrationContextModule(),
+          loadConfigPathsModule(),
         ]);
       preparation = await candidate.provider.prepareApply?.({
         config: nextConfig,

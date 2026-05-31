@@ -147,7 +147,7 @@ type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
 function createQmdCfg(
   agentId: string,
-  workspace: string = "/tmp/workspace",
+  workspace = "/tmp/workspace",
   qmd: Record<string, unknown> = {},
 ): OpenClawConfig {
   return {

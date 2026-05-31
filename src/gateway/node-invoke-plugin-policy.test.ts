@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import {
+  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+  type PluginApprovalRequestPayload,
+} from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -253,6 +256,70 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expect(resultPromise).resolves.toStrictEqual({
       ok: true,
       payload: { id: record?.id, decision: "allow-once" },
+    });
+  });
+
+  it("caps plugin policy approval timeouts through the shared approval policy", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    registryState.current = {
+      nodeHostCommands: [
+        {
+          pluginId: "demo",
+          command: {
+            command: "demo.read",
+            dangerous: true,
+            handle: async () => "{}",
+          },
+          source: "test",
+        },
+      ],
+      nodeInvokePolicies: [
+        {
+          pluginId: "demo",
+          policy: {
+            commands: ["demo.read"],
+            handle: async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
+              const approval = await ctx.approvals?.request({
+                title: "Sensitive action",
+                description: "Needs approval",
+                timeoutMs: Number.MAX_SAFE_INTEGER,
+              });
+              return { ok: true, payload: approval ?? null };
+            },
+          },
+          pluginConfig: { enabled: true },
+          source: "test",
+        },
+      ],
+    } as unknown as PluginRegistry;
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: createOperatorClient(),
+      nodeSession: createNodeSession(),
+      command: "demo.read",
+      params: { path: "/tmp/x" },
+    });
+
+    await vi.waitFor(() => {
+      expect(manager.listPendingRecords()).toHaveLength(1);
+    });
+    const [record] = manager.listPendingRecords();
+    expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await expect(resultPromise).resolves.toStrictEqual({
+      ok: true,
+      payload: { id: record.id, decision: "allow-once" },
     });
   });
 

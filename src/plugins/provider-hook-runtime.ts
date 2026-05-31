@@ -1,10 +1,10 @@
-import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   PluginLruCache,
@@ -93,7 +93,7 @@ function resolveProviderRuntimePluginCacheKey(
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
+  return Boolean(normalized) && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
 }
 
 function resolveProviderRuntimeLookupModelId(

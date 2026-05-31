@@ -32,9 +32,9 @@ const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
-  style: 0.0,
+  style: 0,
   useSpeakerBoost: true,
-  speed: 1.0,
+  speed: 1,
 };
 
 const ELEVENLABS_TTS_MODELS = [

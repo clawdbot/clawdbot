@@ -1,6 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =

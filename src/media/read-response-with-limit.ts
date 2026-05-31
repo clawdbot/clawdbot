@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+
 async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
@@ -14,15 +16,16 @@ async function readChunkWithIdleTimeout(
       }
     };
 
+    const resolvedChunkTimeoutMs = resolveTimerTimeoutMs(chunkTimeoutMs, 1);
     timeoutId = setTimeout(() => {
       timedOut = true;
       const error =
-        onIdleTimeout?.({ chunkTimeoutMs }) ??
-        new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`);
+        onIdleTimeout?.({ chunkTimeoutMs: resolvedChunkTimeoutMs }) ??
+        new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`);
       clear();
       void reader.cancel(error).catch(() => undefined);
       reject(error);
-    }, chunkTimeoutMs);
+    }, resolvedChunkTimeoutMs);
 
     void reader.read().then(
       (result) => {

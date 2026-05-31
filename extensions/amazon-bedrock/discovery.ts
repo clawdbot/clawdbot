@@ -1,10 +1,14 @@
-import {
-  type BedrockClient,
-  type ListFoundationModelsCommandOutput,
-  type ListInferenceProfilesCommandOutput,
+import type {
+  BedrockClient,
+  ListFoundationModelsCommandOutput,
+  ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   BedrockDiscoveryConfig,
   ModelDefinitionConfig,
@@ -503,11 +507,16 @@ export async function discoverBedrockModels(params: {
 
   if (refreshIntervalSeconds > 0) {
     const cached = discoveryCache.get(cacheKey);
-    if (cached?.value && cached.expiresAt > now) {
-      return cached.value;
+    if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
+      if (cached.value) {
+        return cached.value;
+      }
+      if (cached.inFlight) {
+        return cached.inFlight;
+      }
     }
-    if (cached?.inFlight) {
-      return cached.inFlight;
+    if (cached) {
+      discoveryCache.delete(cacheKey);
     }
   }
 
@@ -581,19 +590,27 @@ export async function discoverBedrockModels(params: {
   })();
 
   if (refreshIntervalSeconds > 0) {
-    discoveryCache.set(cacheKey, {
-      expiresAt: now + refreshIntervalSeconds * 1000,
-      inFlight: discoveryPromise,
-    });
+    const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, { nowMs: now });
+    if (expiresAt !== undefined) {
+      discoveryCache.set(cacheKey, {
+        expiresAt,
+        inFlight: discoveryPromise,
+      });
+    }
   }
 
   try {
     const value = await discoveryPromise;
     if (refreshIntervalSeconds > 0) {
-      discoveryCache.set(cacheKey, {
-        expiresAt: now + refreshIntervalSeconds * 1000,
-        value,
+      const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, {
+        nowMs: now,
       });
+      if (expiresAt !== undefined) {
+        discoveryCache.set(cacheKey, {
+          expiresAt,
+          value,
+        });
+      }
     }
     return value;
   } catch (error) {

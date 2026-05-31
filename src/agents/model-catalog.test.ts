@@ -32,9 +32,7 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
     return false;
   }
   return (
-    (provider === "openai" ||
-      provider === "azure-openai-responses" ||
-      provider === "openai-codex") &&
+    (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
     modelId === "gpt-5.3-codex-spark"
   );
 }
@@ -231,6 +229,7 @@ function requireMockCallParam(
 
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
+    vi.resetModules();
     readFileMock = vi.fn();
     vi.doMock("node:fs/promises", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:fs/promises")>()),
@@ -260,6 +259,25 @@ describe("loadModelCatalog", () => {
     vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
       loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
       resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+        currentPluginMetadataSnapshotMock(...args) ?? loadPluginMetadataSnapshotMock(...args),
+    }));
+    vi.doMock("../plugins/manifest-contract-eligibility.js", () => ({
+      isManifestPluginAvailableForControlPlane: ({
+        plugin,
+        snapshot,
+      }: {
+        plugin: { id: string; origin?: string };
+        snapshot: {
+          index?: { plugins?: Array<{ pluginId?: string; id?: string; enabled?: boolean }> };
+        };
+      }) =>
+        plugin.origin === "bundled" ||
+        Boolean(
+          snapshot.index?.plugins?.some(
+            (entry) => (entry.pluginId ?? entry.id) === plugin.id && entry.enabled !== false,
+          ),
+        ),
+      loadManifestMetadataSnapshot: (...args: unknown[]) =>
         currentPluginMetadataSnapshotMock(...args) ?? loadPluginMetadataSnapshotMock(...args),
     }));
 
@@ -303,6 +321,7 @@ describe("loadModelCatalog", () => {
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
     vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
     vi.doUnmock("../plugins/plugin-metadata-snapshot.js");
+    vi.doUnmock("../plugins/manifest-contract-eligibility.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {
@@ -495,7 +514,7 @@ describe("loadModelCatalog", () => {
     readFileMock.mockResolvedValueOnce(
       JSON.stringify({
         providers: {
-          "openai-codex": {
+          openai: {
             models: [
               {
                 id: "gpt-5.3-codex-spark",
@@ -513,14 +532,6 @@ describe("loadModelCatalog", () => {
               },
             ],
           },
-          openai: {
-            models: [
-              {
-                id: "gpt-5.3-codex-spark",
-                name: "GPT-5.3 Codex Spark",
-              },
-            ],
-          },
         },
       }),
     );
@@ -529,7 +540,7 @@ describe("loadModelCatalog", () => {
 
     expect(result).toEqual([
       {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4",
         name: "GPT-5.4",
         reasoning: true,
@@ -911,11 +922,11 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
+  it("does not synthesize stale openai/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex",
         reasoning: true,
         contextWindow: 200000,
@@ -923,14 +934,14 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.2-codex",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.2 Codex",
       },
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
-    const entry = requireCatalogEntry(result, "openai-codex", "gpt-5.4");
+    expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
+    const entry = requireCatalogEntry(result, "openai", "gpt-5.4");
     expect(entry.name).toBe("GPT-5.3 Codex");
   });
 
@@ -954,7 +965,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.3-codex-spark",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex Spark",
         reasoning: true,
         contextWindow: 128000,
@@ -965,14 +976,14 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
     expectNoCatalogEntry(result, "azure-openai-responses", "gpt-5.3-codex-spark");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
+    expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
   });
 
-  it("keeps available openai-codex 5.1/5.2/5.3 built-ins in the catalog", async () => {
+  it("keeps available openai 5.1/5.2/5.3 built-ins in the catalog", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.1-codex-mini",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.1 Codex Mini",
         reasoning: true,
         contextWindow: 400000,
@@ -980,7 +991,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.2-codex",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.2 Codex",
         reasoning: true,
         contextWindow: 400000,
@@ -988,7 +999,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.3-codex",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex",
         reasoning: true,
         contextWindow: 400000,
@@ -996,7 +1007,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.5",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.5",
         reasoning: true,
         contextWindow: 400000,
@@ -1005,15 +1016,15 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.1-codex-mini").name).toBe(
+    expect(requireCatalogEntry(result, "openai", "gpt-5.1-codex-mini").name).toBe(
       "GPT-5.1 Codex Mini",
     );
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.2-codex").name).toBe("GPT-5.2 Codex");
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.3-codex").name).toBe("GPT-5.3 Codex");
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.5").name).toBe("GPT-5.5");
+    expect(requireCatalogEntry(result, "openai", "gpt-5.2-codex").name).toBe("GPT-5.2 Codex");
+    expect(requireCatalogEntry(result, "openai", "gpt-5.3-codex").name).toBe("GPT-5.3 Codex");
+    expect(requireCatalogEntry(result, "openai", "gpt-5.5").name).toBe("GPT-5.5");
   });
 
-  it("does not synthesize gpt-5.4 OpenAI forward-compat entries from template models", async () => {
+  it("keeps OpenAI forward-compat entries on the unified provider", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.2",
@@ -1049,7 +1060,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex",
         reasoning: true,
         contextWindow: 272000,
@@ -1059,14 +1070,11 @@ describe("loadModelCatalog", () => {
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
-    expect(
-      result.some((entry) => entry.provider === "openai" && entry.id.startsWith("gpt-5.4")),
-    ).toBe(false);
-    const entry = requireCatalogEntry(result, "openai-codex", "gpt-5.4");
+    const entry = requireCatalogEntry(result, "openai", "gpt-5.4");
     expect(entry.name).toBe("GPT-5.3 Codex");
-    expect(
-      result.some((entry) => entry.provider === "openai-codex" && entry.id === "gpt-5.4-mini"),
-    ).toBe(false);
+    expect(result.some((entry) => entry.provider === "openai" && entry.id === "gpt-5.4-mini")).toBe(
+      false,
+    );
   });
 
   it("merges provider-owned supplemental catalog entries", async () => {

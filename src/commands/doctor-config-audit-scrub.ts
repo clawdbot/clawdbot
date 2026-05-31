@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { scrubConfigAuditLog } from "../config/io.audit.js";
-import { note } from "../terminal/note.js";
 
 const NOTE_TITLE = "Config audit";
 

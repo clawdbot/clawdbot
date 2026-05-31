@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
   createGatewayRestartTraceHandoffEnv,
@@ -12,7 +13,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -742,6 +742,11 @@ export async function runGatewayLoop(params: {
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
           gatewayLog.warn(
             "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+          );
+          gatewayLog.warn(
+            "An unauthorized SIGUSR1 restart signal was received and ignored. " +
+              "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
+              "or restart the gateway through your service manager.",
           );
           return;
         }

@@ -270,7 +270,7 @@ private fun providerPriority(provider: String): Int =
     "google" -> 2
     "openrouter" -> 3
     "ollama", "ollama-local" -> 4
-    "codex", "openai-codex" -> 5
+    "codex" -> 5
     else -> 100
   }
 

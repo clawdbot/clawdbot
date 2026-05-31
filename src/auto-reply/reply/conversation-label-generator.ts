@@ -25,7 +25,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 }
 
 function isCodexSimpleCompletionModel(model: { api?: string; provider?: string }): boolean {
-  return model.provider === "openai-codex" || model.api === "openai-codex-responses";
+  return model.api === "openai-chatgpt-responses";
 }
 
 function extractSimpleCompletionError(result: {

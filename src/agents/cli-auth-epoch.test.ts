@@ -326,7 +326,7 @@ describe("resolveCliAuthEpoch", () => {
     setCliAuthEpochTestDeps({
       readCodexCliCredentialsCached: () => ({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access,
         refresh: localRefresh,
         expires: 1,
@@ -394,7 +394,7 @@ describe("resolveCliAuthEpoch", () => {
     setCliAuthEpochTestDeps({
       readCodexCliCredentialsCached: () => ({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: localAccess,
         refresh: "local-refresh",
         expires: 1,
@@ -403,9 +403,9 @@ describe("resolveCliAuthEpoch", () => {
       loadAuthProfileStoreForRuntime: () => ({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "profile-access",
             refresh: profileRefresh,
             expires: 1,
@@ -417,25 +417,25 @@ describe("resolveCliAuthEpoch", () => {
 
     const first = await resolveCliAuthEpoch({
       provider: "codex-cli",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       skipLocalCredential: true,
     });
     localAccess = "local-access-b";
     const second = await resolveCliAuthEpoch({
       provider: "codex-cli",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       skipLocalCredential: true,
     });
     profileRefresh = "profile-refresh-b";
     const third = await resolveCliAuthEpoch({
       provider: "codex-cli",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       skipLocalCredential: true,
     });
     profileAccountId = "acct-2";
     const fourth = await resolveCliAuthEpoch({
       provider: "codex-cli",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       skipLocalCredential: true,
     });
 
@@ -449,7 +449,7 @@ describe("resolveCliAuthEpoch", () => {
   it("uses non-prompting Codex CLI credential reads for epoch fingerprints", async () => {
     const readCodexCliCredentialsCached = vi.fn(() => ({
       type: "oauth" as const,
-      provider: "openai-codex" as const,
+      provider: "openai" as const,
       access: "local-access",
       refresh: "local-refresh",
       expires: 1,

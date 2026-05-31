@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearCachedIMessagePrivateApiStatus,
+  getCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+} from "./private-api-status.js";
 import { imessageRpcSupportsMethod } from "./probe.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearCachedIMessagePrivateApiStatus();
+});
 
 describe("imessageRpcSupportsMethod", () => {
   it("returns false when the bridge is not available", () => {
@@ -90,5 +100,37 @@ describe("imessageRpcSupportsMethod", () => {
     ]) {
       expect(imessageRpcSupportsMethod(oldBuild, method)).toBe(false);
     }
+  });
+});
+
+describe("iMessage private API status cache", () => {
+  const availableStatus = {
+    available: true,
+    v2Ready: true,
+    selectors: {},
+    rpcMethods: ["chats.list"],
+  };
+
+  it("drops expiring private API status when the current clock is not a valid date timestamp", () => {
+    clearCachedIMessagePrivateApiStatus();
+    setCachedIMessagePrivateApiStatus(
+      "imsg-invalid-private-clock",
+      availableStatus,
+      1_700_000_030_000,
+    );
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+
+    expect(getCachedIMessagePrivateApiStatus("imsg-invalid-private-clock")).toBeUndefined();
+  });
+
+  it("does not cache private API status with an invalid expiry timestamp", () => {
+    clearCachedIMessagePrivateApiStatus();
+    setCachedIMessagePrivateApiStatus(
+      "imsg-overflow-private-clock",
+      availableStatus,
+      Number.POSITIVE_INFINITY,
+    );
+
+    expect(getCachedIMessagePrivateApiStatus("imsg-overflow-private-clock")).toBeUndefined();
   });
 });

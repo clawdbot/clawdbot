@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -22,7 +24,9 @@ import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
+  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -37,7 +41,10 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -80,6 +87,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-l
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -98,6 +106,7 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -134,6 +143,59 @@ function buildSilentFallbackFailurePayload(params: {
       `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
       `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
     isError: true,
+  });
+}
+
+function resolveSourceReplyPolicy(params: {
+  cfg: OpenClawConfig;
+  sessionCtx: TemplateContext;
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  runtimePolicySessionKey?: string;
+  opts?: GetReplyOptions;
+}): ReturnType<typeof resolveSourceReplyVisibilityPolicy> {
+  const sendPolicy = resolveSendPolicy({
+    cfg: params.cfg,
+    entry: params.sessionEntry,
+    sessionKey: params.runtimePolicySessionKey ?? params.sessionKey,
+    channel:
+      params.sessionCtx.OriginatingChannel ??
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider ??
+      params.sessionEntry?.channel,
+    chatType: params.sessionEntry?.chatType,
+  });
+  return resolveSourceReplyVisibilityPolicy({
+    cfg: params.cfg,
+    ctx: params.sessionCtx,
+    requested: params.opts?.sourceReplyDeliveryMode,
+    sendPolicy,
+  });
+}
+
+function resolveReplyRunDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  sessionCtx: TemplateContext;
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  runtimePolicySessionKey?: string;
+  opts?: GetReplyOptions;
+}): DeliveryContext | undefined {
+  if (resolveSourceReplyPolicy(params).suppressDelivery) {
+    return undefined;
+  }
+  const threadId =
+    normalizeOptionalString(params.sessionCtx.MessageThreadId) ??
+    normalizeOptionalString(params.sessionCtx.TransportThreadId) ??
+    normalizeOptionalString(
+      parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
+    );
+  return normalizeDeliveryContext({
+    ...resolveEffectiveReplyRoute({
+      ctx: params.sessionCtx,
+      entry: params.sessionEntry,
+    }),
+    threadId,
   });
 }
 
@@ -1274,6 +1336,10 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  const replyRouteThreadId = resolveRoutedDeliveryThreadId({
+    ctx: sessionCtx,
+    sessionKey: replySessionKey,
+  });
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
@@ -1284,6 +1350,7 @@ export async function runReplyAgent(params: {
       sessionKey: replySessionKey ?? "",
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
+      routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
     if (admission.status === "skipped") {
@@ -1323,6 +1390,73 @@ export async function runReplyAgent(params: {
   };
   const drainQueuedFollowupsAfterClear = () => {
     scheduleFollowupDrain(queueKey, runFollowupTurn);
+  };
+  const restartRecoveryDeliveryRunId = crypto.randomUUID();
+  let trackedRestartRecoveryDeliveryContext = false;
+  const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
+    if (!sessionKey || !storePath) {
+      return;
+    }
+    const entry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
+    const deliveryContext = resolveReplyRunDeliveryContext({
+      cfg,
+      sessionCtx,
+      sessionEntry: entry,
+      sessionKey,
+      runtimePolicySessionKey,
+      opts,
+    });
+    if (!deliveryContext) {
+      return;
+    }
+    const updatedAt = Date.now();
+    const patch: Partial<SessionEntry> = {
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryRunId,
+      updatedAt,
+    };
+    const persisted = await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (current) =>
+        current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
+          ? patch
+          : null,
+    });
+    if (persisted) {
+      activeSessionEntry = persisted;
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = persisted;
+      }
+      trackedRestartRecoveryDeliveryContext =
+        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
+    }
+  };
+  const clearRestartRecoveryDeliveryContext = async (): Promise<void> => {
+    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
+      return;
+    }
+    const patch: Partial<SessionEntry> = {
+      restartRecoveryDeliveryContext: undefined,
+      restartRecoveryDeliveryRunId: undefined,
+      updatedAt: Date.now(),
+    };
+    const persisted = await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (current) =>
+        current.sessionId === replyOperation.sessionId &&
+        current.abortedLastRun !== true &&
+        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
+          ? patch
+          : null,
+    });
+    if (persisted) {
+      activeSessionEntry = persisted;
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = persisted;
+      }
+    }
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied = false;
@@ -1465,6 +1599,7 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
+    await persistRestartRecoveryDeliveryContext();
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
       runAgentTurnWithFallback({
         commandBody,
@@ -1511,7 +1646,8 @@ export async function runReplyAgent(params: {
       fallbackAttempts,
       directlySentBlockKeys,
     } = runOutcome;
-    let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
+    const { autoCompactionCount } = runOutcome;
+    let { didLogHeartbeatStrip } = runOutcome;
 
     if (
       shouldInjectGroupIntro &&
@@ -2132,22 +2268,13 @@ export async function runReplyAgent(params: {
     // durable delivery retries. Hidden reasoning, message-tool-only replies,
     // and sendPolicy-denied replies must not become heartbeat-replayable text.
     if (sessionKey && storePath && finalPayloads.length > 0) {
-      const sendPolicy = resolveSendPolicy({
+      const sourceReplyPolicy = resolveSourceReplyPolicy({
         cfg,
-        entry: activeSessionEntry,
-        sessionKey: params.runtimePolicySessionKey ?? sessionKey,
-        channel:
-          sessionCtx.OriginatingChannel ??
-          sessionCtx.Surface ??
-          sessionCtx.Provider ??
-          activeSessionEntry?.channel,
-        chatType: activeSessionEntry?.chatType,
-      });
-      const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
-        cfg,
-        ctx: sessionCtx,
-        requested: opts?.sourceReplyDeliveryMode,
-        sendPolicy,
+        sessionCtx,
+        sessionEntry: activeSessionEntry,
+        sessionKey,
+        runtimePolicySessionKey,
+        opts,
       });
       const pendingText = sourceReplyPolicy.suppressDelivery
         ? ""
@@ -2170,6 +2297,14 @@ export async function runReplyAgent(params: {
           })()
         : pendingText;
       if (resolvedPendingText) {
+        const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
+          cfg,
+          sessionCtx,
+          sessionEntry: activeSessionEntry,
+          sessionKey,
+          runtimePolicySessionKey,
+          opts,
+        });
         await applySessionStoreEntryPatch({
           storePath,
           sessionKey,
@@ -2178,6 +2313,7 @@ export async function runReplyAgent(params: {
           patch: {
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
+            pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
           },
@@ -2236,6 +2372,15 @@ export async function runReplyAgent(params: {
     returnWithQueuedFollowupDrain(undefined);
     throw error;
   } finally {
+    try {
+      await clearRestartRecoveryDeliveryContext();
+    } catch (error) {
+      logVerbose(
+        `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(
+          error,
+        )}`,
+      );
+    }
     if (shouldDrainQueuedFollowupsAfterClear) {
       replyOperation.completeThen(drainQueuedFollowupsAfterClear);
     } else {

@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { streamSimple } from "../../stream.js";
 type AnthropicToolSchemaMode = "openai-functions";
 type AnthropicToolChoiceMode = "openai-string-modes";
@@ -147,7 +147,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
           ) {
             payloadObj.tools = payloadObj.tools
               .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
-              .filter((tool): tool is Record<string, unknown> => !!tool);
+              .filter((tool): tool is Record<string, unknown> => Boolean(tool));
           }
           if (usesOpenAiStringModeAnthropicToolChoiceForModel(model, options)) {
             payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(

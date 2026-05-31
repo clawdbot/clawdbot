@@ -48,6 +48,34 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
 }
 
 describe("plugins Docker assertions", () => {
+  it("rejects loose ClawHub preflight limits instead of parsing prefixes", () => {
+    const timeoutResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1e3",
+      },
+    });
+    expect(timeoutResult.status).not.toBe(0);
+    expect(timeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: 1e3",
+    );
+
+    const bodyLimitResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: "1000bytes",
+      },
+    });
+    expect(bodyLimitResult.status).not.toBe(0);
+    expect(bodyLimitResult.stderr).toContain(
+      "invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: 1000bytes",
+    );
+  });
+
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
     const scripts = [
       "scripts/e2e/lib/plugins/sweep.sh",
@@ -92,6 +120,7 @@ describe("plugins Docker assertions", () => {
         env: {
           ...process.env,
           HOME: home,
+          OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1e3",
           OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
         },
       });

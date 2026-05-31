@@ -60,7 +60,7 @@ describe("applyModelProviderToolPolicy", () => {
         },
       },
       modelProvider: "gateway",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
     });
 
@@ -80,7 +80,7 @@ describe("applyModelProviderToolPolicy", () => {
         },
       },
       modelProvider: "gateway",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
       suppressManagedWebSearch: false,
     });
@@ -101,15 +101,15 @@ describe("applyModelProviderToolPolicy", () => {
         },
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "oauth",
             },
           },
         },
       },
-      modelProvider: "openai-codex",
-      modelApi: "openai-codex-responses",
+      modelProvider: "openai",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
     });
 
@@ -128,8 +128,8 @@ describe("applyModelProviderToolPolicy", () => {
           },
         },
       },
-      modelProvider: "openai-codex",
-      modelApi: "openai-codex-responses",
+      modelProvider: "openai",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
     });
 

@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  prepareProviderDynamicModel: vi.fn(),
+  resolveProviderModernModelRef: vi.fn(),
+  runProviderDynamicModel: vi.fn(),
+}));
 
 vi.mock("./agent-model-discovery.js", () => ({
   normalizeDiscoveredAgentModel: (value: unknown) => value,
 }));
+
+vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
 
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 
@@ -36,6 +44,15 @@ function model(provider: string, id: string): Model {
 }
 
 describe("appendPrioritizedDynamicLiveModels", () => {
+  beforeEach(() => {
+    providerRuntimeMocks.prepareProviderDynamicModel.mockReset();
+    providerRuntimeMocks.prepareProviderDynamicModel.mockResolvedValue(undefined);
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+    providerRuntimeMocks.runProviderDynamicModel.mockReset();
+    providerRuntimeMocks.runProviderDynamicModel.mockReturnValue(undefined);
+  });
+
   it("materializes prioritized refs from provider dynamic model hooks", async () => {
     const resolveDynamicModel: DynamicModelResolver = vi.fn((params) =>
       params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
@@ -129,5 +146,26 @@ describe("appendPrioritizedDynamicLiveModels", () => {
     expect(result.models).toHaveLength(1);
     expect(prepareDynamicModel).not.toHaveBeenCalled();
     expect(resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("uses default provider runtime hooks when resolvers are not injected", async () => {
+    providerRuntimeMocks.runProviderDynamicModel.mockImplementation((params) =>
+      params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
+        ? model(DYNAMIC_PROVIDER, "glm-5")
+        : undefined,
+    );
+
+    const result = await appendPrioritizedDynamicLiveModels({
+      models: [],
+      agentDir: "/tmp/openclaw-agent",
+      modelRegistry: REGISTRY,
+      refs: [{ provider: DYNAMIC_PROVIDER, id: "glm-5" }],
+    });
+
+    expect(result.added.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      `${DYNAMIC_PROVIDER}/glm-5`,
+    ]);
+    expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
+    expect(providerRuntimeMocks.runProviderDynamicModel).toHaveBeenCalledTimes(1);
   });
 });

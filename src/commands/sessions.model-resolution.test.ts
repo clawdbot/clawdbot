@@ -53,7 +53,7 @@ describe("sessionsCommand model resolution", () => {
   it("prefers the persisted override model for subagent sessions in JSON output", async () => {
     const model = await resolveSubagentModel(
       {
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.4",
         modelOverride: "test:opus",
       },
@@ -63,10 +63,7 @@ describe("sessionsCommand model resolution", () => {
   });
 
   it("falls back to modelOverride when runtime model is missing", async () => {
-    const model = await resolveSubagentModel(
-      { modelOverride: "openai-codex/gpt-5.4" },
-      "subagent-2",
-    );
+    const model = await resolveSubagentModel({ modelOverride: "openai/gpt-5.4" }, "subagent-2");
     expect(model).toBe("gpt-5.4");
   });
 

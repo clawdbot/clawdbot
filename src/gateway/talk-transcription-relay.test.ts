@@ -67,6 +67,7 @@ function expectTalkEventFields(
 
 describe("talk transcription gateway relay", () => {
   afterEach(() => {
+    vi.useRealTimers();
     clearTalkTranscriptionRelaySessionsForTest();
   });
 
@@ -226,6 +227,37 @@ describe("talk transcription gateway relay", () => {
         providerConfig: { encoding: "linear16", sampleRate: 16000 },
       }),
     ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects session creation when transcription expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const sttSession = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeTranscriptionProviderPlugin = {
+      id: "stt-test",
+      label: "STT Test",
+      isConfigured: () => true,
+      createSession: vi.fn(() => sttSession),
+    };
+    const context = {
+      getRuntimeConfig: () => ({}),
+      broadcastToConnIds: vi.fn(),
+    } as never;
+
+    expect(() =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: {},
+      }),
+    ).toThrow("Transcription relay session expiry is outside the supported Date range");
     expect(provider.createSession).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { stubTool } from "./fast-tool-stubs.js";
 
 // Sessions-tool tests only exercise sessions/subagent registrations.

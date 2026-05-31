@@ -20,6 +20,11 @@ type QaGatewayCallEnv = Pick<
 >;
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+let sessionStoreLockRetryDelaysMsForTests: readonly number[] | undefined;
+
+function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
+  return sessionStoreLockRetryDelaysMsForTests ?? SESSION_STORE_LOCK_RETRY_DELAYS_MS;
+}
 
 type QaSessionTranscriptSummary = {
   finalText: string;
@@ -100,17 +105,15 @@ async function callGatewayWithSessionStoreLockRetry<T>(
   params: Record<string, unknown>,
   options: { timeoutMs: number },
 ) {
-  for (let attempt = 0; attempt <= SESSION_STORE_LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+  const retryDelaysMs = resolveSessionStoreLockRetryDelaysMs();
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
       return (await env.gateway.call(method, params, options)) as T;
     } catch (error) {
-      if (
-        !isSessionStoreLockTimeout(error) ||
-        attempt === SESSION_STORE_LOCK_RETRY_DELAYS_MS.length
-      ) {
+      if (!isSessionStoreLockTimeout(error) || attempt === retryDelaysMs.length) {
         throw error;
       }
-      await sleep(SESSION_STORE_LOCK_RETRY_DELAYS_MS[attempt]);
+      await sleep(retryDelaysMs[attempt]);
     }
   }
   throw new Error(`${method} failed after session store lock retries`);
@@ -243,4 +246,9 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  setSessionStoreLockRetryDelaysMsForTests,
 };
+
+function setSessionStoreLockRetryDelaysMsForTests(delays?: readonly number[]): void {
+  sessionStoreLockRetryDelaysMsForTests = delays;
+}

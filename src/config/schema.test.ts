@@ -143,6 +143,14 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("timeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectTimeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("auth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("sslVerify");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("clientCert");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
   });
 
@@ -186,6 +194,44 @@ describe("config schema", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("validates MCP OAuth client metadata URLs against the SDK contract", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                clientMetadataUrl: "https://client.example.com/openclaw-mcp.json",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+    for (const clientMetadataUrl of [
+      "http://client.example.com/openclaw-mcp.json",
+      "https://client.example.com/",
+    ]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              docs: {
+                url: "https://mcp.example.com/mcp",
+                transport: "streamable-http",
+                auth: "oauth",
+                oauth: { clientMetadataUrl },
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
   });
 
   it("merges plugin ui hints", () => {

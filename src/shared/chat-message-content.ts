@@ -1,4 +1,4 @@
-import { readStringValue } from "./string-coerce.js";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
 export function extractFirstTextBlock(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {

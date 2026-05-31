@@ -233,6 +233,39 @@ describe("info command handlers", () => {
     expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
+  it("loads skills when named /skill receives an empty precomputed command list", async () => {
+    const params = buildInfoParams("/skill demo_skill input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.skillCommands = [];
+    params.loadSkillCommands = vi.fn(async () => [
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ]);
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result).toBeNull();
+    expect(params.loadSkillCommands).toHaveBeenCalledOnce();
+    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an empty precomputed /skill command list authoritative without a loader", async () => {
+    const params = buildInfoParams("/skill demo_skill input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.skillCommands = [];
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Unknown skill: demo_skill");
+    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+  });
+
   it("uses the canonical command sender identity for /whoami AllowFrom", async () => {
     const params = buildInfoParams(
       "/whoami",

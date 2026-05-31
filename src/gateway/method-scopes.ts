@@ -1,6 +1,6 @@
+import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
-import { normalizeOptionalString as normalizeSessionActionParam } from "../shared/string-coerce.js";
 import {
   isCoreGatewayMethodClassified,
   isCoreNodeGatewayMethod,

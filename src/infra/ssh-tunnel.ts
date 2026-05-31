@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable } from "./ports.js";

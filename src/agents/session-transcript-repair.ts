@@ -2,7 +2,7 @@ import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "./runtime/index.js";
 import {
   extractToolCallsFromAssistant,

@@ -622,7 +622,7 @@ describe("gateway sessions patch", () => {
               },
               {
                 id: "work",
-                model: { primary: "openai-codex/gpt-5.5" },
+                model: { primary: "openai/gpt-5.5" },
               },
             ],
           },
@@ -646,7 +646,7 @@ describe("gateway sessions patch", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.5" },
+              model: { primary: "openai/gpt-5.5" },
             },
           },
         } as OpenClawConfig,
@@ -903,7 +903,7 @@ describe("gateway sessions patch", () => {
         cfg: createAllowlistedAnthropicModelCfg(),
         patch: {
           key: MAIN_SESSION_KEY,
-          model: "anthropic/claude-sonnet-4-6@openai-codex:user@example.com",
+          model: "anthropic/claude-sonnet-4-6@openai:user@example.com",
         },
         loadGatewayModelCatalog: async () => [
           { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
@@ -912,7 +912,7 @@ describe("gateway sessions patch", () => {
     );
     expect(entry.providerOverride).toBe("anthropic");
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
-    expect(entry.authProfileOverride).toBe("openai-codex:user@example.com");
+    expect(entry.authProfileOverride).toBe("openai:user@example.com");
     expect(entry.authProfileOverrideSource).toBe("user");
   });
 

@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ErrorPattern = RegExp | string;
 
@@ -173,7 +173,7 @@ const ERROR_PATTERNS = {
     /^terminated$/i,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
-    // shared model runtime's openai-codex provider surfaces `Request failed` when the HTTP
+    // shared model runtime's openai provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s
     // from the upstream Codex service). Treat it as a transport failure so
     // the configured fallback chain runs instead of surfacing the error.

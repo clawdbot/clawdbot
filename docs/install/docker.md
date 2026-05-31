@@ -296,8 +296,8 @@ replacement. Gateway startup does not generate bundled-plugin dependency trees.
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** watch `media/`, session JSONL files,
-`cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
+**Disk growth hotspots:** watch `media/`, session JSONL files, the shared
+SQLite state database, installed plugin package roots, and rolling file logs
 under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,8 +18,6 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -164,8 +164,7 @@ function estimateBase64Size(value: string | undefined): number | undefined {
   }
   let encodedLength = 0;
   let padding = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
+  for (const char of value) {
     if (!char || isBase64Whitespace(char)) {
       continue;
     }

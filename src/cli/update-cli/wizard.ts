@@ -1,4 +1,7 @@
 import { confirm, isCancel } from "@clack/prompts";
+import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   formatUpdateChannelLabel,
@@ -7,9 +10,6 @@ import {
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { selectStyled } from "../../terminal/prompt-select-styled.js";
-import { stylePromptMessage } from "../../terminal/prompt-style.js";
-import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 import {
   isEmptyDir,

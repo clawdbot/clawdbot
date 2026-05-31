@@ -10,8 +10,8 @@ function uuidFromBytes(bytes: Uint8Array): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
 
   let hex = "";
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i].toString(16).padStart(2, "0");
+  for (const byte of bytes) {
+    hex += byte.toString(16).padStart(2, "0");
   }
 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(

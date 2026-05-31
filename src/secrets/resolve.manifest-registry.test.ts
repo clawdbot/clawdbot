@@ -27,9 +27,11 @@ function createPluginManagedSecretProviderFixture(): {
   rootDir: string;
 } {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-secret-provider-"));
+  fs.chmodSync(rootDir, 0o700);
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+  const resolverPath = path.join(rootDir, "resolve.mjs");
   fs.writeFileSync(
-    path.join(rootDir, "resolve.mjs"),
+    resolverPath,
     [
       "import process from 'node:process';",
       "let input = '';",
@@ -43,6 +45,7 @@ function createPluginManagedSecretProviderFixture(): {
     ].join("\n"),
     "utf8",
   );
+  fs.chmodSync(resolverPath, 0o600);
   const manifestRegistry = {
     plugins: [
       {

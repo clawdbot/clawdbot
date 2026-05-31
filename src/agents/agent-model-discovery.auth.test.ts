@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAgentCredentialMapFromStore } from "./agent-auth-credentials.js";
 import {
@@ -106,9 +107,9 @@ describe("discoverAuthStorage", () => {
           provider: "anthropic",
           token: "sk-ant-runtime",
         },
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
@@ -124,12 +125,36 @@ describe("discoverAuthStorage", () => {
       type: "api_key",
       key: "sk-ant-runtime",
     });
-    const codexCredential = credentials["openai-codex"] as
+    const codexCredential = credentials["openai"] as
       | { type?: string; access?: string; refresh?: string }
       | undefined;
     expect(codexCredential?.type).toBe("oauth");
     expect(codexCredential?.access).toBe("oauth-access");
     expect(codexCredential?.refresh).toBe("oauth-refresh");
+  });
+
+  it("drops runtime auth profiles with out-of-range expiry values", () => {
+    const credentials = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "anthropic:bad-token-expiry": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-runtime",
+          expires: MAX_DATE_TIMESTAMP_MS + 1,
+        },
+        "openai:bad-oauth-expiry": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: MAX_DATE_TIMESTAMP_MS + 1,
+        },
+      },
+    });
+
+    expect(credentials.anthropic).toBeUndefined();
+    expect(credentials.openai).toBeUndefined();
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
@@ -218,7 +243,7 @@ describe("discoverAuthStorage", () => {
     await withAgentDir(async (agentDir) => {
       await writeLegacyAuthJson(agentDir, {
         openrouter: { type: "api_key", key: "legacy-static-key" },
-        "openai-codex": {
+        openai: {
           type: "oauth",
           access: "oauth-access",
           refresh: "oauth-refresh",
@@ -230,7 +255,7 @@ describe("discoverAuthStorage", () => {
 
       const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
-      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      const codexEntry = parsed["openai"] as { type?: string; access?: string } | undefined;
       expect(codexEntry?.type).toBe("oauth");
       expect(codexEntry?.access).toBe("oauth-access");
     });

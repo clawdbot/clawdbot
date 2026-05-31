@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type AutoSelectableProvider = {
   id: string;

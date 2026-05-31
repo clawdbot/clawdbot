@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -8,7 +9,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
-import { resolvePrivateCommandRouteTargets } from "./commands-private-route.js";
+import {
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
+  resolvePrivateCommandRouteTargets,
+} from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function createApprovalChannelPlugin(params: {
@@ -142,6 +146,22 @@ function buildApprovalRequest(): ExecApprovalRequest {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+describe("resolvePrivateCommandApprovalRouteExpiresAtMs", () => {
+  it("returns a bounded five-minute route expiry for valid clocks", () => {
+    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(1_800_000_000_000)).toBe(
+      1_800_000_300_000,
+    );
+  });
+
+  it("expires private command routes immediately for invalid clocks", () => {
+    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(Number.NaN)).toBe(0);
+  });
+
+  it("expires private command routes immediately when expiry would exceed Date bounds", () => {
+    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(MAX_DATE_TIMESTAMP_MS)).toBe(0);
+  });
 });
 
 describe("resolvePrivateCommandRouteTargets", () => {

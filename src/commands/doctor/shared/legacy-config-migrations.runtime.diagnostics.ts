@@ -27,7 +27,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS: LegacyConfigMigration
       if (!diagnostics || !isLegacyMemoryPressureBundleConfig(diagnostics.memoryPressureBundle)) {
         return;
       }
-      if (Object.prototype.hasOwnProperty.call(diagnostics, "memoryPressureSnapshot")) {
+      if (Object.hasOwn(diagnostics, "memoryPressureSnapshot")) {
         delete diagnostics.memoryPressureBundle;
         changes.push(
           "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",

@@ -1,5 +1,5 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export function buildSubagentSystemPrompt(params: {

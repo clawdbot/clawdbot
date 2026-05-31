@@ -156,15 +156,14 @@ Use `auth.order.openai` for the user-facing order:
 {
   auth: {
     order: {
-      openai: ["openai-codex:user@example.com", "openai:api-key-backup"],
+      openai: ["openai:user@example.com", "openai:api-key-backup"],
     },
   },
 }
 ```
 
-Existing Codex subscription profiles may still use the legacy
-`openai-codex:*` profile id. The ordered API-key backup can be a normal
-`openai:*` API-key profile. When the subscription hits a Codex usage limit,
+Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key
+profiles. When the subscription hits a Codex usage limit,
 OpenClaw records the exact reset time when Codex provides one, tries the next
 ordered auth profile, and keeps the run inside the Codex harness. Once the reset
 time passes, the subscription profile is eligible again and the next automatic

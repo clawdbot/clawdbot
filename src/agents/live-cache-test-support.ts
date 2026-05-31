@@ -2,7 +2,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import { completeSimple } from "../llm/stream.js";
-import { type Api, type AssistantMessage, type Model } from "../llm/types.js";
+import type { Api, AssistantMessage, Model } from "../llm/types.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";

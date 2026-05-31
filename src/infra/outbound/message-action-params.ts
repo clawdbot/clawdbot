@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
 import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
@@ -18,7 +19,6 @@ import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export const readBooleanParam = readBooleanParamShared;

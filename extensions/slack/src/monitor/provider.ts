@@ -153,7 +153,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? getRuntimeConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
-  let account = resolveSlackAccount({
+  const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
   });

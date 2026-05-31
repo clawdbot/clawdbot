@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export function inferParamBFromIdOrName(text: string): number | null {
   const raw = normalizeLowercaseStringOrEmpty(text);

@@ -389,6 +389,15 @@
         "plan.0.step"
       ]
     },
+    "skill_workshop": {
+      "emoji": "🧰",
+      "title": "Skill Workshop",
+      "detailKeys": [
+        "action",
+        "name",
+        "proposal_id"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",

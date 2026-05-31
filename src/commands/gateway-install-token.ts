@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -11,7 +12,6 @@ import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
   isUnsafeGatewayTailscaleNoAuth,
 } from "../shared/gateway-tailscale-auth-policy.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   readConfigFileSnapshotForWrite,
   replaceConfigFile,

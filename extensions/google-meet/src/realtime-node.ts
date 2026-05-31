@@ -191,7 +191,6 @@ export async function startNodeAgentAudioBridge(params: {
     }),
   );
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
-  let agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined;
   let ttsQueue = Promise.resolve();
 
   const stop = async () => {
@@ -281,26 +280,27 @@ export async function startNodeAgentAudioBridge(params: {
       });
   };
 
-  agentTalkback = createRealtimeVoiceAgentTalkbackQueue({
-    debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-    isStopped: () => stopped,
-    logger: params.logger,
-    logPrefix: "[google-meet] node agent",
-    responseStyle: "Brief, natural spoken answer for a live meeting.",
-    fallbackText: "I hit an error while checking that. Please try again.",
-    consult: ({ question, responseStyle }) =>
-      consultOpenClawAgentForGoogleMeet({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        meetingSessionId: params.meetingSessionId,
-        requesterSessionKey: params.requesterSessionKey,
-        args: { question, responseStyle },
-        transcript,
-      }),
-    deliver: enqueueSpeakText,
-  });
+  const agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined =
+    createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      isStopped: () => stopped,
+      logger: params.logger,
+      logPrefix: "[google-meet] node agent",
+      responseStyle: "Brief, natural spoken answer for a live meeting.",
+      fallbackText: "I hit an error while checking that. Please try again.",
+      consult: ({ question, responseStyle }) =>
+        consultOpenClawAgentForGoogleMeet({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          logger: params.logger,
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          args: { question, responseStyle },
+          transcript,
+        }),
+      deliver: enqueueSpeakText,
+    });
 
   sttSession = resolved.provider.createSession({
     cfg: params.fullConfig,
@@ -455,29 +455,29 @@ export async function startNodeRealtimeAudioBridge(params: {
       audioFormat: params.config.chrome.audioFormat,
     }),
   );
-  let agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined;
-  agentTalkback = createRealtimeVoiceAgentTalkbackQueue({
-    debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-    isStopped: () => stopped,
-    logger: params.logger,
-    logPrefix: "[google-meet] node realtime agent",
-    responseStyle: "Brief, natural spoken answer for a live meeting.",
-    fallbackText: "I hit an error while checking that. Please try again.",
-    consult: ({ question, responseStyle }) =>
-      consultOpenClawAgentForGoogleMeet({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        meetingSessionId: params.meetingSessionId,
-        requesterSessionKey: params.requesterSessionKey,
-        args: { question, responseStyle },
-        transcript,
-      }),
-    deliver: (text) => {
-      bridge?.sendUserMessage(buildGoogleMeetSpeakExactUserMessage(text));
-    },
-  });
+  const agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined =
+    createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      isStopped: () => stopped,
+      logger: params.logger,
+      logPrefix: "[google-meet] node realtime agent",
+      responseStyle: "Brief, natural spoken answer for a live meeting.",
+      fallbackText: "I hit an error while checking that. Please try again.",
+      consult: ({ question, responseStyle }) =>
+        consultOpenClawAgentForGoogleMeet({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          logger: params.logger,
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          args: { question, responseStyle },
+          transcript,
+        }),
+      deliver: (text) => {
+        bridge?.sendUserMessage(buildGoogleMeetSpeakExactUserMessage(text));
+      },
+    });
 
   const stop = async () => {
     if (stopped) {

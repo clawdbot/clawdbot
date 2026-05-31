@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -27,7 +28,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 type AgentGatewayResult = {
@@ -105,9 +105,17 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 
 let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
 let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
+let replyPayloadModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/reply-payload")>
+  | undefined;
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
   import("./agent/session.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
+let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
+
+function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
+  return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
+}
 
 function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCommand"]> {
   embeddedAgentCommandPromise ??= import("./agent.js").then((module) => module.agentCommand);
@@ -119,15 +127,25 @@ function loadAgentSessionModule(): Promise<AgentSessionModule> {
   return agentSessionModulePromise;
 }
 
+function loadReplyPayloadModule() {
+  replyPayloadModulePromise ??= import("openclaw/plugin-sdk/reply-payload");
+  return replyPayloadModulePromise;
+}
+
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandPromise = undefined;
     agentSessionModulePromise = undefined;
+    replyPayloadModulePromise = undefined;
     agentSessionModuleLoader = defaultAgentSessionModuleLoader;
   },
   setAgentSessionModuleLoaderForTests(loader: AgentSessionModuleLoader): void {
     agentSessionModulePromise = undefined;
     agentSessionModuleLoader = loader;
+  },
+  resolveGatewayAgentTimeoutMs,
+  setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
+    gatewayAbortRetryDelaysMsForTests = delays;
   },
 };
 
@@ -150,17 +168,25 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   return raw;
 }
 
+function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
+  if (timeoutSeconds === 0) {
+    return NO_GATEWAY_TIMEOUT_MS;
+  }
+  return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
+}
+
 function getGatewayDispatchConfig(): OpenClawConfig {
   // Scoped gateway turns need core agent/session/gateway fields only. The
   // running gateway owns plugin validation and plugin metadata freshness.
   return getRuntimeConfig({ skipPluginValidation: true, pin: false });
 }
 
-function formatPayloadForLog(payload: {
+async function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
+  const { resolveSendableOutboundReplyParts } = await loadReplyPayloadModule();
   const parts = resolveSendableOutboundReplyParts({
     text: payload.text,
     mediaUrls: payload.mediaUrls,
@@ -171,7 +197,7 @@ function formatPayloadForLog(payload: {
     lines.push(parts.text.trimEnd());
   }
   for (const url of parts.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n").trimEnd();
 }
@@ -317,7 +343,7 @@ function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
 }
 
 function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
-  if (!deps || !Object.prototype.hasOwnProperty.call(deps, "process")) {
+  if (!deps || !Object.hasOwn(deps, "process")) {
     return process;
   }
   const processLike = (deps as { process?: unknown }).process;
@@ -424,8 +450,9 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
       config: params.config,
       ...params.gatewayIdentity,
     });
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
@@ -448,8 +475,9 @@ async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
 }): Promise<boolean> {
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
@@ -580,10 +608,7 @@ async function agentViaGatewayCommand(
     }
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs =
-    timeoutSeconds === 0
-      ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
-      : Math.max(10_000, (timeoutSeconds + 30) * 1000);
+  const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
 
   const sessionKey =
     classifySessionKeyShape(explicitSessionKey) === "agent"
@@ -708,7 +733,7 @@ async function agentViaGatewayCommand(
   }
 
   for (const payload of payloads) {
-    const out = formatPayloadForLog(payload);
+    const out = await formatPayloadForLog(payload);
     if (out) {
       runtime.log(out);
     }

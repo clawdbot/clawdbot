@@ -5,7 +5,7 @@ import {
 } from "./file-loader-utils.js";
 export { parseCommandArgs, substituteArgs } from "./prompt-template-arguments.js";
 import { substituteArgs } from "./prompt-template-arguments.js";
-import { type ExecutionEnv, type PromptTemplate, type Result } from "./types.js";
+import type { ExecutionEnv, PromptTemplate, Result } from "./types.js";
 
 export type PromptTemplateDiagnosticCode =
   | "file_info_failed"

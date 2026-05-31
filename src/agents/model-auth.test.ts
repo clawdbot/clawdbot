@@ -172,6 +172,14 @@ afterEach(() => {
 });
 
 describe("createRuntimeProviderAuthLookup", () => {
+  it("marks env auth maps as authoritative so hot checks skip setup runtime fallback", () => {
+    expect(
+      createRuntimeProviderAuthLookup({
+        env: {},
+      }).envApiKey.skipSetupProviderFallback,
+    ).toBe(true);
+  });
+
   it("omits synthetic auth refs when plugin synthetic auth is disabled", () => {
     expect(
       createRuntimeProviderAuthLookup({
@@ -358,7 +366,7 @@ describe("resolveModelAuthMode", () => {
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "token",
         refresh: "refresh",
         expires: Date.now() + 60_000,

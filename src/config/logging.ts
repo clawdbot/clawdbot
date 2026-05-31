@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { displayPath } from "../utils.js";
 import { createConfigIO } from "./io.js";
 

@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import {
   resolveCommandResolutionFromArgv,
@@ -225,40 +225,38 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
             if (line === current.delimiter) {
               pendingHeredocs.shift();
             }
-          } else {
+          } else if (line === current.delimiter && unquotedHeredocLogicalChunks.length === 0) {
             // An unquoted heredoc body whose previous physical line ended with
             // `\<newline>` is spliced into the next line at runtime. In that
             // case bash does not treat the next physical line as the delimiter,
             // even if it matches literally — the splice wins and the body
             // continues. Only recognize the delimiter when no continuation is
             // pending.
-            if (line === current.delimiter && unquotedHeredocLogicalChunks.length === 0) {
-              pendingHeredocs.shift();
-            } else {
-              const continued = stripUnquotedHeredocLineContinuation(line);
-              unquotedHeredocLogicalChunks.push(continued.line);
-              if (unquotedHeredocLogicalChunks.length > MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES) {
-                return {
-                  ok: false,
-                  reason: "heredoc continuation too long",
-                  segments: [],
-                };
+            pendingHeredocs.shift();
+          } else {
+            const continued = stripUnquotedHeredocLineContinuation(line);
+            unquotedHeredocLogicalChunks.push(continued.line);
+            if (unquotedHeredocLogicalChunks.length > MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES) {
+              return {
+                ok: false,
+                reason: "heredoc continuation too long",
+                segments: [],
+              };
+            }
+            unquotedHeredocLogicalLength += continued.line.length;
+            if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
+              return {
+                ok: false,
+                reason: "heredoc logical line too large",
+                segments: [],
+              };
+            }
+            if (!continued.continues) {
+              if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
+                return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
               }
-              unquotedHeredocLogicalLength += continued.line.length;
-              if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
-                return {
-                  ok: false,
-                  reason: "heredoc logical line too large",
-                  segments: [],
-                };
-              }
-              if (!continued.continues) {
-                if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
-                  return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
-                }
-                unquotedHeredocLogicalChunks = [];
-                unquotedHeredocLogicalLength = 0;
-              }
+              unquotedHeredocLogicalChunks = [];
+              unquotedHeredocLogicalLength = 0;
             }
           }
         }

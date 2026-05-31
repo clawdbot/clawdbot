@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   createTarEntryPreflightChecker,
   extractArchive as extractArchiveSafe,
@@ -9,7 +10,6 @@ import {
 } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { hasBinary } from "../loading/config.js";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 

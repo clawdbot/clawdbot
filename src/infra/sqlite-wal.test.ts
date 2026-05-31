@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   configureSqliteWalMaintenance,
@@ -44,6 +45,19 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(200);
     expect(db.exec).toHaveBeenCalledTimes(4);
+  });
+
+  it("clamps oversized checkpoint intervals before arming timers", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const db = createMockDb();
+
+    const maintenance = configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    maintenance.close();
   });
 
   it("reports checkpoint errors without throwing from background maintenance", () => {

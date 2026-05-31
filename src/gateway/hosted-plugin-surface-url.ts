@@ -74,8 +74,8 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
   const forwardedHostRaw = parseForwardedHost(params.forwardedHost);
   const parsedForwardedHost = parseHostHeader(forwardedHostRaw);
   const parsedRequestHost = parseHostHeader(params.requestHost);
-  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
-  const forwardedHost = normalizeHost(parsedForwardedHost.host, !!override);
+  const requestHost = normalizeHost(parsedRequestHost.host, Boolean(override));
+  const forwardedHost = normalizeHost(parsedForwardedHost.host, Boolean(override));
   const advertisedHost = forwardedHost ? parsedForwardedHost : parsedRequestHost;
   const localAddress = normalizeHost(
     params.localAddress,

@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "./string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export function resolveEmojiAndHomepage(params: {
   metadata?: { emoji?: string; homepage?: string } | null;

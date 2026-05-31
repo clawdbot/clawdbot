@@ -52,17 +52,29 @@ attribution.
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
+   - every human issue reporter for a `Fixes #...` or referenced bug issue
+     represented by a user-facing entry needs `Thanks @reporter` unless the
+     same handle is already thanked in that bullet
+   - every human `Co-authored-by` contributor on represented user-facing work
+     needs `Thanks @handle` when a GitHub handle is known
    - when grouping multiple PRs/issues in one bullet, include every relevant
      PR/issue ref and every human contributor handle in that same bullet
    - multiple `Thanks @...` handles in one bullet are expected; do not drop or
      collapse contributor credit just because the note is grouped
    - if one grouped bullet covers both direct commits and PRs, keep all PR refs
      and thanks, plus any issue refs from the direct commits
+   - before finalizing, audit the final release-note body:
+     - extract all `#NNN` refs from the notes
+     - resolve which refs are PRs and collect human PR authors
+     - resolve issue refs used as bug/report refs and collect human reporters
+     - scan represented commits for `Co-authored-by`
+     - compare those handles to the final `Thanks @...` set
+     - fix every missing human credit or explicitly record why it is omitted
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`
-   - if grouping multiple entries, carry all relevant refs and thanks into the
-     grouped bullet
+   - do not use GitHub's release contributor count as the source of truth; the
+     changelog must carry the complete human credit set itself
 7. Sorting preference:
    - security/data-loss and content-boundary fixes
    - transcript/replay/reply delivery correctness

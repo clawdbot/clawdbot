@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
@@ -14,7 +15,6 @@ import {
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 type JsonObject = Record<string, unknown>;

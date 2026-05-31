@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
@@ -22,6 +22,18 @@ describe("config doc baseline integration", () => {
     Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>
   > | null = null;
   let sharedByPathPromise: Promise<Map<string, ConfigDocBaselineEntry>> | null = null;
+  let deterministicPair: {
+    first: Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>;
+    second: Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>;
+  };
+
+  beforeAll(async () => {
+    const first = await getSharedRendered();
+    deterministicPair = {
+      first,
+      second: await renderConfigDocBaselineArtifacts(first.baseline),
+    };
+  });
 
   function getSharedRendered() {
     sharedRenderedPromise ??= renderConfigDocBaselineArtifacts();
@@ -48,9 +60,7 @@ describe("config doc baseline integration", () => {
   }
 
   it("is deterministic across repeated runs", async () => {
-    const first = await getSharedRendered();
-    const { baseline } = first;
-    const second = await renderConfigDocBaselineArtifacts(baseline);
+    const { first, second } = deterministicPair;
 
     expect(second.json.combined).toBe(first.json.combined);
     expect(second.json.core).toBe(first.json.core);

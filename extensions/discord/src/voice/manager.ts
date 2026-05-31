@@ -674,12 +674,6 @@ export class DiscordVoiceManager {
 
     const player = voiceSdk.createAudioPlayer();
     connection.subscribe(player);
-
-    let speakingHandler: ((userId: string) => void) | undefined;
-    let speakingEndHandler: ((userId: string) => void) | undefined;
-    let disconnectedHandler: (() => Promise<void>) | undefined;
-    let destroyedHandler: (() => void) | undefined;
-    let playerErrorHandler: ((err: Error) => void) | undefined;
     let stopped = false;
     const clearSessionIfCurrent = () => {
       const active = this.sessions.get(guildId);
@@ -787,16 +781,16 @@ export class DiscordVoiceManager {
       };
     }
 
-    speakingHandler = (userId: string) => {
+    const speakingHandler: ((userId: string) => void) | undefined = (userId: string) => {
       void this.handleSpeakingStart(entry, userId).catch((err) => {
         logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
       });
     };
-    speakingEndHandler = (userId: string) => {
+    const speakingEndHandler: ((userId: string) => void) | undefined = (userId: string) => {
       this.scheduleCaptureFinalize(entry, userId, "speaker end");
     };
 
-    disconnectedHandler = async () => {
+    const disconnectedHandler: (() => Promise<void>) | undefined = async () => {
       try {
         logVoiceVerbose(
           `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
@@ -825,14 +819,14 @@ export class DiscordVoiceManager {
         });
       }
     };
-    destroyedHandler = () => {
+    const destroyedHandler: (() => void) | undefined = () => {
       clearSessionIfCurrent();
       stopEntry(entry, {
         destroyConnection: false,
         reason: `destroyed guild ${guildId} channel ${channelId}`,
       });
     };
-    playerErrorHandler = (err: Error) => {
+    const playerErrorHandler: ((err: Error) => void) | undefined = (err: Error) => {
       logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
     };
 

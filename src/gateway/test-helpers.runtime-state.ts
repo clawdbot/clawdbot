@@ -81,7 +81,7 @@ type GatewayTestHoistedState = {
 const gatewayTestHoisted = vi.hoisted(() => {
   const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
   const store = globalThis as Record<PropertyKey, unknown>;
-  if (Object.prototype.hasOwnProperty.call(store, key)) {
+  if (Object.hasOwn(store, key)) {
     return store[key] as GatewayTestHoistedState;
   }
   const created: GatewayTestHoistedState = {

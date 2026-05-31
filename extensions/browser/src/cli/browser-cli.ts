@@ -69,7 +69,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
-      command("screenshot", "Capture a screenshot (MEDIA:<path>)"),
+      command("screenshot", "Capture a screenshot (prints the saved path)"),
       command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
     ],
     register: async (args) => {

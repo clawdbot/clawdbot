@@ -5276,6 +5276,334 @@ public struct SkillsDetailResult: Codable, Sendable {
     }
 }
 
+public struct SkillsProposalsListParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct SkillsProposalsListResult: Codable, Sendable {
+    public let schema: String
+    public let updatedat: String
+    public let proposals: [[String: AnyCodable]]
+
+    public init(
+        schema: String,
+        updatedat: String,
+        proposals: [[String: AnyCodable]])
+    {
+        self.schema = schema
+        self.updatedat = updatedat
+        self.proposals = proposals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schema
+        case updatedat = "updatedAt"
+        case proposals
+    }
+}
+
+public struct SkillsProposalInspectParams: Codable, Sendable {
+    public let agentid: String?
+    public let proposalid: String
+
+    public init(
+        agentid: String? = nil,
+        proposalid: String)
+    {
+        self.agentid = agentid
+        self.proposalid = proposalid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case proposalid = "proposalId"
+    }
+}
+
+public struct SkillsProposalInspectResult: Codable, Sendable {
+    public let record: SkillsProposalRecordResult
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+
+    public init(
+        record: SkillsProposalRecordResult,
+        content: String,
+        supportfiles: [[String: AnyCodable]]?)
+    {
+        self.record = record
+        self.content = content
+        self.supportfiles = supportfiles
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case content
+        case supportfiles = "supportFiles"
+    }
+}
+
+public struct SkillsProposalCreateParams: Codable, Sendable {
+    public let agentid: String?
+    public let name: String
+    public let description: String
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+    public let goal: String?
+    public let evidence: String?
+
+    public init(
+        agentid: String? = nil,
+        name: String,
+        description: String,
+        content: String,
+        supportfiles: [[String: AnyCodable]]?,
+        goal: String?,
+        evidence: String?)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.description = description
+        self.content = content
+        self.supportfiles = supportfiles
+        self.goal = goal
+        self.evidence = evidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case description
+        case content
+        case supportfiles = "supportFiles"
+        case goal
+        case evidence
+    }
+}
+
+public struct SkillsProposalUpdateParams: Codable, Sendable {
+    public let agentid: String?
+    public let skillname: String
+    public let description: String?
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+    public let goal: String?
+    public let evidence: String?
+
+    public init(
+        agentid: String? = nil,
+        skillname: String,
+        description: String?,
+        content: String,
+        supportfiles: [[String: AnyCodable]]?,
+        goal: String?,
+        evidence: String?)
+    {
+        self.agentid = agentid
+        self.skillname = skillname
+        self.description = description
+        self.content = content
+        self.supportfiles = supportfiles
+        self.goal = goal
+        self.evidence = evidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case skillname = "skillName"
+        case description
+        case content
+        case supportfiles = "supportFiles"
+        case goal
+        case evidence
+    }
+}
+
+public struct SkillsProposalReviseParams: Codable, Sendable {
+    public let agentid: String?
+    public let proposalid: String
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+    public let description: String?
+    public let goal: String?
+    public let evidence: String?
+
+    public init(
+        agentid: String? = nil,
+        proposalid: String,
+        content: String,
+        supportfiles: [[String: AnyCodable]]?,
+        description: String?,
+        goal: String?,
+        evidence: String?)
+    {
+        self.agentid = agentid
+        self.proposalid = proposalid
+        self.content = content
+        self.supportfiles = supportfiles
+        self.description = description
+        self.goal = goal
+        self.evidence = evidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case proposalid = "proposalId"
+        case content
+        case supportfiles = "supportFiles"
+        case description
+        case goal
+        case evidence
+    }
+}
+
+public struct SkillsProposalActionParams: Codable, Sendable {
+    public let agentid: String?
+    public let proposalid: String
+    public let reason: String?
+
+    public init(
+        agentid: String? = nil,
+        proposalid: String,
+        reason: String?)
+    {
+        self.agentid = agentid
+        self.proposalid = proposalid
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case proposalid = "proposalId"
+        case reason
+    }
+}
+
+public struct SkillsProposalApplyResult: Codable, Sendable {
+    public let record: SkillsProposalRecordResult
+    public let targetskillfile: String
+
+    public init(
+        record: SkillsProposalRecordResult,
+        targetskillfile: String)
+    {
+        self.record = record
+        self.targetskillfile = targetskillfile
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case targetskillfile = "targetSkillFile"
+    }
+}
+
+public struct SkillsProposalRecordResult: Codable, Sendable {
+    public let schema: String
+    public let id: String
+    public let kind: AnyCodable
+    public let status: AnyCodable
+    public let title: String
+    public let description: String
+    public let createdat: String
+    public let updatedat: String
+    public let createdby: AnyCodable
+    public let proposedversion: String
+    public let draftfile: String
+    public let drafthash: String
+    public let supportfiles: [[String: AnyCodable]]?
+    public let target: [String: AnyCodable]
+    public let scan: [String: AnyCodable]
+    public let goal: String?
+    public let evidence: String?
+    public let appliedat: String?
+    public let rejectedat: String?
+    public let quarantinedat: String?
+    public let staleat: String?
+    public let statusreason: String?
+
+    public init(
+        schema: String,
+        id: String,
+        kind: AnyCodable,
+        status: AnyCodable,
+        title: String,
+        description: String,
+        createdat: String,
+        updatedat: String,
+        createdby: AnyCodable,
+        proposedversion: String,
+        draftfile: String,
+        drafthash: String,
+        supportfiles: [[String: AnyCodable]]?,
+        target: [String: AnyCodable],
+        scan: [String: AnyCodable],
+        goal: String?,
+        evidence: String?,
+        appliedat: String?,
+        rejectedat: String?,
+        quarantinedat: String?,
+        staleat: String?,
+        statusreason: String?)
+    {
+        self.schema = schema
+        self.id = id
+        self.kind = kind
+        self.status = status
+        self.title = title
+        self.description = description
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.createdby = createdby
+        self.proposedversion = proposedversion
+        self.draftfile = draftfile
+        self.drafthash = drafthash
+        self.supportfiles = supportfiles
+        self.target = target
+        self.scan = scan
+        self.goal = goal
+        self.evidence = evidence
+        self.appliedat = appliedat
+        self.rejectedat = rejectedat
+        self.quarantinedat = quarantinedat
+        self.staleat = staleat
+        self.statusreason = statusreason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schema
+        case id
+        case kind
+        case status
+        case title
+        case description
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case createdby = "createdBy"
+        case proposedversion = "proposedVersion"
+        case draftfile = "draftFile"
+        case drafthash = "draftHash"
+        case supportfiles = "supportFiles"
+        case target
+        case scan
+        case goal
+        case evidence
+        case appliedat = "appliedAt"
+        case rejectedat = "rejectedAt"
+        case quarantinedat = "quarantinedAt"
+        case staleat = "staleAt"
+        case statusreason = "statusReason"
+    }
+}
+
 public struct SkillsSecurityVerdictsParams: Codable, Sendable {
     public let agentid: String?
 
@@ -6549,6 +6877,54 @@ public struct ChatHistoryParams: Codable, Sendable {
         case agentid = "agentId"
         case limit
         case maxchars = "maxChars"
+    }
+}
+
+public struct ChatMessageGetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let messageid: String
+    public let maxchars: Int?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        messageid: String,
+        maxchars: Int?)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.messageid = messageid
+        self.maxchars = maxchars
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case messageid = "messageId"
+        case maxchars = "maxChars"
+    }
+}
+
+public struct ChatMessageGetResult: Codable, Sendable {
+    public let ok: Bool
+    public let message: AnyCodable?
+    public let unavailablereason: AnyCodable?
+
+    public init(
+        ok: Bool,
+        message: AnyCodable?,
+        unavailablereason: AnyCodable?)
+    {
+        self.ok = ok
+        self.message = message
+        self.unavailablereason = unavailablereason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case message
+        case unavailablereason = "unavailableReason"
     }
 }
 

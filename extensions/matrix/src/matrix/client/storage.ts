@@ -22,7 +22,6 @@ const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 const LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
 const RECOVERY_KEY_FILENAME = "recovery-key.json";
 const IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
-const STARTUP_VERIFICATION_FILENAME = "startup-verification.json";
 
 type LegacyMoveRecord = {
   sourcePath: string;
@@ -131,17 +130,6 @@ function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
     if (typeof parsed.createdAt === "string" && parsed.createdAt.trim()) {
       metadata.createdAt = parsed.createdAt.trim();
     }
-  }
-
-  const verification = loadJsonFile<{ deviceId?: unknown }>(
-    path.join(rootDir, STARTUP_VERIFICATION_FILENAME),
-  );
-  if (
-    !metadata.deviceId &&
-    typeof verification?.deviceId === "string" &&
-    verification.deviceId.trim()
-  ) {
-    metadata.deviceId = verification.deviceId.trim();
   }
 
   return metadata;
@@ -512,6 +500,29 @@ export function claimCurrentTokenStorageState(params: { rootDir: string }): bool
     accessTokenHash: metadata.accessTokenHash,
     deviceId: metadata.deviceId ?? null,
     currentTokenStateClaimed: true,
+    createdAt: metadata.createdAt ?? new Date().toISOString(),
+  });
+}
+
+export function recordCurrentStorageMetaDeviceId(params: {
+  rootDir: string;
+  deviceId: string;
+}): boolean {
+  const deviceId = params.deviceId.trim();
+  if (!deviceId) {
+    return false;
+  }
+  const metadata = readStoredRootMetadata(params.rootDir);
+  if (!metadata.accessTokenHash?.trim()) {
+    return false;
+  }
+  return writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+    homeserver: metadata.homeserver,
+    userId: metadata.userId,
+    accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+    accessTokenHash: metadata.accessTokenHash,
+    deviceId,
+    currentTokenStateClaimed: metadata.currentTokenStateClaimed === true,
     createdAt: metadata.createdAt ?? new Date().toISOString(),
   });
 }

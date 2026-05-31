@@ -248,9 +248,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
-   * This field provides access to advanced Plugin SDK features that are
-   * available to external plugins but not to built-in channels (which can
-   * directly import internal modules).
+   * This field provides the canonical channel runtime helpers for channel
+   * dispatch, routing, session, reply, and startup context work.
    *
    * ## Available Features
    *
@@ -265,7 +264,7 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    *
    * ## Use Cases
    *
-   * External channel plugins (e.g., email, SMS, custom integrations) that need:
+   * Channel plugins that need:
    * - AI-powered response generation and delivery
    * - Advanced text processing and formatting
    * - Session tracking and management
@@ -299,13 +298,9 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * ## Backward Compatibility
    *
    * - This field is **optional** - channels that don't need it can ignore it
-   * - Bundled channels typically don't use this field
-   *   because they can directly import internal modules
+   * - Gateway startup passes a full `createPluginRuntime().channel` surface
+   *   when a runtime resolver is configured
    * - External plugins should check for undefined before using
-   * - `runtimeContexts` is the stable startup-safe subset. Bundled channels
-   *   may receive only that subset during provider boot.
-   * - External channel plugins that need reply/routing/session helpers receive
-   *   a full `createPluginRuntime().channel` surface from the Gateway.
    *
    * @since Plugin SDK 2026.2.19
    * @see {@link https://docs.openclaw.ai/plugins/building-plugins | Plugin SDK documentation}

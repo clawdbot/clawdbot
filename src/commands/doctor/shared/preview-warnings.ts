@@ -1,7 +1,9 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import {
   isToolAllowedByPolicies,
@@ -13,8 +15,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -899,7 +899,7 @@ export async function collectDoctorPreviewNotes(params: {
         ),
     );
     if (emptyAllowlistWarnings.length > 0) {
-      const { sanitizeForLog } = await import("../../../terminal/ansi.js");
+      const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
       warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
     }
   }

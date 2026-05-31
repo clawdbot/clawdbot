@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const tempRoots: string[] = [];
 
@@ -30,13 +30,25 @@ afterEach(() => {
 });
 
 describe("scripts/embedded-run-abort-leak", () => {
-  it("rejects loose numeric thresholds before writing heap snapshots", () => {
-    const snapDir = makeTempRoot();
-    const result = runHarness(["--snap-dir", snapDir, "--iters", "1e3", "--quiet"]);
+  let looseThresholdProbe: {
+    result: ReturnType<typeof runHarness>;
+    snapDir: string;
+  };
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("error: --iters must be a positive integer");
-    expect(readdirSync(snapDir)).toEqual([]);
+  beforeAll(() => {
+    const snapDir = makeTempRoot();
+    looseThresholdProbe = {
+      result: runHarness(["--snap-dir", snapDir, "--iters", "1e3", "--quiet"]),
+      snapDir,
+    };
+  });
+
+  it("rejects loose numeric thresholds before writing heap snapshots", () => {
+    expect(looseThresholdProbe.result.status).toBe(2);
+    expect(looseThresholdProbe.result.stdout).toBe("");
+    expect(looseThresholdProbe.result.stderr).toContain(
+      "error: --iters must be a positive integer",
+    );
+    expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
   });
 });

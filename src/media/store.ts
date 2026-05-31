@@ -6,13 +6,13 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
 import { basenameFromAnyPath, extnameFromAnyPath, nameFromAnyPath } from "./file-name.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -722,7 +722,7 @@ export async function readMediaBuffer(
  * @param id     The media ID as returned by SavedMedia.id.
  * @param subdir The subdirectory the file was saved into (default "inbound").
  */
-export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
+export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
 }

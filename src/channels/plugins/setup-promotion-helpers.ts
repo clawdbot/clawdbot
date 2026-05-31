@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
 import { getLoadedChannelPlugin } from "./registry.js";
 import {

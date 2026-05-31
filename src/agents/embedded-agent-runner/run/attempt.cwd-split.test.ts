@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
   getHoisted,
+  preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 
@@ -14,6 +15,10 @@ const hoisted = getHoisted();
 const tempPaths: string[] = [];
 
 describe("runEmbeddedAttempt cwd/workspace split", () => {
+  beforeAll(async () => {
+    await preloadRunEmbeddedAttemptForTests();
+  });
+
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
   });

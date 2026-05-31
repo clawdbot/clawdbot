@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
@@ -9,7 +10,6 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 

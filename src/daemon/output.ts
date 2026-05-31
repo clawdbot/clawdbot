@@ -1,4 +1,4 @@
-import { colorize, isRich, theme } from "../terminal/theme.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 
 export const toPosixPath = (value: string) => value.replace(/\\/g, "/");
 

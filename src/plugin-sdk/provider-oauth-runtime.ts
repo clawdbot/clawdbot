@@ -1,8 +1,9 @@
-import type { Model } from "../llm/types.js";
 import {
   positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
-} from "../shared/number-coercion.js";
+} from "../../packages/normalization-core/src/number-coercion.js";
+import type { Model } from "../llm/types.js";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
@@ -262,12 +263,12 @@ export function resolveOAuthTokenExpiresAt(
   options: { nowMs?: number; refreshSkewMs?: number } = {},
 ): number | undefined {
   const lifetimeMs = resolveOAuthTokenLifetimeMs(value);
-  if (lifetimeMs === undefined) {
-    return undefined;
-  }
-
-  const expiresAt = (options.nowMs ?? Date.now()) + lifetimeMs - (options.refreshSkewMs ?? 0);
-  return Number.isSafeInteger(expiresAt) ? expiresAt : undefined;
+  return lifetimeMs === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(lifetimeMs, {
+        nowMs: options.nowMs,
+        bufferMs: options.refreshSkewMs,
+      });
 }
 
 export function createOAuthLoginCancelledError(): Error {

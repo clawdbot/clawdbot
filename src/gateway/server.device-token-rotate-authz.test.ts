@@ -187,17 +187,18 @@ async function issueMixedRolePairingScopedDevice(
 
 describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
   let ownershipGuardServer: Awaited<ReturnType<typeof startServer>>;
+  let pairingScopeDeniedCase: {
+    pairedBAfterRevokeRevokedAtMs: unknown;
+    pairedBToken: string | undefined;
+    revokeMessage: string | undefined;
+    revokeOk: boolean;
+    rotateMessage: string | undefined;
+    rotateOk: boolean;
+    token: string;
+  };
 
   beforeAll(async () => {
     ownershipGuardServer = await startServer("secret");
-  });
-
-  afterAll(async () => {
-    await ownershipGuardServer.server.close();
-    ownershipGuardServer.envSnapshot.restore();
-  });
-
-  test("rejects a device-token caller rotating or revoking another device's token", async () => {
     const deviceA = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-a");
     const deviceB = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-b");
 
@@ -214,24 +215,39 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
         role: "operator",
         scopes: ["operator.pairing"],
       });
-      expect(rotate.ok).toBe(false);
-      expect(rotate.error?.message).toBe("device token rotation denied");
-
       const pairedB = await getPairedDevice(deviceB.deviceId);
-      expect(pairedB?.tokens?.operator?.token).toBe(deviceB.pairingToken);
 
       const revoke = await rpcReq(pairingWs, "device.token.revoke", {
         deviceId: deviceB.deviceId,
         role: "operator",
       });
-      expect(revoke.ok).toBe(false);
-      expect(revoke.error?.message).toBe("device token revocation denied");
-
       const pairedBAfterRevoke = await getPairedDevice(deviceB.deviceId);
-      expect(pairedBAfterRevoke?.tokens?.operator?.revokedAtMs).toBeUndefined();
+      pairingScopeDeniedCase = {
+        pairedBAfterRevokeRevokedAtMs: pairedBAfterRevoke?.tokens?.operator?.revokedAtMs,
+        pairedBToken: pairedB?.tokens?.operator?.token,
+        revokeMessage: revoke.error?.message,
+        revokeOk: revoke.ok,
+        rotateMessage: rotate.error?.message,
+        rotateOk: rotate.ok,
+        token: deviceB.pairingToken,
+      };
     } finally {
       pairingWs?.close();
     }
+  });
+
+  afterAll(async () => {
+    await ownershipGuardServer.server.close();
+    ownershipGuardServer.envSnapshot.restore();
+  });
+
+  test("rejects a device-token caller rotating or revoking another device's token", async () => {
+    expect(pairingScopeDeniedCase.rotateOk).toBe(false);
+    expect(pairingScopeDeniedCase.rotateMessage).toBe("device token rotation denied");
+    expect(pairingScopeDeniedCase.pairedBToken).toBe(pairingScopeDeniedCase.token);
+    expect(pairingScopeDeniedCase.revokeOk).toBe(false);
+    expect(pairingScopeDeniedCase.revokeMessage).toBe("device token revocation denied");
+    expect(pairingScopeDeniedCase.pairedBAfterRevokeRevokedAtMs).toBeUndefined();
   });
 
   test("allows an admin-scoped caller to rotate and revoke another device's token", async () => {

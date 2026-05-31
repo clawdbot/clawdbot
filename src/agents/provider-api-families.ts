@@ -1,7 +1,7 @@
 const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
   "openai-completions",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
 ]);
 

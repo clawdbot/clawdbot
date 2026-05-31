@@ -1,5 +1,5 @@
+import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
-import { normalizeOptionalString as normalizeString } from "../../shared/string-coerce.js";
 import type { InboundMediaFacts } from "../turn/types.js";
 
 export type ChannelInboundMediaInput = {

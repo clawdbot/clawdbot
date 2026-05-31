@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export function parseCronThreadIdOption(value: unknown): number | undefined {
   const raw = normalizeOptionalString(value);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -15,7 +16,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -789,9 +789,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
     let settled = false;
     let ignoreClose = false;
     const startAbort = new AbortController();
-    let abortHandler: (() => void) | undefined;
-    let client: GatewayClient | undefined;
-    let timer: NodeJS.Timeout | undefined;
     let primaryRequestStarted = false;
     const cleanup = () => {
       startAbort.abort();
@@ -828,7 +825,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       cleanup();
       stopClientThenSettle(client, err, value);
     };
-    abortHandler = () => {
+    const abortHandler: (() => void) | undefined = () => {
       if (settled) {
         return;
       }
@@ -850,7 +847,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
     opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    client = gatewayCallDeps.createGatewayClient({
+    const client: GatewayClient | undefined = gatewayCallDeps.createGatewayClient({
       url,
       token,
       password,
@@ -915,7 +912,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
-    timer = setTimeout(() => {
+    const timer: NodeJS.Timeout | undefined = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({

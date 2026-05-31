@@ -1,8 +1,8 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  type CodexAppInventoryCache,
-  type CodexAppInventoryCacheRead,
-  type CodexAppInventoryRequest,
+import type {
+  CodexAppInventoryCache,
+  CodexAppInventoryCacheRead,
+  CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,

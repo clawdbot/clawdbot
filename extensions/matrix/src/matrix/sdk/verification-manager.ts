@@ -4,6 +4,10 @@ import {
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { formatMatrixErrorMessage } from "../errors.js";
 
 export type MatrixVerificationMethod = "sas" | "show-qr" | "scan-qr";
@@ -266,7 +270,7 @@ export class MatrixVerificationManager {
   }
 
   private touchVerificationSession(session: MatrixVerificationSession): void {
-    session.updatedAtMs = Date.now();
+    session.updatedAtMs = resolveDateTimestampMs(Date.now());
     this.emitVerificationSummary(session);
   }
 
@@ -317,8 +321,8 @@ export class MatrixVerificationManager {
       hasReciprocateQr: Boolean(session.reciprocateQrCallbacks),
       completed: phase === VerificationPhase.Done,
       error: session.error,
-      createdAt: new Date(session.createdAtMs).toISOString(),
-      updatedAt: new Date(session.updatedAtMs).toISOString(),
+      createdAt: resolveTimestampMsToIsoString(session.createdAtMs),
+      updatedAt: resolveTimestampMsToIsoString(session.updatedAtMs),
     };
   }
 
@@ -594,7 +598,7 @@ export class MatrixVerificationManager {
       }
     }
 
-    const now = Date.now();
+    const now = resolveDateTimestampMs(Date.now());
     const id = `verification-${++this.verificationSessionCounter}`;
     const session: MatrixVerificationSession = {
       id,

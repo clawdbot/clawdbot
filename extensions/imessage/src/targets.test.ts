@@ -28,7 +28,7 @@ describe("imessage targets", () => {
 
   it("parses sms handles with service", () => {
     const target = parseIMessageTarget("sms:+1555");
-    expect(target).toEqual({ kind: "handle", to: "+1555", service: "sms" });
+    expect(target).toEqual({ kind: "handle", to: "+1555", service: "sms", serviceExplicit: true });
   });
 
   it("normalizes handles", () => {

@@ -108,7 +108,7 @@ function authPlan(status: MigrationPlan["items"][number]["status"] = "skipped"):
     },
     items: [
       {
-        id: "auth:openai-codex",
+        id: "auth:openai",
         kind: "auth",
         action: status === "planned" ? "create" : "skip",
         status,
@@ -1055,7 +1055,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    let appliedPlan = firstAppliedPlan();
+    const appliedPlan = firstAppliedPlan();
     expect(appliedPlan.summary.planned).toBe(3);
     expect(appliedPlan.summary.skipped).toBe(0);
     expect(appliedPlan.summary.conflicts).toBe(0);

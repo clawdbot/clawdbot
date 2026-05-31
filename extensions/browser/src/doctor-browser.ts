@@ -133,7 +133,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   if (!configuredProfiles) {
     return false;
   }
-  if (Object.prototype.hasOwnProperty.call(configuredProfiles, LEGACY_CLAWD_BROWSER_PROFILE_NAME)) {
+  if (Object.hasOwn(configuredProfiles, LEGACY_CLAWD_BROWSER_PROFILE_NAME)) {
     return true;
   }
 

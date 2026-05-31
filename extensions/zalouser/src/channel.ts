@@ -78,7 +78,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
       directory: {
         self: async ({ cfg, accountId }) => {
           const { getZaloUserInfo } = await loadZalouserChannelRuntime();
-          const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+          const account = resolveZalouserAccountSync({ cfg, accountId });
           const parsed = await getZaloUserInfo(account.profile);
           if (!parsed?.userId) {
             return null;
@@ -92,7 +92,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         },
         listPeers: async ({ cfg, accountId, query, limit }) => {
           const { listZaloFriendsMatching } = await loadZalouserChannelRuntime();
-          const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+          const account = resolveZalouserAccountSync({ cfg, accountId });
           const friends = await listZaloFriendsMatching(account.profile, query);
           const rows = friends.map((friend) =>
             mapUser({
@@ -106,7 +106,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         },
         listGroups: async ({ cfg, accountId, query, limit }) => {
           const { listZaloGroupsMatching } = await loadZalouserChannelRuntime();
-          const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+          const account = resolveZalouserAccountSync({ cfg, accountId });
           const groups = await listZaloGroupsMatching(account.profile, query);
           const rows = groups.map((group) =>
             mapGroup({

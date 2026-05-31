@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleDisconnected } from "./app-lifecycle.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { handleDisconnected, handleUpdated } from "./app-lifecycle.ts";
+import { loadChatComposerSnapshot } from "./chat/composer-persistence.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 function createHost() {
   return {
@@ -15,6 +18,10 @@ function createHost() {
     localMediaPreviewRoots: [],
     chatHasAutoScrolled: false,
     chatManualRefreshInFlight: false,
+    settings: { gatewayUrl: "ws://gateway.test/control" },
+    sessionKey: "main",
+    chatMessage: "",
+    chatQueue: [] as ChatQueueItem[],
     chatLoading: false,
     chatMessages: [],
     chatToolMessages: [],
@@ -70,5 +77,32 @@ describe("handleDisconnected", () => {
     vi.advanceTimersByTime(1_000);
     expect(pendingReload).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("handleUpdated", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("persists chat draft and queue changes before chat refresh short-circuits", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const host = createHost();
+    host.chatManualRefreshInFlight = true;
+    host.chatMessage = "survive refresh";
+    host.chatQueue = [{ id: "queued-1", text: "next prompt", createdAt: 1 }];
+
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([
+        ["chatMessage", ""],
+        ["chatQueue", []],
+      ]),
+    );
+
+    expect(loadChatComposerSnapshot(host, "main")).toEqual({
+      draft: "survive refresh",
+      queue: [{ id: "queued-1", text: "next prompt", createdAt: 1 }],
+    });
   });
 });

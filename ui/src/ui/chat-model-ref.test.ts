@@ -31,9 +31,7 @@ describe("chat-model-ref helpers", () => {
   });
 
   it("preserves already-qualified model refs without prepending provider", () => {
-    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai-codex")).toBe(
-      "ollama/qwen3:30b",
-    );
+    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai")).toBe("ollama/qwen3:30b");
   });
 
   it("prefixes provider-native catalog ids that already contain slashes", () => {

@@ -83,15 +83,15 @@ describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", ()
     },
   );
 
-  it("injects parallel_tool_calls into openai-codex Responses payloads", () => {
+  it("injects parallel_tool_calls into openai Responses payloads", () => {
     const payload = runPayloadMutation({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
@@ -106,15 +106,15 @@ describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", ()
     });
 
     const payload = runPayloadMutation({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       thinkingLevel: "high",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
       payload: { reasoning: { effort: "none", summary: "auto" } },
     });
 
@@ -170,7 +170,7 @@ describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", ()
 function runPayloadMutation(params: {
   applyProvider: string;
   applyModelId: string;
-  model: Model<"openai-codex-responses"> | Model<"openai-responses">;
+  model: Model<"openai-chatgpt-responses"> | Model<"openai-responses">;
   thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   payload?: Record<string, unknown>;
 }): Record<string, unknown> {

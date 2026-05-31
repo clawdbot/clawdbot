@@ -1,10 +1,10 @@
 // Load session runtime model metadata so we can infer context windows when the
 // agent reports a model id. This includes custom models.json entries.
 
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import {
   resolveAgentWorkspaceDir,

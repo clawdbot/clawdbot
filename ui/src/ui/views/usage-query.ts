@@ -1,3 +1,4 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "../string-coerce.ts";
 import { extractQueryTerms } from "../usage-helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
@@ -63,7 +64,7 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
         session.channel ?? "",
         session.modelProvider ?? session.providerOverride ?? "",
         session.model ?? session.modelOverride ?? "",
-        session.updatedAt ? new Date(session.updatedAt).toISOString() : "",
+        timestampMsToIsoString(session.updatedAt) ?? "",
         usage?.durationMs ?? "",
         usage?.messageCounts?.total ?? "",
         usage?.messageCounts?.errors ?? "",

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -22,7 +23,6 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
@@ -154,7 +154,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   let loaded = false;
-  let existingServiceEnv: Record<string, string> | undefined;
   let existingServiceCommand: GatewayServiceCommandConfig | null = null;
   try {
     loaded = await service.isLoaded({ env: process.env });
@@ -167,7 +166,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   existingServiceCommand = await service.readCommand(process.env).catch(() => null);
-  existingServiceEnv = existingServiceCommand?.environment;
+  const existingServiceEnv: Record<string, string> | undefined =
+    existingServiceCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,

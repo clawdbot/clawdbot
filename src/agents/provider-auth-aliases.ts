@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -10,7 +11,6 @@ import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
   config?: OpenClawConfig;
@@ -23,6 +23,10 @@ export type ProviderAuthAliasLookupParams = {
 type ProviderAuthAliasCandidate = {
   origin?: PluginOrigin;
   target: string;
+};
+
+const RETIRED_PROVIDER_AUTH_ALIASES: Readonly<Record<string, string>> = {
+  [["openai", "codex"].join("-")]: "openai",
 };
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
@@ -203,5 +207,9 @@ export function resolveProviderIdForAuth(
   if (!normalized) {
     return normalized;
   }
-  return resolveProviderAuthAliasMap(params)[normalized] ?? normalized;
+  return (
+    resolveProviderAuthAliasMap(params)[normalized] ??
+    RETIRED_PROVIDER_AUTH_ALIASES[normalized] ??
+    normalized
+  );
 }

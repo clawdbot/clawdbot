@@ -1,7 +1,7 @@
 export { isVerbose, isYes, setVerbose, setYes } from "./global-state.js";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
 import { getLogger, isFileLogLevelEnabled } from "./logging/logger.js";
-import { theme } from "./terminal/theme.js";
 
 export function shouldLogVerbose() {
   return isVerbose() || isFileLogLevelEnabled("debug");

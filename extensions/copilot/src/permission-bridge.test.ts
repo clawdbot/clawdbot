@@ -16,11 +16,24 @@ import {
 } from "./permission-bridge.js";
 
 function makeRequest(overrides: Partial<SdkPermissionRequest> = {}): SdkPermissionRequest {
+  if (overrides.kind && overrides.kind !== "shell") {
+    return {
+      toolCallId: "call-1",
+      ...overrides,
+    } as SdkPermissionRequest;
+  }
   return {
+    canOfferSessionApproval: false,
+    commands: [],
+    fullCommandText: "echo test",
+    hasWriteFileRedirection: false,
+    intention: "test command",
     kind: "shell",
+    possiblePaths: [],
+    possibleUrls: [],
     toolCallId: "call-1",
     ...overrides,
-  };
+  } as SdkPermissionRequest;
 }
 
 function makeCtx(overrides: Partial<CopilotPermissionContext> = {}): CopilotPermissionContext {

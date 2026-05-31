@@ -267,15 +267,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       });
       return;
     }
-
-    let buffer!: DebounceBuffer<T>;
     const reservedTask = enqueueReservedKeyTask(key, async () => {
       if (buffer.items.length === 0) {
         return;
       }
       await runFlush(buffer.items);
     });
-    buffer = {
+    const buffer: DebounceBuffer<T> = {
       items: [item],
       timeout: null,
       debounceMs,

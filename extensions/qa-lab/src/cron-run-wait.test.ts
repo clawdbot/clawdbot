@@ -1,5 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { waitForCronRunCompletion } from "./cron-run-wait.js";
+import { resolveCronRunPollIntervalMs, waitForCronRunCompletion } from "./cron-run-wait.js";
 
 describe("waitForCronRunCompletion", () => {
   it("ignores older entries and returns the newly finished run", async () => {
@@ -47,6 +48,30 @@ describe("waitForCronRunCompletion", () => {
         afterTs: 150,
         timeoutMs: 5,
         intervalMs: 0,
+      }),
+    ).rejects.toThrow(/timed out waiting for cron run completion/);
+  });
+
+  it("clamps oversized poll intervals before sleeping", () => {
+    expect(resolveCronRunPollIntervalMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("keeps oversized poll intervals within the overall timeout", async () => {
+    const callGateway = vi
+      .fn<
+        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
+      >()
+      .mockResolvedValue({
+        entries: [{ ts: 100, status: "ok", summary: "older run" }],
+      });
+
+    await expect(
+      waitForCronRunCompletion({
+        callGateway,
+        jobId: "dreaming-job",
+        afterTs: 150,
+        timeoutMs: 5,
+        intervalMs: Number.MAX_SAFE_INTEGER,
       }),
     ).rejects.toThrow(/timed out waiting for cron run completion/);
   });

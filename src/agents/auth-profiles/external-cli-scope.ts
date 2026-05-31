@@ -1,10 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeProviderId } from "../provider-id.js";
 
 export type ExternalCliAuthScope = {
   providerIds: string[];
@@ -49,7 +49,7 @@ function addExternalCliRuntimeScope(out: Set<string>, value: string | undefined)
     normalized === "codex" ||
     normalized === "codex-cli" ||
     normalized === "codex-app-server" ||
-    normalized === "openai-codex" ||
+    normalized === "openai" ||
     normalized === "minimax" ||
     normalized === "minimax-cli" ||
     normalized === "minimax-portal"

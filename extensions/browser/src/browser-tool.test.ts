@@ -137,6 +137,17 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   };
 });
 
+const pathValidationMocks = vi.hoisted(() => ({
+  resolveExistingUploadPaths: vi.fn<
+    (args: {
+      requestedPaths: string[];
+    }) => Promise<{ ok: true; paths: string[] } | { ok: false; error: string }>
+  >(async ({ requestedPaths }) => ({
+    ok: true as const,
+    paths: requestedPaths,
+  })),
+}));
+
 const sessionTabRegistryMocks = vi.hoisted(() => ({
   touchSessionBrowserTab: vi.fn(),
   trackSessionBrowserTab: vi.fn(),
@@ -146,6 +157,9 @@ vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
+  describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
+  normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
+  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/openclaw-media/resized.jpg" })),
 }));
 vi.mock("./sdk-setup-tools.js", async () => {
   const actual =
@@ -154,6 +168,8 @@ vi.mock("./sdk-setup-tools.js", async () => {
     ...actual,
     callGatewayTool: gatewayMocks.callGatewayTool,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
+    describeImageFile: toolCommonMocks.describeImageFile,
+    saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
     listNodes: nodesUtilsMocks.listNodes,
   };
 });
@@ -196,6 +212,8 @@ vi.mock("./browser-tool.runtime.js", () => {
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
       usesChromeMcp: profile.driver === "existing-session",
     }),
+    describeImageFile: toolCommonMocks.describeImageFile,
+    saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     jsonResult: (result: unknown) => ({
       content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -226,10 +244,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     },
     readStringParam,
     readStringValue,
-    resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
-      ok: true,
-      paths: requestedPaths,
-    })),
+    resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
     resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
       const node = nodes.find(
         (entry) => entry.nodeId === requested || entry.displayName === requested,
@@ -272,6 +287,14 @@ function resetBrowserToolMocks() {
     actionTimeoutMs: 60_000,
   });
   nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  toolCommonMocks.describeImageFile.mockResolvedValue({
+    text: undefined,
+    decision: { outcome: "skipped" },
+  });
+  toolCommonMocks.normalizeBrowserScreenshot.mockImplementation(async (buffer: Buffer) => ({
+    buffer,
+  }));
+  toolCommonMocks.saveMediaBuffer.mockResolvedValue({ path: "/tmp/openclaw-media/resized.jpg" });
   browserToolTesting.setDepsForTest({
     browserAct: browserActionsMocks.browserAct as never,
     browserArmDialog: browserActionsMocks.browserArmDialog as never,
@@ -287,10 +310,13 @@ function resetBrowserToolMocks() {
     browserStart: browserClientMocks.browserStart as never,
     browserStatus: browserClientMocks.browserStatus as never,
     browserStop: browserClientMocks.browserStop as never,
+    describeImageFile: toolCommonMocks.describeImageFile as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
     getRuntimeConfig: configMocks.loadConfig as never,
     listNodes: nodesUtilsMocks.listNodes as never,
     callGatewayTool: gatewayMocks.callGatewayTool as never,
+    normalizeBrowserScreenshot: toolCommonMocks.normalizeBrowserScreenshot as never,
+    saveMediaBuffer: toolCommonMocks.saveMediaBuffer as never,
     trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
     untrackSessionBrowserTab: sessionTabRegistryMocks.untrackSessionBrowserTab as never,
   });
@@ -928,6 +954,112 @@ describe("browser tool snapshot maxChars", () => {
       imageSanitization?: { maxDimensionPx?: number };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+  });
+
+  it("defangs vision MEDIA-looking text and does not attach media", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+    } as never);
+    browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
+      ok: true,
+      path: "/tmp/screen.png",
+    });
+    toolCommonMocks.describeImageFile.mockResolvedValueOnce({
+      text: "Page shows a login form.\nMEDIA:/tmp/secret.png\nfooter copy",
+      provider: "openai",
+      model: "gpt-vision",
+    } as never);
+
+    const tool = createBrowserTool();
+    const out = await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const textBlocks = (out?.content ?? []).filter(
+      (entry): entry is { type: "text"; text: string } => entry?.type === "text",
+    );
+    expect(textBlocks.length).toBeGreaterThan(0);
+    const joined = textBlocks.map((entry) => entry.text).join("\n");
+    expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
+    expect(joined).toContain("/tmp/secret.png");
+    // The vision-success path must not surface raw screenshot media via
+    // details.media so channel auto-delivery cannot grab the screenshot.
+    expect((out?.details as Record<string, unknown>)?.media).toBeUndefined();
+    // imageResultFromFile is reserved for the non-vision and fallback paths;
+    // when vision succeeds we return a wrapped text block instead.
+    expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
+  });
+
+  it("defangs vision failure fallback text", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+    } as never);
+    browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
+      ok: true,
+      path: "/tmp/screen.png",
+    });
+    toolCommonMocks.describeImageFile.mockRejectedValueOnce(
+      new Error("provider failed\nMEDIA:/tmp/secret.png"),
+    );
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/screen.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      path: string;
+      extraText?: string;
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    expect(imageParams.path).toBe("/tmp/screen.png");
+    expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
+    expect(imageParams.extraText).toContain("/tmp/secret.png");
+  });
+
+  it("preserves screenshot image sanitization on vision failure fallback", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+      agents: { defaults: { imageMaxDimensionPx: 1600 } },
+    } as never);
+    browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
+      ok: true,
+      path: "/tmp/screen.png",
+    });
+    toolCommonMocks.describeImageFile.mockRejectedValueOnce(
+      new Error("vision provider unavailable"),
+    );
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/screen.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      imageSanitization?: { maxDimensionPx?: number };
+      extraText?: string;
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    // Fallback path must carry the same image sanitization the non-vision
+    // screenshot path applies; otherwise configured maxDimensionPx is silently
+    // bypassed whenever vision fails.
+    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 1600 });
+    expect(imageParams.extraText).toContain("browser screenshot vision failed");
   });
 
   it("passes screenshot timeoutMs through the node browser proxy", async () => {
@@ -1632,5 +1764,47 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/Run action=tabs profile="user"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser tool upload inbound media fallback (#83544)", () => {
+  beforeEach(resetBrowserToolMocks);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("resolves upload paths before arming the file chooser", async () => {
+    const inboundPath = "/home/user/.openclaw/media/inbound/report.pdf";
+    pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+      ok: true,
+      paths: [inboundPath],
+    });
+    browserActionsMocks.browserArmFileChooser.mockResolvedValue({ ok: true });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-upload-1", {
+      action: "upload",
+      paths: [inboundPath],
+      ref: "file-input-1",
+    });
+
+    expect(pathValidationMocks.resolveExistingUploadPaths).toHaveBeenCalledWith({
+      requestedPaths: [inboundPath],
+    });
+    expect(result?.content[0]).toHaveProperty("type", "text");
+  });
+
+  it("rejects files outside both uploads and inbound media directories", async () => {
+    pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+      ok: false as const,
+      error: "path outside allowed directories",
+    });
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-upload-2", {
+        action: "upload",
+        paths: ["/etc/passwd"],
+        ref: "file-input-1",
+      }),
+    ).rejects.toThrow("path outside allowed directories");
   });
 });

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, "docs");
@@ -323,6 +324,19 @@ function parseNodeMajor(version) {
   return Number.isFinite(major) ? major : 0;
 }
 
+function createMintlifyPnpmRunnerSpawnSpec(params, options = {}) {
+  return createPnpmRunnerSpawnSpec({
+    comSpec: params.comSpec,
+    cwd: params.cwd,
+    env: params.env ?? process.env,
+    nodeExecPath: options.nodeExecPath ?? params.nodeExecPath,
+    npmExecPath: params.npmExecPath,
+    platform: params.platform,
+    pnpmArgs: MINTLIFY_BROKEN_LINKS_ARGS,
+    stdio: "inherit",
+  });
+}
+
 /**
  * Mintlify currently rejects Node 25+. If the repo script itself is running
  * under a too-new experimental Node, probe common local version managers and
@@ -332,25 +346,31 @@ function parseNodeMajor(version) {
  *   cwd: string;
  *   nodeVersion?: string;
  *   spawnSyncImpl: typeof spawnSync;
+ *   env?: NodeJS.ProcessEnv;
+ *   nodeExecPath?: string;
+ *   npmExecPath?: string;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
  * }} params
  */
 export function resolveMintlifyAnchorAuditInvocation(params) {
   const nodeVersion = params.nodeVersion ?? process.versions.node;
   if (parseNodeMajor(nodeVersion) < NODE_25_UNSUPPORTED_BY_MINTLIFY) {
-    return { command: "pnpm", args: MINTLIFY_BROKEN_LINKS_ARGS };
+    return createMintlifyPnpmRunnerSpawnSpec(params);
   }
 
   const node22Probe = "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)";
+  const node22Runner = createMintlifyPnpmRunnerSpawnSpec(params, { nodeExecPath: "node" });
   const candidates = [
     {
       command: "fnm",
       probeArgs: ["exec", "--using=22", "node", "-e", node22Probe],
-      args: ["exec", "--using=22", "pnpm", ...MINTLIFY_BROKEN_LINKS_ARGS],
+      args: ["exec", "--using=22", node22Runner.command, ...node22Runner.args],
     },
     {
       command: "mise",
       probeArgs: ["exec", "node@22", "--", "node", "-e", node22Probe],
-      args: ["exec", "node@22", "--", "pnpm", ...MINTLIFY_BROKEN_LINKS_ARGS],
+      args: ["exec", "node@22", "--", node22Runner.command, ...node22Runner.args],
     },
   ];
 
@@ -364,7 +384,7 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
     }
   }
 
-  return { command: "pnpm", args: MINTLIFY_BROKEN_LINKS_ARGS };
+  return createMintlifyPnpmRunnerSpawnSpec(params);
 }
 
 export function auditDocsLinks(options = {}) {
@@ -500,7 +520,12 @@ export function auditDocsLinks(options = {}) {
 /**
  * @param {{
  *   args?: string[];
+ *   comSpec?: string;
+ *   env?: NodeJS.ProcessEnv;
+ *   nodeExecPath?: string;
  *   nodeVersion?: string;
+ *   npmExecPath?: string;
+ *   platform?: NodeJS.Platform;
  *   spawnSyncImpl?: typeof spawnSync;
  *   prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
  *   cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
@@ -523,11 +548,17 @@ export function runDocsLinkAuditCli(options = {}) {
       // have the Swift Package Manager tool named `mint` on PATH, and that
       // binary exits with "command 'broken-links' not found".
       const invocation = resolveMintlifyAnchorAuditInvocation({
+        comSpec: options.comSpec,
         cwd: anchorDocsDir,
+        env: options.env,
+        nodeExecPath: options.nodeExecPath,
         nodeVersion: options.nodeVersion,
+        npmExecPath: options.npmExecPath,
+        platform: options.platform,
         spawnSyncImpl,
       });
       const result = spawnSyncImpl(invocation.command, invocation.args, {
+        ...invocation.options,
         cwd: anchorDocsDir,
         stdio: "inherit",
       });

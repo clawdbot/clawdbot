@@ -4,11 +4,16 @@ import {
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHeadersInitForFetch } from "../infra/fetch-headers.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
-import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 import { logDebug } from "../logger.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  buildMcpHttpFetch,
+  withoutMcpAuthorizationHeader,
+  withSameOriginMcpHttpHeaders,
+} from "./mcp-http-fetch.js";
+import { createMcpOAuthClientProvider } from "./mcp-oauth.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
@@ -17,6 +22,8 @@ type ResolvedMcpTransport = {
   description: string;
   transportType: "stdio" | "sse" | "streamable-http";
   connectionTimeoutMs: number;
+  requestTimeoutMs: number;
+  supportsParallelToolCalls: boolean;
   detachStderr?: () => void;
 };
 
@@ -53,12 +60,6 @@ type SseEventSourceFetch = NonNullable<
 >;
 
 const STREAMABLE_HTTP_MAX_REDIRECTS = 20;
-
-const fetchWithUndici: FetchLike = async (url, init) =>
-  (await loadUndiciRuntimeDeps().fetch(
-    url,
-    init as Parameters<ReturnType<typeof loadUndiciRuntimeDeps>["fetch"]>[1],
-  )) as unknown as Response;
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -115,58 +116,67 @@ function getRedirectVisitKey(url: string, init: RequestInit | undefined): string
   return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
 }
 
-const fetchStreamableHttpWithRedirectScrub: FetchLike = async (url, init) => {
-  let currentUrl = resolveFetchUrl(url);
-  let currentInit = init ? { ...init } : undefined;
-  const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
+function buildStreamableHttpFetch(baseFetch: FetchLike): FetchLike {
+  return async (url, init) => {
+    let currentUrl = resolveFetchUrl(url);
+    let currentInit = init ? { ...init } : undefined;
+    const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
 
-  for (let redirectCount = 0; redirectCount <= STREAMABLE_HTTP_MAX_REDIRECTS; redirectCount += 1) {
-    const parsedUrl = new URL(currentUrl);
-    const response = await fetchWithUndici(parsedUrl.toString(), {
-      ...(currentInit ? { ...currentInit } : {}),
-      redirect: "manual",
-    });
-    if (!isRedirectStatus(response.status)) {
-      return response;
-    }
-
-    const location = response.headers.get("location");
-    if (!location) {
-      return response;
-    }
-    if (redirectCount === STREAMABLE_HTTP_MAX_REDIRECTS) {
-      void response.body?.cancel();
-      throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
-    }
-
-    const nextParsedUrl = new URL(location, parsedUrl);
-    const nextUrl = nextParsedUrl.toString();
-    let nextInit = rewriteRedirectInitForMethod(currentInit, response.status);
-    if (nextParsedUrl.origin !== parsedUrl.origin) {
-      if (nextInit?.headers) {
-        nextInit = {
-          ...nextInit,
-          headers: retainSafeHeadersForCrossOriginRedirect(nextInit.headers),
-        };
+    for (
+      let redirectCount = 0;
+      redirectCount <= STREAMABLE_HTTP_MAX_REDIRECTS;
+      redirectCount += 1
+    ) {
+      const parsedUrl = new URL(currentUrl);
+      const response = await baseFetch(parsedUrl.toString(), {
+        ...(currentInit ? { ...currentInit } : {}),
+        redirect: "manual",
+      });
+      if (!isRedirectStatus(response.status)) {
+        return response;
       }
-    }
 
-    const nextVisitKey = getRedirectVisitKey(nextUrl, nextInit);
-    if (visited.has(nextVisitKey)) {
+      const location = response.headers.get("location");
+      if (!location) {
+        return response;
+      }
+      if (redirectCount === STREAMABLE_HTTP_MAX_REDIRECTS) {
+        void response.body?.cancel();
+        throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
+      }
+
+      const nextParsedUrl = new URL(location, parsedUrl);
+      const nextUrl = nextParsedUrl.toString();
+      let nextInit = rewriteRedirectInitForMethod(currentInit, response.status);
+      if (nextParsedUrl.origin !== parsedUrl.origin) {
+        if (nextInit?.headers) {
+          nextInit = {
+            ...nextInit,
+            headers: retainSafeHeadersForCrossOriginRedirect(nextInit.headers),
+          };
+        }
+      }
+
+      const nextVisitKey = getRedirectVisitKey(nextUrl, nextInit);
+      if (visited.has(nextVisitKey)) {
+        void response.body?.cancel();
+        throw new Error("Redirect loop detected");
+      }
+
+      visited.add(nextVisitKey);
       void response.body?.cancel();
-      throw new Error("Redirect loop detected");
+      currentUrl = nextUrl;
+      currentInit = nextInit;
     }
 
-    visited.add(nextVisitKey);
-    void response.body?.cancel();
-    currentUrl = nextUrl;
-    currentInit = nextInit;
-  }
+    throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
+  };
+}
 
-  throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
-};
-
-function buildSseEventSourceFetch(headers: Record<string, string>): SseEventSourceFetch {
+function buildSseEventSourceFetch(
+  headers: Record<string, string>,
+  baseFetch: FetchLike,
+): SseEventSourceFetch {
   return (url: string | URL, init?: RequestInit) => {
     const sdkHeaders: Record<string, string> = {};
     if (init?.headers) {
@@ -178,7 +188,7 @@ function buildSseEventSourceFetch(headers: Record<string, string>): SseEventSour
         Object.assign(sdkHeaders, init.headers);
       }
     }
-    return fetchWithUndici(url, {
+    return baseFetch(url, {
       ...(init as RequestInit),
       headers: { ...sdkHeaders, ...headers },
     }) as ReturnType<SseEventSourceFetch>;
@@ -206,32 +216,64 @@ export function resolveMcpTransport(
       description: resolved.description,
       transportType: "stdio",
       connectionTimeoutMs: resolved.connectionTimeoutMs,
+      requestTimeoutMs: resolved.requestTimeoutMs,
+      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
+  const authProvider =
+    resolved.auth === "oauth"
+      ? createMcpOAuthClientProvider({
+          serverName,
+          serverUrl: resolved.url,
+          config: resolved.oauth,
+        })
+      : undefined;
+  const baseFetch = buildMcpHttpFetch({
+    sslVerify: resolved.sslVerify,
+    clientCert: resolved.clientCert,
+    clientKey: resolved.clientKey,
+    resourceUrl: resolved.url,
+  });
+  const headers =
+    resolved.auth === "oauth" ? withoutMcpAuthorizationHeader(resolved.headers) : resolved.headers;
+  const httpFetch =
+    resolved.auth === "oauth"
+      ? withSameOriginMcpHttpHeaders({
+          fetchFn: baseFetch,
+          headers,
+          resourceUrl: resolved.url,
+        })
+      : baseFetch;
   if (resolved.transportType === "streamable-http") {
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
-        requestInit: resolved.headers ? { headers: resolved.headers } : undefined,
-        fetch: fetchStreamableHttpWithRedirectScrub,
+        requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
+        fetch: buildStreamableHttpFetch(httpFetch),
+        authProvider,
       }),
       description: resolved.description,
       transportType: "streamable-http",
       connectionTimeoutMs: resolved.connectionTimeoutMs,
+      requestTimeoutMs: resolved.requestTimeoutMs,
+      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
     };
   }
-  const headers: Record<string, string> = {
-    ...resolved.headers,
-  };
-  const hasHeaders = Object.keys(headers).length > 0;
+  const sseHeaders: Record<string, string> = { ...headers };
+  const hasHeaders = Object.keys(sseHeaders).length > 0;
   return {
     transport: new SSEClientTransport(new URL(resolved.url), {
-      requestInit: hasHeaders ? { headers } : undefined,
-      fetch: fetchWithUndici,
-      eventSourceInit: { fetch: buildSseEventSourceFetch(headers) },
+      requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
+      fetch: httpFetch,
+      eventSourceInit: {
+        fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
+      },
+      authProvider,
     }),
     description: resolved.description,
     transportType: "sse",
     connectionTimeoutMs: resolved.connectionTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
   };
 }

@@ -28,6 +28,7 @@ export async function notifyPairingApproved(params: {
   channelId: ChannelId;
   id: string;
   cfg: OpenClawConfig;
+  accountId?: string;
   runtime?: RuntimeEnv;
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
@@ -40,6 +41,7 @@ export async function notifyPairingApproved(params: {
   await adapter.notifyApproval({
     cfg: params.cfg,
     id: params.id,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
     runtime: params.runtime,
   });
 }

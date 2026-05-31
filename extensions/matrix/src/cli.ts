@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictInteger, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -216,8 +216,9 @@ function printMatrixOwnDevices(
     console.log(
       `- ${formatMatrixCliText(device.deviceId)}${labels.length ? ` (${labels.join(", ")})` : ""}`,
     );
-    if (device.lastSeenTs) {
-      printTimestamp("  Last seen", new Date(device.lastSeenTs).toISOString());
+    const lastSeenAt = timestampMsToIsoString(device.lastSeenTs);
+    if (lastSeenAt) {
+      printTimestamp("  Last seen", lastSeenAt);
     }
     if (device.lastSeenIp) {
       console.log(`  Last IP: ${formatMatrixCliText(device.lastSeenIp)}`);

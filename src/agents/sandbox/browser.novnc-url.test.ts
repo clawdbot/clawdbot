@@ -93,6 +93,18 @@ describe("noVNC auth helpers", () => {
     expect(consumeNoVncObserverToken(tooLargeToken, 61_001)).toBeNull();
   });
 
+  it("does not issue usable observer tokens when the issue time is invalid", () => {
+    resetNoVncObserverTokensForTests();
+    const token = issueNoVncObserverToken({
+      noVncPort: 50123,
+      password: "abcd1234", // pragma: allowlist secret
+      nowMs: Number.NaN,
+      ttlMs: 100,
+    });
+
+    expect(consumeNoVncObserverToken(token, 1050)).toBeNull();
+  });
+
   it("generates 8-char alphanumeric passwords", () => {
     const password = generateNoVncPassword();
     expect(password).toMatch(/^[a-zA-Z0-9]{8}$/);

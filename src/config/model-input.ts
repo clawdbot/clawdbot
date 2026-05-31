@@ -1,14 +1,14 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
-} from "../plugin-sdk/provider-model-id-normalize.js";
-import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -108,7 +108,7 @@ export function normalizeAgentModelMapForConfig<T extends Record<string, unknown
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(models)) {
     const normalizedKey = normalizeAgentModelRefForConfig(key);
-    if (normalizedKey !== key || Object.prototype.hasOwnProperty.call(next, normalizedKey)) {
+    if (normalizedKey !== key || Object.hasOwn(next, normalizedKey)) {
       mutated = true;
     }
     next[normalizedKey] = mergeAgentModelEntryForConfig(next[normalizedKey], entry);

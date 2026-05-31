@@ -149,8 +149,6 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
     throw createAbortError(signal.reason);
   }
   await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let onAbort: (() => void) | undefined;
     const cleanup = () => {
       if (timer) {
         clearTimeout(timer);
@@ -163,11 +161,11 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
       cleanup();
       resolve();
     };
-    onAbort = () => {
+    const onAbort: (() => void) | undefined = () => {
       cleanup();
       reject(createAbortError(signal?.reason));
     };
-    timer = setTimeout(onResolve, ms);
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
     timer.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });

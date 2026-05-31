@@ -127,7 +127,7 @@ describe("codex plugin", () => {
         .supported,
     ).toBe(true);
     const openAiCodex = harness.supports({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
       requestedRuntime: "auto",
     });

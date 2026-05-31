@@ -11,7 +11,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.js";
 import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-codex-routing.js";
+} from "../openai-routing.js";
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;

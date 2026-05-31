@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { sanitizeForLog } from "../../terminal/ansi.js";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 export type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;

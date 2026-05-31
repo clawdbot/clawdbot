@@ -75,6 +75,35 @@ describe("codex cli node sessions", () => {
     ]);
   });
 
+  it("ignores Date-invalid Codex history timestamps", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cf";
+    await fs.writeFile(
+      path.join(tempDir, "history.jsonl"),
+      JSON.stringify({ session_id: sessionId, ts: 8_700_000_000_000, text: "bad timestamp" }),
+    );
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ filter: "bad timestamp", limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{
+        sessionId?: string;
+        updatedAt?: string;
+        lastMessage?: string;
+        messageCount?: number;
+      }>;
+    };
+
+    expect(parsed.sessions).toEqual([
+      {
+        sessionId,
+        lastMessage: "bad timestamp",
+        messageCount: 1,
+      },
+    ]);
+  });
+
   it("lists sessions from Codex session files when history is absent", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5249";
     const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");

@@ -2,8 +2,35 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { forceFreePort, type PortProcess } from "../src/cli/ports.js";
 import { resolveGatewayPort } from "../src/config/config.js";
+
+function usage(): string {
+  return [
+    "Usage: node --import tsx scripts/test-force.ts",
+    "",
+    "Clears the configured OpenClaw gateway port, then runs the local test suite.",
+    "",
+    "Options:",
+    "  -h, --help    Show this help.",
+  ].join("\n");
+}
+
+function parseArgs(argv: readonly string[]): { help: boolean } {
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      return { help: true };
+    }
+    throw new Error(`unknown argument: ${arg}\n\n${usage()}`);
+  }
+  return { help: false };
+}
+
+export const testForceTesting = {
+  parseArgs,
+  usage,
+};
 
 function killGatewayListeners(port: number): PortProcess[] {
   try {
@@ -42,7 +69,13 @@ function runTests() {
   process.exit(result.status ?? 1);
 }
 
-function main() {
+export function main(argv: readonly string[] = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  if (args.help) {
+    console.log(usage());
+    return;
+  }
+
   const port = resolveGatewayPort(undefined, process.env);
 
   console.log(`🧹 test:force - clearing gateway on port ${port}`);
@@ -55,4 +88,11 @@ function main() {
   runTests();
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+}

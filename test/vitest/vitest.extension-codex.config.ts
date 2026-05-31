@@ -17,6 +17,7 @@ export function createExtensionCodexVitestConfig(
     {
       dir: "extensions",
       env,
+      fileParallelism: false,
       name: "extension-codex",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

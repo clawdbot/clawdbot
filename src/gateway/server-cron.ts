@@ -12,11 +12,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import {
-  appendCronRunLog,
-  resolveCronRunLogPath,
-  resolveCronRunLogPruneOptions,
-} from "../cron/run-log.js";
+import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
@@ -471,13 +467,9 @@ export function buildGatewayCronService(params: {
           warnedLegacyWebhookJobs,
         });
 
-        const logPath = resolveCronRunLogPath({
+        void appendCronRunLog({
           storePath,
-          jobId: evt.jobId,
-        });
-        void appendCronRunLog(
-          logPath,
-          {
+          entry: {
             ts: Date.now(),
             jobId: evt.jobId,
             action: "finished",
@@ -500,9 +492,12 @@ export function buildGatewayCronService(params: {
             provider: evt.provider,
             usage: evt.usage,
           },
-          runLogPrune,
-        ).catch((err) => {
-          cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
+          opts: { keepLines: runLogPrune.keepLines },
+        }).catch((err) => {
+          cronLogger.warn(
+            { err: String(err), storePath, jobId: evt.jobId },
+            "cron: run log append failed",
+          );
         });
       }
     },

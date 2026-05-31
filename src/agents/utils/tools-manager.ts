@@ -376,10 +376,7 @@ const TERMUX_PACKAGES: Record<string, string> = {
 
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(
-  tool: "fd" | "rg",
-  silent: boolean = false,
-): Promise<string | undefined> {
+export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
   const existingPath = getToolPath(tool);
   if (existingPath) {
     return existingPath;

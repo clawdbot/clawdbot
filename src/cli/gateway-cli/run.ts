@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type {
   ConfigFileSnapshot,
@@ -35,10 +39,6 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -329,7 +329,9 @@ export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command
 function isGatewayLockError(err: unknown): err is GatewayLockError {
   return (
     err instanceof GatewayLockError ||
-    (!!err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
+    (Boolean(err) &&
+      typeof err === "object" &&
+      (err as { name?: string }).name === "GatewayLockError")
   );
 }
 

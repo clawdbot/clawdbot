@@ -1,13 +1,13 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseAgentSessionKey,
   normalizeAgentId,
   normalizeMainKey,
 } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
 
 /**

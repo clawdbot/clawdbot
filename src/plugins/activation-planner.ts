@@ -1,7 +1,7 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -271,7 +271,9 @@ function dedupeReasons(
   reasons: readonly (PluginActivationPlannerReason | null)[],
 ): PluginActivationPlannerReason[] {
   return [
-    ...new Set(reasons.filter((reason): reason is PluginActivationPlannerReason => !!reason)),
+    ...new Set(
+      reasons.filter((reason): reason is PluginActivationPlannerReason => Boolean(reason)),
+    ),
   ];
 }
 

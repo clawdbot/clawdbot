@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
@@ -62,6 +63,28 @@ afterEach(() => {
 });
 
 describe("secret provider integration proof harness", () => {
+  it("runs pnpm-backed OpenClaw commands through the repo pnpm runner", async () => {
+    const root = makeTempDir();
+    const fakePnpm = path.join(root, "pnpm.cjs");
+    fs.writeFileSync(fakePnpm, "#!/usr/bin/env node\n", { mode: 0o755 });
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=${Date.now()}`);
+
+    const command = await proof.resolveOpenClawCommand(
+      ["gateway", "status"],
+      { ...process.env, OPENCLAW_SECRET_PROOF_SENTINEL: "1" },
+      {
+        nodeExecPath: "/opt/node/bin/node",
+        npmExecPath: fakePnpm,
+        runner: { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" },
+      },
+    );
+
+    expect(command.command).toBe("/opt/node/bin/node");
+    expect(command.args).toEqual([fakePnpm, "openclaw", "gateway", "status"]);
+    expect(command.options.env.OPENCLAW_SECRET_PROOF_SENTINEL).toBe("1");
+    expect(command.options.shell).toBe(false);
+  });
+
   it("keeps stalled startup health probes inside the ready deadline", async () => {
     const root = makeTempDir();
     const fakeOpenClaw = writeStallingOpenClaw(root);

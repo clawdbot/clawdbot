@@ -1,8 +1,8 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   describeVideoFile,
   describeImageFile,
@@ -294,6 +294,49 @@ describe("media-understanding runtime", () => {
     expect(requireRunCapabilityRequest()).toMatchObject({
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("passes media scope context through file media understanding requests", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await describeImageFile({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {} as OpenClawConfig,
+      scopeContext: {
+        sessionKey: "agent:main:telegram:dm:123",
+        channel: "telegram",
+        chatType: "private",
+      },
+    });
+
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaPath: "/tmp/sample.jpg",
+      MediaType: "image/jpeg",
+      SessionKey: "agent:main:telegram:dm:123",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "private",
+    });
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      ctx: {
+        SessionKey: "agent:main:telegram:dm:123",
+        Surface: "telegram",
+        ChatType: "private",
+      },
     });
   });
 

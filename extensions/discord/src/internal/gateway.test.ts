@@ -257,6 +257,50 @@ describe("GatewayPlugin", () => {
     expect(secondResolved).toBe(true);
   });
 
+  it("bounds identify waits after a backward clock jump", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      vi.setSystemTime(1_000_000_000_000);
+      await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+
+      vi.setSystemTime(0);
+      const second = sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5_000);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(second).resolves.toBeUndefined();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("preserves queued identify spacing in the same bucket", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    let secondResolved = false;
+    let thirdResolved = false;
+
+    const second = sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 }).then(() => {
+      secondResolved = true;
+    });
+    const third = sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 }).then(() => {
+      thirdResolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await second;
+    expect(secondResolved).toBe(true);
+    expect(thirdResolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await third;
+    expect(thirdResolved).toBe(true);
+  });
+
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (eventValue: string, dataValue: unknown) => {});

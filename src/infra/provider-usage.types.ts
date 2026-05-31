@@ -22,6 +22,7 @@ export type UsageProviderId =
   | "github-copilot"
   | "google-gemini-cli"
   | "minimax"
-  | "openai-codex"
+  | "openai"
   | "xiaomi"
+  | "xiaomi-token-plan"
   | "zai";

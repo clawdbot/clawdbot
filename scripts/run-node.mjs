@@ -910,8 +910,6 @@ const resolveRunNodeDiagnosticArgs = (deps) => {
 
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
-  let onSigInt;
-  let onSigTerm;
 
   const cleanupSignals = () => {
     if (onSigInt) {
@@ -934,10 +932,10 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
     }
   };
 
-  onSigInt = () => {
+  const onSigInt = () => {
     forwardSignal("SIGINT");
   };
-  onSigTerm = () => {
+  const onSigTerm = () => {
     forwardSignal("SIGTERM");
   };
 

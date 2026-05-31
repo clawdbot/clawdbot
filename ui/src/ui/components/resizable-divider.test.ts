@@ -2,7 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ResizableDivider } from "./resizable-divider.ts";
+import type { ResizableDivider } from "./resizable-divider.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;

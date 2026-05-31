@@ -1,4 +1,5 @@
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
 type JsonObject = Record<string, unknown>;
 
@@ -11,19 +12,25 @@ type TelegramBotApiOptions = {
 
 const DEFAULT_BASE_URL =
   process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BASE_URL ?? "https://api.telegram.org";
-const DEFAULT_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS,
-  30000,
-);
-const DEFAULT_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES,
-  1024 * 1024,
-);
+export type TelegramBotApiLimits = {
+  bodyMaxBytes: number;
+  timeoutMs: number;
+};
 
-function readPositiveInt(raw: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+export function readTelegramBotApiLimits(
+  env: NodeJS.ProcessEnv = process.env,
+): TelegramBotApiLimits {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES",
+      1024 * 1024,
+      env,
+    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS", 30000, env),
+  };
 }
+
+const DEFAULT_LIMITS = readTelegramBotApiLimits();
 
 function optionalString(source: JsonObject, key: string) {
   const value = source[key];
@@ -49,8 +56,8 @@ export async function telegramBotApi(
   options: TelegramBotApiOptions = {},
 ) {
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_BODY_MAX_BYTES);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_LIMITS.timeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_LIMITS.bodyMaxBytes);
   const label = `Telegram Bot API ${method}`;
   const timeoutError = taggedError(`${label} timed out after ${timeoutMs}ms`, "ETIMEDOUT");
   const controller = new AbortController();

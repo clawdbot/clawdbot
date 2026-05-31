@@ -255,7 +255,8 @@ function sumPendingChars(buffer: string[]) {
   return total;
 }
 
-function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
+function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: number) {
+  let pendingChars = pendingCharsInput;
   if (pendingChars <= cap) {
     return pendingChars;
   }

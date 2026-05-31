@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
-import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
-import { readRootStructuredFileSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import JSON5 from "json5";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootStructuredFileSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import type { PluginManifestActivation } from "./manifest.js";

@@ -81,7 +81,7 @@ describe("generateSlugViaLLM", () => {
         },
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://chatgpt.com/backend-api/codex",
               models: [
                 {
@@ -102,7 +102,7 @@ describe("generateSlugViaLLM", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     const options = requireFirstRunOptions();
-    expect(options.provider).toBe("openai-codex");
+    expect(options.provider).toBe("openai");
     expect(options.model).toBe("gpt-5.5");
   });
 });

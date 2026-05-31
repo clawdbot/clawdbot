@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -20,7 +20,7 @@ export function isSafeManifestChannelId(channelId: string): boolean {
 }
 
 export function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
-  if (isBlockedObjectKey(key) || !Object.prototype.hasOwnProperty.call(record, key)) {
+  if (isBlockedObjectKey(key) || !Object.hasOwn(record, key)) {
     return undefined;
   }
   return record[key];

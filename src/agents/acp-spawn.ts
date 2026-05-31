@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import type { AcpTurnAttachment } from "../acp/control-plane/manager.types.js";
 import {
@@ -56,10 +60,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import {
@@ -541,7 +541,7 @@ function isMissingPathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-async function resolveRuntimeCwdForAcpSpawn(params: {
+export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;
   explicitCwd?: string;
 }): Promise<string | undefined> {
@@ -1211,7 +1211,7 @@ export async function spawnAcpDirect(
     });
   }
 
-  let requestThreadBinding = params.thread === true;
+  const requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,

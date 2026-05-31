@@ -1141,7 +1141,7 @@ describe("exec approvals", () => {
     expect(agentCalls[0]?.message).toContain("webchat-ok");
   });
 
-  it("does not spawn a gateway followup agent when approval is denied", async () => {
+  it("routes denied approval status through the originating session", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1172,8 +1172,19 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(agentCalls).toHaveLength(0);
+    const approvalId = (result.details as { approvalId?: string }).approvalId;
+    expect(typeof approvalId).toBe("string");
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:main",
+      deliver: false,
+      idempotencyKey: `exec-approval-followup:${approvalId}`,
+    });
+    expect(agentCalls[0]?.message).toContain("An async command did not run.");
+    expect(agentCalls[0]?.message).toContain(
+      `Exec denied (gateway id=${approvalId}, user-denied): echo ok`,
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("requires a separate approval for each elevated command after allow-once", async () => {

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isRequestBodyLimitError,
@@ -7,7 +8,6 @@ import {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 

@@ -1140,7 +1140,7 @@ describe("failover-error", () => {
         status: 500,
         message: OPENAI_SERVER_ERROR_PAYLOAD,
       },
-      { provider: "openai-codex", model: "gpt-5.4" },
+      { provider: "openai", model: "gpt-5.4" },
     );
     expect(err?.reason).toBe("server_error");
     expect(err?.status).toBe(500);

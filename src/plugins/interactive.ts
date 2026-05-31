@@ -55,7 +55,7 @@ export async function dispatchPluginInteractiveHandler<
       commitPluginInteractiveCallbackDedupe(dedupeKey);
     }
     const shouldExposeResult =
-      !!resolved &&
+      Boolean(resolved) &&
       typeof resolved === "object" &&
       Object.keys(resolved as Record<string, unknown>).some((key) => key !== "handled");
 

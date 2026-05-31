@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -927,6 +927,7 @@ function discoverInDirectory(params: {
   seen: Set<string>;
   realpathCache: Map<string, string>;
   packageManifestCache?: Map<string, PackageManifest | null>;
+  scanFiles?: boolean;
   recurseDirectories?: boolean;
   skipDirectories?: Set<string>;
   visitedDirectories?: Set<string>;
@@ -958,7 +959,8 @@ function discoverInDirectory(params: {
     const fullPath = path.join(params.dir, entry.name);
     const entryType = resolveScannedEntryType(entry, fullPath);
     if (entryType === "file") {
-      if (!isExtensionFile(fullPath)) {
+      const shouldScanFile = params.scanFiles ?? params.origin === "bundled";
+      if (!shouldScanFile || !isExtensionFile(fullPath)) {
         continue;
       }
       addCandidate({
@@ -1207,6 +1209,7 @@ function discoverFromPath(params: {
   requireBuiltRuntimeEntry?: boolean;
   managedPluginDirs?: Set<string>;
   skipRootDirKeys?: Set<string>;
+  scanFiles?: boolean;
   env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -1408,13 +1411,15 @@ function discoverFromPath(params: {
       seen: params.seen,
       realpathCache: params.realpathCache,
       packageManifestCache: params.packageManifestCache,
+      ...(params.scanFiles !== undefined || params.origin === "config"
+        ? { scanFiles: params.scanFiles ?? true }
+        : {}),
       ...(params.requireBuiltRuntimeEntry !== undefined
         ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
         : {}),
       ...(params.managedPluginDirs ? { managedPluginDirs: params.managedPluginDirs } : {}),
       ...(params.skipRootDirKeys ? { skipRootDirKeys: params.skipRootDirKeys } : {}),
     });
-    return;
   }
 }
 
@@ -1586,6 +1591,7 @@ export function discoverOpenClawPlugins(params: {
           workspaceDir,
           requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
           managedPluginDirs,
+          scanFiles: true,
           env,
           candidates: result.candidates,
           diagnostics: result.diagnostics,

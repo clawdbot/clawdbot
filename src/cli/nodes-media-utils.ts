@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-export { asFiniteNumber as asNumber } from "../shared/number-coercion.js";
-import { readStringValue } from "../shared/string-coerce.js";
-export { asRecord } from "../shared/record-coerce.js";
+export { asFiniteNumber as asNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
+export { asRecord } from "../../packages/normalization-core/src/record-coerce.js";
 export { asBoolean } from "../utils/boolean.js";
 
 export const asString = readStringValue;

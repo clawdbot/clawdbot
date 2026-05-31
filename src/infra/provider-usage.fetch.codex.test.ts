@@ -58,7 +58,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", "acct-1", 5000, mockFetch);
 
-    expect(result.provider).toBe("openai-codex");
+    expect(result.provider).toBe("openai");
     expect(result.plan).toBe("Plus ($12.50)");
     expect(result.windows).toEqual([
       { label: "3h", usedPercent: 35.5, resetAt: 1_700_000_000_000 },

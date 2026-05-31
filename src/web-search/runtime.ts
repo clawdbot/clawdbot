@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -19,11 +24,6 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -260,33 +260,66 @@ function resolveWebSearchProviderLoadScope(params: {
   return onlyPluginIds ? { onlyPluginIds } : {};
 }
 
-export function resolveWebSearchDefinition(
-  options?: ResolveWebSearchDefinitionParams,
-): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
+type WebSearchRequestContext = {
+  config?: OpenClawConfig;
+  search?: WebSearchConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+};
+
+function resolveWebSearchRequestContext(
+  options?: Pick<
+    ResolveWebSearchDefinitionParams,
+    "config" | "preferInputConfig" | "runtimeWebSearch"
+  >,
+): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
     config: options?.config,
     preferInputConfig: options?.preferInputConfig,
   });
-  const search = resolveSearchConfig(config);
-  const runtimeWebSearch = options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
+  return {
+    config,
+    search: resolveSearchConfig(config),
+    runtimeWebSearch: options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search,
+  };
+}
+
+function loadSortedWebSearchProviders(
+  params: WebSearchRequestContext & {
+    providerId?: string;
+    preferRuntimeProviders?: boolean;
+  },
+): PluginWebSearchProviderEntry[] {
   const loadScope = resolveWebSearchProviderLoadScope({
+    config: params.config,
+    search: params.search,
+    runtimeWebSearch: params.runtimeWebSearch,
+    providerId: params.providerId,
+    includeRuntimeSelection: Boolean(params.preferRuntimeProviders),
+  });
+  return sortWebSearchProvidersForAutoDetect(
+    params.preferRuntimeProviders
+      ? resolveRuntimeWebSearchProviders({
+          config: params.config,
+          ...loadScope,
+        })
+      : resolvePluginWebSearchProviders({
+          config: params.config,
+          ...loadScope,
+        }),
+  );
+}
+
+export function resolveWebSearchDefinition(
+  options?: ResolveWebSearchDefinitionParams,
+): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
+  const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
+  const providers = loadSortedWebSearchProviders({
     config,
     search,
     runtimeWebSearch,
     providerId: options?.providerId,
-    includeRuntimeSelection: Boolean(options?.preferRuntimeProviders),
+    preferRuntimeProviders: options?.preferRuntimeProviders,
   });
-  const providers = sortWebSearchProvidersForAutoDetect(
-    options?.preferRuntimeProviders
-      ? resolveRuntimeWebSearchProviders({
-          config,
-          ...loadScope,
-        })
-      : resolvePluginWebSearchProviders({
-          config,
-          ...loadScope,
-        }),
-  );
   return resolveWebProviderDefinition({
     config,
     toolConfig: search as Record<string, unknown> | undefined,
@@ -326,34 +359,18 @@ export function resolveWebSearchDefinition(
 function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
 ): PluginWebSearchProviderEntry[] {
-  const config = resolveWebSearchRuntimeConfig({
-    config: options?.config,
-    preferInputConfig: options?.preferInputConfig,
-  });
-  const search = resolveSearchConfig(config);
-  const runtimeWebSearch = options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
+  const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
   if (!resolveWebSearchEnabled({ search, sandboxed: options?.sandboxed })) {
     return [];
   }
-  const loadScope = resolveWebSearchProviderLoadScope({
+
+  const providers = loadSortedWebSearchProviders({
     config,
     search,
     runtimeWebSearch,
     providerId: options?.providerId,
-    includeRuntimeSelection: Boolean(options?.preferRuntimeProviders),
-  });
-
-  const providers = sortWebSearchProvidersForAutoDetect(
-    options?.preferRuntimeProviders
-      ? resolveRuntimeWebSearchProviders({
-          config,
-          ...loadScope,
-        })
-      : resolvePluginWebSearchProviders({
-          config,
-          ...loadScope,
-        }),
-  ).filter(Boolean);
+    preferRuntimeProviders: options?.preferRuntimeProviders,
+  }).filter(Boolean);
   if (providers.length === 0) {
     return [];
   }

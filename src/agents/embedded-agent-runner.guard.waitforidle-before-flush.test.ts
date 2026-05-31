@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
@@ -142,6 +143,26 @@ describe("flushPendingToolResultsAfterIdle", () => {
       timeoutMs: 30_000,
     });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clamps oversized idle wait timeouts before scheduling", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const idle = deferred<void>();
+    const agent = { waitForIdle: () => idle.promise };
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const flushPromise = flushPendingToolResultsAfterIdle({
+        agent,
+        sessionManager: sm,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      idle.resolve();
+      await flushPromise;
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("immediately flushes pending tool results without waiting when timeoutMs is 0 or less", async () => {

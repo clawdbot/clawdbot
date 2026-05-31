@@ -730,9 +730,9 @@ describe("buildStatusMessage", () => {
       config: {
         agents: {
           defaults: {
-            model: "openai-codex/gpt-5.4",
+            model: "openai/gpt-5.4",
             models: {
-              "openai-codex/gpt-5.4": {
+              "openai/gpt-5.4": {
                 params: {
                   textVerbosity: "low",
                 },
@@ -742,7 +742,7 @@ describe("buildStatusMessage", () => {
         },
       } as unknown as OpenClawConfig,
       agent: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       sessionEntry: {
         sessionId: "abc",
@@ -760,9 +760,9 @@ describe("buildStatusMessage", () => {
       config: {
         agents: {
           defaults: {
-            model: "openai-codex/gpt-5.4",
+            model: "openai/gpt-5.4",
             models: {
-              "openai-codex/gpt-5.4": {
+              "openai/gpt-5.4": {
                 params: {
                   textVerbosity: "high",
                 },
@@ -781,7 +781,7 @@ describe("buildStatusMessage", () => {
       } as unknown as OpenClawConfig,
       agentId: "main",
       agent: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       sessionEntry: {
         sessionId: "abc",
@@ -2372,7 +2372,7 @@ describe("buildStatusMessage", () => {
         contextTokens: 1_000_000,
       },
       sessionEntry: {
-        sessionId: "sess-openai-codex-cap-context",
+        sessionId: "sess-openai-chatgpt-cap-context",
         updatedAt: 0,
         totalTokens: 25_000,
       },
@@ -2396,7 +2396,7 @@ describe("buildStatusMessage", () => {
       explicitConfiguredContextTokens: 1_000_000,
       runtimeContextTokens: 272_000,
       sessionEntry: {
-        sessionId: "sess-openai-codex-runtime-cap-context",
+        sessionId: "sess-openai-chatgpt-runtime-cap-context",
         updatedAt: 0,
         totalTokens: 25_000,
       },

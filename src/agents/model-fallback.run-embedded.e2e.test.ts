@@ -408,7 +408,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.meta.toolSummary?.tools).toEqual(["write"]);
       expect(
         classifyEmbeddedAgentRunResultForModelFallback({
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           result,
         }),

@@ -6,18 +6,10 @@ class: standard
 capacity:
   market: spot
   strategy: most-available
-  fallback: on-demand-after-120s
+  # Fail closed instead of silently falling back to on-demand while the
+  # Azure-backed billing account is the default runner path.
+  fallback: spot-only
   hints: true
-  availabilityZones:
-    - eu-west-1a
-    - eu-west-1b
-    - eu-west-1c
-  regions:
-    - eu-west-1
-    - eu-west-2
-    - eu-central-1
-    - us-east-1
-    - us-west-2
 actions:
   workflow: .github/workflows/crabbox-hydrate.yml
   # Default AWS hydration uses local Actions replay. Use
@@ -37,6 +29,8 @@ blacksmith:
   job: check
   ref: main
 aws:
+  # AWS-specific overrides still pin direct `--provider aws` runs without
+  # leaking AWS region names into the Azure default capacity fallback list.
   region: eu-west-1
   rootGB: 400
 sync:

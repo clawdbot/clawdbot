@@ -377,9 +377,8 @@ function registerDiagnosticRunActivityListener(): void {
         return;
       case "run.completed":
         recordRunCompleted(event);
-        return;
+
       default:
-        return;
     }
   });
 }

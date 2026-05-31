@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 

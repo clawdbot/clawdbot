@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -7,7 +8,6 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageToolsConfig } from "../../config/types.tools.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 

@@ -113,7 +113,8 @@ export function applyConfigSnapshot(
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
   const editableConfig = resolveEditableSnapshotConfig(snapshot);
-  const rawAvailable = typeof snapshot.raw === "string" || !!editableConfig || !!state.configForm;
+  const rawAvailable =
+    typeof snapshot.raw === "string" || Boolean(editableConfig) || Boolean(state.configForm);
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
@@ -427,6 +428,24 @@ export function resetConfigPendingChanges(state: ConfigState) {
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
+}
+
+export function updateMcpServerEnabled(state: ConfigState, name: string, enabled: boolean) {
+  mutateConfigForm(state, (draft) => {
+    const serverPath = ["mcp", "servers", name];
+    if (!enabled) {
+      setPathValue(draft, [...serverPath, "enabled"], false);
+      return;
+    }
+
+    removePathValue(draft, [...serverPath, "enabled"]);
+    const mcp = asConfigRecord(draft.mcp);
+    const servers = asConfigRecord(mcp?.servers);
+    const server = asConfigRecord(servers?.[name]);
+    if (server && Object.keys(server).length === 0) {
+      removePathValue(draft, serverPath);
+    }
+  });
 }
 
 export function findAgentConfigEntryIndex(

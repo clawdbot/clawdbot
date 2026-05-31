@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
@@ -20,7 +21,6 @@ import {
   type ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 export type {
   ProfileApiKeyResolution,

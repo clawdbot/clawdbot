@@ -77,7 +77,7 @@ describe("applyProviderAuthConfigPatch", () => {
         params: { maxTokens: 12000 },
       },
     });
-    expect(Object.prototype.hasOwnProperty.call(models, "__proto__")).toBe(false);
+    expect(Object.hasOwn(models ?? {}, "__proto__")).toBe(false);
     expect(Object.getPrototypeOf(Object.assign({}, models)).polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });

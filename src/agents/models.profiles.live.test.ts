@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -62,7 +63,6 @@ import {
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { normalizeProviderId } from "./provider-id.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 const LIVE = isLiveTestEnabled();
@@ -553,7 +553,7 @@ function resolveTestReasoning(
   if (model.provider === "xai" && id.startsWith("grok-4")) {
     return undefined;
   }
-  if (model.provider === "openai" || model.provider === "openai-codex") {
+  if (model.provider === "openai") {
     if (id.includes("pro")) {
       return "high";
     }
@@ -563,17 +563,17 @@ function resolveTestReasoning(
 }
 
 function resolveLiveSystemPrompt(model: Model): string | undefined {
-  if (model.provider === "openai-codex") {
+  if (model.provider === "openai") {
     return "You are a concise assistant. Follow the user's instruction exactly.";
   }
   return undefined;
 }
 
 describe("resolveLiveSystemPrompt", () => {
-  it("adds instructions for openai-codex probes", () => {
+  it("adds instructions for openai probes", () => {
     expect(
       resolveLiveSystemPrompt({
-        provider: "openai-codex",
+        provider: "openai",
       } as Model),
     ).toContain("Follow the user's instruction exactly.");
   });
@@ -1350,7 +1350,7 @@ describeLive("live models (profile keys)", () => {
               (model.provider === "fireworks" ||
                 model.provider === "google-antigravity" ||
                 model.provider === "minimax" ||
-                model.provider === "openai-codex" ||
+                model.provider === "openai" ||
                 model.provider === "xai" ||
                 model.provider === "zai")
             ) {
@@ -1431,18 +1431,14 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (rate limit)`);
               break;
             }
-            if (
-              allowNotFoundSkip &&
-              model.provider === "openai-codex" &&
-              isRefreshTokenReused(message)
-            ) {
+            if (allowNotFoundSkip && model.provider === "openai" && isRefreshTokenReused(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (codex refresh token reused)`);
               break;
             }
             if (
               allowNotFoundSkip &&
-              model.provider === "openai-codex" &&
+              model.provider === "openai" &&
               isAccountIdExtractionError(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -1451,7 +1447,7 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              model.provider === "openai-codex" &&
+              model.provider === "openai" &&
               isChatGPTUsageLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -1460,7 +1456,7 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              model.provider === "openai-codex" &&
+              model.provider === "openai" &&
               isInstructionsRequiredError(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -1469,7 +1465,7 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              model.provider === "openai-codex" &&
+              model.provider === "openai" &&
               isOpenAiCodexHtmlInterruption(message)
             ) {
               skipped.push({ model: id, reason: message });

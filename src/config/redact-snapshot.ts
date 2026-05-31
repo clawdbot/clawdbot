@@ -3,10 +3,10 @@ import {
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
 } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { type ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
@@ -103,7 +103,7 @@ function isSecretRefWithProvider(
 // the Set, as their first lookup is done before the code knows it's
 // an array.
 function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
-  let result = new Set<string>();
+  const result = new Set<string>();
 
   for (const [path, hint] of Object.entries(hints)) {
     if (!hint.sensitive) {

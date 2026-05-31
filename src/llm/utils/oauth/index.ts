@@ -22,7 +22,7 @@ export {
   loginOpenAICodex,
   openaiCodexOAuthProvider,
   refreshOpenAICodexToken,
-} from "./openai-codex.js";
+} from "./openai-chatgpt.js";
 
 export * from "./types.js";
 
@@ -32,7 +32,7 @@ export * from "./types.js";
 
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
-import { openaiCodexOAuthProvider } from "./openai-codex.js";
+import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
 import type {
   OAuthCredentials,
   OAuthProviderId,

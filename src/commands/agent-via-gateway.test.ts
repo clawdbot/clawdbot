@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -218,31 +219,55 @@ vi.mock("./agent.js", () => {
 });
 
 let originalForceConsoleToStderr = false;
+let zeroTimeoutGatewayRequestMs: number | undefined;
 
-beforeEach(() => {
+function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
   agentViaGatewayTesting.resetLazyImportsForTests();
+  agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
   agentViaGatewayTesting.setAgentSessionModuleLoaderForTests(loadAgentSessionModuleMock);
   originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
+}
+
+beforeEach(() => {
+  resetAgentCliCommandMocksForTest();
 });
 
 afterEach(() => {
+  agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
 
 describe("agentCliCommand", () => {
-  it("uses a timer-safe max gateway timeout when --timeout is 0", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
+  beforeAll(async () => {
+    const restoreForceConsoleToStderr = loggingState.forceConsoleToStderr;
+    resetAgentCliCommandMocksForTest();
+    try {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
+        await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
-      expect(request.timeoutMs).toBe(2_147_000_000);
-    });
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
+        zeroTimeoutGatewayRequestMs = request.timeoutMs;
+      });
+    } finally {
+      agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
+      loggingState.forceConsoleToStderr = restoreForceConsoleToStderr;
+    }
+  });
+
+  it("uses a timer-safe max gateway timeout when --timeout is 0", () => {
+    expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
+  });
+
+  it("clamps oversized gateway timeout seconds", () => {
+    expect(agentViaGatewayTesting.resolveGatewayAgentTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 
   it("rejects partial gateway timeout values", async () => {

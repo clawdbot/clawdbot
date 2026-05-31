@@ -127,9 +127,7 @@ function readRpcRequestBody(body: unknown):
     request: {
       id,
       method: rpcBody.method.trim(),
-      ...(Object.prototype.hasOwnProperty.call(rpcBody, "params")
-        ? { params: rpcBody.params }
-        : {}),
+      ...(Object.hasOwn(rpcBody, "params") ? { params: rpcBody.params } : {}),
     },
   };
 }

@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 
@@ -184,6 +185,26 @@ describe("codex conversation turn collector", () => {
       const assertion = expect(completion).rejects.toThrow("codex app-server bound turn timed out");
       await vi.advanceTimersByTimeAsync(100);
       await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized turn wait timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const collector = createCodexConversationTurnCollector("thread-1");
+      collector.setTurnId("turn-1");
+      const completion = collector.wait({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1 });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      collector.handleNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+      });
+
+      await expect(completion).resolves.toEqual({ replyText: "" });
     } finally {
       vi.useRealTimers();
     }

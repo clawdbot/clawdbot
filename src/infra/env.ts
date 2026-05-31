@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 let log: SubsystemLogger | null = null;
 let logPromise: Promise<SubsystemLogger> | null = null;

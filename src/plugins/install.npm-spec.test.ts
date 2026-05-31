@@ -28,6 +28,20 @@ const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTAL
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
 let npmGlobalConfigPath: string;
+let npmPackArchiveInstallCase: {
+  archivePath: string;
+  calls: unknown[][];
+  dependencySpec: string | undefined;
+  npmRoot: string;
+  result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
+  stagedArchiveContents: string;
+};
+let npmSpecInstallCase: {
+  calls: unknown[][];
+  dependencyInstalled: boolean;
+  npmRoot: string;
+  result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+};
 
 function successfulSpawn(stdout = "") {
   return {
@@ -502,71 +516,133 @@ beforeEach(() => {
   process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
 });
 
+beforeAll(async () => {
+  runCommandWithTimeoutMock.mockReset();
+  resolveOpenClawPackageRootSyncMock.mockReset();
+  const hostRoot = suiteTempRootTracker.makeTempDir();
+  fs.writeFileSync(
+    path.join(hostRoot, "package.json"),
+    `${JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2)}\n`,
+    "utf8",
+  );
+  resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
+
+  const stateDir = suiteTempRootTracker.makeTempDir();
+  const npmRoot = path.join(stateDir, "npm");
+  const archivePath = path.join(stateDir, "openclaw-pack-demo-1.2.3.tgz");
+  fs.writeFileSync(archivePath, "fixture pack contents", "utf8");
+
+  mockNpmViewAndInstallMany([
+    {
+      packageName: "@openclaw/pack-demo",
+      version: "1.2.3",
+      pluginId: "pack-demo",
+      npmRoot,
+      integrity: "sha512-pack-demo",
+      shasum: "packdemosha",
+      packArchivePath: archivePath,
+    },
+    {
+      spec: "@openclaw/voice-call@0.0.1",
+      packageName: "@openclaw/voice-call",
+      version: "0.0.1",
+      pluginId: "voice-call",
+      npmRoot,
+    },
+  ]);
+
+  const result = await installPluginFromNpmPackArchive({
+    archivePath,
+    npmDir: npmRoot,
+    logger: { info: () => {}, warn: () => {} },
+  });
+  const npmProjectRoot = resolvePluginNpmProjectDir({
+    npmDir: npmRoot,
+    packageName: "@openclaw/pack-demo",
+  });
+  const managedManifest = JSON.parse(
+    await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const dependencySpec = managedManifest.dependencies?.["@openclaw/pack-demo"];
+  const stagedArchivePath = dependencySpec
+    ? resolveManagedFileDependency(npmProjectRoot, dependencySpec)
+    : null;
+  if (stagedArchivePath === null) {
+    throw new Error("expected staged archive path");
+  }
+  npmPackArchiveInstallCase = {
+    archivePath,
+    calls: [...runCommandWithTimeoutMock.mock.calls],
+    dependencySpec,
+    npmRoot,
+    result,
+    stagedArchiveContents: await fs.promises.readFile(stagedArchivePath, "utf8"),
+  };
+});
+
+beforeAll(async () => {
+  runCommandWithTimeoutMock.mockReset();
+  resolveOpenClawPackageRootSyncMock.mockReset();
+  const hostRoot = suiteTempRootTracker.makeTempDir();
+  fs.writeFileSync(
+    path.join(hostRoot, "package.json"),
+    `${JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2)}\n`,
+    "utf8",
+  );
+  resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
+
+  const stateDir = suiteTempRootTracker.makeTempDir();
+  const npmRoot = path.join(stateDir, "npm");
+
+  mockNpmViewAndInstall({
+    spec: "@openclaw/voice-call@0.0.1",
+    packageName: "@openclaw/voice-call",
+    version: "0.0.1",
+    pluginId: "voice-call",
+    npmRoot,
+    dependency: { name: "is-number", version: "7.0.0" },
+  });
+
+  const result = await installPluginFromNpmSpec({
+    spec: "@openclaw/voice-call@0.0.1",
+    npmDir: npmRoot,
+    logger: { info: () => {}, warn: () => {} },
+  });
+
+  npmSpecInstallCase = {
+    calls: [...runCommandWithTimeoutMock.mock.calls],
+    dependencyInstalled:
+      result.ok &&
+      fs.existsSync(path.join(result.targetDir, "node_modules", "is-number", "package.json")),
+    npmRoot,
+    result,
+  };
+});
+
 describe("installPluginFromNpmSpec", () => {
   it("installs npm pack archives through the managed npm root", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    const archivePath = path.join(stateDir, "openclaw-pack-demo-1.2.3.tgz");
-    fs.writeFileSync(archivePath, "fixture pack contents", "utf8");
-
-    mockNpmViewAndInstallMany([
-      {
-        packageName: "@openclaw/pack-demo",
-        version: "1.2.3",
-        pluginId: "pack-demo",
-        npmRoot,
-        integrity: "sha512-pack-demo",
-        shasum: "packdemosha",
-        packArchivePath: archivePath,
-      },
-      {
-        spec: "@openclaw/voice-call@0.0.1",
-        packageName: "@openclaw/voice-call",
-        version: "0.0.1",
-        pluginId: "voice-call",
-        npmRoot,
-      },
-    ]);
-
-    const result = await installPluginFromNpmPackArchive({
-      archivePath,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
+    const { archivePath, calls, dependencySpec, npmRoot, result, stagedArchiveContents } =
+      npmPackArchiveInstallCase;
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
     expect(result.pluginId).toBe("pack-demo");
-    const npmProjectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName: "@openclaw/pack-demo",
-    });
     expect(result.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, "@openclaw/pack-demo"));
     expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/pack-demo@1.2.3");
     expect(result.npmResolution?.integrity).toBe("sha512-pack-demo");
     expect(result.npmTarballName).toBe("openclaw-pack-demo-1.2.3.tgz");
     expectNpmInstallIntoProject({
-      calls: runCommandWithTimeoutMock.mock.calls,
+      calls,
       npmRoot,
       packageName: "@openclaw/pack-demo",
     });
-    const managedManifest = JSON.parse(
-      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
-    ) as { dependencies?: Record<string, string> };
-    const dependencySpec = managedManifest.dependencies?.["@openclaw/pack-demo"];
     expect(dependencySpec).toMatch(/^file:\.\/_openclaw-pack-archives\/.+\.tgz$/);
     expect(dependencySpec).not.toContain(archivePath);
-    const stagedArchivePath = dependencySpec
-      ? resolveManagedFileDependency(npmProjectRoot, dependencySpec)
-      : null;
-    if (stagedArchivePath === null) {
-      throw new Error("expected staged archive path");
-    }
-    await expect(fs.promises.readFile(stagedArchivePath, "utf8")).resolves.toBe(
-      "fixture pack contents",
-    );
+    expect(stagedArchiveContents).toBe("fixture pack contents");
   });
 
   it("rejects npm pack archive metadata with traversal package names", async () => {
@@ -606,23 +682,7 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("installs npm plugins into .openclaw/npm", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-
-    mockNpmViewAndInstall({
-      spec: "@openclaw/voice-call@0.0.1",
-      packageName: "@openclaw/voice-call",
-      version: "0.0.1",
-      pluginId: "voice-call",
-      npmRoot,
-      dependency: { name: "is-number", version: "7.0.0" },
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@0.0.1",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
+    const { calls, dependencyInstalled, npmRoot, result } = npmSpecInstallCase;
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -632,11 +692,9 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, "@openclaw/voice-call"));
     expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.1");
     expect(result.npmResolution?.integrity).toBe("sha512-plugin-test");
-    expect(
-      fs.existsSync(path.join(result.targetDir, "node_modules", "is-number", "package.json")),
-    ).toBe(true);
+    expect(dependencyInstalled).toBe(true);
     expectNpmInstallIntoProject({
-      calls: runCommandWithTimeoutMock.mock.calls,
+      calls,
       npmRoot,
       packageName: "@openclaw/voice-call",
     });

@@ -1,11 +1,11 @@
 import os from "node:os";
 import path from "node:path";
-import { isValueToken } from "../infra/cli-root-options.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { isValueToken } from "../infra/cli-root-options.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";

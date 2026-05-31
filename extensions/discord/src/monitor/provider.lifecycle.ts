@@ -2,7 +2,7 @@ import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -184,7 +184,8 @@ function parseGatewayCloseCode(message: string): number | undefined {
 
 function resolveTransportActivityAt(event: unknown): number {
   const at = (event as { at?: unknown } | undefined)?.at;
-  return typeof at === "number" && Number.isFinite(at) && at >= 0 ? at : Date.now();
+  const timestampMs = asDateTimestampMs(at);
+  return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : Date.now();
 }
 
 function createGatewayStatusObserver(params: {

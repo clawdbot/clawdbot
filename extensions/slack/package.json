@@ -8,15 +8,15 @@
   },
   "type": "module",
   "dependencies": {
-    "@slack/bolt": "4.7.2",
+    "@slack/bolt": "4.7.3",
     "@slack/types": "2.21.1",
     "@slack/web-api": "7.16.0",
-    "typebox": "1.1.38",
+    "typebox": "1.1.39",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.30"

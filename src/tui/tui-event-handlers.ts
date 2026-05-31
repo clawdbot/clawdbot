@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -51,6 +51,7 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
   "This response is taking longer than expected. Still waiting for the current run.";
 
@@ -80,6 +81,10 @@ export function createEventHandlers(context: EventHandlerContext) {
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let reconnectPendingRunId: string | null = null;
+  const pendingTerminalLifecycleErrors = new Map<
+    string,
+    { errorMessage: string; timer: ReturnType<typeof setTimeout> }
+  >();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -104,6 +109,22 @@ export function createEventHandlers(context: EventHandlerContext) {
       streamingWatchdogTimer = null;
     }
     streamingWatchdogRunId = null;
+  };
+
+  const clearPendingTerminalLifecycleError = (runId: string) => {
+    const pending = pendingTerminalLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingTerminalLifecycleErrors.delete(runId);
+  };
+
+  const clearPendingTerminalLifecycleErrors = () => {
+    for (const pending of pendingTerminalLifecycleErrors.values()) {
+      clearTimeout(pending.timer);
+    }
+    pendingTerminalLifecycleErrors.clear();
   };
 
   const pauseStreamingWatchdog = () => {
@@ -182,6 +203,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
+    clearPendingTerminalLifecycleErrors();
     btw.clear();
     clearStreamingWatchdog();
   };
@@ -328,12 +350,50 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else {
-      if (streamingWatchdogRunId === params.runId) {
-        clearStreamingWatchdog();
-      }
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
+  };
+
+  const renderTerminalRunError = (params: {
+    runId: string;
+    errorMessage: string;
+    requireActiveOrPending?: boolean;
+  }): boolean => {
+    const { runId, errorMessage } = params;
+    const wasActiveRun = state.activeChatRunId === runId;
+    if (
+      params.requireActiveOrPending === true &&
+      !wasActiveRun &&
+      state.pendingChatRunId !== runId
+    ) {
+      return false;
+    }
+    const renderedError = formatRawAssistantErrorForUi(errorMessage);
+    chatLog.dismissPendingSystem(runId);
+    chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+    noteFinalizedRun(runId, { displayedFinal: true });
+    terminateRun({ runId, wasActiveRun, status: "error" });
+    maybeRefreshHistoryForRun(runId);
+    return true;
+  };
+
+  const renderTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    if (!renderTerminalRunError({ runId, errorMessage, requireActiveOrPending: true })) {
+      return;
+    }
+    tui.requestRender(true);
+  };
+
+  const scheduleTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    clearPendingTerminalLifecycleError(runId);
+    const timer = setTimeout(() => {
+      pendingTerminalLifecycleErrors.delete(runId);
+      renderTerminalLifecycleError(runId, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    pendingTerminalLifecycleErrors.set(runId, { errorMessage, timer });
   };
 
   const hasConcurrentActiveRun = (runId: string) => {
@@ -463,6 +523,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (evt.state === "delta") {
         return;
       }
+      if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
+        clearStaleStreamingIfNoTrackedRunRemains();
+        return;
+      }
       if (evt.state === "final") {
         const hasLateDisplayableFinal =
           hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
@@ -475,6 +539,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    clearPendingTerminalLifecycleError(evt.runId);
     chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
@@ -567,12 +632,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
-      const errorMessage = evt.errorMessage ?? "unknown";
-      const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      renderTerminalRunError({
+        runId: evt.runId,
+        errorMessage: evt.errorMessage ?? "unknown",
+      });
     }
     tui.requestRender();
   };
@@ -651,6 +714,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase && phase !== "error") {
+        clearPendingTerminalLifecycleError(evt.runId);
+      }
       const isPostFinalizingRun = postFinalizingRuns.has(evt.runId);
       const isPostFinalTerminalPhase =
         isPostFinalizingRun && (phase === "end" || phase === "error");
@@ -687,7 +753,19 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (!canUpdateActivityStatus) {
           return;
         }
-        setActivityStatus("error");
+        const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
+        if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
+          const errorMessage =
+            typeof evt.data?.error === "string"
+              ? evt.data.error
+              : typeof evt.data?.errorMessage === "string"
+                ? evt.data.errorMessage
+                : "unknown";
+          scheduleTerminalLifecycleError(evt.runId, errorMessage);
+          setActivityStatus("error");
+        } else {
+          setActivityStatus("error");
+        }
       }
       tui.requestRender();
     }
@@ -723,6 +801,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const dispose = () => {
     clearStreamingWatchdog();
+    clearPendingTerminalLifecycleErrors();
   };
 
   return {

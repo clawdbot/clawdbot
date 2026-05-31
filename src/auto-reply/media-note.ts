@@ -1,6 +1,6 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getMediaDir } from "../media/store.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MsgContext } from "./templating.js";
 
 function stripDarwinPrivatePrefix(value: string): string {
@@ -51,7 +51,10 @@ function formatMediaAttachedLine(params: {
   const typeRaw = sanitizeInlineMediaNoteValue(params.type);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
   const urlRaw = sanitizeInlineMediaNoteValue(params.url);
-  const urlPart = urlRaw ? ` | ${urlRaw}` : "";
+  // When the channel mirrors the local path into MediaUrl (Telegram album
+  // media is the canonical case), rendering ` | ${url}` adds no information
+  // and clutters the prompt with `path | path` duplication (issue #47587).
+  const urlPart = urlRaw && urlRaw !== path ? ` | ${urlRaw}` : "";
   return `${prefix}${path}${typePart}${urlPart}]`;
 }
 

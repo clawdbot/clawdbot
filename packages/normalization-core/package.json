@@ -1,0 +1,41 @@
+{
+  "name": "@openclaw/normalization-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./number-coercion": {
+      "types": "./dist/number-coercion.d.mts",
+      "import": "./dist/number-coercion.mjs",
+      "default": "./dist/number-coercion.mjs"
+    },
+    "./record-coerce": {
+      "types": "./dist/record-coerce.d.mts",
+      "import": "./dist/record-coerce.mjs",
+      "default": "./dist/record-coerce.mjs"
+    },
+    "./string-coerce": {
+      "types": "./dist/string-coerce.d.mts",
+      "import": "./dist/string-coerce.mjs",
+      "default": "./dist/string-coerce.mjs"
+    },
+    "./string-normalization": {
+      "types": "./dist/string-normalization.d.mts",
+      "import": "./dist/string-normalization.mjs",
+      "default": "./dist/string-normalization.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/number-coercion.ts src/record-coerce.ts src/string-coerce.ts src/string-normalization.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

@@ -10,10 +10,6 @@ function loadMatrixSubagentHooksModule() {
 }
 
 export function registerMatrixSubagentHooks(api: OpenClawPluginApi): void {
-  api.on("subagent_spawning", async (event) => {
-    const { handleMatrixSubagentSpawning } = await loadMatrixSubagentHooksModule();
-    return await handleMatrixSubagentSpawning(api, event);
-  });
   api.on("subagent_ended", async (event) => {
     const { handleMatrixSubagentEnded } = await loadMatrixSubagentHooksModule();
     await handleMatrixSubagentEnded(event);
@@ -23,9 +19,3 @@ export function registerMatrixSubagentHooks(api: OpenClawPluginApi): void {
     return handleMatrixSubagentDeliveryTarget(event);
   });
 }
-
-export {
-  handleMatrixSubagentDeliveryTarget,
-  handleMatrixSubagentEnded,
-  handleMatrixSubagentSpawning,
-} from "./src/matrix/subagent-hooks.js";

@@ -85,8 +85,8 @@ function descendantsOf(rootPid, stats) {
   }
   const seen = new Set([rootPid]);
   const queue = [rootPid];
-  for (let index = 0; index < queue.length; index += 1) {
-    for (const child of children.get(queue[index]) ?? []) {
+  for (const queuedPid of queue) {
+    for (const child of children.get(queuedPid) ?? []) {
       if (!seen.has(child)) {
         seen.add(child);
         queue.push(child);

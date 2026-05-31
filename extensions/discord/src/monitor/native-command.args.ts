@@ -1,8 +1,8 @@
-import {
-  type ChatCommandDefinition,
-  type CommandArgDefinition,
-  type CommandArgValues,
-  type NativeCommandSpec,
+import type {
+  ChatCommandDefinition,
+  CommandArgDefinition,
+  CommandArgValues,
+  NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import type { CommandInteraction } from "../internal/discord.js";
 import type { DiscordCommandArgs } from "./native-command.types.js";

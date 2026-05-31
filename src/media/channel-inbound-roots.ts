@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 type ChannelMediaContractApi = {
   resolveInboundAttachmentRoots?: (params: {

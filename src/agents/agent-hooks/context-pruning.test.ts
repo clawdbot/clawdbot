@@ -259,7 +259,7 @@ describe("context-pruning", () => {
 
     const next = pruneWithAggressiveDefaults(messages, {
       keepLastAssistants: 1,
-      softTrimRatio: 10.0,
+      softTrimRatio: 10,
       softTrim: DEFAULT_CONTEXT_PRUNING_SETTINGS.softTrim,
     });
 
@@ -399,7 +399,7 @@ describe("context-pruning", () => {
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
-      hardClearRatio: 10.0,
+      hardClearRatio: 10,
       hardClear: { enabled: false, placeholder: "[cleared]" },
       softTrim: { maxChars: 200, headChars: 100, tailChars: 100 },
     });
@@ -427,7 +427,7 @@ describe("context-pruning", () => {
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
-      hardClearRatio: 10.0,
+      hardClearRatio: 10,
       softTrim: { maxChars: 5, headChars: 7, tailChars: 3 },
     });
 
@@ -448,7 +448,7 @@ describe("context-pruning", () => {
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
-      hardClearRatio: 10.0,
+      hardClearRatio: 10,
       softTrim: { maxChars: 10, headChars: 6, tailChars: 6 },
     });
 

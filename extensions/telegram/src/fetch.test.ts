@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
@@ -1046,6 +1047,56 @@ describe("resolveTelegramFetch", () => {
       "telegram transport attempt marked temporarily unhealthy",
     );
     expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
+  });
+
+  it("does not treat fresh transport attempts as unhealthy when the process clock is invalid", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+
+      const resolved = resolveTelegramFetchOrThrow(undefined, {
+        network: {
+          autoSelectFamily: true,
+        },
+      });
+
+      await resolved("https://api.telegram.org/botx/getMe");
+
+      expect(undiciFetch).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(loggerWarn, "temporarily unhealthy");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("does not cool down transport attempts when the expiry exceeds the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+      }
+
+      const resolved = resolveTelegramFetchOrThrow(undefined, {
+        network: {
+          autoSelectFamily: true,
+          dnsResultOrder: "ipv4first",
+        },
+      });
+
+      await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+        "fetch failed",
+      );
+      for (let i = 0; i < 5; i += 1) {
+        await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+          "fetch failed",
+        );
+      }
+
+      expect(undiciFetch).toHaveBeenCalledTimes(8);
+      expectNoLoggerMessageContaining(loggerWarn, "temporarily unhealthy");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

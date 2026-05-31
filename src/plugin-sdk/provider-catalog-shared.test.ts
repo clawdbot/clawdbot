@@ -1,5 +1,5 @@
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelCatalogProvider } from "../model-catalog/types.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
@@ -88,6 +88,31 @@ describe("provider-catalog-shared live catalog cache", () => {
         load,
       }),
     ).resolves.toBe("ok");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache live catalog loads when the expiry would exceed Date range", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("first")
+      .mockResolvedValueOnce("second");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "overflow"],
+        load,
+        ttlMs: 1,
+        now: () => 8_640_000_000_000_000,
+      }),
+    ).resolves.toBe("first");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", "overflow"],
+        load,
+        ttlMs: 1,
+        now: () => 8_640_000_000_000_000,
+      }),
+    ).resolves.toBe("second");
     expect(load).toHaveBeenCalledTimes(2);
   });
 });

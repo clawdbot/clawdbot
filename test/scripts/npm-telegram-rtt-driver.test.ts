@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const DRIVER_SCRIPT = "scripts/e2e/npm-telegram-rtt-driver.mjs";
 
@@ -97,7 +97,88 @@ function startOversizedJsonServer(portPath: string) {
   );
 }
 
+type DriverCaseResult = {
+  result: ReturnType<typeof spawnSync>;
+  elapsedMs?: number;
+};
+
+async function runStalledTelegramBodyCase(): Promise<DriverCaseResult> {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-telegram-rtt-driver-"));
+  const portPath = path.join(root, "port.txt");
+  const outputDir = path.join(root, "out");
+  const server = startStalledJsonServer(portPath);
+
+  try {
+    const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
+    const startedAt = Date.now();
+    const result = spawnSync(process.execPath, [DRIVER_SCRIPT], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS: "100",
+        OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: outputDir,
+        OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "1",
+        OPENCLAW_QA_TELEGRAM_API_BASE_URL: `http://127.0.0.1:${port}`,
+        OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "1000",
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
+        OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "1000",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+      },
+      killSignal: "SIGKILL",
+      timeout: 2500,
+    });
+    return { result, elapsedMs: Date.now() - startedAt };
+  } finally {
+    await stopChild(server);
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+async function runOversizedTelegramBodyCase(): Promise<DriverCaseResult> {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-telegram-rtt-driver-"));
+  const portPath = path.join(root, "port.txt");
+  const outputDir = path.join(root, "out");
+  const server = startOversizedJsonServer(portPath);
+
+  try {
+    const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
+    const result = spawnSync(process.execPath, [DRIVER_SCRIPT], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES: "16",
+        OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS: "1000",
+        OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: outputDir,
+        OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "1",
+        OPENCLAW_QA_TELEGRAM_API_BASE_URL: `http://127.0.0.1:${port}`,
+        OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "1000",
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
+        OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "1000",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+      },
+      killSignal: "SIGKILL",
+      timeout: 2500,
+    });
+    return { result };
+  } finally {
+    await stopChild(server);
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("npm Telegram RTT driver", () => {
+  let stalledBodyCase: DriverCaseResult;
+  let oversizedBodyCase: DriverCaseResult;
+
+  beforeAll(async () => {
+    [stalledBodyCase, oversizedBodyCase] = await Promise.all([
+      runStalledTelegramBodyCase(),
+      runOversizedTelegramBodyCase(),
+    ]);
+  });
+
   it("rejects loose numeric env values instead of parsing prefixes", () => {
     for (const [name, value] of [
       ["OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", "180000ms"],
@@ -123,78 +204,22 @@ describe("npm Telegram RTT driver", () => {
   });
 
   it("bounds stalled Telegram Bot API response bodies", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-telegram-rtt-driver-"));
-    const portPath = path.join(root, "port.txt");
-    const outputDir = path.join(root, "out");
-    const server = startStalledJsonServer(portPath);
+    const { result, elapsedMs } = stalledBodyCase;
 
-    try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
-      const startedAt = Date.now();
-      const result = spawnSync(process.execPath, [DRIVER_SCRIPT], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS: "100",
-          OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: outputDir,
-          OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "1",
-          OPENCLAW_QA_TELEGRAM_API_BASE_URL: `http://127.0.0.1:${port}`,
-          OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "1000",
-          OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
-          OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
-          OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "1000",
-          OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
-        },
-        killSignal: "SIGKILL",
-        timeout: 2500,
-      });
-
-      expect(result.error).toBeUndefined();
-      expect(result.signal).not.toBe("SIGKILL");
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/abort|timed out|terminated/iu);
-      expect(Date.now() - startedAt).toBeLessThan(2500);
-    } finally {
-      await stopChild(server);
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(result.error).toBeUndefined();
+    expect(result.signal).not.toBe("SIGKILL");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/abort|timed out|terminated/iu);
+    expect(elapsedMs).toBeLessThan(2500);
   });
 
   it("bounds oversized Telegram Bot API response bodies", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-telegram-rtt-driver-"));
-    const portPath = path.join(root, "port.txt");
-    const outputDir = path.join(root, "out");
-    const server = startOversizedJsonServer(portPath);
+    const { result } = oversizedBodyCase;
 
-    try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
-      const result = spawnSync(process.execPath, [DRIVER_SCRIPT], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES: "16",
-          OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS: "1000",
-          OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: outputDir,
-          OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "1",
-          OPENCLAW_QA_TELEGRAM_API_BASE_URL: `http://127.0.0.1:${port}`,
-          OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "1000",
-          OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
-          OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
-          OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "1000",
-          OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
-        },
-        killSignal: "SIGKILL",
-        timeout: 2500,
-      });
-
-      expect(result.error).toBeUndefined();
-      expect(result.signal).not.toBe("SIGKILL");
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Telegram Bot API getMe response body exceeded 16 bytes");
-      expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-    } finally {
-      await stopChild(server);
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(result.error).toBeUndefined();
+    expect(result.signal).not.toBe("SIGKILL");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Telegram Bot API getMe response body exceeded 16 bytes");
+    expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 });

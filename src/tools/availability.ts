@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 
 function isRecord(value: JsonValue | undefined): value is JsonObject {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveConfigPath(

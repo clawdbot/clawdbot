@@ -6,7 +6,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setDiscordRuntime, type DiscordRuntime } from "../runtime.js";
 import {
   buildDiscordModelPickerPreferenceKey,
@@ -163,6 +163,68 @@ describe("discord model picker preferences", () => {
     ]);
   });
 
+  it("imports legacy JSON preferences with max Date timestamps", async () => {
+    const env = await createStateEnv();
+    const scope = { accountId: "main", guildId: "guild-max-date", userId: "user-max-date" };
+    const key = buildDiscordModelPickerPreferenceKey(scope);
+    expect(key).toBeTruthy();
+    const legacyPath = path.join(
+      env.OPENCLAW_STATE_DIR as string,
+      "discord",
+      "model-picker-preferences.json",
+    );
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [key as string]: {
+            recent: ["openai/gpt-4.1", "openai/gpt-4o"],
+            updatedAt: "+275760-09-13T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([
+      "openai/gpt-4.1",
+      "openai/gpt-4o",
+    ]);
+  });
+
+  it("preserves legacy JSON preference order near max Date", async () => {
+    const env = await createStateEnv();
+    const scope = { accountId: "main", guildId: "guild-near-max-date", userId: "user-near-max" };
+    const key = buildDiscordModelPickerPreferenceKey(scope);
+    expect(key).toBeTruthy();
+    const legacyPath = path.join(
+      env.OPENCLAW_STATE_DIR as string,
+      "discord",
+      "model-picker-preferences.json",
+    );
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [key as string]: {
+            recent: ["openai/gpt-4.1", "openai/gpt-4o"],
+            updatedAt: "+275760-09-12T23:59:59.999Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([
+      "openai/gpt-4.1",
+      "openai/gpt-4o",
+    ]);
+  });
+
   it("skips malformed legacy JSON entries during import", async () => {
     const env = await createStateEnv();
     const scope = { userId: "valid-legacy-user" };
@@ -206,5 +268,35 @@ describe("discord model picker preferences", () => {
 
     const recent = await readDiscordModelPickerRecentModels({ env, scope });
     expect(new Set(recent)).toEqual(new Set(["openai/gpt-4o", "openai/gpt-4.1"]));
+  });
+
+  it("keeps selections recent when the process clock is outside the Date range", async () => {
+    const env = await createStateEnv();
+    const scope = { userId: "invalid-clock-user" };
+    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4.1" });
+    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4o" });
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    try {
+      await recordDiscordModelPickerRecentModel({
+        env,
+        scope,
+        modelRef: "openai/gpt-5.5",
+        limit: 2,
+      });
+      await recordDiscordModelPickerRecentModel({
+        env,
+        scope,
+        modelRef: "openai/gpt-5.6",
+        limit: 2,
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope, limit: 3 })).resolves.toEqual([
+      "openai/gpt-5.6",
+      "openai/gpt-5.5",
+    ]);
   });
 });

@@ -1,8 +1,15 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import { createChatSessionsLoadOverrides, refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import {
+  createChatSessionsLoadOverrides,
+  refreshChat,
+  refreshChatAvatar,
+  scopedAgentParamsForSession,
+  scopedAgentListParamsForSession,
+} from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
@@ -22,6 +29,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -116,7 +124,7 @@ function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
     state.chatQueueBySession = { ...queueBySession };
     return;
   }
-  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+  if (Object.hasOwn(queueBySession, sessionKey)) {
     delete queueBySession[sessionKey];
     state.chatQueueBySession = { ...queueBySession };
   }
@@ -129,6 +137,7 @@ function restoreChatQueueForSession(state: AppViewState, sessionKey: string): Ch
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
   const previousSessionKey = state.sessionKey;
+  persistChatComposerState(state, previousSessionKey);
   saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   if (previousSessionKey !== sessionKey) {
@@ -154,6 +163,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.realtimeTalkTranscript = null;
   state.resetRealtimeTalkConversation?.();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
+  restoreChatComposerState(state);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
@@ -710,12 +720,15 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {
-      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
+      agentId:
+        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+        resolveAgentIdFromSessionKey(previousSessionKey),
       parentSessionKey,
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {
       ...createChatSessionsLoadOverrides(state),
+      ...scopedAgentListParamsForSession(state, previousSessionKey),
     },
   );
   if (
@@ -744,6 +757,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     ...createChatSessionsLoadOverrides(state),
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
   });
 }
 
@@ -756,16 +770,12 @@ function countHiddenCronSessions(state: AppViewState, sessions: SessionsListResu
     parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main",
   );
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const isTiedToActiveAgent = (key: string) => {
-    const parsed = parseAgentSessionKey(key);
-    if (parsed) {
-      return normalizeAgentId(parsed.agentId) === activeAgentId;
-    }
-    return activeAgentId === defaultAgentId;
-  };
 
   return sessions.sessions.filter(
-    (s) => isCronSessionKey(s.key) && s.key !== state.sessionKey && isTiedToActiveAgent(s.key),
+    (s) =>
+      isCronSessionKey(s.key) &&
+      s.key !== state.sessionKey &&
+      isSessionKeyTiedToAgent(s.key, activeAgentId, defaultAgentId),
   ).length;
 }
 

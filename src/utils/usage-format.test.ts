@@ -702,7 +702,7 @@ describe("usage-format", () => {
     const tiers: PricingTier[] = [
       { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32_000] },
       { input: 0.7, output: 3.5, cacheRead: 0, cacheWrite: 0, range: [32_000, 128_000] },
-      { input: 1.4, output: 7.0, cacheRead: 0, cacheWrite: 0, range: [128_000, 256_000] },
+      { input: 1.4, output: 7, cacheRead: 0, cacheWrite: 0, range: [128_000, 256_000] },
     ];
     const cost = { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
 
@@ -768,9 +768,9 @@ describe("usage-format", () => {
   it("bills overflow at last tier when only a single small-range tier exists (e.g. <30K)", () => {
     // Only one tier covering [0, 30000), input is 100000
     const tiers: PricingTier[] = [
-      { input: 1.0, output: 3.0, cacheRead: 0.5, cacheWrite: 0, range: [0, 30_000] },
+      { input: 1, output: 3, cacheRead: 0.5, cacheWrite: 0, range: [0, 30_000] },
     ];
-    const cost = { input: 1.0, output: 3.0, cacheRead: 0.5, cacheWrite: 0, tieredPricing: tiers };
+    const cost = { input: 1, output: 3, cacheRead: 0.5, cacheWrite: 0, tieredPricing: tiers };
 
     // 100000 input exceeds the only range, so Tier 1 is the whole-request fallback.
     // Total = 0.1 + 0.015 + 0.001 = 0.116

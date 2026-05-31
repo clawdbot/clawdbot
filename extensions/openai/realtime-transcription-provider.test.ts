@@ -204,12 +204,12 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
   it("treats a Codex OAuth profile as configured when no API key is present", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const cfg = { auth: { order: { "openai-codex": ["openai-codex:default"] } } };
+    const cfg = { auth: { order: { openai: ["openai:default"] } } };
     providerAuthMocks.isProviderAuthProfileConfigured.mockReturnValue(true);
 
     expect(provider.isConfigured({ cfg: cfg as never, providerConfig: {} })).toBe(true);
     expect(providerAuthMocks.isProviderAuthProfileConfigured).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
     });
   });
@@ -222,7 +222,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       response: new Response(JSON.stringify({ value: "ek-test" }), { status: 200 }),
       release,
     });
-    const cfg = { auth: { order: { "openai-codex": ["openai-codex:default"] } } };
+    const cfg = { auth: { order: { openai: ["openai:default"] } } };
     const session = provider.createSession({
       cfg: cfg as never,
       providerConfig: {},
@@ -233,7 +233,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
     expect(socket.headers?.Authorization).toBe("Bearer ek-test");
     expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
     });
     const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);

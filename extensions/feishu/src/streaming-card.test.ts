@@ -50,6 +50,7 @@ describe("FeishuStreamingSession", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -109,6 +110,45 @@ describe("FeishuStreamingSession", () => {
         };
       },
     );
+  }
+
+  function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
+    authTokens: string[];
+    client: ConstructorParameters<typeof FeishuStreamingSession>[0];
+  } {
+    const release = vi.fn(async () => {});
+    const authTokens: string[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url }: { url: string; init?: { body?: string } }) => {
+        if (url.includes("/auth/")) {
+          const token = `token-${authTokens.length + 1}`;
+          authTokens.push(token);
+          return {
+            response: { ok: true, json: async () => resolveAuthJson(token) },
+            release,
+          };
+        }
+        return {
+          response: {
+            ok: true,
+            json: async () => ({
+              code: 0,
+              msg: "ok",
+              data: { card_id: `card-${authTokens.length}` },
+            }),
+          },
+          release,
+        };
+      },
+    );
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    return { authTokens, client };
   }
 
   it("flushes throttled pending text after the throttle window", async () => {
@@ -346,46 +386,12 @@ describe("FeishuStreamingSession", () => {
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const release = vi.fn(async () => {});
-    const authTokens: string[] = [];
-    fetchWithSsrFGuardMock.mockImplementation(
-      async ({ url }: { url: string; init?: { body?: string } }) => {
-        if (url.includes("/auth/")) {
-          const token = `token-${authTokens.length + 1}`;
-          authTokens.push(token);
-          return {
-            response: {
-              ok: true,
-              json: async () => ({
-                code: 0,
-                msg: "ok",
-                tenant_access_token: token,
-                expire: Number.MAX_SAFE_INTEGER,
-              }),
-            },
-            release,
-          };
-        }
-        return {
-          response: {
-            ok: true,
-            json: async () => ({
-              code: 0,
-              msg: "ok",
-              data: { card_id: `card-${authTokens.length}` },
-            }),
-          },
-          release,
-        };
-      },
-    );
-    const client = {
-      im: {
-        message: {
-          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
-        },
-      },
-    } as never;
+    const { authTokens, client } = mockStreamingTokenStart((token) => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: token,
+      expire: Number.MAX_SAFE_INTEGER,
+    }));
 
     await new FeishuStreamingSession(client, {
       appId: "app_unsafe_token_expiry",
@@ -400,6 +406,55 @@ describe("FeishuStreamingSession", () => {
     }).start("chat_id", "open_id");
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
+  });
+
+  it("bounds streaming token fallback lifetime when the process clock is invalid", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const { authTokens, client } = mockStreamingTokenStart((token) => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: token,
+    }));
+
+    await new FeishuStreamingSession(client, {
+      appId: "app_invalid_clock_token_expiry",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+    expect(authTokens).toEqual(["token-1"]);
+
+    dateNow.mockReturnValue(7200 * 1000 - 60_000 + 1);
+    await new FeishuStreamingSession(client, {
+      appId: "app_invalid_clock_token_expiry",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+
+    expect(authTokens).toEqual(["token-1", "token-2"]);
+    dateNow.mockRestore();
+  });
+
+  it("treats an invalid process clock as a streaming token cache miss", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-29T12:00:00.000Z"));
+    const { authTokens, client } = mockStreamingTokenStart((token) => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: token,
+      expire: 7200,
+    }));
+
+    await new FeishuStreamingSession(client, {
+      appId: "app_invalid_clock_cache_miss",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+    expect(authTokens).toEqual(["token-1"]);
+
+    dateNow.mockReturnValue(8_640_000_000_000_001);
+    await new FeishuStreamingSession(client, {
+      appId: "app_invalid_clock_cache_miss",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+
+    expect(authTokens).toEqual(["token-1", "token-2"]);
+    dateNow.mockRestore();
   });
 });
 

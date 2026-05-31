@@ -63,4 +63,88 @@ describe("Discord model picker preference migration", () => {
       updatedAt: "2026-05-29T00:00:00.001Z",
     });
   });
+
+  it("plans legacy JSON import with max Date timestamps", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "discord:default:dm:user:max-date": {
+            recent: ["openai/gpt-5", "openai/gpt-4.1"],
+            updatedAt: "+275760-09-13T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.[0];
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    const entries = await plan.readEntries();
+    expect(
+      entries.map((entry) => {
+        const value = entry.value as { updatedAt?: unknown };
+        return value.updatedAt;
+      }),
+    ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
+  });
+
+  it("keeps legacy JSON import order near max Date", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "discord:default:dm:user:near-max-date": {
+            recent: ["openai/gpt-5", "openai/gpt-4.1"],
+            updatedAt: "+275760-09-12T23:59:59.999Z",
+          },
+        },
+      }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.[0];
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    const entries = await plan.readEntries();
+    expect(
+      entries.map((entry) => {
+        const value = entry.value as { modelRef?: unknown };
+        return value.modelRef;
+      }),
+    ).toEqual(["openai/gpt-5", "openai/gpt-4.1"]);
+    expect(
+      entries.map((entry) => {
+        const value = entry.value as { updatedAt?: unknown };
+        return value.updatedAt;
+      }),
+    ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
+  });
 });

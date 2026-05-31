@@ -27,6 +27,10 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -510,9 +514,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
   const readStoreAllowFrom = async (): Promise<string[]> => {
     const now = Date.now();
-    if (cachedStoreAllowFrom && now < cachedStoreAllowFrom.expiresAtMs) {
+    if (
+      cachedStoreAllowFrom &&
+      isFutureDateTimestampMs(cachedStoreAllowFrom.expiresAtMs, { nowMs: now })
+    ) {
       return cachedStoreAllowFrom.value;
     }
+    cachedStoreAllowFrom = null;
     const value = await core.channel.pairing
       .readAllowFromStore({
         channel: "matrix",
@@ -520,10 +528,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         accountId,
       })
       .catch(() => []);
-    cachedStoreAllowFrom = {
-      value,
-      expiresAtMs: now + ALLOW_FROM_STORE_CACHE_TTL_MS,
-    };
+    const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
+      nowMs: now,
+    });
+    cachedStoreAllowFrom = expiresAtMs === undefined ? null : { value, expiresAtMs };
     return value;
   };
 
@@ -629,7 +637,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }
         }
 
-        let content = event.content as RoomMessageEventContent;
+        const content = event.content as RoomMessageEventContent;
 
         if (
           eventType === EventType.RoomMessage &&

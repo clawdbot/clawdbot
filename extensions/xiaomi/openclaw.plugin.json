@@ -4,7 +4,20 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["xiaomi"],
+  "providers": ["xiaomi", "xiaomi-token-plan"],
+  "autoEnableWhenConfiguredProviders": ["xiaomi", "xiaomi-token-plan"],
+  "setup": {
+    "providers": [
+      {
+        "id": "xiaomi",
+        "envVars": ["XIAOMI_API_KEY"]
+      },
+      {
+        "id": "xiaomi-token-plan",
+        "envVars": ["XIAOMI_TOKEN_PLAN_API_KEY"]
+      }
+    ]
+  },
   "modelCatalog": {
     "providers": {
       "xiaomi": {
@@ -53,10 +66,53 @@
             }
           }
         ]
+      },
+      "xiaomi-token-plan": {
+        "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "mimo-v2.5-pro",
+            "name": "Xiaomi MiMo V2.5 Pro",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 1,
+              "output": 3,
+              "cacheRead": 0.2,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                { "input": 1, "output": 3, "cacheRead": 0.2, "cacheWrite": 0, "range": [0, 256000] },
+                { "input": 1, "output": 3, "cacheRead": 0.4, "cacheWrite": 0, "range": [256000] }
+              ]
+            }
+          },
+          {
+            "id": "mimo-v2.5",
+            "name": "Xiaomi MiMo V2.5",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 0.4,
+              "output": 2,
+              "cacheRead": 0.08,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                { "input": 0.4, "output": 2, "cacheRead": 0.08, "cacheWrite": 0, "range": [0, 256000] },
+                { "input": 0.4, "output": 2, "cacheRead": 0.16, "cacheWrite": 0, "range": [256000] }
+              ]
+            }
+          }
+        ]
       }
     },
     "discovery": {
-      "xiaomi": "static"
+      "xiaomi": "static",
+      "xiaomi-token-plan": "runtime"
     }
   },
   "providerEndpoints": [
@@ -73,27 +129,65 @@
   "contracts": {
     "speechProviders": ["xiaomi"]
   },
-  "setup": {
-    "providers": [
-      {
-        "id": "xiaomi",
-        "envVars": ["XIAOMI_API_KEY"]
-      }
-    ]
+  "providerAuthEnvVars": {
+    "xiaomi": ["XIAOMI_API_KEY"],
+    "xiaomi-token-plan": ["XIAOMI_TOKEN_PLAN_API_KEY"]
   },
   "providerAuthChoices": [
     {
       "provider": "xiaomi",
       "method": "api-key",
       "choiceId": "xiaomi-api-key",
-      "choiceLabel": "Xiaomi API key",
+      "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
       "groupId": "xiaomi",
       "groupLabel": "Xiaomi",
-      "groupHint": "API key",
+      "groupHint": "Pay-as-you-go / Token Plan",
       "optionKey": "xiaomiApiKey",
       "cliFlag": "--xiaomi-api-key",
       "cliOption": "--xiaomi-api-key <key>",
-      "cliDescription": "Xiaomi API key"
+      "cliDescription": "Xiaomi MiMo pay-as-you-go API key"
+    },
+    {
+      "provider": "xiaomi-token-plan",
+      "method": "token-plan-ams",
+      "choiceId": "xiaomi-token-plan-ams",
+      "choiceLabel": "Xiaomi Token Plan (Europe)",
+      "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
+      "groupId": "xiaomi",
+      "groupLabel": "Xiaomi",
+      "groupHint": "Pay-as-you-go / Token Plan",
+      "optionKey": "xiaomiTokenPlanApiKey",
+      "cliFlag": "--xiaomi-token-plan-api-key",
+      "cliOption": "--xiaomi-token-plan-api-key <key>",
+      "cliDescription": "Xiaomi MiMo Token Plan API key"
+    },
+    {
+      "provider": "xiaomi-token-plan",
+      "method": "token-plan-cn",
+      "choiceId": "xiaomi-token-plan-cn",
+      "choiceLabel": "Xiaomi Token Plan (China)",
+      "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
+      "groupId": "xiaomi",
+      "groupLabel": "Xiaomi",
+      "groupHint": "Pay-as-you-go / Token Plan",
+      "optionKey": "xiaomiTokenPlanApiKey",
+      "cliFlag": "--xiaomi-token-plan-api-key",
+      "cliOption": "--xiaomi-token-plan-api-key <key>",
+      "cliDescription": "Xiaomi MiMo Token Plan API key"
+    },
+    {
+      "provider": "xiaomi-token-plan",
+      "method": "token-plan-sgp",
+      "choiceId": "xiaomi-token-plan-sgp",
+      "choiceLabel": "Xiaomi Token Plan (Singapore)",
+      "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
+      "groupId": "xiaomi",
+      "groupLabel": "Xiaomi",
+      "groupHint": "Pay-as-you-go / Token Plan",
+      "optionKey": "xiaomiTokenPlanApiKey",
+      "cliFlag": "--xiaomi-token-plan-api-key",
+      "cliOption": "--xiaomi-token-plan-api-key <key>",
+      "cliDescription": "Xiaomi MiMo Token Plan API key"
     }
   ],
   "configSchema": {

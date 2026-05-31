@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -12,6 +12,8 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { normalizeCronRunErrorText } from "./execution-errors.js";
+import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
   applyJobPatch,
   assertSupportedJobSpec,
@@ -44,12 +46,10 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
-  failureNotificationDeliveryFromJobState,
-  normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
-  wake,
 } from "./timer.js";
+import { wake } from "./wake.js";
 
 const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 

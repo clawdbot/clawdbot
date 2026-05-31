@@ -189,13 +189,17 @@ afterEach(() => {
 });
 
 describe("readBestEffortRuntimeConfigSchema", () => {
-  beforeEach(() => {
+  let validConfigSchemaCase: {
+    channelProps: Record<string, unknown> | undefined;
+    entryProps: Record<string, unknown> | undefined;
+    loadArg: Record<string, unknown> | undefined;
+    manifestRegistryLoadCount: number;
+  };
+
+  beforeAll(async () => {
     vi.clearAllMocks();
     mockLoadConfig.mockReturnValue({});
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
-  });
-
-  it("merges manifest plugin metadata for valid configs", async () => {
     mockReadConfigFileSnapshot.mockResolvedValueOnce(
       makeSnapshot({
         valid: true,
@@ -204,9 +208,23 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     );
 
     const { channelProps, entryProps } = await readSchemaNodes();
+    validConfigSchemaCase = {
+      channelProps,
+      entryProps,
+      loadArg: getManifestRegistryLoadArg(),
+      manifestRegistryLoadCount: mockLoadPluginManifestRegistry.mock.calls.length,
+    };
+  });
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    const loadArg = getManifestRegistryLoadArg();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLoadConfig.mockReturnValue({});
+    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
+  });
+
+  it("merges manifest plugin metadata for valid configs", async () => {
+    const { channelProps, entryProps, loadArg, manifestRegistryLoadCount } = validConfigSchemaCase;
+    expect(manifestRegistryLoadCount).toBe(1);
     expect(loadArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
     expect(loadArg).not.toHaveProperty("cache", false);
     expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");

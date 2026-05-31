@@ -3,7 +3,11 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -48,13 +52,17 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-function resolveStreamingTokenExpiresAt(value: unknown): number {
+function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
+  const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
-    return Date.now();
+    return now;
   }
   return (
-    resolveExpiresAtMsFromDurationSeconds(value) ??
-    Date.now() + FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS * 1000
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now }) ??
+    resolveExpiresAtMsFromDurationSeconds(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, {
+      nowMs: now,
+    }) ??
+    now
   );
 }
 
@@ -85,7 +93,11 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
 async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
-  if (cached && cached.expiresAt > Date.now() + 60000) {
+  const rawNow = Date.now();
+  const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
+  const now = resolveDateTimestampMs(rawNow);
+  const minUsableExpiresAt = resolveExpiresAtMsFromDurationSeconds(60, { nowMs: now }) ?? now;
+  if (cached && hasValidClock && cached.expiresAt > minUsableExpiresAt) {
     return cached.token;
   }
 
@@ -115,7 +127,7 @@ async function getToken(creds: Credentials): Promise<string> {
   }
   tokenCache.set(key, {
     token: data.tenant_access_token,
-    expiresAt: resolveStreamingTokenExpiresAt(data.expire),
+    expiresAt: resolveStreamingTokenExpiresAt(data.expire, now),
   });
   return data.tenant_access_token;
 }
@@ -330,7 +342,7 @@ export class FeishuStreamingSession {
       sequence: 1,
       currentText: "",
       sentText: "",
-      hasNote: !!options?.note,
+      hasNote: Boolean(options?.note),
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
@@ -523,8 +535,9 @@ export class FeishuStreamingSession {
     const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.sentText) {
+    // Only send final update if content differs from what's already displayed.
+    // An explicit empty final text clears a transient preview before closeout.
+    if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
         ? await this.updateCardContent(
             resolveStreamingCardAppendContent(this.state.sentText, text),
@@ -575,6 +588,32 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
+  }
+
+  async discard(): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.clearFlushTimer();
+    await this.queue;
+
+    const currentState = this.state;
+    try {
+      const response = await this.client.im.message.delete({
+        path: { message_id: currentState.messageId },
+      });
+      if (response.code !== undefined && response.code !== 0) {
+        throw new Error(`Delete streaming card message failed: ${response.msg ?? response.code}`);
+      }
+      this.state = null;
+      this.pendingText = null;
+      this.log?.(`Discarded streaming card: cardId=${currentState.cardId}`);
+    } catch (error) {
+      this.log?.(`Discard failed: ${String(error)}`);
+      this.closed = false;
+      await this.close("");
+    }
   }
 
   isActive(): boolean {

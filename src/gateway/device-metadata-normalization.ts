@@ -29,4 +29,4 @@ export function normalizeDeviceMetadataForPolicy(value?: string | null): string 
   // tokens where possible before matching platform/family rules.
   return normalizeLowercaseStringOrEmpty(trimmed.normalize("NFKD").replace(/\p{M}/gu, ""));
 }
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

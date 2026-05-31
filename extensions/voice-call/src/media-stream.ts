@@ -10,6 +10,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -155,7 +156,10 @@ export class MediaStreamHandler {
 
   constructor(config: MediaStreamConfig) {
     this.config = config;
-    this.preStartTimeoutMs = config.preStartTimeoutMs ?? DEFAULT_PRE_START_TIMEOUT_MS;
+    this.preStartTimeoutMs = resolveTimerTimeoutMs(
+      config.preStartTimeoutMs,
+      DEFAULT_PRE_START_TIMEOUT_MS,
+    );
     this.maxPendingConnections = config.maxPendingConnections ?? DEFAULT_MAX_PENDING_CONNECTIONS;
     this.maxPendingConnectionsPerIp =
       config.maxPendingConnectionsPerIp ?? DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP;

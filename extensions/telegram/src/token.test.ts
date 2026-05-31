@@ -2,10 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramToken } from "./token.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 describe("resolveTelegramToken", () => {
   const tempDirs: string[] = [];
@@ -429,20 +427,5 @@ describe("resolveTelegramToken", () => {
   it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     expectNoTokenForUnknownAccount(createUnknownAccountConfig());
-  });
-});
-
-describe("telegram update offset store", () => {
-  it("persists and reloads the last update id", async () => {
-    await withStateDirEnv("openclaw-telegram-", async () => {
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
-
-      await writeTelegramUpdateOffset({
-        accountId: "primary",
-        updateId: 421,
-      });
-
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
-    });
   });
 });

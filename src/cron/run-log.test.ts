@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { migrateLegacyCronRunLogsToSqlite } from "../commands/doctor/cron/legacy-run-log-migration.js";
 import {
   appendCronRunLog,
   DEFAULT_CRON_RUN_LOG_KEEP_LINES,
@@ -11,7 +12,6 @@ import {
   readCronRunLogEntriesPage,
   readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
-  resolveCronRunLogPath,
 } from "./run-log.js";
 
 describe("cron run log", () => {
@@ -49,202 +49,212 @@ describe("cron run log", () => {
     }
   }
 
-  it("resolves store path to per-job runs/<jobId>.jsonl", () => {
+  function storePathForDir(dir: string): string {
+    return path.join(dir, "jobs.json");
+  }
+
+  it("rejects unsafe job ids before querying SQLite run logs", async () => {
     const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
-    const p = resolveCronRunLogPath({ storePath, jobId: "job-1" });
-    expect(p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl"))).toBe(true);
+    for (const jobId of ["../job-1", "nested/job-1", "..\\job-1"]) {
+      await expect(readCronRunLogEntriesPage({ storePath, jobId })).rejects.toThrow(
+        /invalid cron run log job id/i,
+      );
+    }
   });
 
-  it("rejects unsafe job ids when resolving run log path", () => {
-    const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "../job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "nested/job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "..\\job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-  });
-
-  it("appends JSONL and prunes by line count", async () => {
+  it("appends SQLite rows and prunes by line count", async () => {
     await withRunLogDir("openclaw-cron-log-", async (dir) => {
-      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      const storePath = storePathForDir(dir);
 
       for (let i = 0; i < 10; i++) {
-        await appendCronRunLog(
-          logPath,
-          {
+        await appendCronRunLog({
+          storePath,
+          entry: {
             ts: 1000 + i,
             jobId: "job-1",
             action: "finished",
             status: "ok",
             durationMs: i,
           },
-          { maxBytes: 1, keepLines: 3 },
-        );
+          opts: { keepLines: 3 },
+        });
       }
 
-      const raw = await fs.readFile(logPath, "utf-8");
-      const lines: string[] = [];
-      for (const rawLine of raw.split("\n")) {
-        const line = rawLine.trim();
-        if (line) {
-          lines.push(line);
-        }
-      }
-      expect(lines.length).toBe(3);
-      const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
-      expect(last.ts).toBe(1009);
+      const entries = readCronRunLogEntriesSync({ storePath, jobId: "job-1", limit: 10 });
+      expect(entries.map((entry) => entry.ts)).toEqual([1007, 1008, 1009]);
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await expect(fs.stat(logPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
   it("reads run-log entries synchronously for task reconciliation", async () => {
     await withRunLogDir("openclaw-cron-log-sync-", async (dir) => {
-      const logPath = path.join(dir, "runs", "job-1.jsonl");
-      await appendCronRunLog(logPath, {
-        ts: 1000,
-        jobId: "job-1",
-        action: "finished",
-        status: "ok",
-        runAtMs: 900,
-        durationMs: 100,
+      const storePath = storePathForDir(dir);
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 1000,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          runAtMs: 900,
+          durationMs: 100,
+        },
       });
-      await appendCronRunLog(logPath, {
-        ts: 2000,
-        jobId: "job-2",
-        action: "finished",
-        status: "error",
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 2000,
+          jobId: "job-2",
+          action: "finished",
+          status: "error",
+        },
       });
 
-      const jobEntries = readCronRunLogEntriesSync(logPath, { jobId: "job-1" });
+      const jobEntries = readCronRunLogEntriesSync({ storePath, jobId: "job-1" });
       expect(jobEntries).toHaveLength(1);
       expect(jobEntries[0]?.jobId).toBe("job-1");
       expect(jobEntries[0]?.status).toBe("ok");
       expect(jobEntries[0]?.runAtMs).toBe(900);
       expect(jobEntries[0]?.durationMs).toBe(100);
-      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toStrictEqual([]);
+      expect(readCronRunLogEntriesSync({ storePath, jobId: "missing" })).toStrictEqual([]);
     });
   });
 
   it.skipIf(process.platform === "win32")(
-    "writes run log files with secure permissions",
+    "does not create legacy run log files for new writes",
     async () => {
       await withRunLogDir("openclaw-cron-log-perms-", async (dir) => {
+        const storePath = storePathForDir(dir);
         const logPath = path.join(dir, "runs", "job-1.jsonl");
 
-        await appendCronRunLog(logPath, {
-          ts: 1,
-          jobId: "job-1",
-          action: "finished",
-          status: "ok",
+        await appendCronRunLog({
+          storePath,
+          entry: {
+            ts: 1,
+            jobId: "job-1",
+            action: "finished",
+            status: "ok",
+          },
         });
 
-        const mode = (await fs.stat(logPath)).mode & 0o777;
-        expect(mode).toBe(0o600);
+        await expect(fs.stat(logPath)).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
   );
 
   it.skipIf(process.platform === "win32")(
-    "hardens an existing run-log directory to owner-only permissions",
+    "does not mutate legacy run-log directory permissions on SQLite writes",
     async () => {
       await withRunLogDir("openclaw-cron-log-dir-perms-", async (dir) => {
+        const storePath = storePathForDir(dir);
         const runDir = path.join(dir, "runs");
-        const logPath = path.join(runDir, "job-1.jsonl");
         await fs.mkdir(runDir, { recursive: true, mode: 0o755 });
         await fs.chmod(runDir, 0o755);
 
-        await appendCronRunLog(logPath, {
-          ts: 1,
-          jobId: "job-1",
-          action: "finished",
-          status: "ok",
+        await appendCronRunLog({
+          storePath,
+          entry: {
+            ts: 1,
+            jobId: "job-1",
+            action: "finished",
+            status: "ok",
+          },
         });
 
         const runDirMode = (await fs.stat(runDir)).mode & 0o777;
-        expect(runDirMode).toBe(0o700);
+        expect(runDirMode).toBe(0o755);
       });
     },
   );
 
   it("reads newest entries and filters by jobId", async () => {
     await withRunLogDir("openclaw-cron-log-read-", async (dir) => {
-      const logPathA = path.join(dir, "runs", "a.jsonl");
-      const logPathB = path.join(dir, "runs", "b.jsonl");
+      const storePath = storePathForDir(dir);
 
-      await appendCronRunLog(logPathA, {
-        ts: 1,
-        jobId: "a",
-        action: "finished",
-        status: "ok",
+      await appendCronRunLog({
+        storePath,
+        entry: { ts: 1, jobId: "a", action: "finished", status: "ok" },
       });
-      await appendCronRunLog(logPathB, {
-        ts: 2,
-        jobId: "b",
-        action: "finished",
-        status: "error",
-        error: "nope",
-        summary: "oops",
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 2,
+          jobId: "b",
+          action: "finished",
+          status: "error",
+          error: "nope",
+          summary: "oops",
+        },
       });
-      await appendCronRunLog(logPathA, {
-        ts: 3,
-        jobId: "a",
-        action: "finished",
-        status: "skipped",
-        sessionId: "run-123",
-        sessionKey: "agent:main:cron:a:run:run-123",
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 3,
+          jobId: "a",
+          action: "finished",
+          status: "skipped",
+          sessionId: "run-123",
+          sessionKey: "agent:main:cron:a:run:run-123",
+        },
       });
 
-      const allA = await readCronRunLogEntries(logPathA, { limit: 10 });
+      const allA = await readCronRunLogEntries({ storePath, jobId: "a", limit: 10 });
       expect(allA.map((e) => e.jobId)).toEqual(["a", "a"]);
 
-      const onlyA = await readCronRunLogEntries(logPathA, {
+      const onlyA = await readCronRunLogEntries({
+        storePath,
         limit: 10,
         jobId: "a",
       });
       expect(onlyA.map((e) => e.ts)).toEqual([1, 3]);
 
-      const lastOne = await readCronRunLogEntries(logPathA, { limit: 1 });
+      const lastOne = await readCronRunLogEntries({ storePath, jobId: "a", limit: 1 });
       expect(lastOne.map((e) => e.ts)).toEqual([3]);
       expect(lastOne[0]?.sessionId).toBe("run-123");
       expect(lastOne[0]?.sessionKey).toBe("agent:main:cron:a:run:run-123");
 
-      const onlyB = await readCronRunLogEntries(logPathB, {
+      const onlyB = await readCronRunLogEntries({
+        storePath,
         limit: 10,
         jobId: "b",
       });
       expect(onlyB[0]?.summary).toBe("oops");
 
-      const wrongFilter = await readCronRunLogEntries(logPathA, {
-        limit: 10,
-        jobId: "b",
-      });
-      expect(wrongFilter).toStrictEqual([]);
+      expect(await readCronRunLogEntries({ storePath, limit: 10, jobId: "missing" })).toStrictEqual(
+        [],
+      );
     });
   });
 
   it("filters run-log pages by runId", async () => {
     await withRunLogDir("openclaw-cron-log-runid-", async (dir) => {
-      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      const storePath = storePathForDir(dir);
 
-      await appendCronRunLog(logPath, {
-        ts: 1,
-        jobId: "job-1",
-        action: "finished",
-        status: "error",
-        runId: "manual:job-1:1:0",
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "error",
+          runId: "manual:job-1:1:0",
+        },
       });
-      await appendCronRunLog(logPath, {
-        ts: 2,
-        jobId: "job-1",
-        action: "finished",
-        status: "ok",
-        runId: "manual:job-1:2:0",
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 2,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          runId: "manual:job-1:2:0",
+        },
       });
 
-      const page = await readCronRunLogEntriesPage(logPath, {
+      const page = await readCronRunLogEntriesPage({
+        storePath,
+        jobId: "job-1",
         runId: "manual:job-1:2:0",
         limit: 10,
       });
@@ -288,7 +298,9 @@ describe("cron run log", () => {
         "utf-8",
       );
 
-      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      const storePath = storePathForDir(dir);
+      await migrateLegacyCronRunLogsToSqlite(storePath);
+      const entries = await readCronRunLogEntries({ storePath, limit: 10, jobId: "job-1" });
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(2);
       expect(entries[0]?.delivered).toBe(true);
@@ -305,6 +317,35 @@ describe("cron run log", () => {
         fallbackUsed: false,
         delivered: true,
       });
+    });
+  });
+
+  it("dedupes legacy migration against all existing SQLite rows when archive is blocked", async () => {
+    await withRunLogDir("openclaw-cron-log-large-migration-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      const lines = Array.from({ length: 5001 }, (_value, index) =>
+        JSON.stringify({
+          ts: index + 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          runId: `run-${index + 1}`,
+        }),
+      );
+      await fs.writeFile(logPath, `${lines.join("\n")}\n`, "utf-8");
+      await fs.writeFile(`${logPath}.migrated`, "", "utf-8");
+
+      const storePath = storePathForDir(dir);
+      await migrateLegacyCronRunLogsToSqlite(storePath);
+      await migrateLegacyCronRunLogsToSqlite(storePath);
+
+      const page = await readCronRunLogEntriesPage({
+        storePath,
+        jobId: "job-1",
+        limit: 1,
+      });
+      expect(page.total).toBe(5001);
     });
   });
 
@@ -329,9 +370,12 @@ describe("cron run log", () => {
         "utf-8",
       );
 
+      const storePath = storePathForDir(dir);
+      await migrateLegacyCronRunLogsToSqlite(storePath);
       expect(
         (
-          await readCronRunLogEntriesPage(logPath, {
+          await readCronRunLogEntriesPage({
+            storePath,
             limit: 10,
             jobId: "job-1",
             query: "telegram",
@@ -340,7 +384,8 @@ describe("cron run log", () => {
       ).toHaveLength(1);
       expect(
         (
-          await readCronRunLogEntriesPage(logPath, {
+          await readCronRunLogEntriesPage({
+            storePath,
             limit: 10,
             jobId: "job-1",
             query: "-100",
@@ -352,28 +397,31 @@ describe("cron run log", () => {
 
   it("reads and searches run diagnostics", async () => {
     await withRunLogDir("openclaw-cron-log-diagnostics-", async (dir) => {
-      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      const storePath = storePathForDir(dir);
 
-      await appendCronRunLog(logPath, {
-        ts: 1,
-        jobId: "job-1",
-        action: "finished",
-        status: "error",
-        diagnostics: {
-          summary: "exec stderr tail",
-          entries: [
-            {
-              ts: 1,
-              source: "exec",
-              severity: "error",
-              message: "exec stderr tail",
-              exitCode: 2,
-            },
-          ],
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "error",
+          diagnostics: {
+            summary: "exec stderr tail",
+            entries: [
+              {
+                ts: 1,
+                source: "exec",
+                severity: "error",
+                message: "exec stderr tail",
+                exitCode: 2,
+              },
+            ],
+          },
         },
       });
 
-      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      const entries = await readCronRunLogEntries({ storePath, limit: 10, jobId: "job-1" });
       expect(entries[0]?.diagnostics?.summary).toBe("exec stderr tail");
       expect(entries[0]?.diagnostics?.entries).toHaveLength(1);
       expect(entries[0]?.diagnostics?.entries[0]?.source).toBe("exec");
@@ -382,7 +430,8 @@ describe("cron run log", () => {
       expect(entries[0]?.diagnostics?.entries[0]?.exitCode).toBe(2);
       expect(
         (
-          await readCronRunLogEntriesPage(logPath, {
+          await readCronRunLogEntriesPage({
+            storePath,
             limit: 10,
             jobId: "job-1",
             query: "stderr tail",
@@ -394,24 +443,29 @@ describe("cron run log", () => {
 
   it("reads telemetry fields", async () => {
     await withRunLogDir("openclaw-cron-log-telemetry-", async (dir) => {
+      const storePath = storePathForDir(dir);
       const logPath = path.join(dir, "runs", "job-1.jsonl");
 
-      await appendCronRunLog(logPath, {
-        ts: 1,
-        jobId: "job-1",
-        action: "finished",
-        status: "ok",
-        model: "gpt-5.4",
-        provider: "openai",
-        usage: {
-          input_tokens: 10,
-          output_tokens: 5,
-          total_tokens: 15,
-          cache_read_tokens: 2,
-          cache_write_tokens: 1,
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          model: "gpt-5.4",
+          provider: "openai",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            cache_read_tokens: 2,
+            cache_write_tokens: 1,
+          },
         },
       });
 
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(
         logPath,
         `${JSON.stringify({
@@ -426,7 +480,8 @@ describe("cron run log", () => {
         "utf-8",
       );
 
-      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      await migrateLegacyCronRunLogsToSqlite(storePath);
+      const entries = await readCronRunLogEntries({ storePath, limit: 10, jobId: "job-1" });
       expect(entries[0]?.model).toBe("gpt-5.4");
       expect(entries[0]?.provider).toBe("openai");
       expect(entries[0]?.usage).toEqual({
@@ -444,12 +499,14 @@ describe("cron run log", () => {
 
   it("cleans up pending-write bookkeeping after appends complete", async () => {
     await withRunLogDir("openclaw-cron-log-pending-", async (dir) => {
-      const logPath = path.join(dir, "runs", "job-cleanup.jsonl");
-      await appendCronRunLog(logPath, {
-        ts: 1,
-        jobId: "job-cleanup",
-        action: "finished",
-        status: "ok",
+      await appendCronRunLog({
+        storePath: storePathForDir(dir),
+        entry: {
+          ts: 1,
+          jobId: "job-cleanup",
+          action: "finished",
+          status: "ok",
+        },
       });
 
       expect(getPendingCronRunLogWriteCountForTests()).toBe(0);
@@ -458,21 +515,24 @@ describe("cron run log", () => {
 
   it("read drains pending fire-and-forget writes", async () => {
     await withRunLogDir("openclaw-cron-log-drain-", async (dir) => {
-      const logPath = path.join(dir, "runs", "job-drain.jsonl");
+      const storePath = storePathForDir(dir);
 
       // Fire-and-forget write (simulates the `void appendCronRunLog(...)` pattern
       // in server-cron.ts). Do NOT await.
-      const writePromise = appendCronRunLog(logPath, {
-        ts: 42,
-        jobId: "job-drain",
-        action: "finished",
-        status: "ok",
-        summary: "drain-test",
+      const writePromise = appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 42,
+          jobId: "job-drain",
+          action: "finished",
+          status: "ok",
+          summary: "drain-test",
+        },
       });
       void writePromise.catch(() => undefined);
 
       // Read should see the entry because it drains pending writes.
-      const entries = await readCronRunLogEntries(logPath, { limit: 10 });
+      const entries = await readCronRunLogEntries({ storePath, jobId: "job-drain", limit: 10 });
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(42);
       expect(entries[0]?.summary).toBe("drain-test");

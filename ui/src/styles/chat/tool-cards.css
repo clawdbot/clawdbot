@@ -234,7 +234,10 @@
 .chat-tool-msg-summary__error-badge {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 3px;
+  min-height: 20px;
+  box-sizing: border-box;
   padding: 1px 6px;
   margin-left: auto;
   border-radius: 999px;
@@ -244,7 +247,7 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  line-height: 1.4;
+  line-height: 1;
   flex-shrink: 0;
 }
 
@@ -649,17 +652,22 @@
   margin-top: 6px;
 }
 
+.chat-bubble--tool-shell > .chat-tool-msg-collapse {
+  margin-top: 0;
+}
+
 .chat-tool-msg-summary {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  align-content: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
   box-sizing: border-box;
   padding: 8px 11px;
   cursor: pointer;
   font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
+  line-height: 1;
   color: var(--text);
   user-select: none;
   list-style: none;
@@ -675,11 +683,22 @@
   text-align: left;
   appearance: none;
   -webkit-appearance: none;
-  font: inherit;
+  font-family: inherit;
   transition:
     color 150ms ease,
     background 150ms ease,
     border-color 150ms ease;
+}
+
+.chat-tool-msg-summary svg,
+.chat-tool-msg-summary__icon {
+  flex-shrink: 0;
+}
+
+.chat-tool-msg-summary span {
+  display: inline-flex;
+  align-items: center;
+  line-height: var(--control-ui-text-sm);
 }
 
 .chat-tool-msg-summary[type="button"] {
@@ -705,8 +724,13 @@
 
 .chat-tool-msg-summary::before {
   content: "▸";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: 20px;
   font-size: 10px;
-  margin-top: 3px;
+  line-height: 1;
   flex-shrink: 0;
   transition: transform 150ms ease;
 }
@@ -757,17 +781,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  align-self: center;
+  width: 18px;
+  height: 18px;
   color: var(--accent);
   opacity: 0.75;
-  flex-shrink: 0;
 }
 
 .chat-tool-msg-summary__icon svg {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -776,6 +799,8 @@
 }
 
 .chat-tool-msg-summary__label {
+  align-self: center;
+  min-height: 20px;
   font-weight: 600;
   color: var(--text);
   flex: 0 1 auto;
@@ -789,10 +814,13 @@
 
 .chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview {
+  align-self: center;
+  min-height: 20px;
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
+  transform: translateY(0.8px);
   color: color-mix(in srgb, var(--text) 76%, var(--muted) 24%);
-  flex: 1 1 18rem;
+  flex: 0 1 auto;
   max-width: 100%;
   overflow: visible;
   overflow-wrap: anywhere;

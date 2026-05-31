@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
@@ -14,9 +18,12 @@ import {
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
 import {
+  TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+  TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
   clearSentMessageCache,
   recordSentMessage,
   resetSentMessageCacheForTest,
+  setTelegramSentMessageStoreForTest,
   wasSentByBot,
 } from "./sent-message-cache.js";
 
@@ -51,6 +58,17 @@ const {
 } = telegramSendModule;
 
 const TELEGRAM_TEST_CFG = {};
+let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
+
+beforeEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
+  sentMessageStore = createPluginStateSyncKeyedStoreForTests("telegram", {
+    namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+  });
+  sentMessageStore.clear();
+  setTelegramSentMessageStoreForTest(sentMessageStore);
+});
 
 async function expectChatNotFoundWithChatId(
   action: Promise<unknown>,
@@ -186,6 +204,9 @@ function capturedLogText(logFile: string): string {
 }
 
 afterEach(() => {
+  clearSentMessageCache();
+  setTelegramSentMessageStoreForTest(undefined);
+  resetPluginStateStoreForTests();
   setLoggerOverride(null);
   resetLogger();
   resetTelegramMessageCacheBucketsForTest();
@@ -195,7 +216,6 @@ afterEach(() => {
 describe("sent-message-cache", () => {
   afterEach(() => {
     vi.useRealTimers();
-    clearSentMessageCache();
   });
 
   it("records and retrieves sent messages", () => {
@@ -224,6 +244,41 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(false);
   });
 
+  it("keeps sent-message cache storage failures best-effort", () => {
+    setTelegramSentMessageStoreForTest({
+      ...sentMessageStore,
+      entries() {
+        throw new Error("read boom");
+      },
+      register() {
+        throw new Error("write boom");
+      },
+    });
+
+    expect(() => recordSentMessage(123, 1)).not.toThrow();
+    expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("persists sent-message rows with their remaining logical ttl", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-26T12:00:00.000Z"));
+    const ttlByMessageId = new Map<string, number>();
+    setTelegramSentMessageStoreForTest({
+      ...sentMessageStore,
+      register(key, value, options) {
+        sentMessageStore.register(key, value, options);
+        ttlByMessageId.set(value.messageId, options?.ttlMs ?? 0);
+      },
+    });
+
+    recordSentMessage(123, 1);
+    vi.advanceTimersByTime(60 * 60 * 1000);
+    recordSentMessage(123, 2);
+
+    expect(ttlByMessageId.get("1")).toBe(23 * 60 * 60 * 1000);
+    expect(ttlByMessageId.get("2")).toBe(24 * 60 * 60 * 1000);
+  });
+
   it("keeps sent-message ownership across restart", async () => {
     const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
     const sentMessageCfg = { session: { store: persistedStorePath } };
@@ -237,11 +292,13 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=restart",
     );
+    restartedCache.setTelegramSentMessageStoreForTest(sentMessageStore);
 
     try {
       expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
     } finally {
       restartedCache.clearSentMessageCache();
+      restartedCache.setTelegramSentMessageStoreForTest(undefined);
     }
   });
 
@@ -293,6 +350,8 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=shared-b",
     );
+    cacheA.setTelegramSentMessageStoreForTest(sentMessageStore);
+    cacheB.setTelegramSentMessageStoreForTest(sentMessageStore);
 
     cacheA.clearSentMessageCache();
 
@@ -304,6 +363,8 @@ describe("sent-message-cache", () => {
       expect(cacheA.wasSentByBot(123, 1)).toBe(false);
     } finally {
       cacheA.clearSentMessageCache();
+      cacheA.setTelegramSentMessageStoreForTest(undefined);
+      cacheB.setTelegramSentMessageStoreForTest(undefined);
     }
   });
 });
@@ -3070,6 +3131,51 @@ describe("editMessageTelegram", () => {
       }),
     ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses editMessageCaption when requested for media captions", async () => {
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "Media **caption**", {
+      token: "tok",
+      cfg: {},
+      editMode: "caption",
+      buttons: [[{ text: "Open", url: "https://example.com" }]],
+    });
+
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const captionParams = requireRecord(
+      firstMockCall(botApi.editMessageCaption, "editMessageCaption call")[2],
+      "caption edit params",
+    );
+    expect(captionParams.caption).toBe("Media <b>caption</b>");
+    expect(captionParams.parse_mode).toBe("HTML");
+    expect(captionParams.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+    });
+  });
+
+  it("falls back to editMessageCaption when Telegram reports a media message has no text", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: there is no text in the message to edit"),
+    );
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "New caption", {
+      token: "tok",
+      cfg: {},
+      editMode: "auto",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const captionParams = requireRecord(
+      firstMockCall(botApi.editMessageCaption, "fallback editMessageCaption call")[2],
+      "fallback caption edit params",
+    );
+    expect(captionParams.caption).toBe("New caption");
+    expect(captionParams.parse_mode).toBe("HTML");
   });
 
   it("derives readable plain text when Telegram rejects edited HTML", async () => {

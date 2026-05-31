@@ -95,10 +95,7 @@ export function collectVoiceCallLegacyConfigIssues(value: unknown): VoiceCallLeg
       message: "Move streaming.vadThreshold to streaming.providers.openai.vadThreshold.",
     });
   }
-  if (
-    realtimeAgentContext &&
-    Object.prototype.hasOwnProperty.call(realtimeAgentContext, "includeSystemPrompt")
-  ) {
+  if (realtimeAgentContext && Object.hasOwn(realtimeAgentContext, "includeSystemPrompt")) {
     issues.push({
       path: "realtime.agentContext.includeSystemPrompt",
       replacement: "realtime.agentContext",
@@ -250,10 +247,7 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   } else if (typeof streaming?.vadThreshold === "number") {
     changes.push(`Removed invalid ${configPathPrefix}.streaming.vadThreshold.`);
   }
-  if (
-    realtimeAgentContext &&
-    Object.prototype.hasOwnProperty.call(realtimeAgentContext, "includeSystemPrompt")
-  ) {
+  if (realtimeAgentContext && Object.hasOwn(realtimeAgentContext, "includeSystemPrompt")) {
     changes.push(`Removed ${configPathPrefix}.realtime.agentContext.includeSystemPrompt.`);
   }
 

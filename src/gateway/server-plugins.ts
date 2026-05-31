@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -21,7 +22,6 @@ import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type {

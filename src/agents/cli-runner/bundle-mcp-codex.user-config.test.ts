@@ -162,6 +162,34 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     expect(patch).toBeUndefined();
   });
 
+  it("omits disabled user MCP servers from Codex app-server projection", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          disabled: {
+            enabled: false,
+            transport: "streamable-http",
+            url: "https://disabled.example.com/mcp",
+          },
+          enabled: {
+            transport: "stdio",
+            command: "node",
+            args: ["enabled-mcp.js"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        enabled: {
+          command: "node",
+          args: ["enabled-mcp.js"],
+        },
+      },
+    });
+  });
+
   it("normalizes Codex agent scopes before matching", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch(
       {

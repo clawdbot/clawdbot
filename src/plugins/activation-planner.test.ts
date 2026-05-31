@@ -59,7 +59,7 @@ describe("activation planner", () => {
             onAgentHarnesses: ["codex"],
           },
           setup: {
-            providers: [{ id: "openai-codex" }],
+            providers: [{ id: "openai" }],
           },
           channels: [],
           cliBackends: [],
@@ -158,7 +158,7 @@ describe("activation planner", () => {
       resolveManifestActivationPluginIds({
         trigger: {
           kind: "provider",
-          provider: "openai-codex",
+          provider: "openai",
         },
       }),
     ).toEqual(["openai"]);
@@ -287,22 +287,7 @@ describe("activation planner", () => {
       {
         pluginId: "openai",
         origin: "bundled",
-        reasons: ["manifest-provider-owner"],
-      },
-    ]);
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "provider",
-          provider: "openai-codex",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["manifest-setup-provider-owner"],
+        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
       },
     ]);
 

@@ -2,12 +2,8 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
-import {
-  openaiCodexMediaUnderstandingProvider,
-  openaiMediaUnderstandingProvider,
-} from "./media-understanding-provider.js";
+import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import {
   resolveOpenAIPromptOverlayMode,
@@ -45,14 +41,12 @@ export default definePluginEntry({
       },
     });
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
-    api.registerProvider(buildProviderWithPromptContribution(buildOpenAICodexProviderPlugin()));
     api.registerMemoryEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider());
     api.registerRealtimeVoiceProvider(buildOpenAIRealtimeVoiceProvider());
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
-    api.registerMediaUnderstandingProvider(openaiCodexMediaUnderstandingProvider);
     api.registerVideoGenerationProvider(buildOpenAIVideoGenerationProvider());
   },
 });

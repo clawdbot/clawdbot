@@ -11,6 +11,10 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
     "@agentclientprotocol/claude-agent-acp@0.37.0",
     "patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch",
   ],
+  [
+    "@agentclientprotocol/claude-agent-acp@0.39.0",
+    "patches/@agentclientprotocol__claude-agent-acp@0.39.0.patch",
+  ],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
 ]);

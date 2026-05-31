@@ -1,9 +1,9 @@
-import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 

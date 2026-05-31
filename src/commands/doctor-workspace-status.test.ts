@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as noteModule from "../../packages/terminal-core/src/note.js";
 import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
 } from "../plugins/status.test-helpers.js";
-import * as noteModule from "../terminal/note.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({

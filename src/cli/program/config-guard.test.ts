@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { note } from "../../terminal/note.js";
+import { note } from "../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -211,6 +211,9 @@ describe("ensureConfigReady", () => {
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
     ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
     ["Telegram bot info cache", "telegram/bot-info-default.json"],
+    ["Telegram update offset", "telegram/update-offset-default.json"],
+    ["Telegram sticker cache", "telegram/sticker-cache.json"],
+    ["Telegram thread bindings", "telegram/thread-bindings-default.json"],
     ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {

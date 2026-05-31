@@ -1,3 +1,7 @@
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -26,16 +30,24 @@ async function resolveBotUserId(
   client: MattermostClient,
   cacheKey: string,
 ): Promise<string | null> {
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
   const cached = botUserIdCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.userId;
+  if (cached) {
+    if (now !== undefined && cached.expiresAt > now) {
+      return cached.userId;
+    }
+    botUserIdCache.delete(cacheKey);
   }
   const me = await fetchMattermostMe(client);
   const userId = me?.id?.trim();
   if (!userId) {
     return null;
   }
-  botUserIdCache.set(cacheKey, { userId, expiresAt: Date.now() + BOT_USER_CACHE_TTL_MS });
+  const expiresAt = resolveExpiresAtMsFromDurationMs(BOT_USER_CACHE_TTL_MS, { nowMs: rawNow });
+  if (expiresAt !== undefined) {
+    botUserIdCache.set(cacheKey, { userId, expiresAt });
+  }
   return userId;
 }
 

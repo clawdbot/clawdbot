@@ -1,7 +1,7 @@
 import {
   hasNonEmptyString as sharedHasNonEmptyString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "../../../packages/normalization-core/src/string-coerce.js";
 import { MESSAGE_ACTION_TARGET_MODE } from "./message-action-spec.js";
 
 export const hasNonEmptyString = sharedHasNonEmptyString;

@@ -751,7 +751,7 @@ describe("config help copy quality", () => {
 
   it("documents cron run-log retention controls", () => {
     const runLog = FIELD_HELP["cron.runLog"];
-    expect(runLog.includes("cron/runs")).toBe(true);
+    expect(runLog.includes("SQLite")).toBe(true);
 
     const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
     expect(maxBytes.includes("2mb")).toBe(true);

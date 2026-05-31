@@ -437,7 +437,7 @@ describe("handleCompactCommand", () => {
           channels: { whatsapp: { allowFrom: ["*"] } },
           models: {
             providers: {
-              "openai-codex": {
+              openai: {
                 models: [{ id: "gpt-5.5", contextWindow: 258_000 }],
               },
             },

@@ -45,7 +45,7 @@ export type MatrixThreadBindingManager = {
 };
 
 type MatrixThreadBindingManagerCacheEntry = {
-  filePath: string;
+  storageKey: string;
   manager: MatrixThreadBindingManager;
 };
 

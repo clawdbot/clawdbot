@@ -1,8 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
   sessionId: string;

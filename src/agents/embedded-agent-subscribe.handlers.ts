@@ -33,7 +33,6 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return handler();
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-        return;
       }
     };
 
@@ -136,9 +135,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         scheduleEvent(evt, () => {
           return handleAgentEnd(ctx);
         });
-        return;
       default:
-        return;
     }
   };
 }

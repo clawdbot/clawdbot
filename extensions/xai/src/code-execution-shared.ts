@@ -9,7 +9,7 @@ import {
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
-import { type XaiWebSearchResponse } from "./web-search-shared.js";
+import type { XaiWebSearchResponse } from "./web-search-shared.js";
 
 const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";

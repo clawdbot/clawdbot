@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { normalizeToolName } from "./tool-policy.js";

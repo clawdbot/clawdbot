@@ -1,7 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSandboxSessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-resolution.js";
 
 export {
@@ -39,7 +39,7 @@ export function resolveSandboxedSessionToolContext(params: {
   const restrictToSpawned =
     params.sandboxed === true &&
     visibility === "spawned" &&
-    !!requesterInternalKey &&
+    Boolean(requesterInternalKey) &&
     !isSubagentSessionKey(requesterInternalKey);
   return {
     mainKey,

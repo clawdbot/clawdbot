@@ -143,7 +143,6 @@ export function createRealtimeVoiceTurnContextTracker<
       if (!turns.includes(handle)) {
         turns.push(handle);
         prune();
-        return;
       }
     },
     close(handle) {

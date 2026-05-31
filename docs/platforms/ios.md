@@ -7,7 +7,7 @@ read_when:
 title: "iOS app"
 ---
 
-Availability: internal preview. The iOS app is not publicly distributed yet.
+Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
 
 ## What it does
 

@@ -36,7 +36,7 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     const result = TtsConfigSchema.safeParse({
       providers: {
         openai: {
-          speed: 5.0,
+          speed: 5,
         },
       },
     });

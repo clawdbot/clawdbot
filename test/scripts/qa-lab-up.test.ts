@@ -1,21 +1,11 @@
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { qaLabUpTesting } from "../../scripts/qa-lab-up.js";
 
 describe("scripts/qa-lab-up", () => {
   it("prints help before loading the Docker runtime", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/qa-lab-up.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 2_000,
-      },
-    );
+    const args = qaLabUpTesting.parseQaLabUpArgs(["--help"]);
 
-    expect(result.status).toBe(0);
-    expect(result.error).toBeUndefined();
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: pnpm qa:lab:up");
+    expect(args.help).toBe(true);
+    expect(qaLabUpTesting.usage()).toContain("Usage: pnpm qa:lab:up");
   });
 });

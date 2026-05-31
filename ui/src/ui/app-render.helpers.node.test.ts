@@ -28,6 +28,27 @@ vi.mock("./app-chat.ts", () => ({
     includeUnknown: true,
     showArchived: false,
   }),
+  scopedAgentParamsForSession: (state: unknown, sessionKey: string) => {
+    if (sessionKey === "global") {
+      return {
+        agentId: (state as { assistantAgentId?: string | null }).assistantAgentId ?? "main",
+      };
+    }
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
+  scopedAgentListParamsForSession: (state: unknown, sessionKey: string) => {
+    if (sessionKey === "global") {
+      return {
+        agentId: (state as { assistantAgentId?: string | null }).assistantAgentId ?? "main",
+      };
+    }
+    if (sessionKey === "unknown") {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : { agentId: "main" };
+  },
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -786,6 +807,7 @@ describe("createChatSession", () => {
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
+        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -796,6 +818,45 @@ describe("createChatSession", () => {
     ]);
     expect(state.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+  });
+
+  it("creates selected global sessions under the same agent used for refresh", async () => {
+    const state = createChatSessionState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "global", kind: "global" })],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:work:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "work",
+        parentSessionKey: "global",
+        emitCommandHooks: true,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+        agentId: "work",
+      },
+    );
+    expect(state.sessionKey).toBe("agent:work:dashboard:new-chat");
   });
 
   it("preserves draft and attachment edits made while session creation is in flight", async () => {
@@ -988,6 +1049,7 @@ describe("switchChatSession", () => {
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
+      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })

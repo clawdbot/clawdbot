@@ -8,7 +8,7 @@ import {
   type Gpt5PromptOverlayMode,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
-const OPENAI_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
+const OPENAI_PROVIDER_IDS = new Set(["openai"]);
 
 export const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
 export const OPENAI_HEARTBEAT_PROMPT_OVERLAY = GPT5_HEARTBEAT_PROMPT_OVERLAY;

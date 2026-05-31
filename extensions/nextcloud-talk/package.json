@@ -9,7 +9,7 @@
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.30"

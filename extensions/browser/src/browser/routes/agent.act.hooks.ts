@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -9,7 +10,6 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
@@ -49,14 +49,12 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const uploadPathsResult = await pathScope(DEFAULT_UPLOAD_DIR, {
-            label: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          }).existing(paths);
-          if (!uploadPathsResult.ok) {
-            res.status(400).json({ error: uploadPathsResult.error });
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            res.status(400).json({ error: resolvedResult.error });
             return;
           }
-          const resolvedPaths = uploadPathsResult.paths;
+          const resolvedPaths = resolvedResult.paths;
 
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (element) {

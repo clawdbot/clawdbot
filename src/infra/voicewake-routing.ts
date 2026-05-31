@@ -1,12 +1,12 @@
 import path from "node:path";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import {
   classifySessionKeyShape,
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { isRecord as isPlainObject } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 type VoiceWakeRouteTarget =

@@ -151,9 +151,9 @@ function createCodexOAuthStore() {
   return {
     version: 1,
     profiles: {
-      "openai-codex:default": {
+      "openai:chatgpt": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: CODEX_TOKEN,
         refresh: "docker-codex-refresh-token",
         expires: Date.now() + 60 * 60 * 1000,
@@ -207,9 +207,9 @@ async function main() {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: `${mock.baseUrl}/backend-api/codex`,
-              api: "openai-codex-responses",
+              api: "openai-chatgpt-responses",
               request: { allowPrivateNetwork: true },
               models: [],
             },

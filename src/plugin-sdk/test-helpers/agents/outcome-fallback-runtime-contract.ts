@@ -1,7 +1,7 @@
 import type { EmbeddedAgentRunResult } from "../../../agents/embedded-agent-runner/types.js";
 
 export const OUTCOME_FALLBACK_RUNTIME_CONTRACT = {
-  primaryProvider: "openai-codex",
+  primaryProvider: "openai",
   primaryModel: "gpt-5.4",
   fallbackProvider: "anthropic",
   fallbackModel: "claude-haiku-3-5",

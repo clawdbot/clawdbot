@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -18,7 +19,7 @@ import {
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
@@ -460,14 +461,16 @@ export function abortEmbeddedAgentRun(
     return true;
   }
 
-  const mode = opts?.mode;
-  if (mode === "compacting") {
+  const abortActiveEmbeddedRunHandles = (params: {
+    shouldAbort: (handle: EmbeddedAgentQueueHandle) => boolean;
+    formatDebugMessage: (sessionId: string) => string;
+  }): boolean => {
     let aborted = false;
     for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      if (!handle.isCompacting()) {
+      if (!params.shouldAbort(handle)) {
         continue;
       }
-      diag.debug(`aborting compacting run: sessionId=${id}`);
+      diag.debug(params.formatDebugMessage(id));
       try {
         handle.abort();
         aborted = true;
@@ -475,20 +478,23 @@ export function abortEmbeddedAgentRun(
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
       }
     }
+    return aborted;
+  };
+
+  const mode = opts?.mode;
+  if (mode === "compacting") {
+    const aborted = abortActiveEmbeddedRunHandles({
+      shouldAbort: (handle) => handle.isCompacting(),
+      formatDebugMessage: (id) => `aborting compacting run: sessionId=${id}`,
+    });
     return abortActiveReplyRuns({ mode }) || aborted;
   }
 
   if (mode === "all") {
-    let aborted = false;
-    for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      diag.debug(`aborting run: sessionId=${id}`);
-      try {
-        handle.abort();
-        aborted = true;
-      } catch (err) {
-        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
-      }
-    }
+    const aborted = abortActiveEmbeddedRunHandles({
+      shouldAbort: () => true,
+      formatDebugMessage: (id) => `aborting run: sessionId=${id}`,
+    });
     return abortActiveReplyRuns({ mode }) || aborted;
   }
 
@@ -611,7 +617,7 @@ export async function waitForActiveEmbeddedRuns(
   opts?: { pollMs?: number },
 ): Promise<{ drained: boolean }> {
   const pollMsRaw = opts?.pollMs ?? 250;
-  const pollMs = Math.max(10, Math.floor(pollMsRaw));
+  const pollMs = resolveTimerTimeoutMs(pollMsRaw, 250, 10);
   if (timeoutMs !== undefined && timeoutMs <= 0) {
     return { drained: getActiveEmbeddedRunCount() === 0 };
   }
@@ -660,7 +666,7 @@ export function waitForEmbeddedAgentRunEnd(
           diag.warn(`wait timeout: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
           resolve(false);
         },
-        Math.max(100, timeoutMs),
+        resolveTimerTimeoutMs(timeoutMs, 100, 100),
       ),
     };
     waiters.add(waiter);

@@ -12,7 +12,7 @@ import {
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { migrateSessionEntries, parseSessionEntries } from "../sessions/index.js";
+import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-manager.js";
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
@@ -172,7 +172,7 @@ export function buildCliSessionHistoryPrompt(params: {
   // alone exceeds the cap.
   const firstEntry = params.messages[0];
   const firstIsCompaction =
-    !!firstEntry &&
+    Boolean(firstEntry) &&
     typeof firstEntry === "object" &&
     (firstEntry as HistoryMessage).role === "compactionSummary";
   const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;

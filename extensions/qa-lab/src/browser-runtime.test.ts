@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   callQaBrowserRequest,
@@ -134,6 +135,28 @@ describe("browser-runtime", () => {
         timeoutMs: 9_000,
       },
       { timeoutMs: 9_000 },
+    );
+  });
+
+  it("caps oversized browser request timeouts", async () => {
+    const env = createEnv();
+
+    await callQaBrowserRequest(env, {
+      method: "GET",
+      path: "/snapshot",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(env.gateway.call).toHaveBeenCalledWith(
+      "browser.request",
+      {
+        method: "GET",
+        path: "/snapshot",
+        query: undefined,
+        body: undefined,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
+      },
+      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });
 

@@ -1,8 +1,10 @@
 import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
 
 describe("Codex native hook relay config", () => {
@@ -250,6 +252,12 @@ describe("Codex native hook relay config", () => {
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
     });
+  });
+
+  it("caps oversized native hook cleanup grace before scheduling", () => {
+    expect(resolveCodexNativeHookRelayUnregisterGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 });
 

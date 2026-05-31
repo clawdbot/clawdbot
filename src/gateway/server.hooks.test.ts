@@ -95,9 +95,17 @@ type HookCronRunCall = {
   sessionKey?: string;
   job?: {
     agentId?: string;
+    createdAtMs?: number;
     payload?: {
       externalContentSource?: string;
       model?: string;
+    };
+    schedule?: {
+      kind?: string;
+      at?: string;
+    };
+    state?: {
+      nextRunAtMs?: number;
     };
   };
 };
@@ -789,6 +797,32 @@ describe("gateway server hooks", () => {
       requireNonEmptyString(thirdBody.runId, "third hook run id");
       expect(thirdBody.runId).not.toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("dispatches agent hooks when the process clock is outside the Date range", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+      try {
+        const response = await postHook(port, "/hooks/agent", {
+          message: "Bad clock",
+          name: "Clock",
+        });
+        expect(response.status).toBe(200);
+        await waitForSystemEvent();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+
+      const call = cronRunCall();
+      expect(call.job?.createdAtMs).toBe(0);
+      expect(call.job?.schedule).toEqual({ kind: "at", at: "1970-01-01T00:00:00.000Z" });
+      expect(call.job?.state?.nextRunAtMs).toBe(0);
+      drainSystemEvents(resolveMainKey());
     });
   });
 

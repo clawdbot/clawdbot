@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { AcpRuntimeError } from "./errors.js";
 import type { AcpRuntime } from "./types.js";
 

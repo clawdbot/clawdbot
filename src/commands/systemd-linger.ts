@@ -1,10 +1,10 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   enableSystemdUserLinger,
   isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 
 export type LingerPrompter = {
   confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;

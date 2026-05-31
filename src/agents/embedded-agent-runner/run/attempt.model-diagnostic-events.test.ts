@@ -553,7 +553,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const stream = {};
     Object.defineProperty(stream, Symbol.asyncIterator, {
       configurable: false,
-      value: async function* () {
+      async *value() {
         yield { type: "text", text: "ok" };
       },
     });

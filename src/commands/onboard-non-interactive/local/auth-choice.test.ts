@@ -22,6 +22,13 @@ vi.mock("../../../plugins/provider-auth-choices.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  applyNonInteractivePluginProviderChoice.mockReset();
+  applyNonInteractivePluginProviderChoice.mockResolvedValue(undefined);
+  resolveNonInteractiveApiKey.mockReset();
+  resolveManifestDeprecatedProviderAuthChoice.mockReset();
+  resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
+  resolveManifestProviderAuthChoices.mockReset();
+  resolveManifestProviderAuthChoices.mockReturnValue([]);
 });
 
 function createRuntime() {
@@ -54,7 +61,7 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("fails with manifest-owned replacement guidance for deprecated auth choices", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
       choiceId: "demo-provider-modern-api",
     } as never);
 

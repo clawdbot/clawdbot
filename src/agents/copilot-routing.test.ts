@@ -125,7 +125,7 @@ describe("modelSelectionShouldEnsureCopilotRuntimePlugin", () => {
     ).toBe(false);
     expect(
       modelSelectionShouldEnsureCopilotRuntimePlugin({
-        model: "openai-codex/gpt-4o",
+        model: "openai/gpt-4o",
         config: emptyCfg,
       }),
     ).toBe(false);

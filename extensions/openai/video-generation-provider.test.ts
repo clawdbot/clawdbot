@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -6,6 +9,7 @@ import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/p
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
+  resolveApiKeyForProviderMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   fetchWithTimeoutMock,
@@ -100,12 +104,6 @@ function streamedVideoResponse(bytes: string): Response {
 }
 
 describe("openai video generation provider", () => {
-  it("declares the openai-codex alias for default-model ordering", () => {
-    const provider = buildOpenAIVideoGenerationProvider();
-
-    expect(provider.aliases).toContain("openai-codex");
-  });
-
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
   });
@@ -118,6 +116,63 @@ describe("openai video generation provider", () => {
       maxVideos: 1,
       maxInputVideos: 1,
     });
+  });
+
+  it("does not advertise video generation for OAuth-only OpenAI profiles", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-openai-video-auth-"));
+    const previousOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:chatgpt": {
+              type: "oauth",
+              provider: "openai",
+              access: "chatgpt-oauth-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        }),
+      );
+
+      expect(buildOpenAIVideoGenerationProvider().isConfigured?.({ agentDir })).toBe(false);
+    } finally {
+      if (previousOpenAIKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAIKey;
+      }
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires an OpenAI API key credential for direct video generation", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "chatgpt-oauth-token",
+      mode: "oauth",
+    } as never);
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "A paper airplane gliding through golden hour light",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelApi: "openai-responses",
+      }),
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("uses JSON for text-only Sora requests", async () => {

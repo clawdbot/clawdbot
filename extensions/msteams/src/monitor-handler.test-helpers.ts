@@ -137,10 +137,9 @@ export function createActivityHandler(
 ): MSTeamsActivityHandler & {
   run: NonNullable<MSTeamsActivityHandler["run"]>;
 } {
-  let handler: MSTeamsActivityHandler & {
+  const handler: MSTeamsActivityHandler & {
     run: NonNullable<MSTeamsActivityHandler["run"]>;
-  };
-  handler = {
+  } = {
     onMessage: () => handler,
     onMembersAdded: () => handler,
     onReactionsAdded: () => handler,

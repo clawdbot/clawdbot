@@ -394,6 +394,52 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("evicts pending accepted agent dedupe entries with invalid run expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const now = Date.now();
+    deps.dedupe.set("agent:invalid-expiry-pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "invalid-expiry-pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: Number.POSITIVE_INFINITY,
+      },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:invalid-expiry-pending-agent")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("aborts active runs with invalid expiry timestamps", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-invalid-expiry";
+    const activeRun = createActiveRun("main");
+    activeRun.expiresAtMs = Number.POSITIVE_INFINITY;
+    deps.chatAbortControllers.set(runId, activeRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(activeRun.controller.signal.aborted).toBe(true);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));

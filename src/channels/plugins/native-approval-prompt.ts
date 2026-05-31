@@ -1,4 +1,4 @@
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelApprovalCapability } from "./approvals.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 

@@ -520,7 +520,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     } as OpenClawConfig;
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4-mini",
       },
       authStorage: {
@@ -539,9 +539,9 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.4-mini");
-    expect(result.selection.runtimeProvider).toBe("openai-codex");
+    expect(result.selection.runtimeProvider).toBe("openai");
     expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openai-codex",
+      "openai",
       "gpt-5.4-mini",
       expect.any(String),
       cfg,
@@ -551,7 +551,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     );
     expect(
       (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 });
 

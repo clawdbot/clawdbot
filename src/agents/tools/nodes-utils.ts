@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
@@ -145,7 +145,7 @@ export function resolveNodeIdFromList(
 ): string {
   return resolveNodeIdFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    pickDefaultNode,
   });
 }
 
@@ -165,6 +165,6 @@ export async function resolveNode(
   const nodes = await loadNodes(opts);
   return resolveNodeFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    pickDefaultNode,
   });
 }

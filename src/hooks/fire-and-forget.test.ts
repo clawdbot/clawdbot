@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
@@ -80,5 +81,23 @@ describe("fireAndForgetBoundedHook", () => {
     await vi.waitFor(() => {
       expect(starts).toEqual(["first", "second"]);
     });
+  });
+
+  it("caps oversized hook timeout timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const logger = vi.fn();
+
+      fireAndForgetBoundedHook(async () => new Promise(() => {}), "hook failed", logger, {
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      expect(logger).toHaveBeenCalledWith(`hook failed: timed out after ${MAX_TIMER_TIMEOUT_MS}ms`);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

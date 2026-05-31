@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   getShellEnvAppliedKeys,
   getShellPathFromLoginShell,

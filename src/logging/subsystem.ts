@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
+import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
   getConsoleSettings,

@@ -1,59 +1,51 @@
 ---
-summary: "Rich output shortcode protocol for embeds, media, audio hints, and replies"
+summary: "Rich output protocol for structured media, embeds, audio hints, and replies"
 read_when:
   - Changing assistant output rendering in the Control UI
-  - Debugging `[embed ...]`, `MEDIA:`, reply, or audio presentation directives
+  - Debugging `[embed ...]`, structured media, reply, or audio presentation directives
 title: "Rich output protocol"
 ---
 
 Assistant output can carry a small set of delivery/render directives:
 
-- `MEDIA:` for attachment delivery
+- structured `mediaUrl` / `mediaUrls` fields for attachment delivery
 - `[[audio_as_voice]]` for audio presentation hints
 - `[[reply_to_current]]` / `[[reply_to:<id>]]` for reply metadata
 - `[embed ...]` for Control UI rich rendering
 
-Remote `MEDIA:` attachments must be public `https:` URLs. Plain `http:`,
+Remote media attachments must be public `https:` URLs. Plain `http:`,
 loopback, link-local, private, and internal hostnames are ignored as attachment
 directives; server-side media fetchers still enforce their own network guards.
 
-Local `MEDIA:` attachments can use absolute paths, workspace-relative paths, or
+Local media attachments can use absolute paths, workspace-relative paths, or
 home-relative `~/` paths. They still pass through the agent file-read policy and
 media type checks before delivery.
 
 <Warning>
-`MEDIA:` is parsed only as plain text. Wrapping the directive in Markdown
-formatting (bold, inline code, fenced code) prevents the parser from
-recognizing it, and the attachment is silently dropped from delivery.
+Do not emit text commands for attachments from tools, plugins, streaming blocks,
+browser output, or message actions. Use structured media fields instead.
 
-Valid:
+Valid message-tool payload:
 
-```text
-MEDIA:/workspace/image.png
+```json
+{ "message": "Here is your image.", "mediaUrl": "/workspace/image.png" }
 ```
 
-Invalid (parsed as prose, no attachment delivered):
-
-```text
-**MEDIA:/workspace/image.png**
-`MEDIA:/workspace/image.png`
-Here is your image: MEDIA:/workspace/image.png
-```
-
-Keep `MEDIA:` on its own line, in plain text, with no surrounding formatting.
+Legacy final assistant reply text may still be normalized for compatibility, but
+it is not a general plugin/tool protocol.
 </Warning>
 
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
 adapter; Telegram does this so `![alt](url)` can still become a media reply.
 
-These directives are separate. `MEDIA:` and reply/voice tags remain delivery metadata; `[embed ...]` is the web-only rich render path.
-Trusted tool-result media uses the same `MEDIA:` / `[[audio_as_voice]]` parser before delivery, so text tool outputs can still mark an audio attachment as a voice note.
+These directives are separate. Structured media fields and reply/voice tags are
+delivery metadata; `[embed ...]` is the web-only rich render path.
 
-When block streaming is enabled, `MEDIA:` remains single-delivery metadata for a
-turn. If the same media URL is sent in a streamed block and repeated in the final
-assistant payload, OpenClaw delivers the attachment once and strips the duplicate
-from the final payload.
+When block streaming is enabled, media must be carried on structured payload
+fields. If the same media URL is sent in a streamed block and repeated in the
+final assistant payload, OpenClaw delivers the attachment once and strips the
+duplicate from the final payload.
 
 ## `[embed ...]`
 
@@ -72,7 +64,7 @@ Rules:
 - Only URL-backed embeds are rendered. Use `ref="..."` or `url="..."`.
 - Block-form inline HTML embed shortcodes are not rendered.
 - The web UI strips the shortcode from visible text and renders the embed inline.
-- `MEDIA:` is not an embed alias and should not be used for rich embed rendering.
+- Structured media is not an embed alias and should not be used for rich embed rendering.
 
 ## Stored rendering shape
 

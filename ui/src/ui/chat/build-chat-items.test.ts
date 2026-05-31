@@ -194,6 +194,7 @@ describe("buildChatItems", () => {
         key: "stream:main:1",
         text: "Visible reply",
         startedAt: 1,
+        isStreaming: true,
       },
     ]);
   });
@@ -389,6 +390,7 @@ describe("buildChatItems", () => {
       kind: "stream",
       text: "Older streamed output.",
       startedAt: 1_000,
+      isStreaming: false,
     });
     expect(requireGroup(items[1]).role).toBe("assistant");
   });
@@ -406,6 +408,7 @@ describe("buildChatItems", () => {
       kind: "stream",
       text: "Timestamped stream.",
       startedAt: Number.MAX_SAFE_INTEGER,
+      isStreaming: false,
     });
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });

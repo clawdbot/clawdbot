@@ -77,6 +77,35 @@ describe("resolveTeamGroupId", () => {
     expect(fetchGraphJson).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cache team ids when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-boundary" } as never);
+
+      await resolveTeamGroupId("tok", "team-boundary");
+      await resolveTeamGroupId("tok", "team-boundary");
+
+      expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts cached team ids when the current clock is invalid", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-invalid-clock" } as never);
+
+    await resolveTeamGroupId("tok", "team-invalid-clock");
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      await resolveTeamGroupId("tok", "team-invalid-clock");
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to conversationTeamId when Graph returns no id", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
 

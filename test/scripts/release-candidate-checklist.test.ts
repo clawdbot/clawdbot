@@ -13,6 +13,40 @@ describe("release candidate checklist", () => {
     );
   });
 
+  it("stops parsing options after the argument terminator", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14-beta.3",
+      "--full-release-run",
+      "111",
+      "--npm-preflight-run",
+      "222",
+      "--skip-dispatch",
+      "--",
+      "--plugin-publish-scope",
+      "selected",
+    ]);
+
+    expect(options.pluginPublishScope).toBe("all-publishable");
+  });
+
+  it("accepts package-manager argument separators before script options", () => {
+    const options = parseArgs([
+      "--",
+      "--tag",
+      "v2026.5.14-beta.3",
+      "--full-release-run",
+      "111",
+      "--npm-preflight-run",
+      "222",
+      "--skip-dispatch",
+      "--skip-parallels",
+    ]);
+
+    expect(options.tag).toBe("v2026.5.14-beta.3");
+    expect(options.skipParallels).toBe(true);
+  });
+
   it("builds the gated release publish command from green evidence inputs", () => {
     const options = {
       ...parseArgs([

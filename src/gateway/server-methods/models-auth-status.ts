@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
@@ -21,7 +22,6 @@ import {
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
@@ -29,6 +29,7 @@ import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-us
 import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -153,14 +154,11 @@ function buildExpiry(
   remainingMs: number | undefined,
   expiresAt: number | undefined,
 ): ModelAuthExpiry | undefined {
-  if (
-    typeof expiresAt !== "number" ||
-    !Number.isFinite(expiresAt) ||
-    typeof remainingMs !== "number"
-  ) {
+  const validExpiresAt = asDateTimestampMs(expiresAt);
+  if (validExpiresAt === undefined || typeof remainingMs !== "number") {
     return undefined;
   }
-  return { at: expiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
+  return { at: validExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
 }
 
 function providerDisplayName(provider: string): string {
@@ -227,7 +225,7 @@ export function aggregateOAuthStatus(
   }
   const expirable = oauth
     .map((p) => p.expiresAt)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
   const remainingMs = expiresAt !== undefined ? expiresAt - now : undefined;
   return { status, expiresAt, remainingMs };
@@ -238,7 +236,12 @@ function mapProvider(
   usageByProvider: Map<string, { windows: UsageWindow[]; plan?: string }>,
   expectsOAuthSet: Set<string>,
 ): ModelAuthStatusProvider {
-  const usageKey = resolveUsageProviderId(prov.provider);
+  const usageProfile = prov.profiles.find(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  const usageKey = resolveUsageProviderId(prov.provider, {
+    credentialType: usageProfile?.type,
+  });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
   const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
   return {
@@ -432,7 +435,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ...new Set(
           authHealth.profiles
             .filter((p) => p.type === "oauth" || p.type === "token")
-            .map((p) => resolveUsageProviderId(p.provider))
+            .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
             .filter((id): id is UsageProviderId => Boolean(id)),
         ),
       ];

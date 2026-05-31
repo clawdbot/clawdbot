@@ -74,7 +74,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.profileId).toBe("work");
   });
 
-  it("uses Codex execution provider for OpenAI model refs with Codex runtime policy", () => {
+  it("keeps OpenAI as execution provider for OpenAI model refs with Codex runtime policy", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -91,7 +91,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     );
     expect(selection.provider).toBe("openai");
     expect(selection.modelId).toBe("gpt-5.4-mini");
-    expect(selection.runtimeProvider).toBe("openai-codex");
+    expect(selection.runtimeProvider).toBe("openai");
   });
 
   it("falls back to runtime default model when no explicit model is configured", () => {

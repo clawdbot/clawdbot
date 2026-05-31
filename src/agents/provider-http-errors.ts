@@ -1,9 +1,9 @@
-export { asFiniteNumber } from "../shared/number-coercion.js";
+export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { readResponseWithLimit } from "../media/read-response-with-limit.js";
-import { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
 export { asBoolean } from "../utils/boolean.js";
-export { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
+export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
 const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;

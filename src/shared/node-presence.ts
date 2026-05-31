@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "./string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export const NODE_PRESENCE_ALIVE_EVENT = "node.presence.alive";
 

@@ -171,6 +171,23 @@ describe("gateway --force helpers", () => {
     vi.useRealTimers();
   });
 
+  it("bounds oversized force-free intervals by the remaining timeout", async () => {
+    (execFileSync as unknown as Mock).mockReturnValue(["p42", "cnode", ""].join("\n"));
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    await expect(
+      forceFreePortAndWait(18789, {
+        timeoutMs: 2,
+        intervalMs: Number.MAX_SAFE_INTEGER,
+        sigtermTimeoutMs: 1,
+      }),
+    ).rejects.toThrow(/still has listeners/);
+
+    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(killMock).toHaveBeenCalledWith(42, "SIGKILL");
+  });
+
   it("falls back to fuser when lsof is permission denied", async () => {
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
       if (cmd.includes("lsof")) {

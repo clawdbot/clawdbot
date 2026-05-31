@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -174,7 +174,12 @@ afterEach(async () => {
 });
 
 describe("state migrations", () => {
-  it("detects legacy sessions, agent files, channel auth, and allowFrom copies", async () => {
+  let detectionCase: Awaited<ReturnType<typeof detectLegacyStateMigrations>> & {
+    stateDir: string;
+    env: NodeJS.ProcessEnv;
+  };
+
+  beforeAll(async () => {
     const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
     const detected = await detectLegacyStateMigrations({
@@ -182,23 +187,26 @@ describe("state migrations", () => {
       env,
       homedir: () => root,
     });
+    detectionCase = { ...detected, stateDir, env };
+  });
 
-    expect(detected.targetAgentId).toBe("worker-1");
-    expect(detected.targetMainKey).toBe("desk");
-    expect(detected.sessions.hasLegacy).toBe(true);
-    expect(detected.sessions.legacyKeys).toEqual(["group:mobile-room", "group:legacy-room"]);
-    expect(detected.agentDir.hasLegacy).toBe(true);
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
-      path.join(stateDir, "credentials", "mobileauth", "default", "creds.json"),
-      resolveChannelAllowFromPath("chatapp", env, "alpha"),
+  it("detects legacy sessions, agent files, channel auth, and allowFrom copies", () => {
+    expect(detectionCase.targetAgentId).toBe("worker-1");
+    expect(detectionCase.targetMainKey).toBe("desk");
+    expect(detectionCase.sessions.hasLegacy).toBe(true);
+    expect(detectionCase.sessions.legacyKeys).toEqual(["group:mobile-room", "group:legacy-room"]);
+    expect(detectionCase.agentDir.hasLegacy).toBe(true);
+    expect(detectionCase.channelPlans.hasLegacy).toBe(true);
+    expect(detectionCase.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
+      path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json"),
+      resolveChannelAllowFromPath("chatapp", detectionCase.env, "alpha"),
     ]);
-    expect(detected.preview).toEqual([
-      `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
-      `- Sessions: canonicalize legacy keys in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
-      `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
-      `- MobileAuth auth creds.json: ${path.join(stateDir, "credentials", "creds.json")} → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
-      `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", env)} → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
+    expect(detectionCase.preview).toEqual([
+      `- Sessions: ${path.join(detectionCase.stateDir, "sessions")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions")}`,
+      `- Sessions: canonicalize legacy keys in ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
+      `- Agent dir: ${path.join(detectionCase.stateDir, "agent")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "agent")}`,
+      `- MobileAuth auth creds.json: ${path.join(detectionCase.stateDir, "credentials", "creds.json")} → ${path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
+      `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", detectionCase.env)} → ${resolveChannelAllowFromPath("chatapp", detectionCase.env, "alpha")}`,
     ]);
   });
 

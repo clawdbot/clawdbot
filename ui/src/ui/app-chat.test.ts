@@ -149,11 +149,25 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatAvatarReason: null,
     chatSideResult: null,
     chatSideResultTerminalRuns: new Set<string>(),
+    sessionsLoading: false,
+    sessionsResult: null,
+    sessionsResultAgentId: null,
+    sessionsError: null,
+    sessionsFilterActive: "0",
+    sessionsFilterLimit: "50",
+    sessionsIncludeGlobal: true,
+    sessionsIncludeUnknown: true,
+    sessionsShowArchived: false,
+    sessionsExpandedCheckpointKey: null,
+    sessionsCheckpointItemsByKey: {},
+    sessionsCheckpointLoadingKey: null,
+    sessionsCheckpointBusyKey: null,
+    sessionsCheckpointErrorByKey: {},
     chatModelOverrides: {},
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -235,7 +249,7 @@ describe("refreshChat", () => {
       "sessions list payload",
     );
     expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.agentId).toBe("main");
     expect(sessionsListPayload.includeGlobal).toBe(true);
     expect(sessionsListPayload.includeUnknown).toBe(true);
     expect(sessionsListPayload.limit).toBe(50);
@@ -302,6 +316,28 @@ describe("refreshChat", () => {
     expect(sessionsListPayload.includeGlobal).toBe(true);
   });
 
+  it("scopes agent session refresh rows before the list limit", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:dashboard",
+      agentsList: { defaultId: "main", mainKey: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "agent direct sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.limit).toBe(50);
+    expect(sessionsListPayload.includeGlobal).toBe(true);
+  });
+
   it("uses hello default for global chat refresh before agents list loads", async () => {
     const request = vi.fn(() => new Promise<unknown>(() => undefined));
     const host = makeHost({
@@ -333,6 +369,33 @@ describe("refreshChat", () => {
     expect(sessionsListPayload.agentId).toBe("ops");
   });
 
+  it("keeps unknown chat refresh session rows unscoped", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "unknown",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "unknown",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "unknown sessions list payload",
+    );
+    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.includeUnknown).toBe(true);
+  });
+
   it("can wait for history without waiting for secondary metadata refreshes", async () => {
     const history = createDeferred<unknown>();
     const requestUpdate = vi.fn();
@@ -362,6 +425,86 @@ describe("refreshChat", () => {
     ]);
     expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
     expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("drains a restored queue after refresh proves the selected session is idle", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("main", { hasActiveRun: false, status: "done" })]);
+      }
+      return {};
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: [{ id: "queued-1", text: "after reload", createdAt: 1 }],
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "after reload",
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+  });
+
+  it("keeps a restored queue while the selected session is still active", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("main", { hasActiveRun: true, status: "running" })]);
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after active run", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.chatRunId).toBeNull();
+  });
+
+  it("keeps a restored queue when idle proof is stale after sessions refresh fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        throw new Error("sessions unavailable");
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after reload", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+      sessionsResult: createSessionsResult([row("main", { hasActiveRun: false, status: "done" })]),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.sessionsError).toContain("sessions unavailable");
   });
 });
 
@@ -672,7 +815,7 @@ describe("refreshChat", () => {
         "sessions list payload",
       );
       expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-      expect(sessionsListPayload).not.toHaveProperty("agentId");
+      expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
       expect(sessionsListPayload.limit).toBe(50);

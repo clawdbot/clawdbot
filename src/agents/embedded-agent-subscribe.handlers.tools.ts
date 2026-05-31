@@ -1,4 +1,12 @@
 import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
@@ -19,11 +27,6 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  asOptionalObjectRecord,
-  asOptionalRecord as readRecordField,
-} from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
@@ -59,7 +62,6 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./agent-tools.before-tool-call.js");
 type ChannelToolProgress = {
   text: string;
@@ -70,9 +72,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 );
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
-);
-const mediaParseModuleLoader = createLazyImportLoader<MediaParseModule>(
-  () => import("../media/parse.js"),
 );
 const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
   () => import("./agent-tools.before-tool-call.js"),
@@ -104,10 +103,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
-}
-
-function loadMediaParse(): Promise<MediaParseModule> {
-  return mediaParseModuleLoader.load();
 }
 
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
@@ -628,20 +623,6 @@ function queuePendingToolMedia(
   }
 }
 
-async function collectEmittedToolOutputMediaUrls(
-  toolName: string,
-  outputText: string,
-  result: unknown,
-  trustedLocalMediaToolNames?: ReadonlySet<string>,
-): Promise<string[]> {
-  const { splitMediaFromOutput } = await loadMediaParse();
-  const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
-  if (mediaUrls.length === 0) {
-    return [];
-  }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
-}
-
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -748,7 +729,6 @@ async function emitToolResultOutput(params: {
     !Array.isArray((result as { details?: { media?: unknown } }).details?.media),
   );
   const approvalPending = readExecApprovalPendingDetails(result);
-  let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
     if (!ctx.params.onToolResult) {
       return;
@@ -825,15 +805,7 @@ async function emitToolResultOutput(params: {
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(rawToolName, meta, outputText, result);
-      if (ctx.params.toolResultFormat === "plain") {
-        emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
-          rawToolName,
-          outputText,
-          result,
-          ctx.trustedLocalMediaToolNames,
-        );
-      }
+      ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
     }
     if (!hasStructuredMedia) {
       return;
@@ -847,15 +819,11 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const pendingMediaUrls =
-    emittedToolOutputMediaUrls.length === 0
-      ? mediaUrls
-      : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
-  if (pendingMediaUrls.length === 0) {
+  if (mediaUrls.length === 0) {
     return;
   }
   queuePendingToolMedia(ctx, {
-    mediaUrls: pendingMediaUrls,
+    mediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
     ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
   });

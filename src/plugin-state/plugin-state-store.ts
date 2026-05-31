@@ -38,6 +38,7 @@ export {
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   probePluginStateStore,
+  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -113,7 +114,7 @@ function validateOptionalTtlMs(
   if (value == null) {
     return undefined;
   }
-  if (!Number.isInteger(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw invalidInput("plugin state ttlMs must be a positive integer", operation);
   }
   return value;

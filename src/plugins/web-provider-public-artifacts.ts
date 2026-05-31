@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";

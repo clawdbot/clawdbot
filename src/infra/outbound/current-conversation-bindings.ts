@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { saveJsonFile } from "../../plugin-sdk/json-store.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
@@ -46,9 +51,15 @@ function resolveBindingsFilePath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
-  return typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
-    ? record.expiresAt <= now
-    : false;
+  if (record.expiresAt === undefined) {
+    return false;
+  }
+  const expiresAt = asDateTimestampMs(record.expiresAt);
+  if (expiresAt === undefined) {
+    return true;
+  }
+  const nowMs = asDateTimestampMs(now);
+  return nowMs !== undefined && !isFutureDateTimestampMs(expiresAt, { nowMs });
 }
 
 function toPersistedFile(): PersistedCurrentConversationBindingsFile {
@@ -159,11 +170,24 @@ export async function bindGenericCurrentConversation(
     return null;
   }
   loadBindingsIntoMemory();
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
+  if (now === undefined) {
+    return null;
+  }
   const ttlMs =
     typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
+  const expiresAt =
+    ttlMs === undefined
+      ? undefined
+      : ttlMs === 0
+        ? now
+        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (ttlMs !== undefined && expiresAt === undefined) {
+    return null;
+  }
   const key = buildConversationKey(conversation);
   const existing = pruneExpiredBinding(key);
   const record: SessionBindingRecord = {
@@ -173,7 +197,7 @@ export async function bindGenericCurrentConversation(
     conversation,
     status: "active",
     boundAt: now,
-    ...(ttlMs != null ? { expiresAt: now + ttlMs } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
     metadata: {
       ...existing?.metadata,
       ...input.metadata,

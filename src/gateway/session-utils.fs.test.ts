@@ -2107,6 +2107,29 @@ describe("oversized transcript line guards", () => {
     expect(serialized).not.toContain(oversizedContent);
   });
 
+  test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
+    const sessionId = "test-oversized-idless-async";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "w".repeat(300 * 1024);
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({
+        message: { role: "assistant", content: oversizedContent },
+      })}\n`,
+      "utf-8",
+    );
+
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test",
+    });
+
+    expect(out).toHaveLength(1);
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
+    expect(serialized).not.toContain(oversizedContent);
+  });
+
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
     const sessionId = "test-async-title-bounded";
     writeTranscript(

@@ -103,7 +103,6 @@ export function describeOpenAIProviderCatalogContract() {
           switch (params.provider) {
             case "azure-openai-responses":
             case "openai":
-            case "openai-codex":
               return ["openai"];
             default:
               return undefined;
@@ -118,7 +117,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
-          "openai/gpt-*",
+          "openai/gpt-5.5",
         );
       });
 

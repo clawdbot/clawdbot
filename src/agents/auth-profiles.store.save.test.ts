@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
-import { legacyOAuthSidecarTestUtils } from "./auth-profiles/legacy-oauth-sidecar.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
 import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import {
@@ -60,16 +60,16 @@ describe("saveAuthProfileStore", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:one": {
+        "openai:one": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-one",
           refresh: "refresh-one",
           expires: Date.now() + 60_000,
         },
-        "openai-codex:two": {
+        "openai:two": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-two",
           refresh: "refresh-two",
           expires: Date.now() + 60_000,
@@ -157,252 +157,6 @@ describe("saveAuthProfileStore", () => {
       expect(structuredCloneSpy).not.toHaveBeenCalled();
     } finally {
       structuredCloneSpy.mockRestore();
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves legacy oauthRef only as doctor migration metadata during saves", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-oauth-ref-"));
-    const authPath = resolveAuthStorePath(agentDir);
-    const oauthRef = {
-      source: "openclaw-credentials",
-      provider: "openai-codex",
-      id: "0123456789abcdef0123456789abcdef",
-    };
-    try {
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(
-        authPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai-codex:default": {
-                type: "oauth",
-                provider: "openai-codex",
-                expires: Date.now() + 60_000,
-                oauthRef,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      const legacyRuntimeStore = {
-        version: 1,
-        profiles: {
-          "openai-codex:default": {
-            type: "oauth",
-            provider: "openai-codex",
-            expires: Date.now() + 60_000,
-          },
-        },
-      } as unknown as AuthProfileStore;
-
-      saveAuthProfileStore(legacyRuntimeStore, agentDir);
-
-      let parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      expect(parsed.profiles["openai-codex:default"]?.oauthRef).toEqual(oauthRef);
-      expect(ensureAuthProfileStore(agentDir).profiles["openai-codex:default"]).not.toHaveProperty(
-        "oauthRef",
-      );
-
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "new-access-token",
-              refresh: "new-refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-        agentDir,
-      );
-
-      parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      expect(parsed.profiles["openai-codex:default"]).not.toHaveProperty("oauthRef");
-      expect(parsed.profiles["openai-codex:default"]?.access).toBe("new-access-token");
-      expect(parsed.profiles["openai-codex:default"]?.refresh).toBe("new-refresh-token");
-    } finally {
-      clearRuntimeAuthProfileStoreSnapshots();
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps rehydrated legacy oauthRef sidecar tokens runtime-only during ordinary saves", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-oauth-ref-"));
-    const authPath = resolveAuthStorePath(agentDir);
-    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
-    const previousSecretKey = process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
-    process.env.OPENCLAW_OAUTH_DIR = path.join(agentDir, "credentials");
-    process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = "legacy-seed";
-    const oauthRef = {
-      source: "openclaw-credentials" as const,
-      provider: "openai-codex" as const,
-      id: "0123456789abcdef0123456789abcdef",
-    };
-    try {
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(
-        authPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai-codex:default": {
-                type: "oauth",
-                provider: "openai-codex",
-                expires: Date.now() + 60_000,
-                oauthRef,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      const sidecarPath = path.join(resolveOAuthDir(), "auth-profiles", `${oauthRef.id}.json`);
-      await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
-      await fs.writeFile(
-        sidecarPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profileId: "openai-codex:default",
-            provider: "openai-codex",
-            encrypted: legacyOAuthSidecarTestUtils.encryptLegacyOAuthMaterial({
-              ref: oauthRef,
-              profileId: "openai-codex:default",
-              provider: "openai-codex",
-              seed: "legacy-seed",
-              material: {
-                access: "legacy-access-token",
-                refresh: "legacy-refresh-token",
-              },
-            }),
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      const runtimeStore = ensureAuthProfileStore(agentDir);
-      expectProfileFields(runtimeStore.profiles["openai-codex:default"], {
-        access: "legacy-access-token",
-        refresh: "legacy-refresh-token",
-      });
-
-      delete process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
-      const clonedRuntimeStore = JSON.parse(JSON.stringify(runtimeStore)) as AuthProfileStore;
-      saveAuthProfileStore(clonedRuntimeStore, agentDir);
-
-      const parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      expect(parsed.profiles["openai-codex:default"]?.oauthRef).toEqual(oauthRef);
-      expect(parsed.profiles["openai-codex:default"]).not.toHaveProperty("access");
-      expect(parsed.profiles["openai-codex:default"]).not.toHaveProperty("refresh");
-    } finally {
-      if (previousOAuthDir === undefined) {
-        delete process.env.OPENCLAW_OAUTH_DIR;
-      } else {
-        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
-      }
-      if (previousSecretKey === undefined) {
-        delete process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
-      } else {
-        process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = previousSecretKey;
-      }
-      clearRuntimeAuthProfileStoreSnapshots();
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("writes refreshed legacy sidecar tokens inline when they replace runtime sidecar material", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-oauth-ref-"));
-    const authPath = resolveAuthStorePath(agentDir);
-    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
-    process.env.OPENCLAW_OAUTH_DIR = path.join(agentDir, "credentials");
-    const profileId = "openai-codex:default";
-    const oauthRef = {
-      source: "openclaw-credentials",
-      provider: "openai-codex",
-      id: "0123456789abcdef0123456789abcdef",
-    };
-    try {
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(
-        authPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              [profileId]: {
-                type: "oauth",
-                provider: "openai-codex",
-                expires: Date.now() + 60_000,
-                oauthRef,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      const sidecarPath = path.join(resolveOAuthDir(), "auth-profiles", `${oauthRef.id}.json`);
-      await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
-      await fs.writeFile(
-        sidecarPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            profileId,
-            provider: "openai-codex",
-            access: "legacy-access-token",
-            refresh: "legacy-refresh-token",
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      const runtimeStore = ensureAuthProfileStore(agentDir);
-      const refreshedStore: AuthProfileStore = {
-        ...runtimeStore,
-        profiles: {
-          ...runtimeStore.profiles,
-          [profileId]: {
-            ...runtimeStore.profiles[profileId],
-            access: "refreshed-access-token",
-            refresh: "refreshed-refresh-token",
-          } as AuthProfileStore["profiles"][string],
-        },
-      };
-      saveAuthProfileStore(refreshedStore, agentDir);
-
-      const parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      expect(parsed.profiles[profileId]).not.toHaveProperty("oauthRef");
-      expect(parsed.profiles[profileId]?.access).toBe("refreshed-access-token");
-      expect(parsed.profiles[profileId]?.refresh).toBe("refreshed-refresh-token");
-    } finally {
-      if (previousOAuthDir === undefined) {
-        delete process.env.OPENCLAW_OAUTH_DIR;
-      } else {
-        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
-      }
-      clearRuntimeAuthProfileStoreSnapshots();
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
@@ -900,7 +654,7 @@ describe("saveAuthProfileStore", () => {
 
   it("does not persist runtime-only external profiles without an installed snapshot", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-unsnapshotted-"));
-    const profileId = "openai-codex:default";
+    const profileId = "openai:oauth";
 
     try {
       saveAuthProfileStore(
@@ -910,7 +664,7 @@ describe("saveAuthProfileStore", () => {
           profiles: {
             [profileId]: {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               access: "runtime-access",
               refresh: "runtime-refresh",
               expires: 1,
@@ -934,7 +688,7 @@ describe("saveAuthProfileStore", () => {
 
   it("returns active runtime-only external profiles on unscoped reads", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-read-runtime-only-"));
-    const profileId = "openai-codex:default";
+    const profileId = "openai:oauth";
 
     try {
       replaceRuntimeAuthProfileStoreSnapshots([
@@ -947,7 +701,7 @@ describe("saveAuthProfileStore", () => {
             profiles: {
               [profileId]: {
                 type: "oauth",
-                provider: "openai-codex",
+                provider: "openai",
                 access: "runtime-access",
                 refresh: "runtime-refresh",
                 expires: 1,
@@ -965,7 +719,7 @@ describe("saveAuthProfileStore", () => {
       expect(store.runtimeExternalProfileIds).toEqual([profileId]);
       expectProfileFields(store.profiles[profileId], {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "runtime-access",
         refresh: "runtime-refresh",
       });
@@ -1160,6 +914,121 @@ describe("saveAuthProfileStore", () => {
     }
   });
 
+  it("does not rewrite auth secrets when only runtime scheduling state changes", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-only-"));
+    try {
+      const profileId = "anthropic:default";
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-anthropic-plain",
+          },
+        },
+        usageStats: {
+          [profileId]: { lastUsed: 1 },
+        },
+      };
+
+      saveAuthProfileStore(store, agentDir);
+
+      const authPath = resolveAuthStorePath(agentDir);
+      const statePath = resolveAuthStatePath(agentDir);
+      const oldTimestamp = new Date("2001-01-01T00:00:00.000Z");
+      await fs.utimes(authPath, oldTimestamp, oldTimestamp);
+      await fs.utimes(statePath, oldTimestamp, oldTimestamp);
+
+      saveAuthProfileStore(
+        {
+          ...store,
+          usageStats: {
+            [profileId]: { lastUsed: 2 },
+          },
+        },
+        agentDir,
+      );
+
+      expect((await fs.stat(authPath)).mtimeMs).toBe(oldTimestamp.getTime());
+      expect((await fs.stat(statePath)).mtimeMs).toBeGreaterThan(oldTimestamp.getTime());
+
+      const authProfiles = JSON.parse(await fs.readFile(authPath, "utf8")) as {
+        usageStats?: unknown;
+      };
+      expect(authProfiles.usageStats).toBeUndefined();
+
+      const authState = JSON.parse(await fs.readFile(statePath, "utf8")) as {
+        usageStats?: Record<string, { lastUsed?: number }>;
+      };
+      expect(authState.usageStats?.[profileId]?.lastUsed).toBe(2);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "repairs auth secrets permissions when the payload is unchanged",
+    async () => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-permissions-"));
+      try {
+        const store: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-anthropic-plain",
+            },
+          },
+        };
+
+        saveAuthProfileStore(store, agentDir);
+
+        const authPath = resolveAuthStorePath(agentDir);
+        await fs.chmod(authPath, 0o644);
+
+        saveAuthProfileStore(store, agentDir);
+
+        expect((await fs.stat(authPath)).mode & 0o777).toBe(0o600);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not rewrite unchanged runtime scheduling state", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-same-"));
+    try {
+      const profileId = "anthropic:default";
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-anthropic-plain",
+          },
+        },
+        usageStats: {
+          [profileId]: { lastUsed: 1 },
+        },
+      };
+
+      saveAuthProfileStore(store, agentDir);
+
+      const statePath = resolveAuthStatePath(agentDir);
+      const oldTimestamp = new Date("2001-01-01T00:00:00.000Z");
+      await fs.utimes(statePath, oldTimestamp, oldTimestamp);
+
+      saveAuthProfileStore(store, agentDir);
+
+      expect((await fs.stat(statePath)).mtimeMs).toBe(oldTimestamp.getTime());
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist unchanged inherited main OAuth when saving secondary local updates", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-inherited-"));
     const stateDir = path.join(root, ".openclaw");
@@ -1171,9 +1040,9 @@ describe("saveAuthProfileStore", () => {
       saveAuthProfileStore({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:oauth": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "main-access-token",
             refresh: "main-refresh-token",
             expires: Date.now() + 60_000,
@@ -1182,7 +1051,7 @@ describe("saveAuthProfileStore", () => {
       });
 
       const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
-      expectProfileFields(localUpdateStore.profiles["openai-codex:default"], {
+      expectProfileFields(localUpdateStore.profiles["openai:oauth"], {
         type: "oauth",
         refresh: "main-refresh-token",
       });
@@ -1203,14 +1072,14 @@ describe("saveAuthProfileStore", () => {
         type: "api_key",
         provider: "openai",
       });
-      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+      expect(child.profiles["openai:oauth"]).toBeUndefined();
 
       saveAuthProfileStore({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:oauth": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "main-refreshed-access-token",
             refresh: "main-refreshed-refresh-token",
             expires: Date.now() + 120_000,
@@ -1218,7 +1087,7 @@ describe("saveAuthProfileStore", () => {
         },
       });
 
-      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai:oauth"], {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",
@@ -1241,9 +1110,9 @@ describe("saveAuthProfileStore", () => {
       saveAuthProfileStore({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:oauth": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "main-old-access-token",
             refresh: "main-old-refresh-token",
             expires: Date.now() + 60_000,
@@ -1254,7 +1123,7 @@ describe("saveAuthProfileStore", () => {
       });
 
       const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
-      expectProfileFields(localUpdateStore.profiles["openai-codex:default"], {
+      expectProfileFields(localUpdateStore.profiles["openai:oauth"], {
         type: "oauth",
         refresh: "main-old-refresh-token",
       });
@@ -1262,9 +1131,9 @@ describe("saveAuthProfileStore", () => {
       saveAuthProfileStore({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:oauth": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "main-refreshed-access-token",
             refresh: "main-refreshed-refresh-token",
             expires: Date.now() + 120_000,
@@ -1290,11 +1159,68 @@ describe("saveAuthProfileStore", () => {
         type: "api_key",
         provider: "openai",
       });
-      expect(child.profiles["openai-codex:default"]).toBeUndefined();
-      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
+      expect(child.profiles["openai:oauth"]).toBeUndefined();
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai:oauth"], {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist inherited OAuth with an out-of-range local expiry", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-invalid-local-"));
+    const stateDir = path.join(root, ".openclaw");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    try {
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-access-token",
+            refresh: "main-refresh-token",
+            expires: Date.now() + 120_000,
+            accountId: "acct-shared",
+          },
+        },
+      });
+
+      const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
+      localUpdateStore.profiles["openai-codex:default"] = {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-access-token",
+        refresh: "main-refresh-token",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+        accountId: "acct-shared",
+      };
+      localUpdateStore.profiles["openai:default"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-child-local",
+      };
+
+      saveAuthProfileStore(localUpdateStore, childAgentDir, {
+        filterExternalAuthProfiles: false,
+      });
+
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
+        type: "oauth",
+        access: "main-access-token",
+        refresh: "main-refresh-token",
       });
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
@@ -1314,9 +1240,9 @@ describe("saveAuthProfileStore", () => {
       saveAuthProfileStore({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:oauth": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "main-access-token",
             refresh: "main-refresh-token",
             expires: Date.now() + 60_000,
@@ -1344,14 +1270,14 @@ describe("saveAuthProfileStore", () => {
       const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
         profiles: Record<string, unknown>;
       };
-      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+      expect(child.profiles["openai:oauth"]).toBeUndefined();
 
       const runtime = ensureAuthProfileStore(childAgentDir);
       expectProfileFields(runtime.profiles["openai:default"], {
         type: "api_key",
         provider: "openai",
       });
-      expectProfileFields(runtime.profiles["openai-codex:default"], {
+      expectProfileFields(runtime.profiles["openai:oauth"], {
         type: "oauth",
         access: "main-access-token",
         refresh: "main-refresh-token",
@@ -1360,9 +1286,9 @@ describe("saveAuthProfileStore", () => {
       saveAuthProfileStore({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:oauth": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "main-refreshed-access-token",
             refresh: "main-refreshed-refresh-token",
             expires: Date.now() + 120_000,
@@ -1370,7 +1296,7 @@ describe("saveAuthProfileStore", () => {
         },
       });
 
-      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai:oauth"], {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",

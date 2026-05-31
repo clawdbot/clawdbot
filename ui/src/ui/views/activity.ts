@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "../activity-model.ts";
+import { formatTimeMs } from "../format.ts";
 import { icons } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 
@@ -25,15 +26,15 @@ export type ActivityProps = {
 };
 
 function formatTime(value: number): string {
-  const date = new Date(value);
-  if (!Number.isFinite(value) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  return date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return formatTimeMs(
+    value,
+    {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    },
+    "",
+  );
 }
 
 function formatDuration(value: number): string {

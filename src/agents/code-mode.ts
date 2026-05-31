@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -14,6 +18,11 @@ import {
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
+import {
+  createCodeModeNamespaceRuntime,
+  describeCodeModeNamespacesForPrompt,
+  type CodeModeNamespaceRuntime,
+} from "./code-mode-namespaces.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -25,6 +34,7 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   ToolSearchRuntime,
+  type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
   type ToolSearchConfig,
   type ToolSearchToolContext,
@@ -68,7 +78,7 @@ export type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield";
+type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
 
 type PendingBridgeRequest = {
   id: string;
@@ -99,6 +109,7 @@ type CodeModeRunState = {
   createdAt: number;
   expiresAt: number;
   runtime: ToolSearchRuntime;
+  namespaceRuntime: CodeModeNamespaceRuntime;
 };
 
 type CodeModeToolContext = ToolSearchToolContext;
@@ -237,11 +248,15 @@ function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
 
 function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
-    if (state.expiresAt <= now) {
+    if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       activeRuns.delete(runId);
       resumingRunIds.delete(runId);
     }
   }
+}
+
+function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
+  return resolveExpiresAtMsFromDurationSeconds(ttlSeconds, { nowMs: now });
 }
 
 function enforceActiveRunLimit(): void {
@@ -256,7 +271,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
@@ -467,6 +483,7 @@ function errorMessage(error: unknown): string {
 
 async function runBridgeRequest(params: {
   runtime: ToolSearchRuntime;
+  namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -511,6 +528,44 @@ async function runBridgeRequest(params: {
         value = { status: "yielded", reason: values[0] ?? null };
         break;
       }
+      case "namespace": {
+        const namespaceId = values[0];
+        const path = values[1];
+        const callArgs = values[2];
+        if (typeof namespaceId !== "string") {
+          throw new ToolInputError("namespace id must be a string.");
+        }
+        if (!Array.isArray(path) || !path.every((entry) => typeof entry === "string")) {
+          throw new ToolInputError("namespace path must be an array of strings.");
+        }
+        value = await params.namespaceRuntime.invoke(
+          namespaceId,
+          path,
+          Array.isArray(callArgs) ? callArgs : [],
+          async (request) => {
+            const entry = params.runtime
+              .all()
+              .find(
+                (candidate) =>
+                  candidate.name === request.toolName && candidate.sourceName === request.pluginId,
+              );
+            if (!entry) {
+              throw new ToolInputError(
+                `namespace tool is not visible in the run catalog: ${request.toolName}`,
+              );
+            }
+            const called = await params.runtime.callExactId(entry.id, request.input, {
+              parentToolCallId: params.parentToolCallId,
+              signal: params.signal,
+              onUpdate: params.onUpdate,
+            });
+            return isRecord(called.result) && "details" in called.result
+              ? called.result.details
+              : called.result;
+          },
+        );
+        break;
+      }
     }
     return { id: params.request.id, ok: true, value: toJsonSafe(value) };
   } catch (error) {
@@ -546,8 +601,16 @@ function failedCodeModeWorkerResult(
   };
 }
 
+function isQuickJsInterruptedWorkerError(error: unknown): boolean {
+  return String(error) === "interrupted";
+}
+
 function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
-  if (result.status === "failed" && result.code === "timeout" && result.error === "interrupted") {
+  if (
+    result.status === "failed" &&
+    result.code === "timeout" &&
+    isQuickJsInterruptedWorkerError(result.error)
+  ) {
     return {
       ...result,
       error: "code mode timeout exceeded",
@@ -629,6 +692,7 @@ function snapshotState(params: {
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
+  namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -642,6 +706,7 @@ function snapshotState(params: {
   const pending = params.pendingRequests.map((request) => {
     const promise = runBridgeRequest({
       runtime: params.runtime,
+      namespaceRuntime: params.namespaceRuntime,
       parentToolCallId: params.parentToolCallId,
       request,
       signal: params.signal,
@@ -654,6 +719,10 @@ function snapshotState(params: {
     return state;
   });
   const now = Date.now();
+  const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
+  if (expiresAt === undefined) {
+    throw new ToolInputError("code mode run expiry is unavailable.");
+  }
   activeRuns.set(runId, {
     runId,
     parentToolCallId: params.parentToolCallId,
@@ -663,8 +732,9 @@ function snapshotState(params: {
     pending,
     output: params.output,
     createdAt: now,
-    expiresAt: now + params.config.snapshotTtlSeconds * 1000,
+    expiresAt,
     runtime: params.runtime,
+    namespaceRuntime: params.namespaceRuntime,
   });
   return {
     status: "waiting" as const,
@@ -693,6 +763,17 @@ function telemetry(runtime: ToolSearchRuntime) {
   };
 }
 
+function createCodeModeExecDescription(
+  ctx: CodeModeToolContext,
+  catalog?: readonly ToolSearchCatalogEntry[],
+): string {
+  const namespacePrompt = describeCodeModeNamespacesForPrompt(ctx, catalog);
+  return (
+    'Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    (namespacePrompt ? `\n\n${namespacePrompt}` : "")
+  );
+}
+
 async function runExec(params: {
   toolCallId: string;
   ctx: CodeModeToolContext;
@@ -710,6 +791,8 @@ async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  const catalog = runtime.all();
+  const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, catalog);
   let source: string;
   try {
     source = await prepareSource({ code: params.code, language: params.language, config });
@@ -723,14 +806,17 @@ async function runExec(params: {
     };
   }
   try {
-    const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source,
-        config,
-        catalog: runtime.all(),
-      },
-      config.timeoutMs + 1000,
+    const result = normalizeCodeModeWorkerResult(
+      await runCodeModeWorker(
+        {
+          kind: "exec",
+          source,
+          config,
+          catalog,
+          namespaces: namespaceRuntime.descriptors,
+        },
+        config.timeoutMs + 1000,
+      ),
     );
     if (result.status === "waiting") {
       return snapshotState({
@@ -740,6 +826,7 @@ async function runExec(params: {
         ctx: params.ctx,
         config,
         runtime,
+        namespaceRuntime,
         output: result.output,
         signal: params.signal,
         onUpdate: params.onUpdate,
@@ -832,14 +919,16 @@ async function runWait(params: {
     for (const entry of state.pending) {
       settledRequests.push(entry.settled ?? (await entry.promise));
     }
-    const result = await runCodeModeWorker(
-      {
-        kind: "resume",
-        snapshotBytes: state.snapshotBytes,
-        config: state.config,
-        settledRequests,
-      },
-      state.config.timeoutMs + 1000,
+    const result = normalizeCodeModeWorkerResult(
+      await runCodeModeWorker(
+        {
+          kind: "resume",
+          snapshotBytes: state.snapshotBytes,
+          config: state.config,
+          settledRequests,
+        },
+        state.config.timeoutMs + 1000,
+      ),
     );
     const output = [...state.output, ...result.output];
     enforceOutputLimit(output, state.config);
@@ -851,6 +940,7 @@ async function runWait(params: {
         ctx: state.ctx,
         config: state.config,
         runtime: state.runtime,
+        namespaceRuntime: state.namespaceRuntime,
         output,
         signal: params.signal,
         onUpdate: params.onUpdate,
@@ -883,13 +973,12 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
-    description:
-      'Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.',
+    description: createCodeModeExecDescription(ctx),
     parameters: Type.Object({
       code: Type.Optional(
         Type.String({
           description:
-            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
+            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call), `ALL_TOOLS`, and registered namespace globals are available in scope; Node built-in modules are not.",
         }),
       ),
       command: Type.Optional(
@@ -973,13 +1062,31 @@ export function applyCodeModeCatalog(params: {
         tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
         tool.name !== TOOL_CALL_RAW_TOOL_NAME),
   );
-  return applyToolCatalogCompaction({
+  const compacted = applyToolCatalogCompaction({
     ...params,
     tools,
     enabled: true,
     isVisibleControlTool: isCodeModeControlTool,
     shouldCatalogTool: (tool) => !isCodeModeControlTool(tool),
   });
+  const visibleCatalog = params.catalogRef?.current?.entries ?? [];
+  for (const tool of compacted.tools) {
+    if (tool.name === CODE_MODE_EXEC_TOOL_NAME) {
+      tool.description = createCodeModeExecDescription(
+        {
+          config: params.config,
+          runtimeConfig: params.config,
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          catalogRef: params.catalogRef,
+        },
+        visibleCatalog,
+      );
+    }
+  }
+  return compacted;
 }
 
 export function addClientToolsToCodeModeCatalog(params: {

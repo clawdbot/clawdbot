@@ -69,11 +69,11 @@ vi.mock("./codex-native-web-search.js", () => ({
     const search = params.config?.tools?.web?.search;
     const codex = search?.openaiCodex;
     const nativeEligible =
-      params.modelProvider === "openai-codex" || params.modelApi === "openai-codex-responses";
+      params.modelProvider === "openai" || params.modelApi === "openai-chatgpt-responses";
     const hasRequiredAuth =
-      params.modelProvider !== "openai-codex" ||
+      params.modelProvider !== "openai" ||
       Object.values(params.config?.auth?.profiles ?? {}).some(
-        (profile) => profile.provider === "openai-codex",
+        (profile) => profile.provider === "openai",
       );
     const active =
       search?.enabled !== false && codex?.enabled === true && nativeEligible && hasRequiredAuth;
@@ -322,7 +322,7 @@ type WrapProviderStreamFnParams = Parameters<
 function installFullProviderRuntimeDepsForTest() {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: (params) => {
-      if (params.provider !== "openai-codex") {
+      if (params.provider !== "openai") {
         return undefined;
       }
       const transport = params.context.extraParams?.transport;
@@ -339,7 +339,7 @@ function installFullProviderRuntimeDepsForTest() {
       if (params.provider === "openai") {
         return createTestOpenAIProviderWrapper(params, true);
       }
-      if (params.provider === "openai-codex") {
+      if (params.provider === "openai") {
         return createTestOpenAIProviderWrapper(params, false);
       }
       if (params.provider === "azure-openai" || params.provider === "azure-openai-responses") {
@@ -515,15 +515,15 @@ describe("applyExtraParamsToAgent", () => {
 
     const agent = { streamFn: (() => ({}) as ReturnType<StreamFn>) as StreamFn };
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
 
     applyExtraParamsToAgent(
       agent,
       undefined,
-      "openai-codex",
+      "openai",
       "gpt-5.4",
       undefined,
       "high",
@@ -543,7 +543,7 @@ describe("applyExtraParamsToAgent", () => {
     model:
       | Model<"openai-responses">
       | Model<"azure-openai-responses">
-      | Model<"openai-codex-responses">
+      | Model<"openai-chatgpt-responses">
       | Model<"openai-completions">
       | Model<"anthropic-messages">;
     options?: SimpleStreamOptions;
@@ -602,7 +602,7 @@ describe("applyExtraParamsToAgent", () => {
     model:
       | Model<"openai-completions">
       | Model<"openai-responses">
-      | Model<"openai-codex-responses">
+      | Model<"openai-chatgpt-responses">
       | Model<"azure-openai-responses">
       | Model<"anthropic-messages">;
     cfg?: Record<string, unknown>;
@@ -1314,15 +1314,15 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.parallel_tool_calls).toBe(true);
   });
 
-  it("injects parallel_tool_calls for openai-codex-responses payloads when configured", () => {
+  it("injects parallel_tool_calls for openai-chatgpt-responses payloads when configured", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
         agents: {
           defaults: {
             models: {
-              "openai-codex/gpt-5.4": {
+              "openai/gpt-5.4": {
                 params: {
                   parallelToolCalls: true,
                 },
@@ -1332,11 +1332,11 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-      } as unknown as Model<"openai-codex-responses">,
+      } as unknown as Model<"openai-chatgpt-responses">,
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
@@ -1969,7 +1969,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -1979,13 +1979,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5.4");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -1993,13 +1993,13 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
-  it("passes configured websocket transport through stream options for openai-codex gpt-5.4", () => {
+  it("passes configured websocket transport through stream options for openai gpt-5.4", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -2009,13 +2009,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5.4");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -2056,13 +2056,13 @@ describe("applyExtraParamsToAgent", () => {
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
-    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.4");
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -2105,13 +2105,13 @@ describe("applyExtraParamsToAgent", () => {
 
   it("injects GPT-5 default parallel tool calls for Codex Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
       payload: {},
     });
 
@@ -2119,15 +2119,15 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.text).toEqual({ verbosity: "low" });
   });
 
-  it("injects native Codex web_search for direct openai-codex Responses models", () => {
+  it("injects native Codex web_search for direct openai Responses models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "oauth",
             },
           },
@@ -2146,10 +2146,10 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
       payload: { tools: [{ type: "function", name: "read" }] },
     });
 
@@ -2181,10 +2181,10 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "gateway",
         id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
       payload: { tools: [{ type: "web_search" }] },
     });
 
@@ -2242,7 +2242,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.4": {
               params: {
                 transport: "sse",
               },
@@ -2252,13 +2252,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5.4");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -2272,7 +2272,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -2282,13 +2282,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5.4");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, { transport: "sse" });
 
@@ -2302,7 +2302,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.4": {
               params: {
                 transport: "udp",
               },
@@ -2312,13 +2312,13 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5.4");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
+    } as Model<"openai-chatgpt-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -2329,7 +2329,7 @@ describe("applyExtraParamsToAgent", () => {
   it("returns prepared Codex transport defaults for runtime sessions", () => {
     const effectiveExtraParams = resolvePreparedExtraParams({
       cfg: undefined,
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
     });
 
@@ -2524,7 +2524,7 @@ describe("applyExtraParamsToAgent", () => {
   it("uses prepared transport when session settings did not explicitly set one", () => {
     const effectiveExtraParams = resolvePreparedExtraParams({
       cfg: undefined,
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
     });
 
@@ -2979,13 +2979,13 @@ describe("applyExtraParamsToAgent", () => {
 
   it("injects configured text verbosity into Codex Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
         agents: {
           defaults: {
             models: {
-              "openai-codex/gpt-5.4": {
+              "openai/gpt-5.4": {
                 params: {
                   text_verbosity: "high",
                 },
@@ -2995,11 +2995,11 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-      } as unknown as Model<"openai-codex-responses">,
+      } as unknown as Model<"openai-chatgpt-responses">,
       payload: {
         store: false,
         text: {
@@ -3081,13 +3081,13 @@ describe("applyExtraParamsToAgent", () => {
 
   it("injects configured OpenAI service_tier into Codex Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
         agents: {
           defaults: {
             models: {
-              "openai-codex/gpt-5.4": {
+              "openai/gpt-5.4": {
                 params: {
                   serviceTier: "priority",
                 },
@@ -3097,11 +3097,11 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api",
-      } as unknown as Model<"openai-codex-responses">,
+      } as unknown as Model<"openai-chatgpt-responses">,
     });
     expect(payload.service_tier).toBe("priority");
   });
@@ -3663,17 +3663,17 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("service_tier");
   });
 
-  it("maps fast mode to priority service_tier for openai-codex responses", () => {
+  it("maps fast mode to priority service_tier for openai responses", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       extraParamsOverride: { fastMode: true },
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api",
-      } as unknown as Model<"openai-codex-responses">,
+      } as unknown as Model<"openai-chatgpt-responses">,
       payload: {
         store: false,
       },
@@ -4036,31 +4036,31 @@ describe("applyExtraParamsToAgent", () => {
 
   it.each([
     {
-      name: "with openai-codex provider config",
+      name: "with openai provider config",
       run: () =>
         runResponsesPayloadMutationCase({
-          applyProvider: "openai-codex",
+          applyProvider: "openai",
           applyModelId: "codex-mini-latest",
           model: {
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             id: "codex-mini-latest",
             baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-          } as Model<"openai-codex-responses">,
+          } as Model<"openai-chatgpt-responses">,
         }),
     },
     {
       name: "without config via provider/model hints",
       run: () =>
         runResponsesPayloadMutationCase({
-          applyProvider: "openai-codex",
+          applyProvider: "openai",
           applyModelId: "codex-mini-latest",
           model: {
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             id: "codex-mini-latest",
             baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-          } as Model<"openai-codex-responses">,
+          } as Model<"openai-chatgpt-responses">,
           options: {},
         }),
     },

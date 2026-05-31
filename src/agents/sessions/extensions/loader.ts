@@ -17,6 +17,7 @@ import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
 import * as bundledTypeboxFormat from "typebox/format";
 import * as bundledTypeboxValue from "typebox/value";
+import { installOpenClawInternalCorePackageNativeResolver } from "../../../plugins/plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
@@ -429,6 +430,7 @@ async function loadExtensionSourceTransformModule(
   extensionPath: string,
 ): Promise<ExtensionFactory | undefined> {
   if (!extensionSourceTransformLoader) {
+    installOpenClawInternalCorePackageNativeResolver({ moduleUrl: import.meta.url });
     const createJitiLoader = await loadCreateJitiLoaderFactory();
     extensionSourceTransformLoader = createJitiLoader(import.meta.url, {
       ...(isBunBinary

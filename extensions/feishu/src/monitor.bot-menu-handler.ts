@@ -1,5 +1,5 @@
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { ClawdbotConfig, HistoryEntry, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import {
@@ -54,6 +54,7 @@ export function createFeishuBotMenuHandler(params: {
   cfg: ClawdbotConfig;
   accountId: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
   getBotOpenId?: (accountId: string) => string | undefined;
@@ -117,6 +118,7 @@ export function createFeishuBotMenuHandler(params: {
           botOpenId: getBotOpenId(accountId),
           botName: getBotName(accountId),
           runtime,
+          channelRuntime: params.channelRuntime,
           chatHistories,
           accountId,
           processingClaimHeld: true,

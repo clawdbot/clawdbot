@@ -2233,7 +2233,7 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
   });
 
-  it("respects newline chunk mode for plugin text", async () => {
+  it("respects newline chunk mode for plugin text without splitting short messages", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     const cfg: OpenClawConfig = {
       channels: {
@@ -2249,14 +2249,40 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    const firstChunkCall = requireMatrixSendCall(sendMatrix);
+    expect(firstChunkCall?.[0]).toBe("!room:example");
+    expect(firstChunkCall?.[1]).toBe("Line one\n\nLine two");
+    expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
+  });
+
+  it("splits long plugin text on packed paragraph boundaries in newline mode", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    const cfg: OpenClawConfig = {
+      channels: {
+        matrix: { textChunkLimit: 14, chunkMode: "newline" },
+      } as OpenClawConfig["channels"],
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "Alpha\n\nBeta\n\nGamma" }],
+      deps: { matrix: sendMatrix },
+    });
+
     expect(sendMatrix).toHaveBeenCalledTimes(2);
     const firstChunkCall = requireMatrixSendCall(sendMatrix);
     expect(firstChunkCall?.[0]).toBe("!room:example");
-    expect(firstChunkCall?.[1]).toBe("Line one");
+    expect(firstChunkCall?.[1]).toBe("Alpha\n\nBeta");
     expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
     const secondChunkCall = sendMatrix.mock.calls[1];
     expect(secondChunkCall?.[0]).toBe("!room:example");
-    expect(secondChunkCall?.[1]).toBe("Line two");
+    expect(secondChunkCall?.[1]).toBe("Gamma");
     expect((secondChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
   });
 
@@ -2551,8 +2577,8 @@ describe("deliverOutboundPayloads", () => {
       { text: " ", mediaUrls: [] },
     ]);
     expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [] },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"] },
+      { text: "hi", mediaUrls: [], audioAsVoice: undefined },
+      { text: "", mediaUrls: ["https://x.test/a.jpg"], audioAsVoice: undefined },
     ]);
   });
 
@@ -2743,7 +2769,7 @@ describe("deliverOutboundPayloads", () => {
     const rawPayloads: DeliverOutboundPayload[] = [
       { text: "NO_REPLY" },
       { text: '{"action":"NO_REPLY"}' },
-      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "caption", mediaUrl: "https://x.test/a.png" },
       { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
     ];
 
@@ -2779,13 +2805,13 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.payloads).toStrictEqual([
       { text: "NO_REPLY" },
       { text: '{"action":"NO_REPLY"}' },
-      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "caption", mediaUrl: "https://x.test/a.png" },
       { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
     ]);
     const renderedPlan = queuedDelivery?.renderedBatchPlan;
     expect(renderedPlan?.payloadCount).toBe(4);
     expect(renderedPlan?.textCount).toBe(4);
-    expect(renderedPlan?.mediaCount).toBe(1);
+    expect(renderedPlan?.mediaCount).toBe(2);
     const noReplyMediaItem = renderedPlan?.items?.find((item) => item.index === 3);
     expect(noReplyMediaItem?.kinds).toStrictEqual(["text", "media"]);
     expect(noReplyMediaItem?.text).toBe("NO_REPLY");

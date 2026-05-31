@@ -83,6 +83,20 @@ export function isReasoningItemCompletionNotification(
   return item ? readString(item, "type") === "reasoning" : false;
 }
 
+export function isAssistantCommentaryCompletionNotification(
+  notification: CodexServerNotification,
+): boolean {
+  if (!isJsonObject(notification.params) || notification.method !== "item/completed") {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return Boolean(
+    item &&
+    readString(item, "type") === "agentMessage" &&
+    readString(item, "phase") === "commentary",
+  );
+}
+
 export function isRawReasoningCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {

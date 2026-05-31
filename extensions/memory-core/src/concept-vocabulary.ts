@@ -231,7 +231,7 @@ const LANGUAGE_STOP_WORDS = {
 
 const CONCEPT_STOP_WORDS = new Set(
   Object.values(LANGUAGE_STOP_WORDS)
-    .flatMap((words) => words)
+    .flat()
     .map((word) => normalizeLowercaseStringOrEmpty(word)),
 );
 

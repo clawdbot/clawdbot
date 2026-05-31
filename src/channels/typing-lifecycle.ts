@@ -33,6 +33,7 @@ export function createTypingKeepaliveLoop(params: {
     timer = setInterval(() => {
       void tick();
     }, params.intervalMs);
+    timer.unref?.();
   };
 
   const stop = () => {

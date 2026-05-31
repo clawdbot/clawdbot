@@ -1,5 +1,5 @@
 import type { MessageMetadata } from "@slack/types";
-import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,

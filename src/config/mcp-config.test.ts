@@ -177,4 +177,35 @@ describe("config mcp config", () => {
       });
     });
   });
+
+  it("canonicalizes common MCP operator aliases when saving config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          url: "https://example.com/mcp",
+          connect_timeout: 5,
+          supports_parallel_tool_calls: true,
+          ssl_verify: false,
+          client_cert: "/tmp/client.crt",
+          client_key: "/tmp/client.key",
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        url: "https://example.com/mcp",
+        connectTimeout: 5,
+        supportsParallelToolCalls: true,
+        sslVerify: false,
+        clientCert: "/tmp/client.crt",
+        clientKey: "/tmp/client.key",
+      });
+    });
+  });
 });

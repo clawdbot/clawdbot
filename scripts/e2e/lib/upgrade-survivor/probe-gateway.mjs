@@ -17,9 +17,35 @@ function option(name, fallback) {
   return value;
 }
 
+function optionValue(name, envName, fallback) {
+  const index = args.indexOf(name);
+  if (index !== -1) {
+    return {
+      label: name,
+      value: option(name),
+    };
+  }
+  return {
+    label: envName,
+    value: process.env[envName] ?? fallback,
+  };
+}
+
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readStrictInteger({ allowZero = false, label, value }) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${label}: ${text}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`invalid ${label}: ${text}`);
+  }
+  return parsed;
 }
 
 const baseUrl = option("--base-url");
@@ -32,35 +58,25 @@ const allowFailing = new Set(
     .map((entry) => entry.trim())
     .filter(Boolean),
 );
-const timeoutMs = Number.parseInt(
-  option("--timeout-ms", process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS || "60000"),
-  10,
+const timeoutOption = optionValue(
+  "--timeout-ms",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS",
+  "60000",
 );
-const attemptTimeoutMs = Number.parseInt(
-  option(
-    "--attempt-timeout-ms",
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS || "5000",
-  ),
-  10,
+const attemptTimeoutOption = optionValue(
+  "--attempt-timeout-ms",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS",
+  "5000",
 );
-const maxBodyBytes = Number.parseInt(
-  option(
-    "--max-body-bytes",
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES || "1048576",
-  ),
-  10,
+const maxBodyOption = optionValue(
+  "--max-body-bytes",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES",
+  "1048576",
 );
+const timeoutMs = readStrictInteger({ ...timeoutOption, allowZero: true });
+const attemptTimeoutMs = readStrictInteger(attemptTimeoutOption);
+const maxBodyBytes = readStrictInteger(maxBodyOption);
 const url = new URL(probePath, baseUrl).toString();
-
-if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
-  throw new Error(`invalid --timeout-ms: ${String(timeoutMs)}`);
-}
-if (!Number.isFinite(attemptTimeoutMs) || attemptTimeoutMs <= 0) {
-  throw new Error(`invalid --attempt-timeout-ms: ${String(attemptTimeoutMs)}`);
-}
-if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
-  throw new Error(`invalid --max-body-bytes: ${String(maxBodyBytes)}`);
-}
 if (expectKind !== "live" && expectKind !== "ready") {
   throw new Error(`unknown probe expectation: ${expectKind}`);
 }

@@ -11,12 +11,12 @@
     "./test-api.js": "./test-api.ts"
   },
   "dependencies": {
-    "typebox": "1.1.38",
+    "typebox": "1.1.39",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.30"

@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -15,10 +19,6 @@ import type { ImageContent } from "../../llm/types.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
@@ -286,8 +286,7 @@ export async function writeCliImages(params: {
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   const store = privateFileStore(imageRoot);
   const paths: string[] = [];
-  for (let i = 0; i < params.images.length; i += 1) {
-    const image = params.images[i];
+  for (const image of params.images) {
     const fileName = path.basename(resolveCliImagePath(image));
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);

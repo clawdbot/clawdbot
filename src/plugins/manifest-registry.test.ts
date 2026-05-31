@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -11,6 +11,10 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
+let manifestChangeCase: {
+  firstName: string | undefined;
+  secondName: string | undefined;
+};
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -26,6 +30,14 @@ function mkdirSafe(dir: string) {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
+}
+
+function makeOpenClawDevSourceRoot() {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  mkdirSafe(path.join(root, "src"));
+  mkdirSafe(path.join(root, "extensions"));
+  return root;
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
@@ -397,7 +409,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("reflects plugin manifest changes on the next registry load", () => {
+  beforeAll(() => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
@@ -421,7 +433,6 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const first = loadPluginManifestRegistry({ env });
-    expect(first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
 
     writeManifest(pluginDir, {
       id: "cached-manifest",
@@ -432,7 +443,15 @@ describe("loadPluginManifestRegistry", () => {
     fs.utimesSync(manifestPath, updatedAt, updatedAt);
 
     const second = loadPluginManifestRegistry({ env });
-    expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+    manifestChangeCase = {
+      firstName: first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
+      secondName: second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
+    };
+  });
+
+  it("reflects plugin manifest changes on the next registry load", () => {
+    expect(manifestChangeCase.firstName).toBe("Before");
+    expect(manifestChangeCase.secondName).toBe("After");
   });
 
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
@@ -582,6 +601,41 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
+  it("prefers dev source bundled plugins over installed globals with the same id", () => {
+    const devSourceRoot = makeOpenClawDevSourceRoot();
+    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
+    const globalDir = makeTempDir();
+    const manifest = { id: "codex", configSchema: { type: "object" } };
+    mkdirSafe(bundledDir);
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+  });
+
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -702,7 +756,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       enabledByDefault: true,
       enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -757,7 +811,7 @@ describe("loadPluginManifestRegistry", () => {
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
-        "openai-codex": "openai",
+        openai: "openai",
       },
       providerAuthChoices: [
         {
@@ -822,7 +876,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
-      "openai-codex": "openai",
+      openai: "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
@@ -1403,9 +1457,9 @@ describe("loadPluginManifestRegistry", () => {
       throw new Error("expected external chat manifest channel config map");
     }
     expect(Object.getPrototypeOf(channelConfigs)).toBe(null);
-    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "__proto__")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "constructor")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "prototype")).toBe(false);
+    expect(Object.hasOwn(channelConfigs, "__proto__")).toBe(false);
+    expect(Object.hasOwn(channelConfigs, "constructor")).toBe(false);
+    expect(Object.hasOwn(channelConfigs, "prototype")).toBe(false);
     expectRecordFields(channelConfigs["safe-chat"]?.schema, "safe-chat schema", {
       type: "object",
       additionalProperties: false,
@@ -1759,11 +1813,11 @@ describe("loadPluginManifestRegistry", () => {
       },
       imageGenerationProviderMetadata: {
         openai: {
-          aliases: ["openai-codex"],
+          aliases: ["openai"],
           authProviders: ["openai"],
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               providerBaseUrl: {
                 provider: "openai",
                 defaultBaseUrl: "https://api.openai.com/v1",
@@ -1817,7 +1871,7 @@ describe("loadPluginManifestRegistry", () => {
           optional: true,
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
             },
           ],
           configSignals: [
@@ -1840,11 +1894,11 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.imageGenerationProviderMetadata).toEqual({
       openai: {
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         authProviders: ["openai"],
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             providerBaseUrl: {
               provider: "openai",
               defaultBaseUrl: "https://api.openai.com/v1",
@@ -1892,7 +1946,7 @@ describe("loadPluginManifestRegistry", () => {
         optional: true,
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
           },
         ],
         configSignals: [
@@ -2143,9 +2197,9 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      mediaUnderstandingProviders: ["openai", "openai"],
       imageGenerationProviders: ["openai"],
       configSchema: { type: "object" },
     });

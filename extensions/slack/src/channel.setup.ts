@@ -3,7 +3,7 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { type ResolvedSlackAccount } from "./accounts.js";
+import type { ResolvedSlackAccount } from "./accounts.js";
 import {
   listSlackAccountIds,
   resolveSlackConfigAccessorAccount,
@@ -11,7 +11,7 @@ import {
   resolveSlackAccount,
   type SlackConfigAccessorAccount,
 } from "./accounts.js";
-import { type ChannelPlugin } from "./channel-api.js";
+import type { ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackSetupAdapter, createSlackSetupWizardProxy } from "./setup-core.js";
 import {

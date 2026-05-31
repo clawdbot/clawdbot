@@ -162,6 +162,8 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
   return [...counts.entries()].map(([key, count]) => `${key}|${count}`).toSorted();
 }
 
+collectProductionLintSuppressions();
+
 describe("production lint suppressions", () => {
   it("lists production files from git without walking source roots", () => {
     expectNoReaddirSyncDuring(() => {

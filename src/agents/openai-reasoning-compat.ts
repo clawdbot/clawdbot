@@ -1,5 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveOpenAIReasoningEffortForModel } from "./openai-reasoning-effort.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type OpenAIReasoningCompatModel = {
   provider?: string | null;
@@ -32,8 +31,7 @@ export function resolveOpenAIReasoningEffortMap(
   const provider = normalizeLowercaseStringOrEmpty(model.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(model.id ?? "");
   const builtinMap: Record<string, string> =
-    (provider === "openai" || provider === "openai-codex") &&
-    OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS.has(id)
+    provider === "openai" && OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS.has(id)
       ? { minimal: "medium", low: "medium" }
       : {};
   return {
@@ -41,20 +39,4 @@ export function resolveOpenAIReasoningEffortMap(
     ...builtinMap,
     ...readCompatReasoningEffortMap(model.compat),
   };
-}
-
-export function mapOpenAIReasoningEffortForModel(params: {
-  model: OpenAIReasoningCompatModel;
-  effort?: string;
-  fallbackMap?: Record<string, string>;
-}): string | undefined {
-  const { effort } = params;
-  if (effort === undefined) {
-    return effort;
-  }
-  return resolveOpenAIReasoningEffortForModel({
-    model: params.model,
-    effort,
-    fallbackMap: resolveOpenAIReasoningEffortMap(params.model, params.fallbackMap),
-  });
 }

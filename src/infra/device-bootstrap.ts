@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeDeviceBootstrapHandoffProfile,
@@ -201,7 +205,7 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
     const record = entry as Partial<DeviceBootstrapTokenRecord>;
     const token =
       typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
-    const issuedAtMs = typeof record.issuedAtMs === "number" ? record.issuedAtMs : 0;
+    const issuedAtMs = asDateTimestampMs(record.issuedAtMs) ?? 0;
     const profile = resolvePersistedBootstrapProfile(record);
     const pendingProfile = resolvePersistedPendingProfile(record);
     state[tokenKey] = {
@@ -212,11 +216,11 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
       deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
       publicKey: typeof record.publicKey === "string" ? record.publicKey : undefined,
       issuedAtMs,
-      ts: typeof record.ts === "number" ? record.ts : issuedAtMs,
+      ts: asDateTimestampMs(record.ts) ?? issuedAtMs,
       lastUsedAtMs: typeof record.lastUsedAtMs === "number" ? record.lastUsedAtMs : undefined,
     };
   }
-  pruneExpiredPending(state, Date.now(), DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
+  pruneExpiredPending(state, asDateTimestampMs(Date.now()) ?? 0, DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
   return state;
 }
 
@@ -236,7 +240,14 @@ export async function issueDeviceBootstrapToken(
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const token = generatePairingToken();
-    const issuedAtMs = Date.now();
+    const issuedAtMs = asDateTimestampMs(Date.now());
+    const expiresAtMs =
+      issuedAtMs === undefined
+        ? undefined
+        : resolveExpiresAtMsFromDurationMs(DEVICE_BOOTSTRAP_TOKEN_TTL_MS, { nowMs: issuedAtMs });
+    if (issuedAtMs === undefined || expiresAtMs === undefined) {
+      throw new Error("Device bootstrap token expiry could not be resolved.");
+    }
     const profileInput = resolveIssuedBootstrapProfileInput(params);
     const profile = resolveIssuedBootstrapProfile(params);
     warnIfIssuedBootstrapScopesWereStripped({ input: profileInput, profile });
@@ -248,7 +259,7 @@ export async function issueDeviceBootstrapToken(
       issuedAtMs,
     };
     await persistState(state, params.baseDir);
-    return { token, expiresAtMs: issuedAtMs + DEVICE_BOOTSTRAP_TOKEN_TTL_MS };
+    return { token, expiresAtMs };
   });
 }
 

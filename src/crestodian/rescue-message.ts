@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -86,7 +90,9 @@ async function readPending(
     if (!parsed) {
       return null;
     }
-    if (Date.parse(parsed.expiresAt) <= now.getTime()) {
+    const expiresAtMs = asDateTimestampMs(Date.parse(parsed.expiresAt));
+    const nowMs = asDateTimestampMs(now.getTime());
+    if (expiresAtMs === undefined || nowMs === undefined || expiresAtMs <= nowMs) {
       await fs.rm(pendingPath, { force: true });
       return null;
     }
@@ -182,11 +188,18 @@ export async function runCrestodianRescueMessage(
   }
   if (isPersistentCrestodianOperation(operation)) {
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + policy.pendingTtlMinutes * 60_000);
+    const nowMs = asDateTimestampMs(now.getTime());
+    const expiresAtMs =
+      nowMs === undefined
+        ? undefined
+        : resolveExpiresAtMsFromDurationMs(policy.pendingTtlMinutes * 60_000, { nowMs });
+    if (expiresAtMs === undefined) {
+      return "Crestodian rescue could not create a pending approval because the expiry clock is invalid.";
+    }
     await writePending(pendingPath, {
       id: randomUUID(),
       createdAt: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
       operation,
       auditDetails: buildAuditDetails(input),
     });

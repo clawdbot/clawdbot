@@ -1,9 +1,9 @@
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
 } from "../../../agents/workspace.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { normalizeTrimmedStringList } from "../../../shared/string-normalization.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 

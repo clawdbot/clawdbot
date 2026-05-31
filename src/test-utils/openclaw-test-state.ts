@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
@@ -304,10 +304,11 @@ export async function createOpenClawTestState(
     },
     applyEnv: () => {
       for (const [key, value] of Object.entries(envVars)) {
+        // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
         if (value === undefined) {
-          delete process.env[key];
+          Reflect.deleteProperty(process.env, key);
         } else {
-          process.env[key] = value;
+          Reflect.set(process.env, key, value);
         }
       }
       envApplied = true;

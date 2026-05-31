@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import net from "node:net";
-import { isRecord as isObjectRecord } from "../../shared/record-coerce.js";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
 

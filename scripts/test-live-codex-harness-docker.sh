@@ -148,7 +148,7 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" ]]; then
   while IFS= read -r auth_file; do
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files_from_csv "openai-codex")
+  done < <(openclaw_live_collect_auth_files_from_csv "openai")
 fi
 
 AUTH_FILES_CSV=""

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   parseNonNegativeInt,
   parsePositiveInt,
@@ -21,8 +22,13 @@ const DEFAULT_QA_SCENARIOS = [
 ];
 const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
+const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
+  "dist/plugin-sdk/qa-lab.js",
+  "dist/plugin-sdk/qa-runtime.js",
+];
 
 function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     outputDir: path.join(
       process.cwd(),
@@ -39,10 +45,10 @@ function parseArgs(argv) {
     cpuCoreWarn: DEFAULT_CPU_CORE_WARN,
     hotWallWarnMs: DEFAULT_HOT_WALL_WARN_MS,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }
@@ -126,8 +132,8 @@ function runStep(name, command, args, options = {}, params = {}) {
   console.error(`[gateway-cpu] start ${name}`);
   const spawn = params.spawnSync ?? defaultSpawnSync;
   const result = spawn(command, args, {
-    cwd: process.cwd(),
-    env: process.env,
+    cwd: params.cwd ?? process.cwd(),
+    env: params.env ?? process.env,
     stdio: "inherit",
     ...options,
   });
@@ -136,29 +142,51 @@ function runStep(name, command, args, options = {}, params = {}) {
   return { name, status, signal: result.signal ?? null };
 }
 
-function pnpmCommand(args) {
+function pnpmCommand(args, params = {}) {
   return createPnpmRunnerSpawnSpec({
-    cwd: process.cwd(),
-    env: process.env,
+    cwd: params.cwd ?? process.cwd(),
+    env: params.env ?? process.env,
     pnpmArgs: args,
     stdio: "inherit",
   });
 }
 
-function toRepoRelativePath(absolutePath) {
-  const relativePath = path.relative(process.cwd(), absolutePath);
+function toRepoRelativePath(repoRoot, absolutePath) {
+  const relativePath = path.relative(repoRoot, absolutePath);
   if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error(`Output path must stay inside the repo root: ${absolutePath}`);
   }
   return relativePath;
 }
 
+function hasPrivateQaDist(repoRoot, fsImpl = fs) {
+  return PRIVATE_QA_REQUIRED_DIST_ENTRIES.every((relativePath) => {
+    try {
+      return fsImpl.statSync(path.join(repoRoot, relativePath)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function buildPrivateQaEnv(env) {
+  return {
+    ...env,
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD ?? "1",
+  };
+}
+
 async function runGatewayCpuScenarios(options, params = {}) {
+  const repoRoot = params.cwd ?? process.cwd();
+  const baseEnv = params.env ?? process.env;
+  const qaBuildEnv = buildPrivateQaEnv(baseEnv);
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
   const qaOutputDir = path.join(options.outputDir, "qa-suite");
-  const qaOutputArg = toRepoRelativePath(qaOutputDir);
+  const qaOutputArg = toRepoRelativePath(repoRoot, qaOutputDir);
   const steps = [];
 
   if (!options.skipStartup) {
@@ -194,20 +222,40 @@ async function runGatewayCpuScenarios(options, params = {}) {
     );
   }
 
+  let privateQaBuildFailed = false;
+  if (!options.skipQa && !hasPrivateQaDist(repoRoot, params.fs ?? fs)) {
+    const privateQaBuild = runStep(
+      "private QA build",
+      process.execPath,
+      ["scripts/build-all.mjs", "qaRuntime"],
+      { env: qaBuildEnv },
+      params,
+    );
+    steps.push(privateQaBuild);
+    privateQaBuildFailed = privateQaBuild.status !== 0;
+  }
+
   if (!options.skipQa) {
-    const qaCommand = pnpmCommand([
-      "openclaw",
-      "qa",
-      "suite",
-      "--provider-mode",
-      "mock-openai",
-      "--concurrency",
-      "1",
-      "--output-dir",
-      qaOutputArg,
-      ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
-    ]);
-    steps.push(runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params));
+    const qaCommand = pnpmCommand(
+      [
+        "openclaw",
+        "qa",
+        "suite",
+        "--provider-mode",
+        "mock-openai",
+        "--concurrency",
+        "1",
+        "--output-dir",
+        qaOutputArg,
+        ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
+      ],
+      { cwd: repoRoot, env: qaBuildEnv },
+    );
+    steps.push(
+      privateQaBuildFailed
+        ? { name: "qa suite", signal: null, status: 1 }
+        : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
+    );
   }
 
   const startup = readJsonIfExists(startupOutput);
@@ -262,6 +310,7 @@ async function main(params = {}) {
 }
 
 export const testing = {
+  hasPrivateQaDist,
   parseArgs,
   runGatewayCpuScenarios,
 };

@@ -242,6 +242,58 @@ describe("update-startup", () => {
     expect(parsed.lastNotifiedTag).toBe("latest");
   });
 
+  it("falls back when the update-check clock is outside Date range", async () => {
+    mockPackageUpdateStatus("latest", "2.0.0");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+  });
+
+  it("does not throttle invalid update-check clocks against persisted state", async () => {
+    const statePath = path.join(tempDir, "update-check.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          lastCheckedAt: "2026-01-17T09:30:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    mockPackageUpdateStatus("latest", "2.0.0");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+  });
+
   it("hydrates cached update from persisted state during throttle window", async () => {
     const statePath = path.join(tempDir, "update-check.json");
     await fs.writeFile(

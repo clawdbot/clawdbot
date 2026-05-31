@@ -31,8 +31,8 @@ describe("resolveOAuthRefreshLockPath", () => {
 
   it("keeps lock paths inside the oauth-refresh directory for dot-segment ids", () => {
     const refreshLockDir = path.join(stateDir, "locks", "oauth-refresh");
-    const dotSegmentPath = resolveOAuthRefreshLockPath("openai-codex", "..");
-    const currentDirPath = resolveOAuthRefreshLockPath("openai-codex", ".");
+    const dotSegmentPath = resolveOAuthRefreshLockPath("openai", "..");
+    const currentDirPath = resolveOAuthRefreshLockPath("openai", ".");
 
     expect(path.dirname(dotSegmentPath)).toBe(refreshLockDir);
     expect(path.dirname(currentDirPath)).toBe(refreshLockDir);
@@ -42,19 +42,19 @@ describe("resolveOAuthRefreshLockPath", () => {
   });
 
   it("hashes profile ids so distinct values stay distinct", () => {
-    expect(resolveOAuthRefreshLockPath("openai-codex", "openai-codex:work/test")).not.toBe(
-      resolveOAuthRefreshLockPath("openai-codex", "openai-codex_work:test"),
+    expect(resolveOAuthRefreshLockPath("openai", "openai:work/test")).not.toBe(
+      resolveOAuthRefreshLockPath("openai", "openai_work:test"),
     );
     // Unicode normalization / collation corner cases must still hash distinctly.
-    expect(resolveOAuthRefreshLockPath("openai-codex", "«c")).not.toBe(
-      resolveOAuthRefreshLockPath("openai-codex", "઼"),
+    expect(resolveOAuthRefreshLockPath("openai", "«c")).not.toBe(
+      resolveOAuthRefreshLockPath("openai", "઼"),
     );
   });
 
   it("hashes distinct providers to distinct paths for the same profileId", () => {
     // The new (provider, profileId) keying is the whole point of P2 from
     // review: a shared profileId across providers must not collide.
-    expect(resolveOAuthRefreshLockPath("openai-codex", "shared:default")).not.toBe(
+    expect(resolveOAuthRefreshLockPath("openai", "shared:default")).not.toBe(
       resolveOAuthRefreshLockPath("anthropic", "shared:default"),
     );
   });
@@ -69,16 +69,16 @@ describe("resolveOAuthRefreshLockPath", () => {
   });
 
   it("keeps lock filenames short for long profile ids", () => {
-    const longProfileId = `openai-codex:${"x".repeat(512)}`;
-    const basename = path.basename(resolveOAuthRefreshLockPath("openai-codex", longProfileId));
+    const longProfileId = `openai:${"x".repeat(512)}`;
+    const basename = path.basename(resolveOAuthRefreshLockPath("openai", longProfileId));
 
     expect(basename).toMatch(/^sha256-[0-9a-f]{64}$/);
     expect(Buffer.byteLength(basename, "utf8")).toBeLessThan(255);
   });
 
   it("is deterministic: same (provider, profileId) produces the same path", () => {
-    const first = resolveOAuthRefreshLockPath("openai-codex", "openai-codex:default");
-    const second = resolveOAuthRefreshLockPath("openai-codex", "openai-codex:default");
+    const first = resolveOAuthRefreshLockPath("openai", "openai:default");
+    const second = resolveOAuthRefreshLockPath("openai", "openai:default");
     expect(first).toBe(second);
   });
 
@@ -92,7 +92,7 @@ describe("resolveOAuthRefreshLockPath", () => {
     // Sanity precondition: parent dir must not exist yet.
     await expectPathMissing(locksDir);
 
-    const resolved = resolveOAuthRefreshLockPath("openai-codex", "openai-codex:default");
+    const resolved = resolveOAuthRefreshLockPath("openai", "openai:default");
     expect(path.dirname(resolved)).toBe(locksDir);
     expect(path.basename(resolved)).toMatch(/^sha256-[0-9a-f]{64}$/);
     // Function itself must not create the directory (path resolver only).
@@ -101,13 +101,13 @@ describe("resolveOAuthRefreshLockPath", () => {
 
   it("never embeds path separators or .. in the basename", () => {
     const hazards = [
-      ["openai-codex", "../etc/passwd"],
-      ["openai-codex", "../../../../secrets"],
-      ["openai-codex", "openai\\codex"],
-      ["openai-codex", "openai/codex/default"],
-      ["openai-codex", "profile\x00with-null"],
-      ["openai-codex", "profile\nwith-newline"],
-      ["openai-codex", "profile with spaces"],
+      ["openai", "../etc/passwd"],
+      ["openai", "../../../../secrets"],
+      ["openai", "openai\\codex"],
+      ["openai", "openai/codex/default"],
+      ["openai", "profile\x00with-null"],
+      ["openai", "profile\nwith-newline"],
+      ["openai", "profile with spaces"],
       ["../../etc", "passwd"],
       ["provider\x00with-null", "default"],
     ] as const;
@@ -174,7 +174,7 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
   it("always produces a basename that matches sha256-<hex64> regardless of input", () => {
     const rng = makeSeededRandom(0x2026_0417);
     for (let i = 0; i < 500; i += 1) {
-      const provider = randomProfileId(rng, 64) || "openai-codex";
+      const provider = randomProfileId(rng, 64) || "openai";
       const id = randomProfileId(rng, 4096);
       const basename = path.basename(resolveOAuthRefreshLockPath(provider, id));
       expect(basename).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -194,7 +194,7 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
     const rng = makeSeededRandom(0xdecafbad);
     const expectedDir = path.join(stateDir, "locks", "oauth-refresh");
     for (let i = 0; i < 200; i += 1) {
-      const provider = randomProfileId(rng, 32) || "openai-codex";
+      const provider = randomProfileId(rng, 32) || "openai";
       const id = randomProfileId(rng, 1024);
       const resolved = resolveOAuthRefreshLockPath(provider, id);
       expect(path.dirname(resolved)).toBe(expectedDir);
@@ -228,7 +228,7 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
     let collisions = 0;
     for (let i = 0; i < 1000; i += 1) {
       const id = randomProfileId(rng, 128) || `id-${i}`;
-      const resolved = resolveOAuthRefreshLockPath("openai-codex", id);
+      const resolved = resolveOAuthRefreshLockPath("openai", id);
       const existing = seen.get(resolved);
       if (existing !== undefined && existing !== id) {
         collisions += 1;

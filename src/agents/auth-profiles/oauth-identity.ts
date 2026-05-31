@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
@@ -105,11 +106,12 @@ export function shouldMirrorRefreshedOAuthCredential(params: {
   if (!isSafeToCopyOAuthIdentity(existing, refreshed)) {
     return { shouldMirror: false, reason: "identity-mismatch-or-regression" };
   }
-  if (
-    Number.isFinite(existing.expires) &&
-    Number.isFinite(refreshed.expires) &&
-    existing.expires >= refreshed.expires
-  ) {
+  const refreshedExpires = asDateTimestampMs(refreshed.expires);
+  if (refreshedExpires === undefined) {
+    return { shouldMirror: false, reason: "incoming-not-fresher" };
+  }
+  const existingExpires = asDateTimestampMs(existing.expires);
+  if (existingExpires !== undefined && existingExpires >= refreshedExpires) {
     return { shouldMirror: false, reason: "incoming-not-fresher" };
   }
   return { shouldMirror: true, reason: "incoming-fresher" };

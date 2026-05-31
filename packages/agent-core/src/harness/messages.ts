@@ -1,6 +1,41 @@
 import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
-import type { AgentMessage } from "../types.js";
-import { requireSessionTimestampMs } from "./session/timestamps.js";
+import type {
+  AgentMessage,
+  BashExecutionMessage,
+  BranchSummaryMessage,
+  CompactionSummaryMessage,
+  CustomMessage,
+} from "../types.js";
+import { parseSessionTimestampMs, requireSessionTimestampMs } from "./session/timestamps.js";
+
+export type {
+  BashExecutionMessage,
+  BranchSummaryMessage,
+  CompactionSummaryMessage,
+  CustomMessage,
+} from "../types.js";
+
+export type HarnessMessage =
+  | AgentMessage
+  | BashExecutionMessage
+  | CustomMessage
+  | BranchSummaryMessage
+  | CompactionSummaryMessage;
+
+// Internal session paths keep call sites explicit about this harness-owned
+// boundary even though these message roles are part of AgentMessage.
+export function asAgentMessage(message: HarnessMessage): AgentMessage {
+  return message as AgentMessage;
+}
+
+function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
+  if (typeof timestamp === "number") {
+    return timestamp;
+  }
+  const parsed = parseSessionTimestampMs(timestamp);
+  // Corrupt persisted rows should not abort context conversion; session order is already preserved.
+  return parsed ?? 0;
+}
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -16,50 +51,6 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 `;
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
-
-export interface BashExecutionMessage {
-  role: "bashExecution";
-  command: string;
-  output: string;
-  exitCode: number | undefined;
-  cancelled: boolean;
-  truncated: boolean;
-  fullOutputPath?: string;
-  timestamp: number;
-  excludeFromContext?: boolean;
-}
-
-export interface CustomMessage<T = unknown> {
-  role: "custom";
-  customType: string;
-  content: string | (TextContent | ImageContent)[];
-  display: boolean;
-  details?: T;
-  timestamp: number;
-}
-
-export interface BranchSummaryMessage {
-  role: "branchSummary";
-  summary: string;
-  fromId: string;
-  timestamp: number;
-}
-
-export interface CompactionSummaryMessage {
-  role: "compactionSummary";
-  summary: string;
-  tokensBefore: number;
-  timestamp: number;
-}
-
-declare module "../types.js" {
-  interface CustomAgentMessages {
-    bashExecution: BashExecutionMessage;
-    custom: CustomMessage;
-    branchSummary: BranchSummaryMessage;
-    compactionSummary: CompactionSummaryMessage;
-  }
-}
 
 export function bashExecutionToText(msg: BashExecutionMessage): string {
   let text = `Ran \`${msg.command}\`\n`;
@@ -125,25 +116,26 @@ export function createCustomMessage(
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages
     .map((m): Message | undefined => {
-      switch (m.role) {
+      const message = m as HarnessMessage;
+      switch (message.role) {
         case "bashExecution":
-          if (m.excludeFromContext) {
+          if (message.excludeFromContext) {
             return undefined;
           }
           return {
             role: "user",
-            content: [{ type: "text", text: bashExecutionToText(m) }],
-            timestamp: m.timestamp,
+            content: [{ type: "text", text: bashExecutionToText(message) }],
+            timestamp: message.timestamp,
           };
         case "custom": {
           const content =
-            typeof m.content === "string"
-              ? [{ type: "text" as const, text: m.content }]
-              : m.content;
+            typeof message.content === "string"
+              ? [{ type: "text" as const, text: message.content }]
+              : message.content;
           return {
             role: "user",
             content,
-            timestamp: m.timestamp,
+            timestamp: message.timestamp,
           };
         }
         case "branchSummary":
@@ -152,10 +144,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: [
               {
                 type: "text" as const,
-                text: BRANCH_SUMMARY_PREFIX + m.summary + BRANCH_SUMMARY_SUFFIX,
+                text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: m.timestamp,
+            timestamp: message.timestamp,
           };
         case "compactionSummary":
           return {
@@ -163,15 +155,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: [
               {
                 type: "text" as const,
-                text: COMPACTION_SUMMARY_PREFIX + m.summary + COMPACTION_SUMMARY_SUFFIX,
+                text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: m.timestamp,
+            timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),
           };
         case "user":
         case "assistant":
         case "toolResult":
-          return m;
+          return message;
         default:
           return undefined;
       }

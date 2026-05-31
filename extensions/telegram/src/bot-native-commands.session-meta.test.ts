@@ -11,7 +11,7 @@ import {
   createTelegramTopicCommandContext,
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
-import { type RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -1287,7 +1287,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
     sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:telegram:group:-1001234567890:topic:42": {
-        authProfileOverride: "openai-codex:owner@example.com",
+        authProfileOverride: "openai:owner@example.com",
         sessionId: "sess-topic",
         updatedAt: 1,
       },
@@ -1339,7 +1339,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
         sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
-        authProfileId: "openai-codex:owner@example.com",
+        authProfileId: "openai:owner@example.com",
         messageThreadId: 42,
       },
       "plugin command params",

@@ -219,6 +219,29 @@ describe("diffs tool", () => {
     }
   });
 
+  it("caps artifact-only ttlSeconds that bypass schema validation", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+    try {
+      const screenshotter = createPngScreenshotter();
+      const tool = createToolWithScreenshotter(store, screenshotter);
+
+      const result = await tool.execute?.("tool-2c-ttl-cap", {
+        before: "one\n",
+        after: "two\n",
+        mode: "file",
+        ttlSeconds: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(Date.parse(requireString(readDetails(result).expiresAt, "expiresAt"))).toBe(
+        now.getTime() + 21_600_000,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses default ttlSeconds when tool input omits ttlSeconds", async () => {
     vi.useFakeTimers();
     const now = new Date("2026-02-27T16:00:00Z");

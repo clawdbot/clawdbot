@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type {
   PluginHookAgentContext,
   PluginHookContextWindowSource,
@@ -5,6 +7,7 @@ import type {
 
 export type AgentHarnessHookContext = {
   runId: string;
+  trace?: DiagnosticTraceContext;
   jobId?: string;
   agentId?: string;
   sessionKey?: string;
@@ -18,11 +21,13 @@ export type AgentHarnessHookContext = {
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
+  config?: OpenClawConfig;
 };
 
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
   return {
     runId: params.runId,
+    ...(params.trace ? { trace: params.trace } : {}),
     ...(params.jobId ? { jobId: params.jobId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),

@@ -1,4 +1,4 @@
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OriginatingChannelType } from "../templating.js";
 
 export function resolveOriginMessageProvider(params: {

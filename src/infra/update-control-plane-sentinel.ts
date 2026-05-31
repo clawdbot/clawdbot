@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   markUpdateRestartSentinelFailure,
   writeRestartSentinel,

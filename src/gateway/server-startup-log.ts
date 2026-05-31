@@ -1,3 +1,4 @@
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -12,7 +13,6 @@ import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
-import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 
 type StartupThinkLevel =
   | "off"

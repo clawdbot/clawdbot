@@ -1,7 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import { getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { MediaAttachment } from "./types.js";
 
 export function normalizeAttachmentPath(raw?: string | null): string | undefined {

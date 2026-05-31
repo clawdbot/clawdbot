@@ -48,7 +48,7 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
   if (
     model.api !== "openai-responses" &&
     model.api !== "azure-openai-responses" &&
-    model.api !== "openai-codex-responses"
+    model.api !== "openai-chatgpt-responses"
   ) {
     return false;
   }
@@ -187,7 +187,7 @@ async function resolveImageRuntime(params: {
     },
   );
   const { authStorage } = resolved;
-  let { model } = resolved;
+  const { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }

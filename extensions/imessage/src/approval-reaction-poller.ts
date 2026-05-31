@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   extractIMessageApprovalPromptBinding,
   handleIMessageApprovalReaction,
   listPendingIMessageApprovalReactionPollTargets,
@@ -158,10 +162,12 @@ function bindObservedConversation(params: {
   target: PendingIMessageApprovalReactionPollTarget;
   message: HistoryMessage;
 }): void {
-  const ttlMs = params.target.expiresAtMs - Date.now();
-  if (ttlMs <= 0) {
+  const nowMs = asDateTimestampMs(Date.now());
+  const expiresAtMs = asDateTimestampMs(params.target.expiresAtMs);
+  if (nowMs === undefined || expiresAtMs === undefined || expiresAtMs <= nowMs) {
     return;
   }
+  const ttlMs = expiresAtMs - nowMs;
   const conversation = buildConversationKeyFromMessage(params.message);
   const messageIds = new Set([
     ...enumerateMessageGuidCandidates(params.target.messageId),
@@ -195,13 +201,17 @@ function bindObservedApprovalPrompt(params: {
     return null;
   }
   const conversation = buildConversationKeyFromMessage(params.message);
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS);
+  if (expiresAtMs === undefined) {
+    return null;
+  }
   const target: PendingIMessageApprovalReactionPollTarget = {
     accountId: params.accountId,
     conversation,
     messageId,
     approvalId: binding.approvalId,
     allowedDecisions: binding.allowedDecisions,
-    expiresAtMs: Date.now() + OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS,
+    expiresAtMs,
   };
   bindObservedConversation({ target, message: params.message });
   return target;

@@ -1,4 +1,4 @@
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 
 export type QaBusConversationKind = "direct" | "channel" | "group";
 

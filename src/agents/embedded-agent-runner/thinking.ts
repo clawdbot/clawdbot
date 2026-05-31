@@ -14,7 +14,7 @@ export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
   return (
-    !!message &&
+    Boolean(message) &&
     typeof message === "object" &&
     message.role === "assistant" &&
     Array.isArray(message.content)
@@ -23,7 +23,7 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
 
 function isThinkingBlock(block: AssistantContentBlock): boolean {
   return (
-    !!block &&
+    Boolean(block) &&
     typeof block === "object" &&
     ((block as { type?: unknown }).type === "thinking" ||
       (block as { type?: unknown }).type === "redacted_thinking")
@@ -44,7 +44,7 @@ function hasAssistantToolCall(message: AssistantMessage): boolean {
 
 function isToolResultMessage(message: AgentMessage): boolean {
   return (
-    !!message &&
+    Boolean(message) &&
     typeof message === "object" &&
     (message as { role?: unknown }).role === "toolResult"
   );

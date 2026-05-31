@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import { isValidEnvSecretRefId, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,10 +14,6 @@ import {
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));

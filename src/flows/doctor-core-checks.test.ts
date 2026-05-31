@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import {
@@ -94,6 +94,36 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
 
 describe("registerCoreHealthChecks", () => {
   let tmp: string | undefined;
+  let hooksModelCatalogCase: {
+    calls: unknown[][];
+  };
+
+  beforeAll(async () => {
+    clearHealthChecksForTest();
+    resetCoreHealthChecksForTest();
+    mocks.loadModelCatalog.mockClear();
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
+
+    await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    hooksModelCatalogCase = {
+      calls: [...mocks.loadModelCatalog.mock.calls],
+    };
+    clearHealthChecksForTest();
+    resetCoreHealthChecksForTest();
+  });
 
   beforeEach(() => {
     clearHealthChecksForTest();
@@ -302,15 +332,7 @@ describe("registerCoreHealthChecks", () => {
         },
       },
     };
-    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
-
-    await check.detect({
-      mode: "lint",
-      runtime,
-      cfg,
-    });
-
-    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+    expect(hooksModelCatalogCase.calls).toContainEqual([{ config: cfg, readOnly: true }]);
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {

@@ -354,7 +354,7 @@ To restrict who can click a button, set `allowedUsers` on that button (Discord u
 
 Component callbacks expire after 30 minutes by default. Set `channels.discord.agentComponents.ttlMs` to change that callback registry lifetime for the default Discord account, or `channels.discord.accounts.<accountId>.agentComponents.ttlMs` to override one account in a multi-account setup. The value is milliseconds, must be a positive integer, and is capped at `86400000` (24 hours). Longer TTLs are useful for review or approval workflows that need buttons to remain usable, but they also extend the window where an old Discord message can still trigger an action. Prefer the shortest TTL that fits the workflow, and keep the default when stale callbacks would be surprising.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.models` when you want the picker to show dynamically discovered models only for selected providers such as `openai-codex` or `vllm`.
+The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.models` when you want the picker to show dynamically discovered models only for selected providers such as `openai` or `vllm`.
 
 File attachments:
 
@@ -1197,7 +1197,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1234,7 +1234,7 @@ Notes:
 - `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](#follow-users-in-voice) for behavior rules and examples.
 - `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
-- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai-codex/gpt-5.5"`.
+- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai/gpt-5.5"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. The supported realtime bootstrap files are limited to those profile files; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
 - In OpenAI `agent-proxy` realtime mode, set `voice.realtime.requireWakeName: true` to keep Discord realtime voice silent until a transcript starts or ends with a wake name. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. Wake-name gating disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when a leading wake name is recognized from partial transcription before the final transcript arrives.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
@@ -1325,7 +1325,7 @@ Default agent-proxy voice-channel session example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         followUsersEnabled: true,
         followUsers: ["123456789012345678"],
         realtime: {
@@ -1375,7 +1375,7 @@ Realtime bidi example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -1398,7 +1398,7 @@ Voice as an extension of an existing Discord channel session:
       voice: {
         enabled: true,
         mode: "agent-proxy",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         agentSession: {
           mode: "target",
           target: "channel:123456789012345678",
@@ -1433,7 +1433,7 @@ Echo-heavy OpenAI Realtime example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",

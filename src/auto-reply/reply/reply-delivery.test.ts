@@ -272,6 +272,19 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
   });
 
+  it("leaves media-looking text alone when media directive parsing is disabled", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "Result\nMEDIA: ./image.png" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+      extractMediaDirectives: false,
+    });
+
+    expect(normalized.payload.text).toBe("Result\nMEDIA: ./image.png");
+    expect(normalized.payload.mediaUrl).toBeUndefined();
+    expect(normalized.payload.mediaUrls).toBeUndefined();
+  });
+
   it("does not mark plain replies as explicit reply_to_current opt-outs", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "plain reply" },
@@ -282,7 +295,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.replyToCurrent).toBeUndefined();
   });
 
-  it("passes normalized media block replies through media path normalization", async () => {
+  it("passes structured media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
     } as unknown as BlockReplyPipelineLike;
@@ -305,7 +318,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       directlySentBlockKeys: new Set(),
     });
 
-    await handler({ text: "Result\nMEDIA: ./image.png" });
+    await handler({ text: "Result", mediaUrl: "./image.png" });
 
     expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
       text: "Result",
@@ -313,12 +326,12 @@ describe("createBlockReplyDeliveryHandler", () => {
       mediaUrls: [absPath],
       replyToId: undefined,
       replyToCurrent: undefined,
-      replyToTag: false,
+      replyToTag: undefined,
       audioAsVoice: false,
     });
   });
 
-  it("suppresses generated media-failure warning text for silent block replies", async () => {
+  it("suppresses generated media-failure warning text for silent structured block replies", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
     } as unknown as BlockReplyPipelineLike;
@@ -342,7 +355,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       directlySentBlockKeys: new Set(),
     });
 
-    await handler({ text: "NO_REPLY\nMEDIA: ./missing.png\nMEDIA: ./survived.png" });
+    await handler({ text: "NO_REPLY", mediaUrls: ["./missing.png", "./survived.png"] });
 
     expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
       text: undefined,

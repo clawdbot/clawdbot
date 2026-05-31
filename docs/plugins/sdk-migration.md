@@ -792,6 +792,35 @@ canonical replacement.
 
   </Accordion>
 
+  <Accordion title="subagent_spawning hook → core thread binding">
+    **Old**: `api.on("subagent_spawning", handler)` returning
+    `threadBindingReady` or `deliveryOrigin`.
+
+    **New**: let core prepare `thread: true` subagent bindings through the
+    channel session-binding adapter. Use `api.on("subagent_spawned", handler)`
+    only for post-launch observation.
+
+    ```typescript
+    // Before
+    api.on("subagent_spawning", async () => ({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: { channel: "discord", to: "channel:123", threadId: "456" },
+    }));
+
+    // After
+    api.on("subagent_spawned", async (event) => {
+      await observeSubagentLaunch(event);
+    });
+    ```
+
+    `subagent_spawning`, `PluginHookSubagentSpawningEvent`,
+    `PluginHookSubagentSpawningResult`, and
+    `SubagentLifecycleHookRunner.runSubagentSpawning(...)` remain only as
+    deprecated compatibility surfaces while external plugins migrate.
+
+  </Accordion>
+
   <Accordion title="Provider discovery types → provider catalog types">
     Four discovery type aliases are now thin wrappers over the
     catalog-era types:

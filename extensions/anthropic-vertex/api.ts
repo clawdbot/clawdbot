@@ -17,6 +17,13 @@ export {
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
 import { hasAnthropicVertexAvailableAuth } from "./region.js";
 
+let streamRuntimeModulePromise: Promise<typeof import("./stream-runtime.js")> | null = null;
+
+const loadStreamRuntimeModule = async () => {
+  streamRuntimeModulePromise ??= import("./stream-runtime.js");
+  return await streamRuntimeModulePromise;
+};
+
 export function mergeImplicitAnthropicVertexProvider(params: {
   existing?: ReturnType<typeof buildAnthropicVertexProvider>;
   implicit: ReturnType<typeof buildAnthropicVertexProvider>;
@@ -50,7 +57,7 @@ export function createAnthropicVertexStreamFn(
   baseURL?: string,
   deps?: AnthropicVertexStreamDeps,
 ): StreamFn {
-  const streamFnPromise = import("./stream-runtime.js").then((runtime) =>
+  const streamFnPromise = loadStreamRuntimeModule().then((runtime) =>
     runtime.createAnthropicVertexStreamFn(projectId, region, baseURL, deps),
   );
   return async (model, context, options) => {
@@ -64,7 +71,7 @@ export function createAnthropicVertexStreamFnForModel(
   env: NodeJS.ProcessEnv = process.env,
   deps?: AnthropicVertexStreamDeps,
 ): StreamFn {
-  const streamFnPromise = import("./stream-runtime.js").then((runtime) =>
+  const streamFnPromise = loadStreamRuntimeModule().then((runtime) =>
     runtime.createAnthropicVertexStreamFnForModel(model, env, deps),
   );
   return async (...args) => {

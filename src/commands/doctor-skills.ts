@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,7 +11,6 @@ import {
   type GhConfigDiscoveryInput,
   type GhConfigDiscoveryResult,
 } from "../skills/lifecycle/gh-config-discovery.js";
-import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   collectUnavailableAgentSkills,

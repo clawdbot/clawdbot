@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getSessionEntry } from "../../config/sessions.js";
 import {
   buildFastReplyCommandContext,
   initFastReplySessionState,
@@ -12,6 +13,7 @@ import {
 } from "./get-reply-fast-path.js";
 import {
   buildGetReplyCtx,
+  createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
   expectResolvedTelegramTimezone,
   registerGetReplyRuntimeOverrides,
@@ -28,6 +30,7 @@ function emptyAliasIndex(): ModelAliasIndex {
 
 const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
+  handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
   loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
     {
@@ -113,6 +116,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       resolveRuntimeCliBackends: () => [],
     });
     mocks.ensureAgentWorkspace.mockReset();
+    mocks.handleInlineActions.mockReset();
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     mocks.initSessionState.mockReset();
     mocks.loadModelCatalog.mockReset();
     mocks.loadModelCatalog.mockResolvedValue([
@@ -523,6 +528,81 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     const directiveParams = requireDirectiveParams();
     expect(directiveParams.sessionKey).toBe(targetSessionKey);
     expect(directiveParams.workspaceDir).toBe("/tmp/workspace");
+  });
+
+  it("continues native slash goal starts with the rewritten command-safe prompt", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-goal-fast-"));
+    const targetSessionKey = "agent:main:telegram:123";
+    const storePath = path.join(home, "sessions.json");
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    const continuationPrompt = `Pursue this goal exactly as written from this JSON string: "\\/status"`;
+    const continueDirectives = async (params: unknown) =>
+      createGetReplyContinueDirectivesResult({
+        body: (params as { triggerBodyNormalized: string }).triggerBodyNormalized,
+        abortKey: targetSessionKey,
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "telegram:user:42",
+        commandSource: (params as { triggerBodyNormalized: string }).triggerBodyNormalized,
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      });
+    mocks.resolveReplyDirectives
+      .mockImplementationOnce(continueDirectives)
+      .mockImplementationOnce(async (params: unknown) => {
+        expect((params as { triggerBodyNormalized: string }).triggerBodyNormalized).toBe(
+          continuationPrompt,
+        );
+        return continueDirectives(params);
+      });
+    mocks.handleInlineActions.mockImplementation(async (params: unknown) => {
+      expect(params).toMatchObject({
+        command: {
+          rawBodyNormalized: continuationPrompt,
+          commandBodyNormalized: continuationPrompt,
+        },
+        cleanedBody: continuationPrompt,
+      });
+      return {
+        kind: "continue",
+        directives: {},
+        abortedLastRun: false,
+        cleanedBody: continuationPrompt,
+      };
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: "/goal start /status",
+          BodyForAgent: "/goal start /status",
+          RawBody: "/goal start /status",
+          CommandBody: "/goal start /status",
+          CommandSource: "native",
+          CommandAuthorized: true,
+          SessionKey: "telegram:slash:123",
+          CommandTargetSessionKey: targetSessionKey,
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(getSessionEntry({ storePath, sessionKey: targetSessionKey })?.goal?.objective).toBe(
+      "/status",
+    );
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.command.commandBodyNormalized).toBe(continuationPrompt);
+    expect(preparedReplyParams.sessionCtx.BodyForAgent).toBe(continuationPrompt);
+    expect(mocks.handleInlineActions).toHaveBeenCalledTimes(2);
   });
 
   it("uses native command target session keys during fast bootstrap", () => {

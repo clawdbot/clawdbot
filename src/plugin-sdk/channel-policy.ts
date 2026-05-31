@@ -1,10 +1,13 @@
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "../../packages/normalization-core/src/string-normalization.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createAllowlistProviderRestrictSendersWarningCollector } from "../channels/plugins/group-policy-warnings.js";
 import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { createScopedDmSecurityResolver } from "./channel-config-helpers.js";
 /** Shared policy warnings and DM/group policy helpers for channel plugins. */
 export type {

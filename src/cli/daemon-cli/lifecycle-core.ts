@@ -367,7 +367,6 @@ export async function runServiceStart(params: {
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
-    return;
   }
 }
 

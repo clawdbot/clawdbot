@@ -1,6 +1,6 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleepWithAbort } from "./backoff.js";
 
 export type TransportReadyResult = {

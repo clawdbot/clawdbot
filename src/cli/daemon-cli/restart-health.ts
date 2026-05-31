@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,10 +16,6 @@ import {
   type PortUsage,
 } from "../../infra/ports.js";
 import { killProcessTree } from "../../process/kill-tree.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { sleep } from "../../utils.js";
 
 export const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;

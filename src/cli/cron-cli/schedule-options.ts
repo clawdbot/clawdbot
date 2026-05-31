@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {

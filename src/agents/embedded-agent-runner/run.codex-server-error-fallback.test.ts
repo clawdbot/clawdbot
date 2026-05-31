@@ -38,7 +38,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
     const currentAttemptAssistant = makeAssistantMessageFixture({
       stopReason: "error",
       errorMessage: rawCodexError,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
     });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -56,7 +56,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.4",
+              primary: "openai/gpt-5.4",
               fallbacks: ["anthropic/claude-opus-4-6"],
             },
           },

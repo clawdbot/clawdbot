@@ -84,7 +84,7 @@ describe("resolveConfiguredEntries", () => {
         defaults: {
           model: "openai/gpt-5.5",
           models: {
-            "openai-codex/*": {},
+            "openai/*": {},
             "openai/gpt-5.5": { alias: "Primary" },
           },
         },

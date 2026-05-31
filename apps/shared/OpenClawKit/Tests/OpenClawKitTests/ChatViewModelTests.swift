@@ -2192,7 +2192,7 @@ extension TestChatTransportState {
             path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(
-                modelProvider: "openai-codex",
+                modelProvider: "openai",
                 model: "gpt-5.5",
                 contextTokens: nil,
                 thinkingLevels: [

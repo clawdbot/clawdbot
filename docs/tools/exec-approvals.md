@@ -15,6 +15,10 @@ safety interlock: commands are allowed only when policy + allowlist +
 tool policy and elevated gating (unless elevated is set to `full`, which
 skips approvals).
 
+For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
+Codex Guardian mapping, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
+
 <Note>
 Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults; if an approvals field is omitted, the `tools.exec` value is
@@ -443,9 +447,13 @@ Exec lifecycle is surfaced as system messages:
 - `Exec finished`.
 
 These are posted to the agent's session after the node reports the event.
-Denied exec approvals are terminal: OpenClaw can report the denial to the
-operator or direct chat route, but it does not post `Exec denied` back into the
-agent session or wake agent work.
+Denied exec approvals are terminal for the host command itself: the command
+does not run. For main-agent async approvals with an originating session,
+OpenClaw posts the denial back into that session as an internal followup so the
+agent can stop waiting on the async command and avoid a missing-result repair.
+If there is no session or the session cannot be resumed, OpenClaw can still
+report a concise denial to the operator or direct chat route. Denials for
+subagent sessions are not posted back into the subagent.
 Gateway-host exec approvals emit the same lifecycle events when the
 command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these
@@ -453,11 +461,12 @@ messages for easy correlation.
 
 ## Denied approval behavior
 
-When an async exec approval is denied, OpenClaw treats the request as terminal.
-It can show a concise denial to the operator or direct chat route, but it does
-not send denial guidance back through the agent session. That keeps a denied
-command from becoming another model turn and prevents the agent from reusing
-output from an earlier run of the same command.
+When an async exec approval is denied, OpenClaw treats the host command as
+terminal and fail-closed. For main-agent sessions, the denial is delivered as an
+internal session followup that tells the agent the async command did not run.
+That preserves transcript continuity without exposing stale command output. If
+session delivery is unavailable, OpenClaw falls back to a concise operator or
+direct-chat denial when a safe route exists.
 
 ## Implications
 

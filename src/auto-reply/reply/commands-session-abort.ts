@@ -1,7 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,

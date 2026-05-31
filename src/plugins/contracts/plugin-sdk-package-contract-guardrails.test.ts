@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -724,6 +724,17 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 }
 
 describe("plugin-sdk package contract guardrails", () => {
+  let deprecatedTestBarrelImports: Array<{ file: string; specifier: string }> = [];
+  let unusedReservedSdkSubpaths: string[] = [];
+
+  beforeAll(() => {
+    deprecatedTestBarrelImports = collectDeprecatedTestBarrelImports();
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    unusedReservedSdkSubpaths = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
+    );
+  });
+
   it("lists package guardrail scan inputs from git without walking roots", () => {
     expectNoReaddirSyncDuring(() => {
       const pluginIds = collectBundledPluginIds();
@@ -939,7 +950,7 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
-    expect(collectDeprecatedTestBarrelImports()).toStrictEqual([]);
+    expect(deprecatedTestBarrelImports).toStrictEqual([]);
   });
 
   it("keeps the package testing barrel as a single deprecated bridge", () => {
@@ -959,12 +970,7 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps reserved SDK compatibility subpaths actively used", () => {
-    const usedReserved = new Set(collectReservedSdkSubpathImports());
-    const unusedReserved = reservedBundledPluginSdkEntrypoints.filter(
-      (entrypoint) => !usedReserved.has(entrypoint),
-    );
-
-    expect(unusedReserved).toStrictEqual([]);
+    expect(unusedReservedSdkSubpaths).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

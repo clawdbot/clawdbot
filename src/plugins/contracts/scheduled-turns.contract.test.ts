@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -455,6 +456,14 @@ describe("plugin scheduled turns", () => {
         },
       }),
     ).resolves.toBeUndefined();
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+  });
+
+  it("rejects delayed schedules that cannot fit in the Date timestamp range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    await expect(scheduleWorkflowTurn({ schedule: { delayMs: 1 } })).resolves.toBeUndefined();
     expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
   });
 

@@ -3,7 +3,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 
-vi.mock("../terminal/theme.js", () => ({
+vi.mock("../../packages/terminal-core/src/theme.js", () => ({
   isRich: () => false,
   theme: {
     heading: (s: string) => s,
@@ -13,7 +13,7 @@ vi.mock("../terminal/theme.js", () => ({
   },
 }));
 
-vi.mock("../terminal/links.js", () => ({
+vi.mock("../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: (path: string, label: string) => `${label}${path}`,
 }));
 

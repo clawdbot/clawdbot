@@ -80,7 +80,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   builtinToolNames?: ReadonlySet<string>;
   /**
-   * Exact raw names allowed to emit local MEDIA: paths for this run.
+   * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the
    * startup metadata snapshot.
    */

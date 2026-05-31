@@ -1,5 +1,5 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { readErrorName } from "../infra/errors.js";
-import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
 import {
   classifyFailoverSignal,
   inferSignalStatus,
@@ -169,6 +169,46 @@ function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
 }
 
+function isStableProviderErrorType(value: string): boolean {
+  if (
+    /^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+}
+
+function readDirectErrorType(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const directType = (err as { errorType?: unknown }).errorType;
+  if (typeof directType === "string") {
+    const trimmed = directType.trim();
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
+  if (typeof detailType === "string") {
+    const trimmed = detailType.trim();
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  const type = (err as { type?: unknown }).type;
+  if (typeof type === "string") {
+    const trimmed = type.trim();
+    if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
+      return undefined;
+    }
+    return isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+function getErrorType(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorType);
+}
+
 function readDirectProvider(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -216,6 +256,7 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   return {
     status: readDirectStatusCode(err),
     code: readDirectErrorCode(err),
+    errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
   };
@@ -333,6 +374,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
   return {
     status: getStatusCode(err),
     code: getErrorCode(err),
+    errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
   };

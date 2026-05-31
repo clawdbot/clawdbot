@@ -1,4 +1,8 @@
 import { GatewayDispatchEvents } from "discord-api-types/v10";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { getChannel, getGuild, getGuildMember, getUser } from "./api.js";
 import type { RequestClient } from "./rest.js";
 import { Guild, GuildMember, User, channelFactory, type StructureClient } from "./structures.js";
@@ -79,15 +83,23 @@ export class DiscordEntityCache {
 
   private async fetchCached<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
     const ttl = this.params.ttlMs ?? DEFAULT_REST_CACHE_TTL_MS;
+    const rawNow = Date.now();
+    const now = asDateTimestampMs(rawNow);
     if (ttl > 0) {
       const cached = this.entries.get(key) as CacheEntry<T> | undefined;
-      if (cached && cached.expiresAt > Date.now()) {
+      if (cached && now !== undefined && cached.expiresAt > now) {
         return cached.value;
+      }
+      if (cached) {
+        this.entries.delete(key);
       }
     }
     const value = await fetcher();
     if (ttl > 0) {
-      this.entries.set(key, { expiresAt: Date.now() + ttl, value });
+      const expiresAt = resolveExpiresAtMsFromDurationMs(ttl, { nowMs: rawNow });
+      if (expiresAt !== undefined) {
+        this.entries.set(key, { expiresAt, value });
+      }
     }
     return value;
   }

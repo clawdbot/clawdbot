@@ -1,7 +1,7 @@
 import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const jitiCalls = vi.hoisted(() => ({
   imports: [] as string[],
@@ -26,6 +26,11 @@ vi.mock("jiti/static", () => ({
 }));
 
 const tempDirs: string[] = [];
+let preloadedLoadExtensions: typeof import("./loader.js").loadExtensions;
+
+beforeAll(async () => {
+  preloadedLoadExtensions = (await import("./loader.js")).loadExtensions;
+});
 
 beforeEach(() => {
   vi.resetModules();
@@ -39,7 +44,7 @@ afterEach(async () => {
 
 describe("loadExtensions native JavaScript path", () => {
   it("loads compiled JavaScript extensions without creating a jiti loader", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const loadExtensions = preloadedLoadExtensions;
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.mjs");

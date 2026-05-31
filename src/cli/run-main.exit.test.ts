@@ -232,7 +232,7 @@ vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
   resolveManifestToolOwner: resolveManifestToolOwnerMock,
 }));
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 

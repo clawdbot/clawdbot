@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString as normalizeTrimmedString } from "../shared/string-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 type PluginManifestMetadataRecord = {

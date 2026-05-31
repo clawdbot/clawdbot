@@ -2051,10 +2051,8 @@ export class MatrixClient {
       this.emitter.emit("room.event", roomId, raw);
       if (isEncryptedEvent) {
         this.emitter.emit("room.encrypted_event", roomId, raw);
-      } else {
-        if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
-          this.emitter.emit("room.message", roomId, raw);
-        }
+      } else if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
+        this.emitter.emit("room.message", roomId, raw);
       }
 
       const stateKey = raw.state_key ?? "";

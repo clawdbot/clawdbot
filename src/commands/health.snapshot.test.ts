@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
@@ -472,6 +473,23 @@ describe("getHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("clamps oversized probe timeouts", async () => {
+    testConfig = {
+      session: { store: "/tmp/x" },
+      channels: { telegram: { botToken: "123:test" } },
+    };
+    testStore = {};
+    const timeouts: number[] = [];
+    probeTelegramAccountForTestOverride = async (_account, timeoutMs) => {
+      timeouts.push(timeoutMs);
+      return { ok: true };
+    };
+
+    await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+    expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 
   it("includes active plugin load errors in the health snapshot", async () => {

@@ -115,12 +115,53 @@ function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string)
   return rows.some((row) => row.name === columnName);
 }
 
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { ok?: unknown } | undefined;
+  return row?.ok === 1;
+}
+
 function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): void {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
-  if (!columnName || tableHasColumn(db, tableName, columnName)) {
+  if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
     return;
   }
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+}
+
+function backfillCronRunLogEntryJson(db: DatabaseSync): void {
+  if (!tableExists(db, "cron_run_logs") || !tableHasColumn(db, "cron_run_logs", "entry_json")) {
+    return;
+  }
+  const rows = db
+    .prepare(
+      `SELECT store_key, job_id, seq, ts
+         FROM cron_run_logs
+        WHERE entry_json = '{}'`,
+    )
+    .all() as Array<{
+    store_key: string;
+    job_id: string;
+    seq: number | bigint;
+    ts: number | bigint;
+  }>;
+  if (rows.length === 0) {
+    return;
+  }
+  const update = db.prepare(
+    `UPDATE cron_run_logs
+        SET entry_json = ?
+      WHERE store_key = ? AND job_id = ? AND seq = ?`,
+  );
+  for (const row of rows) {
+    update.run(
+      JSON.stringify({ ts: Number(row.ts), jobId: row.job_id, action: "finished" }),
+      row.store_key,
+      row.job_id,
+      row.seq,
+    );
+  }
 }
 
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
@@ -128,10 +169,84 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
   ensureColumn(db, "node_pairing_paired", "client_id TEXT");
   ensureColumn(db, "node_pairing_paired", "client_mode TEXT");
+  ensureColumn(db, "cron_run_logs", "status TEXT");
+  ensureColumn(db, "cron_run_logs", "error TEXT");
+  ensureColumn(db, "cron_run_logs", "summary TEXT");
+  ensureColumn(db, "cron_run_logs", "diagnostics_summary TEXT");
+  ensureColumn(db, "cron_run_logs", "delivery_status TEXT");
+  ensureColumn(db, "cron_run_logs", "delivery_error TEXT");
+  ensureColumn(db, "cron_run_logs", "delivered INTEGER");
+  ensureColumn(db, "cron_run_logs", "session_id TEXT");
+  ensureColumn(db, "cron_run_logs", "session_key TEXT");
+  ensureColumn(db, "cron_run_logs", "run_id TEXT");
+  ensureColumn(db, "cron_run_logs", "run_at_ms INTEGER");
+  ensureColumn(db, "cron_run_logs", "duration_ms INTEGER");
+  ensureColumn(db, "cron_run_logs", "next_run_at_ms INTEGER");
+  ensureColumn(db, "cron_run_logs", "model TEXT");
+  ensureColumn(db, "cron_run_logs", "provider TEXT");
+  ensureColumn(db, "cron_run_logs", "total_tokens INTEGER");
+  ensureColumn(db, "cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
+  backfillCronRunLogEntryJson(db);
+  ensureColumn(db, "cron_jobs", "description TEXT");
+  ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
+  ensureColumn(db, "cron_jobs", "agent_id TEXT");
+  ensureColumn(db, "cron_jobs", "session_key TEXT");
+  ensureColumn(db, "cron_jobs", "schedule_expr TEXT");
+  ensureColumn(db, "cron_jobs", "schedule_tz TEXT");
+  ensureColumn(db, "cron_jobs", "every_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "anchor_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "at TEXT");
+  ensureColumn(db, "cron_jobs", "stagger_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "payload_message TEXT");
+  ensureColumn(db, "cron_jobs", "payload_model TEXT");
+  ensureColumn(db, "cron_jobs", "payload_fallbacks_json TEXT");
+  ensureColumn(db, "cron_jobs", "payload_thinking TEXT");
+  ensureColumn(db, "cron_jobs", "payload_timeout_seconds INTEGER");
+  ensureColumn(db, "cron_jobs", "payload_allow_unsafe_external_content INTEGER");
+  ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
+  ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
+  ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_to TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_thread_id TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_account_id TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_best_effort INTEGER");
+  ensureColumn(db, "cron_jobs", "failure_delivery_mode TEXT");
+  ensureColumn(db, "cron_jobs", "failure_delivery_channel TEXT");
+  ensureColumn(db, "cron_jobs", "failure_delivery_to TEXT");
+  ensureColumn(db, "cron_jobs", "failure_delivery_account_id TEXT");
+  ensureColumn(db, "cron_jobs", "failure_alert_disabled INTEGER");
+  ensureColumn(db, "cron_jobs", "failure_alert_after INTEGER");
+  ensureColumn(db, "cron_jobs", "failure_alert_channel TEXT");
+  ensureColumn(db, "cron_jobs", "failure_alert_to TEXT");
+  ensureColumn(db, "cron_jobs", "failure_alert_cooldown_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "failure_alert_include_skipped INTEGER");
+  ensureColumn(db, "cron_jobs", "failure_alert_mode TEXT");
+  ensureColumn(db, "cron_jobs", "failure_alert_account_id TEXT");
+  ensureColumn(db, "cron_jobs", "next_run_at_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "running_at_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "last_run_at_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "last_run_status TEXT");
+  ensureColumn(db, "cron_jobs", "last_error TEXT");
+  ensureColumn(db, "cron_jobs", "last_duration_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "consecutive_errors INTEGER");
+  ensureColumn(db, "cron_jobs", "consecutive_skipped INTEGER");
+  ensureColumn(db, "cron_jobs", "schedule_error_count INTEGER");
+  ensureColumn(db, "cron_jobs", "last_delivery_status TEXT");
+  ensureColumn(db, "cron_jobs", "last_delivery_error TEXT");
+  ensureColumn(db, "cron_jobs", "last_delivered INTEGER");
+  ensureColumn(db, "cron_jobs", "last_failure_alert_at_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "state_json TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, "cron_jobs", "runtime_updated_at_ms INTEGER");
+  ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
+  ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   assertSupportedSchemaVersion(db, pathname);
+  ensureAdditiveStateColumns(db);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   ensureAdditiveStateColumns(db);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);

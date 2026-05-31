@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   const error = await fs.access(targetPath).then(
@@ -53,6 +57,25 @@ describe("dreaming markdown storage", () => {
     const content = await fs.readFile(inlinePath, "utf-8");
     expect(content).toContain("## Light Sleep");
     expect(content).toContain("- Candidate: remember the API key is fake");
+  });
+
+  it("falls back when the injected timestamp is outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: bounded fallback"],
+      nowMs: 8_640_000_000_000_001,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    expect(requireInlinePath(result)).toBe(path.join(workspaceDir, "memory", "2026-05-30.md"));
   });
 
   it("keeps multiple inline phases in the shared daily memory file", async () => {

@@ -115,6 +115,37 @@ describe("qa suite runtime agent process helpers", () => {
     expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
   });
 
+  it("caps oversized qa cli timeout timers", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const child = createSpawnedProcess();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: {
+            tempRoot: "/tmp/runtime",
+            runtimeEnv: { PATH: "/usr/bin" },
+          },
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+        { timeoutMs: Number.MAX_SAFE_INTEGER },
+      );
+
+      await waitForSpawnCount(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.stdout.emit("data", Buffer.from("ok\n"));
+      child.emit("exit", 0);
+      await expect(pending).resolves.toBe("ok");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("merges isolated env overrides into qa cli runs", async () => {
     const child = createSpawnedProcess();
     spawnMock.mockReturnValue(child);

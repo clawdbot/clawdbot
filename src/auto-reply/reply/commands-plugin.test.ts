@@ -100,7 +100,7 @@ describe("handlePluginCommand", () => {
       [params.sessionKey]: {
         sessionId: "target-session",
         sessionFile: "/tmp/target-session.jsonl",
-        authProfileOverride: "openai-codex:owner@example.com",
+        authProfileOverride: "openai:owner@example.com",
         updatedAt: Date.now(),
       },
     };
@@ -113,7 +113,7 @@ describe("handlePluginCommand", () => {
     >;
     expect(commandParams.sessionId).toBe("target-session");
     expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
-    expect(commandParams.authProfileId).toBe("openai-codex:owner@example.com");
+    expect(commandParams.authProfileId).toBe("openai:owner@example.com");
   });
 
   it("continues the agent without leaking continueAgent into the reply payload", async () => {

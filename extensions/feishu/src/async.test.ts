@@ -49,4 +49,19 @@ describe("waitForAbortableDelay", () => {
 
     await expect(delay).resolves.toBe(true);
   });
+
+  it("normalizes oversized delays before arming the timer", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback: () => void) => {
+        queueMicrotask(callback);
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      });
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+
+    const delay = waitForAbortableDelay(Number.MAX_SAFE_INTEGER);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await expect(delay).resolves.toBe(true);
+  });
 });

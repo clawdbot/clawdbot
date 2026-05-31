@@ -173,8 +173,9 @@ async function sendTextChunkToTarget(params: {
   text: string;
   consumeQuoteRef: ConsumeQuoteRefFn;
   allowDm: boolean;
+  forcePlainText?: boolean;
 }): Promise<unknown> {
-  const { account, event, text, consumeQuoteRef, allowDm } = params;
+  const { account, event, text, consumeQuoteRef, allowDm, forcePlainText } = params;
   const ref = consumeQuoteRef();
   const target = buildDeliveryTarget(event);
   if (target.type === "dm" && !allowDm) {
@@ -184,6 +185,7 @@ async function sendTextChunkToTarget(params: {
   return await senderSendText(target, text, creds, {
     msgId: event.messageId,
     messageReference: ref,
+    forcePlainText,
   });
 }
 
@@ -211,6 +213,35 @@ async function sendTextChunks(
   });
 }
 
+export async function sendTextOnlyReply(
+  text: string,
+  event: DeliverEventContext,
+  actx: DeliverAccountContext,
+  sendWithRetry: SendWithRetryFn,
+  consumeQuoteRef: ConsumeQuoteRefFn,
+  deps: DeliverDeps,
+): Promise<void> {
+  const safeText = filterInternalMarkers(text).trim();
+  if (!safeText) {
+    return;
+  }
+  const { account, log } = actx;
+  const chunks = deps.chunkText(safeText, TEXT_CHUNK_LIMIT);
+  await sendTextChunksWithRetry({
+    account,
+    event,
+    chunks,
+    sendWithRetry,
+    consumeQuoteRef,
+    allowDm: true,
+    forcePlainText: true,
+    log,
+    onSuccess: (chunk) =>
+      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${chunk.slice(0, 50)}...`,
+    onError: (err) => `Failed to send text-only chunk: ${formatErrorMessage(err)}`,
+  });
+}
+
 async function sendTextChunksWithRetry(params: {
   account: GatewayAccount;
   event: DeliverEventContext;
@@ -218,11 +249,13 @@ async function sendTextChunksWithRetry(params: {
   sendWithRetry: SendWithRetryFn;
   consumeQuoteRef: ConsumeQuoteRefFn;
   allowDm: boolean;
+  forcePlainText?: boolean;
   log?: DeliverAccountContext["log"];
   onSuccess: (chunk: string) => string;
   onError: (err: unknown) => string;
 }): Promise<void> {
-  const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, log } = params;
+  const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, forcePlainText, log } =
+    params;
   for (const chunk of chunks) {
     try {
       await sendWithRetry((token) =>
@@ -233,6 +266,7 @@ async function sendTextChunksWithRetry(params: {
           text: chunk,
           consumeQuoteRef,
           allowDm,
+          forcePlainText,
         }),
       );
       log?.info(params.onSuccess(chunk));

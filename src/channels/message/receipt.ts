@@ -1,4 +1,4 @@
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   MessageReceipt,
   MessageReceiptPartKind,

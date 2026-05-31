@@ -1,5 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type ChannelMatchSource = "direct" | "parent" | "wildcard";
 
@@ -53,14 +53,14 @@ export function resolveChannelEntryMatch<T>(params: {
   const entries = params.entries ?? {};
   const match: ChannelEntryMatch<T> = {};
   for (const key of params.keys) {
-    if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+    if (!Object.hasOwn(entries, key)) {
       continue;
     }
     match.entry = entries[key];
     match.key = key;
     break;
   }
-  if (params.wildcardKey && Object.prototype.hasOwnProperty.call(entries, params.wildcardKey)) {
+  if (params.wildcardKey && Object.hasOwn(entries, params.wildcardKey)) {
     match.wildcardEntry = entries[params.wildcardKey];
     match.wildcardKey = params.wildcardKey;
   }

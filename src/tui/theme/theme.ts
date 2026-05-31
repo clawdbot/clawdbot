@@ -4,8 +4,8 @@ import type {
   SelectListTheme,
   SettingsListTheme,
 } from "@earendil-works/pi-tui";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 
 const DARK_TEXT = "#E8E3D5";

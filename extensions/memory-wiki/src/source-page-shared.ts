@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   setImportedSourceEntry,
@@ -48,7 +49,7 @@ export async function writeImportedSourcePage(params: {
     throw error;
   });
   const created = !pageStat;
-  const updatedAt = new Date(params.sourceUpdatedAtMs).toISOString();
+  const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
   const shouldSkip = await shouldSkipImportedSourceWrite({
     vaultRoot: params.vaultRoot,
     syncKey: params.syncKey,

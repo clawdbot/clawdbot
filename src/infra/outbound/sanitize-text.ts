@@ -11,7 +11,7 @@
  * @see https://github.com/openclaw/openclaw/issues/18558
  */
 
-import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");

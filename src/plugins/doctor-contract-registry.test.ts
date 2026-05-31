@@ -280,7 +280,7 @@ describe("doctor-contract-registry module loader", () => {
         entries: {
           "load-path-doctor": {
             config: {
-              summaryModel: "openai-codex/gpt-5.4-mini",
+              summaryModel: "openai/gpt-5.4-mini",
             },
           },
         },

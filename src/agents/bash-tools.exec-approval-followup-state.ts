@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
 const EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_PREFIX = "exec-approval-followup:";
@@ -56,7 +60,7 @@ function cloneExecApprovalFollowupRuntimeHandoff(
 
 function pruneExpiredExecApprovalFollowupRuntimeHandoffs(nowMs: number): void {
   for (const [handoffId, entry] of execApprovalFollowupRuntimeHandoffs) {
-    if (entry.expiresAtMs <= nowMs) {
+    if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
       execApprovalFollowupRuntimeHandoffs.delete(handoffId);
     }
   }
@@ -94,6 +98,13 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   pruneExpiredExecApprovalFollowupRuntimeHandoffs(nowMs);
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(
+    EXEC_APPROVAL_FOLLOWUP_RUNTIME_HANDOFF_TTL_MS,
+    { nowMs },
+  );
+  if (expiresAtMs === undefined) {
+    return undefined;
+  }
   const handoffId = randomUUID();
   const idempotencyKey = buildExecApprovalFollowupIdempotencyKey({
     approvalId,
@@ -105,7 +116,7 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
     sessionKey,
     idempotencyKey,
     bashElevated: cloneExecElevatedDefaults(params.bashElevated),
-    expiresAtMs: nowMs + EXEC_APPROVAL_FOLLOWUP_RUNTIME_HANDOFF_TTL_MS,
+    expiresAtMs,
   });
   return { handoffId, idempotencyKey };
 }
@@ -129,7 +140,7 @@ export function consumeExecApprovalFollowupRuntimeHandoff(params: {
   if (!entry) {
     return undefined;
   }
-  if (entry.expiresAtMs <= nowMs) {
+  if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
     execApprovalFollowupRuntimeHandoffs.delete(handoffId);
     return undefined;
   }

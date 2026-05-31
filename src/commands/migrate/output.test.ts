@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
-import { stripAnsi } from "../../terminal/ansi.js";
 import { formatMigrationPreview, formatMigrationResult } from "./output.js";
 
 function skillItem(index: number): MigrationItem {

@@ -1,3 +1,5 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import {
   parseRuntimeTimeoutSecondsInput,
@@ -8,7 +10,6 @@ import {
   validateRuntimePermissionProfileInput,
 } from "../../../acp/control-plane/runtime-options.js";
 import { resolveAcpSessionIdentifierLinesFromIdentity } from "../../../acp/runtime/session-identifiers.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { findLatestTaskForRelatedSessionKeyForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -145,6 +146,11 @@ export async function handleAcpStatusAction(
       const runtimeDetails = sanitizeTaskStatusText(status.runtimeStatus?.details, {
         errorContext: true,
       });
+      const taskUpdatedAt =
+        typeof linkedTask?.lastEventAt === "number"
+          ? timestampMsToIsoString(linkedTask.lastEventAt)
+          : undefined;
+      const lastActivityAt = timestampMsToIsoString(status.lastActivityAt) ?? "n/a";
       const lines = [
         "ACP status:",
         "-----",
@@ -162,14 +168,12 @@ export async function handleAcpStatusAction(
               ...(taskProgress ? [`taskProgress: ${taskProgress}`] : []),
               ...(taskSummary ? [`taskSummary: ${taskSummary}`] : []),
               ...(taskError ? [`taskError: ${taskError}`] : []),
-              ...(typeof linkedTask.lastEventAt === "number"
-                ? [`taskUpdatedAt: ${new Date(linkedTask.lastEventAt).toISOString()}`]
-                : []),
+              ...(taskUpdatedAt ? [`taskUpdatedAt: ${taskUpdatedAt}`] : []),
             ]
           : []),
         `runtimeOptions: ${formatRuntimeOptionsText(status.runtimeOptions)}`,
         `capabilities: ${formatAcpCapabilitiesText(status.capabilities.controls)}`,
-        `lastActivityAt: ${new Date(status.lastActivityAt).toISOString()}`,
+        `lastActivityAt: ${lastActivityAt}`,
         ...(lastError ? [`lastError: ${lastError}`] : []),
         ...(runtimeSummary ? [`runtime: ${runtimeSummary}`] : []),
         ...(runtimeDetails ? [`runtimeDetails: ${runtimeDetails}`] : []),

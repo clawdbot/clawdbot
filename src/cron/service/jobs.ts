@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,

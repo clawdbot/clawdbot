@@ -18,6 +18,18 @@ type TestConfig = {
     list?: TestAgentConfig[];
   };
 };
+type TestBindingRequest = {
+  targetSessionKey: string;
+  targetKind?: string;
+  conversation: {
+    channel: string;
+    accountId?: string;
+    conversationId: string;
+    parentConversationId?: string;
+  };
+  placement: "current" | "child";
+  metadata?: Record<string, unknown>;
+};
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -28,7 +40,23 @@ const hoisted = vi.hoisted(() => ({
   >(() => ({ sandboxed: false })),
   hookRunner: {
     hasHooks: vi.fn(() => false),
-    runSubagentSpawning: vi.fn(),
+  },
+  bindingService: {
+    getCapabilities: vi.fn(() => ({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["child"] as Array<"current" | "child">,
+    })),
+    bind: vi.fn(async (request: TestBindingRequest) => {
+      const conversation = request.conversation;
+      return {
+        targetSessionKey: request.targetSessionKey,
+        targetKind: request.targetKind,
+        status: "active",
+        conversation,
+      };
+    }),
+    listBySession: vi.fn(() => []),
   },
 }));
 
@@ -111,6 +139,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
       resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
+      getSessionBindingService: () => hoisted.bindingService,
       resetModules: false,
     }));
   });
@@ -123,7 +152,9 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
     hoisted.hookRunner.hasHooks.mockReset();
     hoisted.hookRunner.hasHooks.mockImplementation(() => false);
-    hoisted.hookRunner.runSubagentSpawning.mockReset();
+    hoisted.bindingService.getCapabilities.mockClear();
+    hoisted.bindingService.bind.mockClear();
+    hoisted.bindingService.listBySession.mockClear();
     hoisted.configOverride = createConfigOverride();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
   });
@@ -323,11 +354,6 @@ describe("spawnSubagentDirect workspace inheritance", () => {
   });
 
   it("keeps lifecycle hooks enabled when registerSubagentRun fails after thread binding succeeds", async () => {
-    hoisted.hookRunner.hasHooks.mockImplementation((name?: string) => name === "subagent_spawning");
-    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
-      status: "ok",
-      threadBindingReady: true,
-    });
     hoisted.registerSubagentRunMock.mockImplementation(() => {
       throw new Error("registry unavailable");
     });

@@ -3,6 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -13,11 +19,13 @@ const PREFERENCE_MAX_ENTRIES = 2_000;
 const MAX_PLUGIN_STATE_KEY_BYTES = 512;
 const textEncoder = new TextEncoder();
 let lastPreferenceTimestampMs = 0;
+let lastPreferenceOrder = 0;
 
 type ModelPickerPreferencesEntry = {
   scopeKey: string;
   modelRef: string;
   updatedAt: string;
+  updatedOrder?: number;
 };
 
 type LegacyModelPickerPreferencesEntry = {
@@ -124,6 +132,7 @@ function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEn
     scopeKey?: unknown;
     modelRef?: unknown;
     updatedAt?: unknown;
+    updatedOrder?: unknown;
   };
   if (typeof typedValue.scopeKey !== "string" || typeof typedValue.modelRef !== "string") {
     return undefined;
@@ -136,6 +145,10 @@ function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEn
     scopeKey: typedValue.scopeKey,
     modelRef,
     updatedAt: typeof typedValue.updatedAt === "string" ? typedValue.updatedAt : "",
+    updatedOrder:
+      typeof typedValue.updatedOrder === "number" && Number.isSafeInteger(typedValue.updatedOrder)
+        ? typedValue.updatedOrder
+        : undefined,
   };
 }
 
@@ -152,13 +165,58 @@ function timestampMs(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function legacyUpdatedAtForIndex(updatedAt: string, index: number, total: number): string {
-  return new Date(timestampMs(updatedAt) + Math.max(0, total - index)).toISOString();
+function timestampOrder(value?: number): number {
+  return value !== undefined && value >= 0 ? value : 0;
 }
 
-function nextPreferenceTimestampIso(): string {
-  lastPreferenceTimestampMs = Math.max(Date.now(), lastPreferenceTimestampMs + 1);
-  return new Date(lastPreferenceTimestampMs).toISOString();
+function comparePreferenceEntries(
+  left: { key: string; value: ModelPickerPreferencesEntry },
+  right: { key: string; value: ModelPickerPreferencesEntry },
+): number {
+  return (
+    timestampMs(right.value.updatedAt) - timestampMs(left.value.updatedAt) ||
+    timestampOrder(right.value.updatedOrder) - timestampOrder(left.value.updatedOrder) ||
+    left.key.localeCompare(right.key)
+  );
+}
+
+function legacyUpdatedAtForIndex(updatedAt: string, index: number, total: number): string {
+  const baseMs = timestampMs(updatedAt);
+  const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
+  const shiftedMs = anchorMs - Math.max(0, index);
+  return (
+    timestampMsToIsoString(shiftedMs) ??
+    timestampMsToIsoString(baseMs) ??
+    timestampMsToIsoString(Math.max(0, total - index)) ??
+    "1970-01-01T00:00:00.000Z"
+  );
+}
+
+function nextPreferenceTimestamp(existingEntries: ModelPickerPreferencesEntry[]): {
+  updatedAt: string;
+  updatedOrder: number;
+} {
+  const existingMaxTimestampMs = existingEntries.reduce(
+    (max, entry) => Math.max(max, timestampMs(entry.updatedAt)),
+    0,
+  );
+  lastPreferenceTimestampMs = Math.min(
+    Math.max(
+      resolveDateTimestampMs(Date.now(), 0),
+      lastPreferenceTimestampMs + 1,
+      existingMaxTimestampMs + 1,
+    ),
+    MAX_DATE_TIMESTAMP_MS,
+  );
+  const existingMaxOrder = existingEntries.reduce(
+    (max, entry) => Math.max(max, timestampOrder(entry.updatedOrder)),
+    0,
+  );
+  lastPreferenceOrder = Math.max(lastPreferenceOrder + 1, existingMaxOrder + 1);
+  return {
+    updatedAt: resolveTimestampMsToIsoString(lastPreferenceTimestampMs),
+    updatedOrder: lastPreferenceOrder,
+  };
 }
 
 function normalizeLegacyPreferenceKey(key: string): string | undefined {
@@ -237,10 +295,13 @@ export async function readDiscordModelPickerRecentModels(params: {
     await importLegacyPreferences(params.env);
     const store = openPreferenceStore(params.env);
     const recent = (await store.entries())
-      .map((entry) => sanitizeStoredPreferenceEntry(entry.value))
-      .filter((entry): entry is ModelPickerPreferencesEntry => entry?.scopeKey === key)
-      .toSorted((left, right) => timestampMs(right.updatedAt) - timestampMs(left.updatedAt))
-      .map((entry) => entry.modelRef);
+      .map((entry) => ({ key: entry.key, value: sanitizeStoredPreferenceEntry(entry.value) }))
+      .filter(
+        (entry): entry is { key: string; value: ModelPickerPreferencesEntry } =>
+          entry.value?.scopeKey === key,
+      )
+      .toSorted(comparePreferenceEntries)
+      .map((entry) => entry.value.modelRef);
     if (!params.allowedModelRefs || params.allowedModelRefs.size === 0) {
       return sanitizeRecentModels(recent, limit);
     }
@@ -268,10 +329,14 @@ export async function recordDiscordModelPickerRecentModel(params: {
   try {
     await importLegacyPreferences(params.env);
     const store = openPreferenceStore(params.env);
+    const existingEntries = (await store.entries())
+      .map((entry) => sanitizeStoredPreferenceEntry(entry.value))
+      .filter((entry): entry is ModelPickerPreferencesEntry => entry?.scopeKey === key);
+    const timestamp = nextPreferenceTimestamp(existingEntries);
     await store.register(buildPreferenceModelKey(key, normalizedModelRef), {
       scopeKey: key,
       modelRef: normalizedModelRef,
-      updatedAt: nextPreferenceTimestampIso(),
+      ...timestamp,
     });
     const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
     const scopedEntries = (await store.entries())
@@ -280,13 +345,7 @@ export async function recordDiscordModelPickerRecentModel(params: {
         (entry): entry is { key: string; value: ModelPickerPreferencesEntry } =>
           entry.value?.scopeKey === key,
       )
-      .toSorted(
-        (left, right) =>
-          timestampMs(right.value.updatedAt) - timestampMs(left.value.updatedAt) ||
-          left.key.localeCompare(right.key),
-      );
+      .toSorted(comparePreferenceEntries);
     await Promise.all(scopedEntries.slice(limit).map((entry) => store.delete(entry.key)));
-  } catch {
-    return;
-  }
+  } catch {}
 }

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const state = vi.hoisted(() => ({
@@ -138,6 +139,10 @@ vi.mock("./command/delivery.runtime.js", () => ({
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 
+beforeAll(async () => {
+  agentCommand = (await import("./agent-command.js")).agentCommand;
+});
+
 beforeEach(async () => {
   vi.clearAllMocks();
   state.deliveryFreshEntries = [];
@@ -158,7 +163,6 @@ beforeEach(async () => {
       },
     },
   } as OpenClawConfig;
-  agentCommand ??= (await import("./agent-command.js")).agentCommand;
 });
 
 afterEach(async () => {
@@ -210,29 +214,27 @@ async function readSessionMessages(sessionFile: string) {
     .map((entry) => entry.message);
 }
 
+function requireStorePath(): string {
+  const storePath = state.cfg?.session?.store;
+  if (!storePath) {
+    throw new Error("missing test session store path");
+  }
+  return storePath;
+}
+
 describe("agentCommand compaction transcript rotation", () => {
-  it("keeps sessions.json on the rotated successor and resumes the next turn from it", async () => {
-    const storePath = state.cfg?.session?.store;
-    if (!storePath) {
-      throw new Error("missing test session store path");
-    }
+  it("keeps sessions.json on the rotated successor", async () => {
+    const storePath = requireStorePath();
     const sessionsDir = await fs.realpath(path.dirname(storePath));
     const rotatedSessionFile = path.join(sessionsDir, "rotated-session.jsonl");
-    state.runAgentAttemptMock
-      .mockResolvedValueOnce(
-        makeResult({
-          sessionId: "rotated-session",
-          sessionFile: rotatedSessionFile,
-          text: "first answer after rotation",
-          compactionCount: 1,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeResult({
-          sessionId: "rotated-session",
-          text: "second answer",
-        }),
-      );
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({
+        sessionId: "rotated-session",
+        sessionFile: rotatedSessionFile,
+        text: "first answer after rotation",
+        compactionCount: 1,
+      }),
+    );
 
     await agentCommand({
       message: "first prompt",
@@ -255,6 +257,40 @@ describe("agentCommand compaction transcript rotation", () => {
     await expect(readSessionMessages(rotatedSessionFile)).resolves.toEqual([
       expect.objectContaining({ role: "assistant" }),
     ]);
+  });
+
+  it("resumes the next turn from the rotated successor", async () => {
+    const storePath = requireStorePath();
+    const sessionsDir = await fs.realpath(path.dirname(storePath));
+    const rotatedSessionFile = path.join(sessionsDir, "rotated-session.jsonl");
+    const sessionKey = "agent:main:explicit:old-session";
+    await fs.writeFile(
+      rotatedSessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "rotated-session",
+        timestamp: new Date(0).toISOString(),
+        cwd: state.workspaceDir,
+      })}\n`,
+      "utf-8",
+    );
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "rotated-session",
+        sessionFile: rotatedSessionFile,
+        updatedAt: Date.now(),
+        usageFamilyKey: sessionKey,
+        usageFamilySessionIds: ["old-session", "rotated-session"],
+        compactionCount: 1,
+      },
+    });
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({
+        sessionId: "rotated-session",
+        text: "second answer",
+      }),
+    );
 
     await agentCommand({
       message: "second prompt",
@@ -262,7 +298,7 @@ describe("agentCommand compaction transcript rotation", () => {
       cwd: state.workspaceDir,
     });
 
-    const secondAttempt = state.runAgentAttemptMock.mock.calls[1]?.[0] as
+    const secondAttempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
       | { sessionId?: string; sessionFile?: string; sessionKey?: string }
       | undefined;
     expect(secondAttempt).toMatchObject({

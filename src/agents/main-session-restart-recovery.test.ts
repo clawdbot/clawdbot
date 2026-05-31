@@ -415,6 +415,106 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("delivers resumed marked sessions through the current run recovery context", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:discord:direct:123": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        deliveryContext: {
+          channel: "discord",
+          to: "discord:dm:stale",
+          accountId: "old",
+        },
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+          threadId: 123,
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    const resumeParams = firstGatewayParams();
+    expect(resumeParams).toMatchObject({
+      sessionKey: "agent:main:discord:direct:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      lane: "main",
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+      threadId: "123",
+    });
+  });
+
+  it("does not infer restart delivery from historical session routes", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:discord:direct:123": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        deliveryContext: {
+          channel: "discord",
+          to: "discord:dm:stale",
+          accountId: "old",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams().deliver).toBe(false);
+  });
+
+  it("does not deliver restart recovery when session send policy denies sends", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:discord:direct:123": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({
+      cfg: { session: { sendPolicy: { default: "deny" } } },
+      stateDir: tmpDir,
+    });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams().deliver).toBe(false);
+  });
+
   it("fails marked sessions with stale approval-pending exec tool results", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
@@ -460,7 +560,17 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
         pendingFinalDelivery: true,
         pendingFinalDeliveryText: pendingPayload,
+        pendingFinalDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:final",
+          accountId: "main",
+        },
         pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:stale",
+          accountId: "old",
+        },
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
@@ -473,6 +583,13 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams()).toMatchObject({
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "discord:dm:final",
+      accountId: "main",
+    });
     expect(firstGatewayParams().message).toContain(pendingPayload);
 
     const beforeStoreRead = Date.now();
@@ -575,7 +692,7 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
-  it("sends a visible notice before failing an unresumable chat-bound main session", async () => {
+  it("sends a visible notice through legacy session route before failing an unresumable main session", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:demo-channel:room-1": {
@@ -583,12 +700,10 @@ describe("main-session-restart-recovery", () => {
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
-        deliveryContext: {
-          channel: "demo-channel",
-          to: "room-1",
-          accountId: "default",
-          threadId: "thread-1",
-        },
+        lastChannel: "discord",
+        lastTo: "discord:channel:room-1",
+        lastAccountId: "default",
+        lastThreadId: "thread-1",
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
@@ -605,14 +720,14 @@ describe("main-session-restart-recovery", () => {
       | undefined;
     expect(gatewayCall?.method).toBe("message.action");
     expect(gatewayCall?.params).toMatchObject({
-      channel: "demo-channel",
+      channel: "discord",
       action: "send",
       accountId: "default",
       sessionKey: "agent:main:demo-channel:room-1",
       sessionId: "main-session",
     });
     expect(gatewayCall?.params?.params).toMatchObject({
-      to: "room-1",
+      to: "discord:channel:room-1",
       threadId: "thread-1",
       bestEffort: true,
     });

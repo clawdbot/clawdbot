@@ -1,5 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { resolveExpiresAtMsFromDurationOrEpoch } from "openclaw/plugin-sdk/number-runtime";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  asSafeIntegerInRange,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -68,6 +73,10 @@ export function normalizeOAuthExpires(expiredIn: unknown, now = Date.now()): num
   });
 }
 
+function normalizeOAuthAuthorizationExpires(expiredIn: unknown): number | undefined {
+  return asSafeIntegerInRange(expiredIn, { min: 1, max: MAX_DATE_TIMESTAMP_MS });
+}
+
 function generatePkce(): { verifier: string; challenge: string; state: string } {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = randomBytes(16).toString("base64url");
@@ -117,7 +126,11 @@ async function requestOAuthCode(params: {
     if (payload.state !== params.state) {
       throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
     }
-    return payload;
+    const expiredIn = normalizeOAuthAuthorizationExpires(payload.expired_in);
+    if (expiredIn === undefined) {
+      throw new Error("MiniMax OAuth authorization returned invalid expired_in.");
+    }
+    return { ...payload, expired_in: expiredIn };
   } finally {
     await release();
   }
@@ -247,7 +260,7 @@ export async function loginMiniMaxPortalOAuth(params: {
     // Fall back to manual copy/paste if browser open fails.
   }
 
-  let pollIntervalMs = oauth.interval ? oauth.interval : 2000;
+  let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.
   const expireTimeMs = oauth.expired_in;
 
@@ -267,7 +280,11 @@ export async function loginMiniMaxPortalOAuth(params: {
       throw new Error(result.message);
     }
 
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    const remainingMs = Math.max(0, expireTimeMs - Date.now());
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 

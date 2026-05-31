@@ -1,5 +1,8 @@
+import {
+  clampTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseFiniteNumber } from "../shared/number-coercion.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 
@@ -8,9 +11,9 @@ export const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 export type ModelCatalogBrowseView = "default" | "configured" | "all";
 
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
-  return Math.max(
-    1,
-    Math.floor(parseFiniteNumber(value) ?? DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS),
+  return (
+    clampTimerTimeoutMs(value, 1) ??
+    resolveTimerTimeoutMs(DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1)
   );
 }
 

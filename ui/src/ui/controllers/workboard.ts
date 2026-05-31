@@ -28,6 +28,8 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "specified",
+  "decomposed",
   "claimed",
   "heartbeat",
   "execution_updated",
@@ -37,9 +39,12 @@ export const WORKBOARD_EVENT_KINDS = [
   "link_added",
   "proof_added",
   "artifact_added",
+  "attachment_added",
   "diagnostic",
   "notification",
   "dispatch",
+  "orchestration",
+  "protocol_violation",
   "archived",
   "unarchived",
   "stale",
@@ -164,6 +169,31 @@ export type WorkboardArtifact = {
   mimeType?: string;
 };
 
+export type WorkboardAttachment = {
+  id: string;
+  cardId: string;
+  createdAt: number;
+  fileName: string;
+  byteSize: number;
+  mimeType?: string;
+  note?: string;
+};
+
+export type WorkboardWorkerLog = {
+  id: string;
+  createdAt: number;
+  level: "info" | "warning" | "error";
+  message: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type WorkboardWorkerProtocol = {
+  state: "idle" | "running" | "completed" | "blocked" | "violated";
+  updatedAt: number;
+  detail?: string;
+};
+
 export type WorkboardDiagnostic = {
   kind: string;
   severity: WorkboardDiagnosticSeverity;
@@ -211,6 +241,9 @@ export type WorkboardMetadata = {
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
   artifacts?: WorkboardArtifact[];
+  attachments?: WorkboardAttachment[];
+  workerLogs?: WorkboardWorkerLog[];
+  workerProtocol?: WorkboardWorkerProtocol;
   automation?: WorkboardAutomation;
   claim?: WorkboardClaim;
   diagnostics?: WorkboardDiagnostic[];
@@ -432,6 +465,18 @@ function normalizeStringArray(value: unknown): string[] {
     : [];
 }
 
+function normalizeWorkerProtocolState(
+  value: unknown,
+): WorkboardWorkerProtocol["state"] | undefined {
+  return value === "idle" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "blocked" ||
+    value === "violated"
+    ? value
+    : undefined;
+}
+
 function normalizeAutomation(value: unknown): WorkboardAutomation | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -598,6 +643,70 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
         ];
       })
     : [];
+  const attachments = Array.isArray(value.attachments)
+    ? value.attachments.flatMap((entry): WorkboardAttachment[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.cardId !== "string" ||
+          typeof entry.fileName !== "string" ||
+          typeof entry.byteSize !== "number" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            cardId: entry.cardId,
+            fileName: entry.fileName,
+            byteSize: entry.byteSize,
+            createdAt: entry.createdAt,
+            ...(typeof entry.mimeType === "string" ? { mimeType: entry.mimeType } : {}),
+            ...(typeof entry.note === "string" ? { note: entry.note } : {}),
+          },
+        ];
+      })
+    : [];
+  const workerLogs = Array.isArray(value.workerLogs)
+    ? value.workerLogs.flatMap((entry): WorkboardWorkerLog[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.message !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            level:
+              entry.level === "warning" || entry.level === "error" || entry.level === "info"
+                ? entry.level
+                : "info",
+            message: entry.message,
+            createdAt: entry.createdAt,
+            ...(typeof entry.sessionKey === "string" ? { sessionKey: entry.sessionKey } : {}),
+            ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+          },
+        ];
+      })
+    : [];
+  const workerProtocolRecord = isRecord(value.workerProtocol) ? value.workerProtocol : null;
+  const workerProtocolState = normalizeWorkerProtocolState(workerProtocolRecord?.state);
+  const workerProtocol = workerProtocolState
+    ? {
+        state: workerProtocolState,
+        updatedAt:
+          typeof workerProtocolRecord?.updatedAt === "number"
+            ? workerProtocolRecord.updatedAt
+            : Date.now(),
+        ...(typeof workerProtocolRecord?.detail === "string"
+          ? { detail: workerProtocolRecord.detail }
+          : {}),
+      }
+    : undefined;
   const claim = isRecord(value.claim)
     ? {
         ownerId: typeof value.claim.ownerId === "string" ? value.claim.ownerId : "",
@@ -673,6 +782,9 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
     ...(links.length ? { links } : {}),
     ...(proof.length ? { proof } : {}),
     ...(artifacts.length ? { artifacts } : {}),
+    ...(attachments.length ? { attachments } : {}),
+    ...(workerLogs.length ? { workerLogs } : {}),
+    ...(workerProtocol ? { workerProtocol } : {}),
     ...(automation ? { automation } : {}),
     ...(claim?.ownerId && claim.claimedAt ? { claim } : {}),
     ...(diagnostics.length ? { diagnostics } : {}),
@@ -1384,6 +1496,33 @@ export async function archiveWorkboardCard(params: {
     state.error = formatError(error);
   } finally {
     state.busyCardId = null;
+    params.requestUpdate?.();
+  }
+}
+
+export async function dispatchWorkboard(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (!params.client) {
+    return;
+  }
+  state.loading = true;
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    await params.client.request("workboard.cards.dispatch", {});
+    const payload = await params.client.request("workboard.cards.list", {});
+    const normalized = normalizeCardsPayload(payload);
+    state.cards = normalized.cards;
+    state.statuses = normalized.statuses;
+    state.loaded = true;
+  } catch (error) {
+    state.error = formatError(error);
+  } finally {
+    state.loading = false;
     params.requestUpdate?.();
   }
 }

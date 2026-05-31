@@ -29,6 +29,7 @@ export {
   type ResolvedApprovalView,
 } from "../infra/approval-handler-runtime.js";
 export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type {
   ExpiredApprovalView,
   ResolvedApprovalView,
@@ -40,7 +41,6 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;

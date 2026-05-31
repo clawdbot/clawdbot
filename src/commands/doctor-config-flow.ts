@@ -1,9 +1,9 @@
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
@@ -88,7 +88,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
-  let snapshot = preflight.snapshot;
+  const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);

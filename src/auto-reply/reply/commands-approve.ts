@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,
   resolveChannelApprovalCapability,
@@ -7,7 +8,6 @@ import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalOverGateway } from "../../infra/approval-gateway-resolver.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";

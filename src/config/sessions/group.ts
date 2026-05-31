@@ -1,12 +1,12 @@
-import type { MsgContext } from "../../auto-reply/templating.js";
-import { listChannelPlugins } from "../../channels/plugins/registry.js";
-import { normalizeSessionPeerId } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeHyphenSlug } from "@openclaw/normalization-core/string-normalization";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { listChannelPlugins } from "../../channels/plugins/registry.js";
+import { normalizeSessionPeerId } from "../../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 

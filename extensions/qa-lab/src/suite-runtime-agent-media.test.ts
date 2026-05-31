@@ -53,8 +53,19 @@ describe("qa suite runtime agent media helpers", () => {
     waitForTransportReadyMock.mockClear();
   });
 
-  it("extracts media paths from tool output text", () => {
-    expect(extractMediaPathFromText("done\nMEDIA:/tmp/image.png")).toBe("/tmp/image.png");
+  it("extracts media paths from structured tool output details", () => {
+    expect(
+      extractMediaPathFromText(
+        JSON.stringify({ details: { media: { mediaUrls: ["", "/tmp/image.png"] } } }),
+      ),
+    ).toBe("/tmp/image.png");
+    expect(
+      extractMediaPathFromText(
+        JSON.stringify({
+          details: { media: { attachments: [{ path: "/tmp/from-attachment.png" }] } },
+        }),
+      ),
+    ).toBe("/tmp/from-attachment.png");
     expect(extractMediaPathFromText("done")).toBeUndefined();
   });
 
@@ -62,11 +73,11 @@ describe("qa suite runtime agent media helpers", () => {
     fetchJsonMock.mockResolvedValue([
       {
         allInputText: "irrelevant",
-        toolOutput: "MEDIA:/tmp/other.png",
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/other.png"] } } }),
       },
       {
         allInputText: "prompt snippet",
-        toolOutput: "done\nMEDIA:/tmp/generated.png",
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/generated.png"] } } }),
       },
     ]);
 

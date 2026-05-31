@@ -1,3 +1,9 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
@@ -22,10 +28,9 @@ import {
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../shared/number-coercion.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -87,7 +92,7 @@ function parseSessionDurationMs(raw: string): number {
 }
 
 function formatSessionExpiry(expiresAt: number) {
-  return new Date(expiresAt).toISOString();
+  return timestampMsToIsoString(expiresAt) ?? "n/a";
 }
 
 function resolveSessionBindingDurationMs(
@@ -103,11 +108,17 @@ function resolveSessionBindingDurationMs(
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
-  const raw = binding.metadata?.lastActivityAt;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+  const raw = asDateTimestampMs(binding.metadata?.lastActivityAt);
+  if (raw === undefined) {
     return binding.boundAt;
   }
   return Math.max(Math.floor(raw), binding.boundAt);
+}
+
+function resolveSessionBindingExpiryAt(baseMs: number, durationMs: number): number | undefined {
+  return durationMs > 0
+    ? resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: baseMs })
+    : undefined;
 }
 
 function resolveSessionBindingBoundBy(binding: SessionBindingRecord): string {
@@ -176,7 +187,10 @@ function resolveUpdatedBindingExpiry(params: {
         if (idleTimeoutMs <= 0) {
           return undefined;
         }
-        return Math.max(binding.lastActivityAt, binding.boundAt) + idleTimeoutMs;
+        return resolveSessionBindingExpiryAt(
+          Math.max(binding.lastActivityAt, binding.boundAt),
+          idleTimeoutMs,
+        );
       }
 
       const maxAgeMs =
@@ -186,7 +200,7 @@ function resolveUpdatedBindingExpiry(params: {
       if (maxAgeMs <= 0) {
         return undefined;
       }
-      return binding.boundAt + maxAgeMs;
+      return resolveSessionBindingExpiryAt(binding.boundAt, maxAgeMs);
     })
     .filter((expiresAt): expiresAt is number => typeof expiresAt === "number");
 
@@ -536,12 +550,12 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     "idleTimeoutMs",
     24 * 60 * 60 * 1000,
   );
-  const idleExpiresAt =
-    idleTimeoutMs > 0
-      ? resolveSessionBindingLastActivityAt(activeBinding) + idleTimeoutMs
-      : undefined;
+  const idleExpiresAt = resolveSessionBindingExpiryAt(
+    resolveSessionBindingLastActivityAt(activeBinding),
+    idleTimeoutMs,
+  );
   const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
-  const maxAgeExpiresAt = maxAgeMs > 0 ? activeBinding.boundAt + maxAgeMs : undefined;
+  const maxAgeExpiresAt = resolveSessionBindingExpiryAt(activeBinding.boundAt, maxAgeMs);
 
   const durationArgRaw = tokens.slice(1).join("");
   if (!durationArgRaw) {

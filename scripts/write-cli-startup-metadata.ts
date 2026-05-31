@@ -39,6 +39,7 @@ const CORE_CHANNEL_ORDER = [
   "signal",
   "imessage",
 ] as const;
+const generatorSignature = createHash("sha1").update(readFileSync(scriptPath)).digest("hex");
 
 type ExtensionChannelEntry = {
   id: string;
@@ -162,8 +163,8 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/gateway-cli/run-command.ts"),
       path.join(sourceRootDir, "src/cli/models-cli.ts"),
       path.join(sourceRootDir, "src/cli/plugins-cli.ts"),
-      path.join(sourceRootDir, "src/terminal/links.ts"),
-      path.join(sourceRootDir, "src/terminal/theme.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/links.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/theme.ts"),
     ],
     sourceRootDir,
   );
@@ -467,6 +468,7 @@ export async function writeCliStartupMetadata(options?: {
   try {
     const existing = JSON.parse(readFileSync(resolvedOutputPath, "utf8")) as {
       rootHelpBundleSignature?: unknown;
+      generatorSignature?: unknown;
       browserHelpSourceSignature?: unknown;
       secretsHelpSourceSignature?: unknown;
       nodesHelpSourceSignature?: unknown;
@@ -480,6 +482,7 @@ export async function writeCliStartupMetadata(options?: {
     if (
       bundleIdentity &&
       existing.rootHelpBundleSignature === bundleIdentity.signature &&
+      existing.generatorSignature === generatorSignature &&
       existing.browserHelpSourceSignature === browserHelpSourceSignature &&
       existing.secretsHelpSourceSignature === secretsHelpSourceSignature &&
       existing.nodesHelpSourceSignature === nodesHelpSourceSignature &&
@@ -527,6 +530,7 @@ export async function writeCliStartupMetadata(options?: {
     `${JSON.stringify(
       {
         generatedBy: "scripts/write-cli-startup-metadata.ts",
+        generatorSignature,
         channelOptions,
         channelCatalogSignature: channelCatalog.signature,
         rootHelpBundleSignature: bundleIdentity?.signature ?? null,

@@ -1,6 +1,7 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
+import { formatDateTimeMs, formatMs, formatTimeMs } from "../format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
@@ -59,8 +60,7 @@ function renderSessionSummary(
     return html` <div class="usage-empty-block">${t("usage.details.noUsageData")}</div> `;
   }
 
-  const formatTs = (ts?: number): string =>
-    ts ? new Date(ts).toLocaleString() : t("usage.common.emptyValue");
+  const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
 
   const badges: string[] = [];
   if (session.channel) {
@@ -577,8 +577,8 @@ function renderTimeSeriesCompact(
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${new Date(points[0].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${new Date(points[points.length - 1].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(points[0].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(points[points.length - 1].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
           `
             : nothing}
           <!-- Bars -->
@@ -587,14 +587,17 @@ function renderTimeSeriesCompact(
             const x = padding.left + i * (barWidth + barGap);
             const bh = (val / maxValue) * chartHeight;
             const y = padding.top + chartHeight - bh;
-            const date = new Date(p.timestamp);
             const tooltipLines = [
-              date.toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
+              formatDateTimeMs(
+                p.timestamp,
+                {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                },
+                "",
+              ),
               `${formatTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
             ];
             if (breakdownByType) {
@@ -744,13 +747,11 @@ function renderTimeSeriesCompact(
                 })}
               </span>
               ·
-              ${new Date(rangeStartTs).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}–${new Date(rangeEndTs).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              ${formatTimeMs(
+                rangeStartTs,
+                { hour: "2-digit", minute: "2-digit" },
+                "",
+              )}–${formatTimeMs(rangeEndTs, { hour: "2-digit", minute: "2-digit" }, "")}
               ·
               ${formatTokens(
                 filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite,
@@ -1186,7 +1187,7 @@ function renderSessionLogsCompact(
             <div class="session-log-entry ${roleClass}">
               <div class="session-log-meta">
                 <span class="session-log-role">${roleLabel}</span>
-                <span>${new Date(log.timestamp).toLocaleString()}</span>
+                <span>${formatMs(log.timestamp)}</span>
                 ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
               </div>
               <div class="session-log-content">${cleanContent}</div>

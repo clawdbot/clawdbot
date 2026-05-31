@@ -50,7 +50,7 @@ describe("provider usage formatting", () => {
       updatedAt: 0,
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           displayName: "Codex",
           windows: [],
           error: "Token expired",

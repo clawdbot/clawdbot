@@ -407,6 +407,21 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload.stream).toBe(true);
   });
 
+  it("forwards stop sequences as Anthropic stop_sequences", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        stop: ["User:", "Assistant:"],
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.stop_sequences).toEqual(["User:", "Assistant:"]);
+  });
+
   it("caps default max_tokens for large-output Anthropic-compatible models", async () => {
     await runTransportStream(
       makeAnthropicTransportModel({

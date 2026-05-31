@@ -540,7 +540,7 @@ describe("secrets apply", () => {
   it("preserves unrelated oauth profiles while applying auth-profile key ref targets", async () => {
     const codexOAuthRef = {
       id: "codex-sidecar-ref",
-      provider: "openai-codex",
+      provider: "openai",
     };
     await writeJsonFile(fixture.authStorePath, {
       version: 1,
@@ -550,9 +550,9 @@ describe("secrets apply", () => {
           provider: "openai",
           key: "sk-openai-static", // pragma: allowlist secret
         },
-        "openai-codex:sidecar": {
+        "openai:sidecar": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           oauthRef: codexOAuthRef,
           email: "codex@example.invalid",
         },
@@ -562,13 +562,11 @@ describe("secrets apply", () => {
         },
       },
       order: {
-        openai: ["openai:static"],
-        "openai-codex": ["openai-codex:sidecar"],
+        openai: ["openai:sidecar", "openai:static"],
         "claude-cli": ["anthropic:claude-cli"],
       },
       lastGood: {
-        openai: "openai:static",
-        "openai-codex": "openai-codex:sidecar",
+        openai: "openai:sidecar",
         "claude-cli": "anthropic:claude-cli",
       },
     });
@@ -609,14 +607,14 @@ describe("secrets apply", () => {
     };
     expect(Object.keys(nextAuthStore.profiles).toSorted()).toEqual([
       "anthropic:claude-cli",
-      "openai-codex:sidecar",
+      "openai:sidecar",
       "openai:static",
     ]);
     expect(nextAuthStore.profiles["openai:static"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:static"].keyRef).toEqual(OPENAI_API_KEY_ENV_REF);
-    expect(nextAuthStore.profiles["openai-codex:sidecar"]).toMatchObject({
+    expect(nextAuthStore.profiles["openai:sidecar"]).toMatchObject({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       oauthRef: codexOAuthRef,
       email: "codex@example.invalid",
     });
@@ -624,7 +622,7 @@ describe("secrets apply", () => {
       provider: "claude-cli",
       mode: "oauth",
     });
-    expect(nextAuthStore.order?.["openai-codex"]).toEqual(["openai-codex:sidecar"]);
+    expect(nextAuthStore.order?.["openai"]).toEqual(["openai:sidecar", "openai:static"]);
     expect(nextAuthStore.lastGood?.["claude-cli"]).toBe("anthropic:claude-cli");
   });
 

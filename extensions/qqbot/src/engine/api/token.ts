@@ -6,7 +6,12 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -273,10 +278,18 @@ export class TokenManager {
         throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
       }
 
-      const expiresAt = Date.now() + resolveTokenExpiresInSeconds(data.expires_in) * 1000;
+      const nowMs = asDateTimestampMs(Date.now());
+      if (nowMs === undefined) {
+        this.logger?.debug?.(`[qqbot:token:${appId}] Not cached: invalid process clock`);
+        return data.access_token;
+      }
+      const expiresAt =
+        resolveExpiresAtMsFromDurationSeconds(resolveTokenExpiresInSeconds(data.expires_in), {
+          nowMs,
+        }) ?? nowMs;
       this.cache.set(appId, { token: data.access_token, expiresAt, appId });
       this.logger?.debug?.(
-        `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
+        `[qqbot:token:${appId}] Cached, expires at: ${resolveTimestampMsToIsoString(expiresAt)}`,
       );
 
       return data.access_token;

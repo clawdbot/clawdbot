@@ -1,4 +1,4 @@
-import type { RenderTableOptions, TableColumn } from "../../terminal/table.js";
+import type { RenderTableOptions, TableColumn } from "../../../packages/terminal-core/src/table.js";
 
 type HeadingFn = (text: string) => string;
 type TableRenderer = (input: RenderTableOptions) => string;

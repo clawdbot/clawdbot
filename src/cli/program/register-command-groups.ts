@@ -1,5 +1,5 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { removeCommandByName } from "./command-tree.js";
 import { registerLazyCommand } from "./register-lazy-command.js";
 

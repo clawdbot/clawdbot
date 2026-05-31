@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { lowercasePreservingWhitespace } from "../shared/string-coerce.js";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 function normalizeWorkspacePathForComparison(input: string): string {

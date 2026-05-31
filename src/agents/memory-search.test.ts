@@ -4,6 +4,7 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
@@ -527,6 +528,50 @@ describe("memory search config", () => {
     const cfg = configWithDefaultProvider("openai");
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectDefaultRemoteBatch(resolved);
+  });
+
+  it("normalizes remote batch timer config once before provider adapters receive it", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              batch: {
+                pollIntervalMs: Number.MAX_SAFE_INTEGER,
+                timeoutMinutes: Number.MAX_SAFE_INTEGER,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.batch?.pollIntervalMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolved?.remote?.batch?.timeoutMinutes).toBe(Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000));
+  });
+
+  it("keeps the default remote batch poll delay for zero intervals", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              batch: {
+                pollIntervalMs: 0,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.batch?.pollIntervalMs).toBe(2000);
   });
 
   it("keeps remote unset for local provider without overrides", () => {

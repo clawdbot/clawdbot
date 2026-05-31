@@ -8,6 +8,7 @@ import {
 } from "./bundled-compat.js";
 import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
+import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -201,6 +202,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   discovery?: PluginDiscoveryResult;
 }) {
   const env = params.env ?? process.env;
+  const devSourceRoot = resolveOpenClawDevSourceRoot(env);
   const pluginIds = new Set(params.pluginIds);
   const registry = createEmptyPluginRegistry();
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
@@ -219,6 +221,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
             process.argv[1],
             import.meta.url,
             params.pluginSdkResolution,
+            devSourceRoot,
           ),
           pluginSdkResolution: params.pluginSdkResolution,
           env,
@@ -228,6 +231,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
+      devSourceRoot,
       loaderFilename: import.meta.url,
       ...(aliasMap ? { aliasMap } : {}),
       pluginSdkResolution: params.pluginSdkResolution,

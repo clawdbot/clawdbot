@@ -169,11 +169,27 @@ async function applyCurrentConfig(ws: WebSocket) {
 
 describe("gateway shared auth rotation", () => {
   let server: Awaited<ReturnType<typeof startGatewayServer>>;
+  let sharedTokenRotationCase: {
+    closed: Awaited<ReturnType<typeof waitForGatewayWsClose>>;
+    ok: boolean;
+  };
 
   beforeAll(async () => {
     port = await getFreePort();
     testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
     server = await startGatewayServer(port, { controlUiEnabled: true });
+
+    const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
+    try {
+      const closed = waitForGatewayWsClose(ws);
+      const res = await sendSharedTokenRotationPatch(ws);
+      sharedTokenRotationCase = {
+        closed: await closed,
+        ok: res.ok,
+      };
+    } finally {
+      await closeWsAndWait(ws);
+    }
   });
 
   beforeEach(() => {
@@ -185,19 +201,11 @@ describe("gateway shared auth rotation", () => {
   });
 
   it("disconnects existing shared-token websocket sessions after config.patch rotates auth", async () => {
-    const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
-    try {
-      const closed = waitForGatewayWsClose(ws);
-      const res = await sendSharedTokenRotationPatch(ws);
-
-      expect(res.ok).toBe(true);
-      await expect(closed).resolves.toEqual({
-        code: 4001,
-        reason: "gateway auth changed",
-      });
-    } finally {
-      await closeWsAndWait(ws);
-    }
+    expect(sharedTokenRotationCase.ok).toBe(true);
+    expect(sharedTokenRotationCase.closed).toEqual({
+      code: 4001,
+      reason: "gateway auth changed",
+    });
   });
 
   it("keeps existing device-token websocket sessions connected after shared token rotation", async () => {

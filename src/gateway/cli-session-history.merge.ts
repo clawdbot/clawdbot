@@ -1,6 +1,9 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 

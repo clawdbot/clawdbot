@@ -141,7 +141,7 @@ async function makeStorePath(prefix: string): Promise<string> {
 }
 
 const createStorePath = makeStorePath;
-const TEST_NATIVE_MODEL_PROFILE_ID = "openai-codex:secondary@example.test";
+const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
 
 function requireString(value: string | undefined, label: string): string {
   if (!value) {
@@ -1253,8 +1253,8 @@ describe("initSessionState RawBody", () => {
 
     const result = await initSessionState({
       ctx: {
-        Body: `/model openai-codex/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
-        CommandBody: `/model openai-codex/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
+        Body: `/model openai/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
+        CommandBody: `/model openai/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
         Provider: "slack",
         Surface: "slack",
         AccountId: "default",
@@ -1915,6 +1915,66 @@ describe("initSessionState browser tab cleanup", () => {
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
   });
 
+  it("skips browser tab cleanup when root browser support is disabled", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const storePath = await createStorePath("openclaw-tab-cleanup-browser-disabled-");
+    const sessionKey = "agent:main:webchat:dm:tab-disabled";
+    const existingSessionId = "tab-disabled-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      browser: { enabled: false },
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
+  it("skips browser tab cleanup when the browser plugin entry is disabled", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const storePath = await createStorePath("openclaw-tab-cleanup-browser-plugin-disabled-");
+    const sessionKey = "agent:main:webchat:dm:tab-plugin-disabled";
+    const existingSessionId = "tab-plugin-disabled-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      plugins: { entries: { browser: { enabled: false } } },
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
   it("closes tracked browser tabs on explicit /new reset", async () => {
     const storePath = await createStorePath("openclaw-tab-cleanup-reset-");
     const sessionKey = "agent:main:telegram:dm:tab-reset";
@@ -2423,10 +2483,10 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const sessionKey = "agent:main:telegram:direct:6761477233";
     const existingSessionId = "existing-session-auto-overrides";
     const autoOverrides = {
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.4",
       modelOverrideSource: "auto",
-      authProfileOverride: "openai-codex:default",
+      authProfileOverride: "openai:default",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
       verboseLevel: "on",
@@ -2483,7 +2543,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const sessionKey = "agent:main:telegram:direct:6761477233";
     const existingSessionId = "existing-session-recovered-auto-fallback";
     const autoOverrides = {
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.4",
       modelOverrideFallbackOriginProvider: "anthropic",
       modelOverrideFallbackOriginModel: "claude-opus-4-6",
@@ -3587,7 +3647,7 @@ describe("persistSessionUsageUpdate", () => {
       entry: {
         sessionId: "s1",
         updatedAt: Date.now(),
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.4",
       },
     });
@@ -3598,13 +3658,13 @@ describe("persistSessionUsageUpdate", () => {
       isHeartbeat: true,
       usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
       lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
-      providerUsed: "openai-codex",
+      providerUsed: "openai",
       modelUsed: "gpt-5.1-codex-mini",
       contextTokensUsed: 128_000,
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.4");
     expect(stored[sessionKey].inputTokens).toBe(1_200);
     expect(stored[sessionKey].outputTokens).toBe(100);
@@ -3621,7 +3681,7 @@ describe("persistSessionUsageUpdate", () => {
       entry: {
         sessionId: "s1",
         updatedAt: Date.now(),
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.5",
         contextTokens: 200_000,
         inputTokens: 1_234,
@@ -3668,7 +3728,7 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.5");
     expect(stored[sessionKey].contextTokens).toBe(200_000);
     expect(stored[sessionKey].inputTokens).toBe(1_234);
@@ -3704,7 +3764,7 @@ describe("persistSessionUsageUpdate", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://api.openai.com/v1",
               models: [
                 {
@@ -3723,7 +3783,7 @@ describe("persistSessionUsageUpdate", () => {
       } satisfies OpenClawConfig,
       usage: { input: 5_107, output: 1_827, cacheRead: 1_536, cacheWrite: 0 },
       lastCallUsage: { input: 5_107, output: 1_827, cacheRead: 1_536, cacheWrite: 0 },
-      providerUsed: "openai-codex",
+      providerUsed: "openai",
       modelUsed: "gpt-5.3-codex-spark",
       contextTokensUsed: 200_000,
     });

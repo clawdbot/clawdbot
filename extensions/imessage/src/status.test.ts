@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
-import { probeIMessage } from "./probe.js";
+import { clearIMessagePrivateApiCache, probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
 
@@ -159,6 +159,7 @@ describe("imessage setup status", () => {
 describe("probeIMessage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearIMessagePrivateApiCache();
     spawnMock.mockClear();
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
@@ -183,6 +184,127 @@ describe("probeIMessage", () => {
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("drops cached rpc support when the current clock is not a valid date timestamp", async () => {
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValueOnce(Number.NaN)
+      .mockReturnValue(1_700_000_000_000);
+    const runCommand = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: 'unknown command "rpc" for "imsg"',
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: true,
+          v2_ready: true,
+          selectors: {},
+          rpc_methods: ["chats.list"],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --file",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    vi.spyOn(clientModule, "createIMessageRpcClient").mockResolvedValue({
+      request: vi.fn().mockResolvedValue({ chats: [] }),
+      stop: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    await expect(probeIMessage(1000, { cliPath: "imsg-invalid-rpc-clock" })).resolves.toMatchObject(
+      {
+        ok: false,
+        fatal: true,
+      },
+    );
+    await expect(probeIMessage(1000, { cliPath: "imsg-invalid-rpc-clock" })).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+
+    expect(runCommand).toHaveBeenNthCalledWith(1, ["imsg-invalid-rpc-clock", "rpc", "--help"], {
+      timeoutMs: 1000,
+    });
+    expect(runCommand).toHaveBeenNthCalledWith(2, ["imsg-invalid-rpc-clock", "rpc", "--help"], {
+      timeoutMs: 1000,
+    });
+  });
+
+  it("does not cache rpc support when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: 'unknown command "rpc" for "imsg"',
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessage(1000, { cliPath: "imsg-overflow-rpc-clock" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      fatal: true,
+    });
+    await expect(
+      probeIMessage(1000, { cliPath: "imsg-overflow-rpc-clock" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      fatal: true,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache unavailable private API status when the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: "bridge unavailable",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+    });
+    await expect(
+      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(4);
   });
 
   it("fails fast for default local imsg probes on non-mac hosts", async () => {

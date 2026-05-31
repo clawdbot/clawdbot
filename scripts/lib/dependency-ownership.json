@@ -6,6 +6,16 @@
       "class": "core-runtime",
       "risk": ["protocol-client"]
     },
+    "@anthropic-ai/sdk": {
+      "owner": "provider:anthropic",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "@clack/core": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["interactive-cli"]
+    },
     "@clack/prompts": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -21,6 +31,26 @@
       "class": "tui-runtime",
       "risk": ["tui-runtime"]
     },
+    "@google/genai": {
+      "owner": "provider:google",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network", "realtime"]
+    },
+    "@grammyjs/runner": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "risk": ["telegram-bot-api", "polling"]
+    },
+    "@grammyjs/transformer-throttler": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "risk": ["telegram-bot-api", "rate-limiting"]
+    },
+    "@homebridge/ciao": {
+      "owner": "plugin:bonjour",
+      "class": "plugin-runtime",
+      "risk": ["mdns", "network"]
+    },
     "@modelcontextprotocol/sdk": {
       "owner": "core:mcp",
       "class": "core-runtime",
@@ -31,6 +61,16 @@
       "class": "plugin-runtime",
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
+    },
+    "@mistralai/mistralai": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "@openclaw/fs-safe": {
+      "owner": "core:filesystem-safety",
+      "class": "core-runtime",
+      "risk": ["filesystem", "path-safety"]
     },
     "chalk": {
       "owner": "core:cli",
@@ -47,10 +87,20 @@
       "class": "core-runtime",
       "risk": ["cli-parser"]
     },
+    "cross-spawn": {
+      "owner": "core:child-process",
+      "class": "core-runtime",
+      "risk": ["process-spawn"]
+    },
     "croner": {
       "owner": "core:scheduler",
       "class": "core-runtime",
       "risk": ["scheduler"]
+    },
+    "diff": {
+      "owner": "core:agent-editing",
+      "class": "core-runtime",
+      "risk": ["diff"]
     },
     "dotenv": {
       "owner": "core:config",
@@ -66,6 +116,31 @@
       "owner": "core:media-admission",
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
+    },
+    "glob": {
+      "owner": "core:package-manager",
+      "class": "core-runtime",
+      "risk": ["filesystem-glob"]
+    },
+    "grammy": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "risk": ["telegram-bot-api", "network"]
+    },
+    "highlight.js": {
+      "owner": "core:syntax-highlighting",
+      "class": "core-runtime",
+      "risk": ["syntax-highlighting"]
+    },
+    "hosted-git-info": {
+      "owner": "core:git-utils",
+      "class": "core-runtime",
+      "risk": ["git-metadata-parser"]
+    },
+    "ignore": {
+      "owner": "core:gitignore-matching",
+      "class": "core-runtime",
+      "risk": ["pattern-matching"]
     },
     "@openclaw/proxyline": {
       "owner": "core:proxy",
@@ -103,15 +178,40 @@
       "class": "core-runtime",
       "risk": ["parser", "markdown"]
     },
+    "minimatch": {
+      "owner": "core:pattern-matching",
+      "class": "core-runtime",
+      "risk": ["pattern-matching"]
+    },
+    "node-edge-tts": {
+      "owner": "plugin:microsoft",
+      "class": "plugin-runtime",
+      "risk": ["tts", "network"]
+    },
     "openai": {
       "owner": "provider:openai",
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "partial-json": {
+      "owner": "core:llm-json-parsing",
+      "class": "core-runtime",
+      "risk": ["streaming-json-parser"]
+    },
     "playwright-core": {
       "owner": "core:browser",
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
+    },
+    "proper-lockfile": {
+      "owner": "core:session-storage",
+      "class": "core-runtime",
+      "risk": ["filesystem-locking"]
+    },
+    "quickjs-wasi": {
+      "owner": "core:code-mode",
+      "class": "core-runtime",
+      "risk": ["wasm", "sandboxed-js"]
     },
     "clawpdf": {
       "owner": "plugin:document-extract",
@@ -139,10 +239,20 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "tree-sitter-bash": {
+      "owner": "core:command-explainer",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-shell"]
+    },
     "tslog": {
       "owner": "core:logging",
       "class": "core-runtime",
       "risk": ["logging"]
+    },
+    "typescript": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
     },
     "typebox": {
       "owner": "core:json-schema-contracts",
@@ -158,6 +268,11 @@
       "owner": "core:web-push",
       "class": "core-runtime",
       "risk": ["network", "push-notifications", "crypto"]
+    },
+    "web-tree-sitter": {
+      "owner": "core:command-explainer",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-shell"]
     },
     "ws": {
       "owner": "core:gateway-websocket",

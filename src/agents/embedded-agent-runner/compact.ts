@@ -1084,7 +1084,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         missingToolResultText:
           model.api === "openai-responses" ||
           model.api === "azure-openai-responses" ||
-          model.api === "openai-codex-responses"
+          model.api === "openai-chatgpt-responses"
             ? "aborted"
             : undefined,
         allowedToolNames,
@@ -1146,7 +1146,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
-        sandboxEnabled: !!sandbox?.enabled,
+        sandboxEnabled: Boolean(sandbox?.enabled),
         toolHookContext: {
           agentId: sessionAgentId,
           config: params.config,
@@ -1256,7 +1256,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
                 erroredAssistantResultPolicy: "drop",
                 ...(model.api === "openai-responses" ||
                 model.api === "azure-openai-responses" ||
-                model.api === "openai-codex-responses"
+                model.api === "openai-chatgpt-responses"
                   ? { missingToolResultText: "aborted" }
                   : {}),
               })

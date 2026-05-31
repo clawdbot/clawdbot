@@ -1,5 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const transportReadyMocks = vi.hoisted(() => ({
   injectedSleepError: null as Error | null,

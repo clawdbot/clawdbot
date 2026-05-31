@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
@@ -14,8 +16,7 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
@@ -61,6 +62,29 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
+
+function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> {
+  const params =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? { ...(args as Record<string, unknown>) }
+      : {};
+
+  if (typeof params.message !== "string" || !params.message.trim()) {
+    for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
+      const value = readStringParam(params, alias);
+      if (value) {
+        params.message = stripFormattedReasoningMessage(value);
+        break;
+      }
+    }
+  }
+
+  for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
+    delete params[alias];
+  }
+  return params;
+}
 
 function resolveRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
   const match = /^(agent:[^:]+:.+):run:[^:]+$/.exec(sessionKey.trim());
@@ -280,8 +304,9 @@ export function createSessionsSendTool(opts?: {
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSendTool(),
     parameters: SessionsSendToolSchema,
+    prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
@@ -484,18 +509,30 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterChannel = opts?.agentChannel;
+      const sameSessionA2A = requesterSessionKey === resolvedKey;
+
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
       // before we reach the post-run read, which would otherwise make the new
       // reply look like the baseline and hide it from the caller.
+      // Fire-and-forget same-session sends still need this baseline because the
+      // A2A follow-up may deliver directly to the source channel.
       const baselineReply =
-        timeoutSeconds === 0
-          ? undefined
-          : await readLatestAssistantReplySnapshot({
+        timeoutSeconds !== 0
+          ? await readLatestAssistantReplySnapshot({
               sessionKey: resolvedKey,
               limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
               callGateway: gatewayCall,
-            });
+            })
+          : sameSessionA2A
+            ? await readLatestAssistantReplySnapshot({
+                sessionKey: resolvedKey,
+                limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+                callGateway: gatewayCall,
+              }).catch(() => undefined)
+            : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
@@ -518,8 +555,6 @@ export function createSessionsSendTool(opts?: {
         extraSystemPrompt: agentMessageContext,
         inputProvenance,
       };
-      const requesterSessionKey = opts?.agentSessionKey;
-      const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       // Skip the A2A ping-pong + announce flow when the current caller is the

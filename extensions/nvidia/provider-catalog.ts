@@ -1,4 +1,8 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
@@ -106,17 +110,26 @@ export function clearNvidiaFeaturedModelCacheForTests() {
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
   const now = Date.now();
-  if (featuredModelCache && featuredModelCache.expiresAtMs > now) {
+  if (
+    featuredModelCache &&
+    isFutureDateTimestampMs(featuredModelCache.expiresAtMs, { nowMs: now })
+  ) {
     return featuredModelCache.models;
   }
+  featuredModelCache = undefined;
   featuredModelRequest ??= fetchNvidiaFeaturedModels();
   try {
     const models = await featuredModelRequest;
     if (models && models.length > 0) {
-      featuredModelCache = {
-        expiresAtMs: now + FEATURED_MODEL_CACHE_TTL_MS,
-        models,
-      };
+      const expiresAtMs = resolveExpiresAtMsFromDurationMs(FEATURED_MODEL_CACHE_TTL_MS, {
+        nowMs: now,
+      });
+      if (expiresAtMs !== undefined) {
+        featuredModelCache = {
+          expiresAtMs,
+          models,
+        };
+      }
     }
     return models;
   } finally {

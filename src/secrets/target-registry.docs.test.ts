@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildSecretRefCredentialMatrix,
   type SecretRefCredentialMatrixDocument,
@@ -30,7 +30,9 @@ afterAll(() => {
 });
 
 describe("secret target registry docs", () => {
-  it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
+  let matrixDocsCase: { raw: string; expected: string };
+
+  beforeAll(() => {
     const pathname = path.join(
       process.cwd(),
       "docs",
@@ -39,8 +41,11 @@ describe("secret target registry docs", () => {
     );
     const raw = fs.readFileSync(pathname, "utf8");
     const expected = buildSecretRefCredentialMatrixJson();
+    matrixDocsCase = { raw, expected };
+  });
 
-    expect(raw).toBe(expected);
+  it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
+    expect(matrixDocsCase.raw).toBe(matrixDocsCase.expected);
   });
 
   it("stays in sync with docs/reference/secretref-credential-surface.md", () => {

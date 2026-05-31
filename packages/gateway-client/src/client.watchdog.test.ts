@@ -253,6 +253,39 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("clamps oversized tick watchdog intervals before scheduling", () => {
+    vi.useFakeTimers();
+    try {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = new GatewayClient({
+        tickWatchMinIntervalMs: 5,
+      });
+      Object.assign(
+        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+        {
+          ws: {
+            readyState: WebSocket.OPEN,
+            send: vi.fn(),
+            close: vi.fn(),
+          },
+          tickIntervalMs: Number.MAX_SAFE_INTEGER,
+          lastTick: Date.now(),
+        },
+      );
+
+      (
+        client as unknown as {
+          startTickWatch: () => void;
+        }
+      ).startTickWatch();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("times out unresolved requests and clears pending state", async () => {
     vi.useFakeTimers();
     try {

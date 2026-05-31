@@ -5,6 +5,7 @@
  * error handling and priority ordering.
  */
 
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -535,10 +536,7 @@ export function createHookRunner(
   };
 
   const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
-    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      return undefined;
-    }
-    return Math.floor(timeoutMs);
+    return clampPositiveTimerTimeoutMs(timeoutMs);
   };
 
   const getVoidHookTimeoutMs = (
@@ -1453,8 +1451,9 @@ export function createHookRunner(
   }
 
   /**
-   * Run subagent_spawning hook.
-   * Runs sequentially so channel plugins can deterministically provision session bindings.
+   * @deprecated Core prepares thread-bound subagent bindings through channel
+   * session-binding adapters before subagent_spawned fires. This remains only
+   * for older plugins that call the hook runner directly.
    */
   async function runSubagentSpawning(
     event: PluginHookSubagentSpawningEvent,

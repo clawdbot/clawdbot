@@ -143,14 +143,13 @@ describe("waitForDiscordGatewayStop", () => {
   it("keeps the lifecycle handler active until disconnect returns on abort", async () => {
     const onGatewayEvent = vi.fn(() => "stop" as const);
     const fatalEvent = createGatewayEvent("fatal", "disconnect emitted error");
-    let emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined;
     const { abort, detachLifecycle, disconnect, emitGatewayEvent, promise } = startGatewayWait({
       onGatewayEvent,
       disconnect: () => {
         emitFromDisconnect?.(fatalEvent);
       },
     });
-    emitFromDisconnect = emitGatewayEvent;
+    const emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined = emitGatewayEvent;
 
     abort.abort();
 
@@ -164,7 +163,6 @@ describe("waitForDiscordGatewayStop", () => {
     const firstEvent = createGatewayEvent("fatal", "first failure");
     const secondEvent = createGatewayEvent("fatal", "second failure");
     const seenEvents: DiscordGatewayEvent[] = [];
-    let emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined;
     const { emitGatewayEvent, promise } = startGatewayWait({
       onGatewayEvent: (event) => {
         seenEvents.push(event);
@@ -174,7 +172,7 @@ describe("waitForDiscordGatewayStop", () => {
         emitFromDisconnect?.(secondEvent);
       },
     });
-    emitFromDisconnect = emitGatewayEvent;
+    const emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined = emitGatewayEvent;
 
     emitGatewayEvent(firstEvent);
 

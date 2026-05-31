@@ -90,7 +90,7 @@ describe("error helpers", () => {
 
   it("dedupes repeated cause messages while preserving deeper distinct causes", () => {
     const rootCause = new Error("provider auth lookup failed");
-    const inner = new Error('No API key found for provider "openai-codex".', { cause: rootCause });
+    const inner = new Error('No API key found for provider "openai".', { cause: rootCause });
     const wrapper = new Error(inner.message, { cause: inner });
     expect(formatErrorMessage(wrapper)).toBe(`${inner.message} | ${rootCause.message}`);
   });

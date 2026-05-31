@@ -209,7 +209,7 @@ describe("remote sandbox fs bridge", () => {
           }
           if (command.script.includes('stat -c "%F|%s|%y"')) {
             return {
-              stdout: Buffer.from("regular file|9007199254740992|not-a-date\n"),
+              stdout: Buffer.from("regular file|9007199254740992|8640000000001\n"),
               stderr: Buffer.alloc(0),
               code: 0,
             };

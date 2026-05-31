@@ -133,6 +133,11 @@ describe("setupOfficialPluginInstalls", () => {
           label: "Diagnostics Prometheus",
           hint: "OpenClaw diagnostics Prometheus exporter",
         },
+        {
+          value: "tokenjuice",
+          label: "Tokenjuice",
+          hint: "OpenClaw tokenjuice exec output compaction plugin",
+        },
       ]),
     );
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({

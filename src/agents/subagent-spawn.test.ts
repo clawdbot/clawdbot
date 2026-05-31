@@ -68,7 +68,7 @@ describe("spawnSubagentDirect seam flow", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
-      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
+      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
       resetModules: false,
@@ -198,7 +198,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "inspect the spawn seam",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -231,7 +231,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(requesterOrigin.threadId).toBe(42);
     expect(registerInput.task).toBe("inspect the spawn seam");
     expect(registerInput.cleanup).toBe("keep");
-    expect(registerInput.model).toBe("openai-codex/gpt-5.4");
+    expect(registerInput.model).toBe("openai/gpt-5.4");
     expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
     expect(registerInput.expectsCompletionMessage).toBe(true);
     expect(registerInput.spawnMode).toBe("run");
@@ -245,7 +245,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: childSessionKey,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       overrideSource: "user",
     });
@@ -325,7 +325,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "inspect unthreaded spawn",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -364,7 +364,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "verify per-method scope routing",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",

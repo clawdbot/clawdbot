@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const ISSUE_FILE_COUNTS = [
@@ -63,6 +64,28 @@ Options:
 }
 
 const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+const ARGUMENT_FLAGS = new Set([
+  "--allow-non-darwin",
+  "--expect-leak",
+  "--files",
+  "--full",
+  "--help",
+  "--invoke-timeout-ms",
+  "--keep",
+  "--max-workspace-reg-fds",
+  "--min-leaked-fds",
+  "--mode",
+  "--output-dir",
+  "--report-only",
+  "--sample-delay-ms",
+  "--settle-delay-ms",
+]);
+
+function stripPackageManagerSeparatorForKnownFlags(argv) {
+  return argv[0] === "--" && ARGUMENT_FLAGS.has(argv[1])
+    ? stripLeadingPackageManagerSeparator(argv)
+    : argv;
+}
 
 export function readNumber(value, label) {
   const raw = String(value).trim();
@@ -95,6 +118,7 @@ function readPositiveNumberEnv(name, fallback) {
 }
 
 export function parseArgs(argv) {
+  const args = stripPackageManagerSeparatorForKnownFlags(argv);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const options = {
     fileCount: undefined,
@@ -109,9 +133,9 @@ export function parseArgs(argv) {
     allowNonDarwin: process.env.OPENCLAW_MEMORY_FD_REPRO_ALLOW_NON_DARWIN === "1",
   };
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const next = argv[i + 1];
+  parseArgv: for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = args[i + 1];
     const readValue = () => {
       if (!next) {
         throw new Error(`Missing value for ${arg}`);
@@ -122,7 +146,7 @@ export function parseArgs(argv) {
 
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--help":
         console.log(usage());
         process.exit(0);
@@ -435,6 +459,122 @@ export async function stopGatewayWithRuntime({
 
 export { readBoundedResponseText };
 
+function parseJsonValue(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function readStringProperty(record, key) {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function parseToolTextContent(result) {
+  const content = Array.isArray(result?.content) ? result.content : [];
+  for (const entry of content) {
+    const text = entry?.type === "text" && typeof entry.text === "string" ? entry.text : null;
+    if (!text) {
+      continue;
+    }
+    const parsed = asRecord(parseJsonValue(text));
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+export function classifyMemorySearchInvokeResponse({ httpOk, status, bodyText }) {
+  const parsedBody = parseJsonValue(bodyText);
+  const body = asRecord(parsedBody);
+  if (!httpOk) {
+    const errorRecord = asRecord(body?.error);
+    return {
+      ok: false,
+      httpOk,
+      status,
+      gatewayOk: body?.ok === true ? true : body?.ok === false ? false : undefined,
+      error:
+        readStringProperty(errorRecord, "message") ??
+        readStringProperty(body, "error") ??
+        `memory_search HTTP request failed with status ${status}`,
+    };
+  }
+  if (!body) {
+    return {
+      ok: false,
+      httpOk,
+      status,
+      error: "memory_search response was not JSON",
+    };
+  }
+
+  const gatewayOk = body.ok === true ? true : body.ok === false ? false : undefined;
+  if (gatewayOk === false) {
+    const errorRecord = asRecord(body.error);
+    return {
+      ok: false,
+      httpOk,
+      status,
+      gatewayOk,
+      error:
+        readStringProperty(errorRecord, "message") ??
+        readStringProperty(body, "error") ??
+        "memory_search gateway invocation failed",
+    };
+  }
+
+  const result = asRecord(body.result);
+  const details = asRecord(result?.details);
+  const directResult = Array.isArray(result?.results) ? result : null;
+  const directBody =
+    Array.isArray(body.results) || body.disabled === true || body.unavailable === true
+      ? body
+      : null;
+  const payload = details ?? parseToolTextContent(result) ?? directResult ?? directBody;
+  if (!payload) {
+    return {
+      ok: false,
+      httpOk,
+      status,
+      gatewayOk,
+      error: "memory_search result payload missing or invalid",
+    };
+  }
+  const resultCount = Array.isArray(payload.results) ? payload.results.length : undefined;
+  const toolDisabled = payload.disabled === true;
+  const toolUnavailable = payload.unavailable === true;
+  const toolError = readStringProperty(payload, "error");
+  const ok = gatewayOk === true && !toolDisabled && !toolUnavailable && !toolError;
+
+  return {
+    ok,
+    httpOk,
+    status,
+    gatewayOk,
+    resultCount,
+    toolDisabled,
+    toolUnavailable,
+    ...(toolError ? { toolError } : {}),
+    ...(ok
+      ? {}
+      : {
+          error:
+            toolError ??
+            (toolDisabled || toolUnavailable
+              ? "memory_search returned disabled/unavailable"
+              : "memory_search result payload missing or invalid"),
+        }),
+  };
+}
+
 async function invokeMemorySearch({ port, token, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -462,9 +602,13 @@ async function invokeMemorySearch({ port, token, timeoutMs }) {
       "memory_search",
       MEMORY_SEARCH_RESPONSE_MAX_BYTES,
     );
-    return {
-      ok: res.ok,
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: res.ok,
       status: res.status,
+      bodyText: text,
+    });
+    return {
+      ...result,
       durationMs: Date.now() - startedAt,
       bodyPreview: text.slice(0, 500),
     };

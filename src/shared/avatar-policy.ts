@@ -1,6 +1,6 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 

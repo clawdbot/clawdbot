@@ -28,6 +28,7 @@ import {
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
+  shouldPrintHelp,
   stopGateway,
   summarizeProcessSamples,
   tailFile,
@@ -43,6 +44,25 @@ afterEach(() => {
 });
 
 describe("kitchen-sink RPC isolated state", () => {
+  it("prints help without creating temp state or installing the plugin", async () => {
+    const result = await runCommand(process.execPath, [
+      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--help",
+    ]);
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
+    expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
+    expect(result.stdout).not.toContain("temp root preserved");
+  });
+
+  it("detects short and long help flags", () => {
+    expect(shouldPrintHelp(["--help"])).toBe(true);
+    expect(shouldPrintHelp(["-h"])).toBe(true);
+    expect(shouldPrintHelp([])).toBe(false);
+  });
+
   it("keeps loose numeric env values from corrupting runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
     expect(readPositiveInt("1000", 60_000)).toBe(1000);
@@ -293,8 +313,8 @@ setInterval(() => {}, 1000);
 
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
       detached: undefined,
-      timeoutKillGraceMs: 50,
-      timeoutMs: 1000,
+      timeoutKillGraceMs: 25,
+      timeoutMs: 500,
     });
 
     try {
@@ -303,7 +323,7 @@ setInterval(() => {}, 1000);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 1000ms");
+      await expect(runPromise).rejects.toThrow("timed out after 500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -312,6 +332,42 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("records resource samples for command process trees", async () => {
+    const samples: Array<{
+      aggregateRssMiB?: number;
+      elapsedMs?: number;
+      label?: string;
+      processId?: number;
+      rssMiB?: number;
+    }> = [];
+    const seenPids: number[] = [];
+
+    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+      resourceLabel: "plugins install",
+      resourceSampleIntervalMs: 1,
+      resourceSamples: samples,
+      sampleProcessImpl: async (pid: number) => {
+        seenPids.push(pid);
+        return {
+          aggregateRssMiB: 640,
+          cpuPercent: 12,
+          processId: pid + 1,
+          rssMiB: 512,
+        };
+      },
+    });
+
+    expect(result.stdout).toBe("");
+    expect(seenPids.length).toBeGreaterThan(0);
+    expect(samples[0]).toMatchObject({
+      aggregateRssMiB: 640,
+      label: "plugins install",
+      processId: seenPids[0]! + 1,
+      rssMiB: 512,
+    });
+    expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 });
 

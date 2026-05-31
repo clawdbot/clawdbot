@@ -187,6 +187,32 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cache probe results when the expiry would exceed a valid Date", async () => {
+    await withFakeTimers(async () => {
+      vi.setSystemTime(new Date(8_640_000_000_000_000));
+      const requestFn = setupSuccessClient();
+
+      const { first, second } = await readSequentialDefaultProbePair();
+
+      expect(first).toEqual(second);
+      expect(requestFn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("evicts cached probe results when the current clock is invalid", async () => {
+    const requestFn = setupSuccessClient();
+
+    await probeFeishu(DEFAULT_CREDS);
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      await probeFeishu(DEFAULT_CREDS);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
   it("makes a fresh API call after cache expires", async () => {
     await withFakeTimers(async () => {
       const requestFn = setupSuccessClient();

@@ -1,4 +1,4 @@
-import { type SessionMetadata, type SessionTreeEntry } from "../types.js";
+import type { SessionMetadata, SessionTreeEntry } from "../types.js";
 import { BaseSessionStorage } from "./storage-base.js";
 import { uuidv7 } from "./uuid.js";
 

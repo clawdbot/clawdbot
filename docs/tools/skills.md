@@ -120,20 +120,13 @@ the tool surface those skills teach.
 
 ## Skill Workshop
 
-The optional, experimental **Skill Workshop** plugin can create or update
-workspace skills from reusable procedures observed during agent work. It
-is disabled by default and must be explicitly enabled via
-`plugins.entries.skill-workshop`.
+[Skill Workshop](/tools/skill-workshop) is the governed path for
+agent-generated or reviewed skill creation and improvement. It turns reusable
+work into a pending proposal, scans and hashes the proposal bundle, supports
+review and revision, and writes the final `SKILL.md` only after apply.
 
-Skill Workshop writes only to `<workspace>/skills`, scans generated
-content, supports pending approval or automatic safe writes, quarantines
-unsafe proposals, and refreshes the skill snapshot after successful
-writes so new skills become available without a Gateway restart.
-
-Use it for corrections such as _"next time, verify GIF attribution"_ or
-hard-won workflows such as media QA checklists. Start with pending
-approval; use automatic writes only in trusted workspaces after reviewing
-its proposals. Full guide: [Skill Workshop plugin](/plugins/skill-workshop).
+Use it when an agent or operator wants to capture reusable work without
+silently mutating active workspace skills.
 
 ## ClawHub (install and sync)
 
@@ -564,6 +557,5 @@ schema: [Skills config](/tools/skills-config).
 - [ClawHub](/clawhub) - public skills registry
 - [Creating skills](/tools/creating-skills) - building custom skills
 - [Plugins](/tools/plugin) - plugin system overview
-- [Skill Workshop plugin](/plugins/skill-workshop) - generate skills from agent work
 - [Skills config](/tools/skills-config) - skill configuration reference
 - [Slash commands](/tools/slash-commands) - all available slash commands

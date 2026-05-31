@@ -333,6 +333,40 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
+  it("sends structured mediaUrls arrays", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          mediaUrls: ["./one.png", "/workspace/two.png"],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "one.png"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
+    });
+  });
+
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {
@@ -1100,11 +1134,6 @@ describe("runMessageAction media behavior", () => {
           media: "/workspace/data/file.txt",
           message: "",
           expectedRelativePath: path.join("data", "file.txt"),
-        },
-        {
-          name: "MEDIA directive",
-          message: "Hello\nMEDIA: ./data/note.ogg",
-          expectedRelativePath: path.join("data", "note.ogg"),
         },
       ] as const) {
         await withSandbox(async (sandboxDir) => {

@@ -1,6 +1,6 @@
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
-import { getChromeMcpPid } from "../chrome-mcp.js";
+import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
@@ -227,7 +227,6 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
   try {
     const tab = await profileCtx.ensureTabAvailable();
     if (capabilities.usesChromeMcp) {
-      const { takeChromeMcpSnapshot } = await import("../chrome-mcp.js");
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
@@ -270,7 +269,7 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
 }
 
 function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(query ?? {}, key);
+  return Object.hasOwn(query ?? {}, key);
 }
 
 function parseHeadlessStartOverride(params: {

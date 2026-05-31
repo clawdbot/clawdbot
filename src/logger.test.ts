@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
@@ -9,7 +10,6 @@ import {
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
 import type { RuntimeEnv } from "./runtime.js";
-import { theme } from "./terminal/theme.js";
 import { withTempDirSync } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {

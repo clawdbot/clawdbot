@@ -1,11 +1,11 @@
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { collectConfiguredModelRefs } from "../config/model-refs.js";
-import type { AuthProfileConfig } from "../config/types.auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { AuthProfileConfig } from "../config/types.auth.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
 const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
@@ -183,7 +183,7 @@ export function protectActiveAuthProfileConfig(params: {
       normalizeProviderId(afterProfileRecord?.provider) ||
       normalizeProviderId(beforeProfileRecord?.provider) ||
       extractProviderFromProfileId(profileId);
-    const protectsActiveProvider = !!provider && activeProviders.has(provider);
+    const protectsActiveProvider = provider !== null && activeProviders.has(provider);
     const protectsExplicitProfile = explicitProfileIds.has(profileId);
     if (!protectsActiveProvider && !protectsExplicitProfile) {
       continue;

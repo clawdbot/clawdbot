@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
@@ -136,6 +136,18 @@ export const callGateway = vi
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
 export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+export const autoMigrateLegacyState = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+export const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
@@ -461,7 +473,9 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
+  autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 }));
@@ -577,6 +591,14 @@ beforeEach(() => {
   serviceUninstall.mockReset().mockResolvedValue(undefined);
   serviceReadCommand.mockReset().mockResolvedValue(null);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
+  autoMigrateLegacyStateDir.mockReset().mockResolvedValue({
+    migrated: false,
+    skipped: false,
+    changes: [],
+    warnings: [],
+  });
+  autoMigrateLegacyState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
+  autoMigrateLegacyTaskStateSidecars.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;

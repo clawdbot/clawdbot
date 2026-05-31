@@ -58,17 +58,17 @@ describe("media-generation model refs", () => {
   it("matches provider aliases through a caller-supplied normalizer", () => {
     expect(
       resolveCapabilityModelRefForProviders({
-        raw: "openai-codex/gpt-image-2",
+        raw: "openai/gpt-image-2",
         parseModelRef: parseGenerationModelRef,
         normalizeProviderId: (value) => value.toLowerCase(),
         providers: [
           {
             id: "openai",
-            aliases: ["openai-codex"],
+            aliases: ["openai"],
             defaultModel: "gpt-image-2",
           },
         ],
       }),
-    ).toEqual({ provider: "openai-codex", model: "gpt-image-2" });
+    ).toEqual({ provider: "openai", model: "gpt-image-2" });
   });
 });

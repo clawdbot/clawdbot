@@ -549,7 +549,7 @@ describe("resolveEffectiveToolInventory", () => {
       normalizeToolsMock,
     });
     effectiveInventoryState.normalizeTransportMock.mockReturnValue({
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
 
@@ -557,7 +557,7 @@ describe("resolveEffectiveToolInventory", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               models: [
                 {
                   id: "gpt-5.5-codex",
@@ -572,7 +572,7 @@ describe("resolveEffectiveToolInventory", () => {
           },
         },
       } as never,
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       modelId: "gpt-5.5-codex",
     });
 
@@ -582,7 +582,7 @@ describe("resolveEffectiveToolInventory", () => {
         context: expect.objectContaining({
           config: expect.any(Object),
           workspaceDir: "/tmp/workspace-main",
-          provider: "openai-codex",
+          provider: "openai",
           api: "openai-responses",
           baseUrl: undefined,
         }),
@@ -590,14 +590,14 @@ describe("resolveEffectiveToolInventory", () => {
     );
     expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelApi: "openai-codex-responses",
+        modelApi: "openai-chatgpt-responses",
       }),
     );
     expect(normalizeToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelApi: "openai-codex-responses",
+        modelApi: "openai-chatgpt-responses",
         model: expect.objectContaining({
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
         }),
       }),

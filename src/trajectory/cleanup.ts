@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { isRecord } from "../shared/record-coerce.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,

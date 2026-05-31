@@ -1,3 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,13 +14,12 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-  openai: ["OPENAI_API_KEY"],
-  "openai-codex": ["CODEX_API_KEY", "OPENAI_API_KEY"],
+  openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -52,6 +53,7 @@ export type ProviderAuthLookupMaps = {
   aliasMap: Readonly<Record<string, string>>;
   envCandidateMap: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  setupProviderFallbackRefs: readonly string[];
 };
 
 function isWorkspacePluginTrustedForProviderEnvVars(
@@ -126,6 +128,13 @@ function appendUniqueAuthEvidence(
     }
     seen.add(key);
     bucket.push(entry);
+  }
+}
+
+function appendUniqueProviderRef(target: Set<string>, providerId: string): void {
+  const normalized = normalizeProviderId(providerId);
+  if (normalized) {
+    target.add(normalized);
   }
 }
 
@@ -260,6 +269,37 @@ function resolveManifestProviderAuthEvidenceFromSnapshot(
   return evidenceByProvider;
 }
 
+function resolveManifestSetupProviderFallbackRefsFromSnapshot(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+): string[] {
+  const refs = new Set<string>();
+  for (const plugin of snapshot.plugins) {
+    if (
+      snapshot.index.plugins.length > 0 &&
+      !isInstalledPluginEnabled(snapshot.index, plugin.id, params?.config)
+    ) {
+      continue;
+    }
+    if (plugin.setup?.requiresRuntime === false) {
+      continue;
+    }
+    if (plugin.setup?.providers === undefined && plugin.providers === undefined) {
+      continue;
+    }
+    for (const providerId of listSetupProviderIds(plugin)) {
+      appendUniqueProviderRef(refs, providerId);
+    }
+  }
+  for (const [alias, target] of Object.entries(aliases)) {
+    if (refs.has(target)) {
+      appendUniqueProviderRef(refs, alias);
+    }
+  }
+  return [...refs].toSorted((a, b) => a.localeCompare(b));
+}
+
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -291,6 +331,11 @@ export function resolveProviderAuthLookupMaps(
       ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
     },
     authEvidenceMap: resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliasMap),
+    setupProviderFallbackRefs: resolveManifestSetupProviderFallbackRefsFromSnapshot(
+      params,
+      snapshot,
+      aliasMap,
+    ),
   };
 }
 
@@ -393,13 +438,13 @@ export function getProviderEnvVars(
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
   return uniqueStrings([
-    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-    ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
+    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
+    ...Object.values(resolveProviderEnvVars(params)).flat(),
   ]);
 }
 
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys));
+  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
 }
 
 export function omitEnvKeysCaseInsensitive(

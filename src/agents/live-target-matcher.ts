@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeGooglePreviewModelId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ModelTarget = {
   raw: string;

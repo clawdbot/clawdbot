@@ -109,7 +109,7 @@ vi.mock("../infra/wsl.js", () => ({
   isWSL: vi.fn(async () => false),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 

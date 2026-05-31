@@ -53,6 +53,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+let pollingSessionTesting: typeof import("./polling-session.js").testing;
 let claimTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimTelegramSpooledUpdate;
 let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegram-ingress-spool.js").isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess;
 let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdateClaims;
@@ -499,7 +500,8 @@ function startIsolatedIngressSession(params: {
 
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
+    ({ TelegramPollingSession, testing: pollingSessionTesting } =
+      await import("./polling-session.js"));
     ({
       claimTelegramSpooledUpdate,
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
@@ -2160,7 +2162,7 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       await vi.waitFor(() => expect(events).toEqual(["first:42"]));
 
-      await vi.advanceTimersByTimeAsync(150);
+      await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => expect(worker.createWorker).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
       await runPromise;
@@ -2247,44 +2249,9 @@ describe("TelegramPollingSession", () => {
   });
 
   it("caps oversized spooled update handler abort grace timers", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const abort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    let releaseTurn: (() => void) | undefined;
-    const turnDone = new Promise<void>((resolve) => {
-      releaseTurn = resolve;
-    });
-
-    try {
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wedged topic 10 turn")]);
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        spooledUpdateHandlerTimeoutMs: 100,
-        spooledUpdateHandlerAbortGraceMs: Number.MAX_SAFE_INTEGER,
-        handleUpdate: async () => {
-          await turnDone;
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(150);
-      await vi.waitFor(() => {
-        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      });
-
-      releaseTurn?.();
-      abort.abort();
-      stopWorker();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await runPromise;
-    } finally {
-      releaseTurn?.();
-      abort.abort();
-      setTimeoutSpy.mockRestore();
-      vi.useRealTimers();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateHandlerAbortGraceMs(Number.MAX_SAFE_INTEGER),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not drain more updates on the old bot while a timeout restart is pending", async () => {

@@ -191,7 +191,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     dreamingRestartConfirmLoading: false,
     dreamingStatusError: null,
     client: null,
-    refreshSessionsAfterChat: new Set(),
+    refreshSessionsAfterChat: new Map(),
     connect: vi.fn(),
     setTab: vi.fn(),
     setTheme: vi.fn(),
@@ -304,5 +304,212 @@ describe("renderApp assistant avatar routing", () => {
     );
 
     expect(container.querySelector(".shell")).toBeInstanceOf(HTMLElement);
+  });
+
+  it("filters sidebar recent sessions to the active chat agent", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:work:main",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:work:dashboard:older",
+                kind: "direct",
+                label: "Work older",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Work new", "Work older"]);
+  });
+
+  it("keeps legacy main sessions tied to the default agent when identity is stale", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "main",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                label: "Main legacy",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Main legacy", "Main old"]);
+  });
+
+  it("uses hello default agent for global sidebar sessions before agent list hydration", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "global",
+          assistantAgentId: null,
+          agentsList: null,
+          hello: {
+            snapshot: {
+              sessionDefaults: {
+                defaultAgentId: "ops",
+              },
+            },
+          } as AppViewState["hello"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 2,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:ops:dashboard:new",
+                kind: "direct",
+                label: "Ops new",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Ops new"]);
+  });
+
+  it("keeps unknown sidebar sessions unscoped", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "unknown",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 20,
+              },
+              {
+                key: "unknown",
+                kind: "unknown",
+                label: "Unknown sentinel",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Main old", "Work new"]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { theme } from "../../terminal/theme.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   filterContainerGenericHints,
   parsePortFromArgs,

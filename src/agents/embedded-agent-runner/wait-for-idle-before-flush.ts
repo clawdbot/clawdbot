@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;
 };
@@ -17,6 +19,7 @@ async function waitForAgentIdleBestEffort(
   if (typeof waitForIdle !== "function") {
     return false;
   }
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
 
   const idleResolved = Symbol("idle");
   const idleTimedOut = Symbol("timeout");
@@ -25,7 +28,7 @@ async function waitForAgentIdleBestEffort(
     const outcome = await Promise.race([
       waitForIdle.call(agent).then(() => idleResolved),
       new Promise<symbol>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(idleTimedOut), timeoutMs);
+        timeoutHandle = setTimeout(() => resolve(idleTimedOut), resolvedTimeoutMs);
         timeoutHandle.unref?.();
       }),
     ]);

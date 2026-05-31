@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -49,6 +50,7 @@ function requireValue(argv, index, flag) {
 }
 
 export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
@@ -68,25 +70,25 @@ export function parseArgs(argv) {
     npmPreflightRunId: "",
     outputDir: "",
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--tag":
-        options.tag = requireValue(argv, ++index, arg);
+        options.tag = requireValue(args, ++index, arg);
         break;
       case "--workflow-ref":
-        options.workflowRef = requireValue(argv, ++index, arg);
+        options.workflowRef = requireValue(args, ++index, arg);
         break;
       case "--repo":
-        options.repo = requireValue(argv, ++index, arg);
+        options.repo = requireValue(args, ++index, arg);
         break;
       case "--full-release-run":
-        options.fullReleaseRunId = requireValue(argv, ++index, arg);
+        options.fullReleaseRunId = requireValue(args, ++index, arg);
         break;
       case "--npm-preflight-run":
-        options.npmPreflightRunId = requireValue(argv, ++index, arg);
+        options.npmPreflightRunId = requireValue(args, ++index, arg);
         break;
       case "--skip-dispatch":
         options.skipDispatch = true;
@@ -101,28 +103,28 @@ export function parseArgs(argv) {
         options.skipTelegram = true;
         break;
       case "--telegram-provider-mode":
-        options.telegramProviderMode = requireValue(argv, ++index, arg);
+        options.telegramProviderMode = requireValue(args, ++index, arg);
         break;
       case "--provider":
-        options.provider = requireValue(argv, ++index, arg);
+        options.provider = requireValue(args, ++index, arg);
         break;
       case "--mode":
-        options.mode = requireValue(argv, ++index, arg);
+        options.mode = requireValue(args, ++index, arg);
         break;
       case "--release-profile":
-        options.releaseProfile = requireValue(argv, ++index, arg);
+        options.releaseProfile = requireValue(args, ++index, arg);
         break;
       case "--npm-dist-tag":
-        options.npmDistTag = requireValue(argv, ++index, arg);
+        options.npmDistTag = requireValue(args, ++index, arg);
         break;
       case "--plugin-publish-scope":
-        options.pluginPublishScope = requireValue(argv, ++index, arg);
+        options.pluginPublishScope = requireValue(args, ++index, arg);
         break;
       case "--plugins":
-        options.plugins = requireValue(argv, ++index, arg);
+        options.plugins = requireValue(args, ++index, arg);
         break;
       case "--output-dir":
-        options.outputDir = requireValue(argv, ++index, arg);
+        options.outputDir = requireValue(args, ++index, arg);
         break;
       case "-h":
       case "--help":

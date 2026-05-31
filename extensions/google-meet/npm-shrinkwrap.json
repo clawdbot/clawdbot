@@ -9,7 +9,7 @@
       "version": "2026.5.30",
       "dependencies": {
         "commander": "14.0.3",
-        "typebox": "1.1.38"
+        "typebox": "1.1.39"
       },
       "peerDependencies": {
         "openclaw": ">=2026.5.30"
@@ -30,9 +30,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     }
   }

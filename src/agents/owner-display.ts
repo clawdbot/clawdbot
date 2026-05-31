@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type OwnerDisplaySetting = {
   ownerDisplay?: "raw" | "hash";

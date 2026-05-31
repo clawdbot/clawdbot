@@ -1,9 +1,9 @@
-import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 
 export type ChannelRouteChatType = "direct" | "group" | "channel";
 

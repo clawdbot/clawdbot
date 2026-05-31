@@ -97,7 +97,6 @@ async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaun
     if (!result.ok) {
       throw result.error;
     }
-    return;
   } finally {
     vi.useRealTimers();
   }

@@ -25,12 +25,12 @@ import {
   type CodexAppServerSandboxMode,
   type OpenClawExecPolicyForCodexAppServer,
 } from "./app-server/config.js";
-import {
-  type CodexServiceTier,
-  type CodexThreadResumeResponse,
-  type CodexThreadStartResponse,
-  type CodexTurnStartResponse,
-  type JsonValue,
+import type {
+  CodexServiceTier,
+  CodexThreadResumeResponse,
+  CodexThreadStartResponse,
+  CodexTurnStartResponse,
+  JsonValue,
 } from "./app-server/protocol.js";
 import {
   resolveCodexNativeExecutionBlock,
@@ -714,13 +714,10 @@ function resolveThreadRequestModelProvider(params: {
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (modelProvider.toLowerCase() === "openai" || modelProvider.toLowerCase() === "openai-codex")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
     return undefined;
   }
-  return modelProvider.toLowerCase() === "openai-codex" ? "openai" : modelProvider;
+  return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
 }
 
 function buildAgentLookup(params: {

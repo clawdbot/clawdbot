@@ -24,7 +24,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { OPENAI_CODEX_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-routing.js";
+import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
@@ -133,7 +133,7 @@ function resolveSimpleCompletionRuntimeProvider(params: {
     config: params.cfg,
     agentId: params.agentId,
   });
-  return policy.runtime === "codex" ? { runtimeProvider: OPENAI_CODEX_PROVIDER_ID } : {};
+  return policy.runtime === "codex" ? { runtimeProvider: OPENAI_PROVIDER_ID } : {};
 }
 
 async function setRuntimeApiKeyForCompletion(params: {
@@ -211,9 +211,14 @@ export async function prepareSimpleCompletionModel(params: {
             ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
             : {}),
           skipAgentDiscovery: true,
+          authProfileId: params.profileId,
+          preferredProfile: params.preferredProfile,
         },
       )
-    : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
+    : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+        authProfileId: params.profileId,
+        preferredProfile: params.preferredProfile,
+      });
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,

@@ -66,7 +66,7 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
     Skills with a `SKILL.md` file under `skills/<name>/` are copied, along with per-skill config values from `skills.config`.
   </Accordion>
   <Accordion title="Auth credentials">
-    Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include supported OAuth credentials from Hermes `auth.json`, OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Use `--include-secrets` for non-interactive `openclaw migrate` credential import, `--no-auth-credentials` to skip it, or onboarding `--import-secrets` when importing from the onboarding wizard.
+    Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Hermes `auth.json` OAuth entries are legacy state and are surfaced as manual reauth/doctor work instead of imported into live auth. Use `--include-secrets` for non-interactive `openclaw migrate` credential import, `--no-auth-credentials` to skip it, or onboarding `--import-secrets` when importing from the onboarding wizard.
   </Accordion>
 </AccordionGroup>
 
@@ -137,7 +137,7 @@ If a conflict surfaces mid-apply (for example, an unexpected race on a config fi
 
 Interactive `openclaw migrate` asks whether to import detected auth credentials, with yes selected by default.
 
-- Accepting the prompt imports supported OAuth credentials from Hermes `auth.json`, OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys).
+- Accepting the prompt imports OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Hermes `auth.json` OAuth entries are reported for manual OpenAI reauth or doctor repair.
 - Use `--no-auth-credentials` or choose no at the prompt to import non-secret state only.
 - Use `--include-secrets` when running unattended with `--yes`.
 - Use onboarding `--import-secrets` when importing credentials from the onboarding wizard.

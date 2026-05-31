@@ -593,10 +593,7 @@ function computeDiff(
       return true;
     }
     for (const key of origKeys) {
-      if (
-        !Object.prototype.hasOwnProperty.call(curr, key) ||
-        valuesDiffer(orig[key], curr[key], depth + 1)
-      ) {
+      if (!Object.hasOwn(curr, key) || valuesDiffer(orig[key], curr[key], depth + 1)) {
         return true;
       }
     }

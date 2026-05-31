@@ -70,4 +70,11 @@ describe("voice-call CLI timeout helpers", () => {
       10_000 + MAX_TIMER_TIMEOUT_MS,
     );
   });
+
+  it("caps gateway continue poll timeouts from async operation payloads", () => {
+    expect(
+      testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.MAX_SAFE_INTEGER }, 45_000),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.NaN }, 45_000)).toBe(45_000);
+  });
 });

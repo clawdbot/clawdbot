@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPlugin } from "../../../channels/plugins/index.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { resolveQueueSettings as resolveQueueSettingsCore } from "./settings.js";
 import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 

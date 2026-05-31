@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -10,7 +11,6 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   createAsyncLock,

@@ -8,20 +8,20 @@
       "name": "@openclaw/acpx",
       "version": "2026.5.30",
       "dependencies": {
-        "@agentclientprotocol/claude-agent-acp": "0.37.0",
+        "@agentclientprotocol/claude-agent-acp": "0.39.0",
         "@zed-industries/codex-acp": "0.15.0",
         "acpx": "0.10.0",
         "zod": "4.4.3"
       }
     },
     "node_modules/@agentclientprotocol/claude-agent-acp": {
-      "version": "0.37.0",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.37.0.tgz",
-      "integrity": "sha512-xZd/0tYQyUAQICMqx/msJJEtF07KJzUwQodHDrpUoaHG3miBKW635bLKo9kQInWYIhQ96ZJDhdSHHnH44e+KlA==",
+      "version": "0.39.0",
+      "resolved": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.39.0.tgz",
+      "integrity": "sha512-+tCm5v32L0R3zE4qjZQowfO1L/zqvQ5FapmsMSIf4gawXfTf26CG5hgz99wARdo0zn20/1eP80gzx7PbZlSX9A==",
       "license": "Apache-2.0",
       "dependencies": {
         "@agentclientprotocol/sdk": "0.22.1",
-        "@anthropic-ai/claude-agent-sdk": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk": "0.3.156",
         "zod": "^3.25.0 || ^4.0.0"
       },
       "bin": {
@@ -38,22 +38,22 @@
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.146.tgz",
-      "integrity": "sha512-hK9/Ng+hOyexUemTxdIUsSWJ9o2LFi2YNWzHwz8/YMCohUYOnFMZkBiENvUAb0WIc5hieOyBZrOIlg5OewuJMg==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.156.tgz",
+      "integrity": "sha512-6nM/Dj+VMds52UXJ2YaV4IKhYamlUqN0HtdDrFzYz5lvPMpDS935qD8YZDAUpy+ltdoD6PJMd1V/CKFY3/oWCQ==",
       "license": "SEE LICENSE IN README.md",
       "engines": {
         "node": ">=18.0.0"
       },
       "optionalDependencies": {
-        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.146",
-        "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.146"
+        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.156",
+        "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.156"
       },
       "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.93.0",
@@ -62,9 +62,9 @@
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.146.tgz",
-      "integrity": "sha512-0IIvlEaenq2CRSVx5Bo5BaCtHQXS87GancM35WKEYveGVLn6DI+5G7ikYuTE4AKRPkMnogFtY4BJt6LulWGj+A==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.156.tgz",
+      "integrity": "sha512-IkjcS9dqAUlD4Nb62L9AZtmAXCa+FV4ul8lIlyXXUprh3nlecbKsWOXVd/GORrzAhMmynJaX4+iV1JiutFKXUA==",
       "cpu": [
         "arm64"
       ],
@@ -75,9 +75,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.146.tgz",
-      "integrity": "sha512-Dk5xJ03Ff1JXbMRP1t2wc/TyfY6xF/2Ysp31wMhFPjoNiKSPHMWaIg242+T3CHdxLWmJ8plWHL1HL5cyZ/LCkw==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.156.tgz",
+      "integrity": "sha512-6PKi5fPmGRuzXu+Em/iwLmPG3mqg0hl92wcTU8fmChqyNtxhxsjCw7LTbdFqp/05o5NeZVVV4k3p7YUv5IFD6g==",
       "cpu": [
         "x64"
       ],
@@ -88,9 +88,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.146.tgz",
-      "integrity": "sha512-mzBXDDWWBAC/vDtAYpO1G/dq5QvJtYSPXsqcb+sNdcDhiuf4IYnYp7ytRncYlsUNDkLmX6Gk2jkWAHUUA2Lozg==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.156.tgz",
+      "integrity": "sha512-H0Nfd41iw5isto9uQI1FlVSZ0eaDttr8rBpJMR25oK/mj3egMO5EmZ6aAxeeUYSLn2mSU50HA5VNxlGUE118TQ==",
       "cpu": [
         "arm64"
       ],
@@ -101,9 +101,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.146.tgz",
-      "integrity": "sha512-QlCid0ucdrmhUAOewfQjaofN2wlokWcfFTxSFePTSj1umk35JO7TDFP700F7jU49r1fPWIdvJpPwWGyB0DeFPA==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.156.tgz",
+      "integrity": "sha512-R7KEVjxkR4rYgIQoHGBzwPdUJYxRTO8I4vHjRbMLH1eW4FS7BJvVs7ogfKR/NnHFBvMVqtC+l6jHLQv8bobUiw==",
       "cpu": [
         "arm64"
       ],
@@ -114,9 +114,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.146.tgz",
-      "integrity": "sha512-B2baXU1tCBT5CVlD7jJMKjpC4xdO45NUIWpqImmwuOfKvlM/PITjyTXyTY662mGZf1dBmdqBBsqirwFH/jhi8Q==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.156.tgz",
+      "integrity": "sha512-ymhrdlbWoYvTACUdaGdhrEv+ZMfwXLsf0BRLkr/IvY5aqybP7URzWmmZGOtDQpqkT/8xu/UCGqUYH3woJwUxfg==",
       "cpu": [
         "x64"
       ],
@@ -127,9 +127,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.146.tgz",
-      "integrity": "sha512-E3coK1ThQT08KIX80RLcsq7DWXFllCKOzoOe32it/bdtY56TBgPY9xemwXhIJ+cVBHTI9/MpBSIlKBcFCt+yQA==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.156.tgz",
+      "integrity": "sha512-/Q6WUizI6a+hqZZ6ElwRU0PEuFhOoN4v6CuU35HHbiZ/7uaocGht4A8ZIgK1Fw6wOGtZzGLbc00CA1OU1Zg8EA==",
       "cpu": [
         "x64"
       ],
@@ -140,9 +140,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-win32-arm64": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.146.tgz",
-      "integrity": "sha512-CIwQxGX2r/yWpjCJ6ahB3smKXhghWgGTxL98+LGW52TUwqTiBnlNrH9DPqqgv1/+Hyquw6xfLrKU+StyfMgiLw==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.156.tgz",
+      "integrity": "sha512-5sAeNObQQrMy4NF9HwxewrMnU7mVxZDHh+/MfJVQSz0GSTvXQ6gOuRH8helMlfspoU6VOdekPxVLRooX/3foEw==",
       "cpu": [
         "arm64"
       ],
@@ -153,9 +153,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64": {
-      "version": "0.3.146",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.146.tgz",
-      "integrity": "sha512-qmxrsyaqA8s4HShqJls7ZCRjdoqN66Jo/hbjQNB3uHepD8tEO1iD19aPV4+osdLT7feMkhDBfLT07Q30R2NB5w==",
+      "version": "0.3.156",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.156.tgz",
+      "integrity": "sha512-/PofeTWoiKgnWNSNk0wG4SsRn22GGLmnLhg2R94WcNhCRFOyOTmiZcYH2DBlWZBIRVTZDsSfa/Pl1DyPvYCGKw==",
       "cpu": [
         "x64"
       ],
@@ -166,9 +166,9 @@
       ]
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.98.0",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.98.0.tgz",
-      "integrity": "sha512-N7aXtCvC5g6T1Y4V29lJjceu/zTkVkIZF0jdBvagr0TRFHuKeImffalGWEfqZKrvjH+IQbzJWw6TmSmUzrlMgg==",
+      "version": "0.100.1",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.100.1.tgz",
+      "integrity": "sha512-RANcEe7LpiLczkKGOwoXOTuFdPhuubS0i4xaAKOMpcqc55YO0mukgxppV7eygx3DXNjxWT6RYOLPyOy0aIAmwg==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
@@ -187,9 +187,9 @@
       }
     },
     "node_modules/@babel/runtime": {
-      "version": "7.29.2",
-      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.2.tgz",
-      "integrity": "sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==",
+      "version": "7.29.7",
+      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz",
+      "integrity": "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==",
       "license": "MIT",
       "engines": {
         "node": ">=6.9.0"
@@ -1196,9 +1196,9 @@
       }
     },
     "node_modules/es-object-atoms": {
-      "version": "1.1.1",
-      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.1.tgz",
-      "integrity": "sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==",
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
+      "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0"
@@ -1285,9 +1285,9 @@
       }
     },
     "node_modules/eventsource-parser": {
-      "version": "3.0.8",
-      "resolved": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.0.8.tgz",
-      "integrity": "sha512-70QWGkr4snxr0OXLRWsFLeRBIRPuQOvt4s8QYjmUlmlkyTZkRqS7EDVRZtzU3TiyDbXSzaOeF0XUKy8PchzukQ==",
+      "version": "3.1.0",
+      "resolved": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.1.0.tgz",
+      "integrity": "sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==",
       "license": "MIT",
       "engines": {
         "node": ">=18.0.0"
@@ -1536,9 +1536,9 @@
       }
     },
     "node_modules/hasown": {
-      "version": "2.0.3",
-      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.3.tgz",
-      "integrity": "sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==",
+      "version": "2.0.4",
+      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
+      "integrity": "sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==",
       "license": "MIT",
       "dependencies": {
         "function-bind": "^1.1.2"
@@ -2081,9 +2081,9 @@
       }
     },
     "node_modules/streamx": {
-      "version": "2.25.0",
-      "resolved": "https://registry.npmjs.org/streamx/-/streamx-2.25.0.tgz",
-      "integrity": "sha512-0nQuG6jf1w+wddNEEXCF4nTg3LtufWINB5eFEN+5TNZW7KWJp6x87+JFL43vaAUPyCfH1wID+mNVyW6OHtFamg==",
+      "version": "2.26.0",
+      "resolved": "https://registry.npmjs.org/streamx/-/streamx-2.26.0.tgz",
+      "integrity": "sha512-VvNG1K72Po/xwJzxZFnZ++Tbrv4lwSptsbkFuzXCJAYZvCK5nnxsvXU6ajqkv7chyiI1Y0YXq2Jh8Iy8Y7NF/A==",
       "license": "MIT",
       "dependencies": {
         "events-universal": "^1.0.0",

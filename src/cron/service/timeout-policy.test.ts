@@ -1,5 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import type { CronJob } from "../types.js";
 import {
   AGENT_TURN_SAFETY_TIMEOUT_MS,

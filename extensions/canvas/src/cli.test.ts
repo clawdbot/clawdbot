@@ -87,9 +87,9 @@ describe("canvas CLI", () => {
     expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(writtenFile.base64).toBe("aGk=");
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const mediaMessage = runtime.log.mock.calls[0]?.[0];
-    expect(mediaMessage?.startsWith("MEDIA:")).toBe(true);
-    expect(mediaMessage?.endsWith(".png")).toBe(true);
+    const savedPath = runtime.log.mock.calls[0]?.[0];
+    expect(savedPath?.startsWith("MEDIA:")).toBe(false);
+    expect(savedPath?.endsWith(".png")).toBe(true);
   });
 
   it("rejects node-controlled snapshot formats before writing", async () => {

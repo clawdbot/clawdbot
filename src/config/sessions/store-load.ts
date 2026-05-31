@@ -1,9 +1,9 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -44,6 +44,11 @@ export type LoadSessionStoreOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
   clone?: boolean;
+  hydrateSkillPromptRefs?: boolean;
+};
+
+export type ReadSessionEntryOptions = {
+  hydrateSkillPromptRefs?: boolean;
 };
 
 const log = createSubsystemLogger("sessions/store");
@@ -65,6 +70,10 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -146,6 +155,16 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   assign(
     "pendingFinalDeliveryIntentId",
     normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
+  );
+  const restartRecoveryDeliveryContext = normalizeOptionalDeliveryContext(
+    entry.restartRecoveryDeliveryContext,
+  );
+  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
+    assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
+  }
+  assign(
+    "restartRecoveryDeliveryRunId",
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
   );
 
   return next;
@@ -355,6 +374,8 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  const shouldHydrateSkillPromptRefs = opts.hydrateSkillPromptRefs !== false;
+  const canWriteSessionStoreCache = shouldHydrateSkillPromptRefs;
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
@@ -371,8 +392,8 @@ export function loadSessionStore(
   // Retry a few times on Windows because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
-  let fileStat = getFileStatSnapshot(storePath);
-  let mtimeMs = fileStat?.mtimeMs;
+  const fileStat = getFileStatSnapshot(storePath);
+  const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
@@ -400,7 +421,9 @@ export function loadSessionStore(
     }
   }
 
-  const hydratedPromptRefs = hydrateSessionStoreSkillPromptRefs({ storePath, store });
+  const hydratedPromptRefs = shouldHydrateSkillPromptRefs
+    ? hydrateSessionStoreSkillPromptRefs({ storePath, store })
+    : false;
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
@@ -444,7 +467,7 @@ export function loadSessionStore(
 
   setSerializedSessionStore(storePath, serializedFromDisk);
 
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && canWriteSessionStoreCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
       storePath,
       store,
@@ -488,8 +511,12 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
 export function readSessionEntry(
   storePath: string,
   sessionKey: string,
+  opts: ReadSessionEntryOptions = {},
 ): SessionStoreSnapshotEntry | undefined {
-  const store = loadSessionStore(storePath, { clone: false });
+  const store = loadSessionStore(storePath, {
+    clone: false,
+    ...(opts.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
   const resolved = resolveSessionStoreEntry({
     store,
     sessionKey,

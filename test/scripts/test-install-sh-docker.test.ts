@@ -321,6 +321,16 @@ describe("test-install-sh-docker", () => {
     expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
   });
+
+  it("uses public npm latest as the non-root installer expectation", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(wrapper).toContain(
+      'public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"',
+    );
+    expect(wrapper).toContain('LATEST_VERSION="$public_latest_version"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION"');
+  });
 });
 
 describe("install-sh smoke runner", () => {

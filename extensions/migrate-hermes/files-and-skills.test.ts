@@ -182,4 +182,69 @@ describe("Hermes migration file and skill items", () => {
     await expectPathMissing(path.join(reportDir, "archive", "auth.json"));
     await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
   });
+
+  it("reports legacy Hermes auth.json OAuth state as manual reauth work", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const legacyOpenAIProvider = ["openai", "codex"].join("-");
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {
+          [legacyOpenAIProvider]: {
+            tokens: {
+              access_token: "old-access",
+              refresh_token: "old-refresh",
+            },
+          },
+        },
+        credential_pool: {
+          [legacyOpenAIProvider]: [
+            {
+              access_token: "pool-access",
+              refresh_token: "pool-refresh",
+            },
+          ],
+        },
+      }),
+    );
+
+    const provider = buildHermesMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
+    );
+
+    const manualAuth = itemById(plan.items, "manual:legacy-hermes-auth-json");
+    expect(manualAuth?.kind).toBe("manual");
+    expect(manualAuth?.status).toBe("skipped");
+    expect(manualAuth?.message).toContain("no longer imports");
+    expect(plan.items.some((item) => item.kind === "auth")).toBe(false);
+    expect(plan.warnings).toContain(
+      "Some Hermes settings require manual review before they can be activated safely.",
+    );
+  });
+
+  it("ignores empty Hermes auth.json credential containers", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {},
+        credential_pool: {},
+        tokens: { anthropic: { access: "other-access", refresh: "other-refresh" } },
+      }),
+    );
+
+    const provider = buildHermesMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
+    );
+
+    expect(plan.items.find((item) => item.id === "manual:legacy-hermes-auth-json")).toBeUndefined();
+  });
 });

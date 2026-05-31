@@ -3,6 +3,9 @@ import {
   abortChatRunById,
   abortChatRunsForProvider,
   isChatStopCommandText,
+  registerChatAbortController,
+  resolveAgentRunExpiresAtMs,
+  resolveChatRunExpiresAtMs,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
   updateChatRunProvider,
@@ -130,6 +133,48 @@ describe("isChatStopCommandText", () => {
     expect(isChatStopCommandText("/status")).toBe(false);
     expect(isChatStopCommandText("please do not do that")).toBe(false);
     expect(isChatStopCommandText("keep going")).toBe(false);
+  });
+});
+
+describe("registerChatAbortController", () => {
+  it("expires registrations immediately when the process clock is invalid", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-invalid-clock",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      now: Number.NaN,
+    });
+
+    expect(registration.registered).toBe(true);
+    expect(registration.entry).toMatchObject({
+      startedAtMs: 0,
+      expiresAtMs: 0,
+    });
+    expect(chatAbortControllers.get("run-invalid-clock")?.expiresAtMs).toBe(0);
+  });
+
+  it("expires registrations immediately when explicit expiry is invalid", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-invalid-expiry",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      now: 1_800_000_000_000,
+      expiresAtMs: Number.POSITIVE_INFINITY,
+    });
+
+    expect(registration.entry?.expiresAtMs).toBe(0);
+  });
+
+  it("bounds default and agent run expiry calculations to valid Date timestamps", () => {
+    expect(resolveChatRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
+    expect(resolveChatRunExpiresAtMs({ now: 8_640_000_000_000_000, timeoutMs: 60_000 })).toBe(0);
+    expect(resolveAgentRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
   });
 });
 

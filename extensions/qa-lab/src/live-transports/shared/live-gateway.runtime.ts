@@ -35,7 +35,7 @@ async function stopQaLiveLaneResources(
 }
 
 function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
-  if (!entries || !Object.prototype.hasOwnProperty.call(entries, "memory-core")) {
+  if (!entries || !Object.hasOwn(entries, "memory-core")) {
     return entries;
   }
   const { "memory-core": _memoryCore, ...rest } = entries;

@@ -3,6 +3,11 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
+import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
+  normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -21,10 +26,6 @@ import type {
   ProviderSanitizeReplayHistoryContext,
   ProviderThinkingProfile,
 } from "./plugin-entry.js";
-import {
-  normalizeAntigravityPreviewModelId,
-  normalizeGooglePreviewModelId,
-} from "./provider-model-id-normalize.js";
 
 export type {
   ModelApi,
@@ -34,7 +35,7 @@ export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -72,7 +73,6 @@ export {
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
 } from "../plugins/provider-model-compat.js";
-export { normalizeProviderId } from "../agents/provider-id.js";
 export {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -84,6 +84,10 @@ export {
   sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
 };
+
+export function normalizeProviderId(provider: string): string {
+  return normalizeProviderIdCore(provider);
+}
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -92,7 +96,7 @@ export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "../plugins/provider-model-helpers.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
 const CLAUDE_OPUS_48_MODEL_PREFIXES = ["claude-opus-4-8", "claude-opus-4.8"] as const;
 const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
@@ -168,7 +172,13 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
   return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
-export { normalizeAntigravityPreviewModelId, normalizeGooglePreviewModelId };
+export function normalizeAntigravityPreviewModelId(id: string): string {
+  return normalizeAntigravityPreviewModelIdCore(id);
+}
+
+export function normalizeGooglePreviewModelId(id: string): string {
+  return normalizeGooglePreviewModelIdCore(id);
+}
 
 export type ProviderReplayFamily =
   | "openai-compatible"

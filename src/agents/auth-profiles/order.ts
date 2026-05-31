@@ -1,6 +1,9 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
@@ -25,7 +28,7 @@ export type AuthProfileEligibility = {
 };
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;

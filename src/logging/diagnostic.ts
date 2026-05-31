@@ -40,9 +40,9 @@ import {
   resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
-import {
-  type StuckSessionRecoveryOutcome,
-  type StuckSessionRecoveryRequest,
+import type {
+  StuckSessionRecoveryOutcome,
+  StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
 import {
   diagnosticSessionStates,

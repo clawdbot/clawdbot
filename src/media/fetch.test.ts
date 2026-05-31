@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -633,6 +634,32 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.path).toMatch(/[a-f0-9-]{36}\.png$/);
     expect(saved.path).not.toMatch(/photo---/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it("clamps oversized saved-response idle timeout timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+            status: 200,
+            headers: { "content-type": "application/octet-stream" },
+          }),
+      );
+
+      const saved = await saveRemoteMedia({
+        url: "https://example.com/download",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 8,
+        readIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      });
+
+      await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3]));
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("cancels ignored content-length overflow bodies for saved responses", async () => {

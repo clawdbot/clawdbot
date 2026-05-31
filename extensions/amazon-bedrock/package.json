@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1053.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1053.0",
-    "@aws-sdk/credential-provider-node": "3.972.44",
-    "@smithy/node-http-handler": "4.7.4",
-    "@smithy/shared-ini-file-loader": "4.5.4",
+    "@aws-sdk/client-bedrock": "3.1056.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1056.0",
+    "@aws-sdk/credential-provider-node": "3.972.46",
+    "@smithy/node-http-handler": "4.7.5",
+    "@smithy/shared-ini-file-loader": "4.5.5",
     "@smithy/types": "4.14.2"
   },
   "devDependencies": {

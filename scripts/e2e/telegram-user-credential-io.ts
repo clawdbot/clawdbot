@@ -78,7 +78,6 @@ export function runCommand(
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let timeout: NodeJS.Timeout;
     let killTimer: NodeJS.Timeout | undefined;
     let timedOutError: Error | undefined;
     const timeoutMs = Math.max(1, options.timeoutMs);
@@ -97,7 +96,7 @@ export function runCommand(
       clearTimers();
       reject(error);
     };
-    timeout = setTimeout(() => {
+    const timeout: NodeJS.Timeout = setTimeout(() => {
       if (settled) {
         return;
       }

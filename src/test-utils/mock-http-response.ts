@@ -1,5 +1,5 @@
 import type { ServerResponse } from "node:http";
-import { lowercasePreservingWhitespace } from "../shared/string-coerce.js";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 
 export function createMockServerResponse(): ServerResponse & { body?: string } {
   const headers: Record<string, string> = {};

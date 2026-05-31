@@ -190,7 +190,7 @@ export function buildTokenEfficiencyReport(
   const usageSource: TokenEfficiencyRow["usageSource"] = liveUsage ? "live-usage" : "mock-estimate";
   const parityResults = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)
-    .filter((result): result is RuntimeParityResult => !!result);
+    .filter((result): result is RuntimeParityResult => Boolean(result));
 
   if (parityResults.length === 0) {
     return {

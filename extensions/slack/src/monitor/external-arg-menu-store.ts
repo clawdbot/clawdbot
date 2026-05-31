@@ -1,3 +1,7 @@
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES = 18;
@@ -20,10 +24,15 @@ type SlackExternalArgMenuEntry = {
 
 function pruneSlackExternalArgMenuStore(
   store: Map<string, SlackExternalArgMenuEntry>,
-  now: number,
+  rawNow: number,
 ): void {
+  const now = asDateTimestampMs(rawNow);
+  if (now === undefined) {
+    store.clear();
+    return;
+  }
   for (const [token, entry] of store.entries()) {
-    if (entry.expiresAt <= now) {
+    if (asDateTimestampMs(entry.expiresAt) === undefined || entry.expiresAt <= now) {
       store.delete(token);
     }
   }
@@ -47,11 +56,16 @@ export function createSlackExternalArgMenuStore() {
     ): string {
       pruneSlackExternalArgMenuStore(store, now);
       const token = createSlackExternalArgMenuToken(store);
-      store.set(token, {
-        choices: params.choices,
-        userId: params.userId,
-        expiresAt: now + SLACK_EXTERNAL_ARG_MENU_TTL_MS,
+      const expiresAt = resolveExpiresAtMsFromDurationMs(SLACK_EXTERNAL_ARG_MENU_TTL_MS, {
+        nowMs: now,
       });
+      if (expiresAt !== undefined) {
+        store.set(token, {
+          choices: params.choices,
+          userId: params.userId,
+          expiresAt,
+        });
+      }
       return token;
     },
     readToken(raw: unknown): string | undefined {

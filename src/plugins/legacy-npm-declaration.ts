@@ -1,7 +1,7 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { validatePluginId } from "./install-paths.js";
 
 export const LEGACY_NPM_DECLARATION_FILE = "openclaw.extension.json";

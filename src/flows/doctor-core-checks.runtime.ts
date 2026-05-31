@@ -56,18 +56,15 @@ function buildDoctorRuntimeModel(params: {
 }): ProviderRuntimeModel {
   const provider = params.provider || DEFAULT_PROVIDER;
   const id = params.modelId || DEFAULT_MODEL;
-  const api =
-    provider === "openai-codex"
-      ? "openai-codex-responses"
-      : provider === "openai"
-        ? "openai-responses"
-        : undefined;
+  const api = params.entry?.api ?? (provider === "openai" ? "openai-responses" : undefined);
+  const entryBaseUrl = (params.entry as { baseUrl?: string } | undefined)?.baseUrl;
   const baseUrl =
-    provider === "openai-codex"
+    entryBaseUrl ??
+    (api === "openai-chatgpt-responses"
       ? "https://chatgpt.com/backend-api"
       : provider === "openai"
         ? "https://api.openai.com/v1"
-        : undefined;
+        : undefined);
   return {
     ...params.entry,
     provider,

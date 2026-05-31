@@ -183,7 +183,7 @@ function createHost(): TestGatewayHost {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
     execApprovalBusy: false,

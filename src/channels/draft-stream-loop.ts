@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+
 export type DraftStreamLoop = {
   update: (text: string) => void;
   flush: () => Promise<void>;
@@ -13,6 +15,7 @@ export function createDraftStreamLoop(params: {
   sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
   onBackgroundFlushError?: (err: unknown) => void;
 }): DraftStreamLoop {
+  const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
   let lastSentAt = 0;
   let pendingText = "";
   let inFlightPromise: Promise<void | boolean> | undefined;
@@ -78,7 +81,7 @@ export function createDraftStreamLoop(params: {
     if (timer) {
       return;
     }
-    const delay = Math.max(0, params.throttleMs - (Date.now() - lastSentAt));
+    const delay = Math.max(0, throttleMs - (Date.now() - lastSentAt));
     timer = setTimeout(() => {
       startBackgroundFlush();
     }, delay);
@@ -94,7 +97,7 @@ export function createDraftStreamLoop(params: {
         schedule();
         return;
       }
-      if (!timer && Date.now() - lastSentAt >= params.throttleMs) {
+      if (!timer && Date.now() - lastSentAt >= throttleMs) {
         startBackgroundFlush();
         return;
       }

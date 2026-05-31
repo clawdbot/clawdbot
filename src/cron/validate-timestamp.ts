@@ -1,4 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  asDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import type { CronSchedule } from "./types.js";
 
@@ -40,12 +44,13 @@ export function validateScheduleTimestamp(
     };
   }
 
-  const diffMs = atMs - nowMs;
+  const referenceNowMs = asDateTimestampMs(nowMs) ?? asDateTimestampMs(Date.now()) ?? 0;
+  const diffMs = atMs - referenceNowMs;
 
   // Check if timestamp is in the past (allow 1 minute grace period)
   if (diffMs < -ONE_MINUTE_MS) {
-    const nowDate = new Date(nowMs).toISOString();
-    const atDate = new Date(atMs).toISOString();
+    const nowDate = resolveTimestampMsToIsoString(referenceNowMs);
+    const atDate = resolveTimestampMsToIsoString(atMs);
     const minutesAgo = Math.floor(-diffMs / ONE_MINUTE_MS);
     return {
       ok: false,
@@ -55,7 +60,7 @@ export function validateScheduleTimestamp(
 
   // Check if timestamp is too far in the future
   if (diffMs > TEN_YEARS_MS) {
-    const atDate = new Date(atMs).toISOString();
+    const atDate = resolveTimestampMsToIsoString(atMs);
     const yearsAhead = Math.floor(diffMs / (365.25 * 24 * 60 * 60 * 1000));
     return {
       ok: false,

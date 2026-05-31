@@ -383,7 +383,7 @@ export async function sendText(
   target: DeliveryTarget,
   content: string,
   creds: AccountCreds,
-  opts?: { msgId?: string; messageReference?: string },
+  opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
 ): Promise<MessageResponse> {
   const api = resolveAccount(creds.appId).messageApi;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
@@ -394,9 +394,12 @@ export async function sendText(
       return api.sendMessage(scope, target.id, content, c, {
         msgId: opts.msgId,
         messageReference: opts.messageReference,
+        forcePlainText: opts.forcePlainText,
       });
     }
-    return api.sendProactiveMessage(scope, target.id, content, c);
+    return api.sendProactiveMessage(scope, target.id, content, c, {
+      forcePlainText: opts?.forcePlainText,
+    });
   }
 
   if (target.type === "dm") {

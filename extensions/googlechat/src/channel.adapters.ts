@@ -144,7 +144,7 @@ export const googlechatPairingTextAdapter = {
     message: string;
     accountId?: string | null;
   }) => {
-    const account = resolveGoogleChatAccount({ cfg: cfg, accountId });
+    const account = resolveGoogleChatAccount({ cfg, accountId });
     if (account.credentialSource === "none") {
       return;
     }
@@ -205,7 +205,7 @@ export const googlechatOutboundAdapter = {
       threadId?: string | number | null;
     }) => {
       const account = resolveGoogleChatAccount({
-        cfg: cfg,
+        cfg,
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
@@ -252,14 +252,14 @@ export const googlechatOutboundAdapter = {
         throw new Error("Google Chat mediaUrl is required.");
       }
       const account = resolveGoogleChatAccount({
-        cfg: cfg,
+        cfg,
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
       const thread =
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const maxBytes = resolveChannelMediaMaxBytes({
-        cfg: cfg,
+        cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>
           (
             cfg.channels?.googlechat as

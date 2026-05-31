@@ -131,7 +131,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       context: { account: ctx.account },
       abortSignal: ctx.abortSignal,
     });
-    accountLogger.info(`approval.native context registered (lease=${!!lease})`);
+    accountLogger.info(`approval.native context registered (lease=${Boolean(lease)})`);
   } else {
     accountLogger.info("No channelRuntime — skipping approval.native registration");
   }

@@ -127,20 +127,20 @@ describe("codex conversation binding", () => {
   it("uses the default Codex auth profile and omits the public OpenAI provider for new binds", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const config = {
-      auth: { order: { "openai-codex": ["openai-codex:default"] } },
+      auth: { order: { openai: ["openai:default"] } },
     };
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
         },
       },
     });
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
+    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
@@ -164,18 +164,18 @@ describe("codex conversation binding", () => {
       provider?: unknown;
     };
     expect(authOrderParams?.cfg).toBe(config);
-    expect(authOrderParams?.provider).toBe("openai-codex");
+    expect(authOrderParams?.provider).toBe("openai");
     const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
       authProfileId?: unknown;
     };
-    expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
+    expect(sharedClientParams?.authProfileId).toBe("openai:default");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"authProfileId": "openai-codex:default"',
+      '"authProfileId": "openai:default"',
     );
   });
 
@@ -186,7 +186,7 @@ describe("codex conversation binding", () => {
       profiles: {
         work: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -622,7 +622,7 @@ describe("codex conversation binding", () => {
       profiles: {
         work: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
         },
       },
@@ -1045,7 +1045,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-1",
         cwd: tempDir,
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
       }),
     );
     const unhandledRejections: unknown[] = [];

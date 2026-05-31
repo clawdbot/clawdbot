@@ -27,7 +27,9 @@ vi.mock("../model-selection.js", () => ({
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
+    ["codex-cli", "openai"].includes(provider.trim().toLowerCase())
+      ? "openai"
+      : provider.trim().toLowerCase(),
 }));
 
 vi.mock("../model-runtime-aliases.js", async () => {
@@ -544,7 +546,7 @@ describe("CLI attempt execution", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-codex",
       updatedAt: Date.now(),
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -575,14 +577,14 @@ describe("CLI attempt execution", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       sessionStore,
       storePath,
       sessionHasHistory: false,
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(firstRunCliAgentArg().authProfileId).toBe("openai-codex:work");
+    expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
   });
 
   it("persists CLI replies into the session transcript", async () => {
@@ -1217,9 +1219,9 @@ describe("CLI attempt execution", () => {
 
   it("forwards user-pinned OpenAI API-key backup profiles to Codex harness runs", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
-    const sessionKey = "agent:main:direct:openai-codex-api-key";
+    const sessionKey = "agent:main:direct:openai-chatgpt-api-key";
     const sessionEntry: SessionEntry = {
-      sessionId: "openclaw-session-openai-codex-api-key",
+      sessionId: "openclaw-session-openai-chatgpt-api-key",
       updatedAt: Date.now(),
       authProfileOverride: "openai:backup",
       authProfileOverrideSource: "user",
@@ -1271,7 +1273,7 @@ describe("CLI attempt execution", () => {
         isFallbackRetry: false,
         resolvedThinkLevel: "medium",
         timeoutMs: 1_000,
-        runId: "run-openai-codex-api-key-backup",
+        runId: "run-openai-chatgpt-api-key-backup",
         opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
         runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
         spawnedBy: undefined,
@@ -1673,9 +1675,9 @@ describe("embedded attempt harness pinning", () => {
       JSON.stringify({
         version: 1,
         profiles: {
-          "openai-codex:work": {
+          "openai:work": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -1728,7 +1730,7 @@ describe("embedded attempt harness pinning", () => {
 
     expectMockArgFields(runEmbeddedAgentMock, {
       agentHarnessId: undefined,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       authProfileIdSource: "auto",
     });
   });
@@ -1817,11 +1819,11 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("routes explicit OpenAI native runs with Codex OAuth through OpenClaw and the legacy Codex auth transport", async () => {
+  it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenClaw", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-agent-codex-oauth-session",
       updatedAt: Date.now(),
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     };
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1862,16 +1864,16 @@ describe("embedded attempt harness pinning", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       sessionHasHistory: false,
     });
 
     expectMockArgFields(runEmbeddedAgentMock, {
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       authProfileIdSource: "user",
     });
   });

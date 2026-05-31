@@ -380,7 +380,7 @@ describe("doctor stale plugin config helpers", () => {
     expect(warnings[2]).toContain("Auto-removal is paused");
   });
 
-  it("treats legacy plugin aliases as valid ids during scan and repair", () => {
+  it("treats legacy OpenAI Codex plugin ids as stale during scan and repair", () => {
     const cfg = {
       plugins: {
         allow: ["openai-codex", "acpx"],
@@ -393,9 +393,19 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(scanStalePluginConfig(cfg)).toEqual([
       {
+        pluginId: "openai-codex",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
+      {
         pluginId: "acpx",
         pathLabel: "plugins.allow",
         surface: "allow",
+      },
+      {
+        pluginId: "openai-codex",
+        pathLabel: "plugins.entries.openai-codex",
+        surface: "entries",
       },
       {
         pluginId: "acpx",
@@ -405,9 +415,7 @@ describe("doctor stale plugin config helpers", () => {
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.config.plugins?.allow).toEqual(["openai-codex"]);
-    expect(result.config.plugins?.entries).toEqual({
-      "openai-codex": { enabled: true },
-    });
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.config.plugins?.entries).toEqual({});
   });
 });

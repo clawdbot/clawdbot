@@ -249,7 +249,7 @@ type VoiceResult =
 
 async function processVoiceAttachment(
   localPath: string,
-  audioPath: string | null,
+  audioPathInput: string | null,
   att: RawAttachment,
   asrReferText: string,
   cfg: unknown,
@@ -257,6 +257,7 @@ async function processVoiceAttachment(
   audioConvert: AudioConvertPort,
   log: ProcessContext["log"],
 ): Promise<VoiceResult> {
+  let audioPath = audioPathInput;
   const wavUrl = att.voice_wav_url
     ? att.voice_wav_url.startsWith("//")
       ? `https:${att.voice_wav_url}`

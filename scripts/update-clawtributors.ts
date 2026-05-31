@@ -109,7 +109,7 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  let login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+  const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
   if (!login) {
     continue;
   }
@@ -156,7 +156,7 @@ function computeScore(loc: number, commits: number, prs: number, firstDate: stri
     ? Math.max(0, (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000)
     : 0;
   const tenureRatio = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1.0 + tenureRatio * tenureRatio * 0.5;
+  const tenure = 1 + tenureRatio * tenureRatio * 0.5;
   return base * tenure;
 }
 
@@ -330,7 +330,7 @@ for (const [index, entry] of visibleEntries.slice(0, 25).entries()) {
   const daysIn =
     fd !== "?" ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000) : 0;
   const tr = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1.0 + tr * tr * 0.5;
+  const tenure = 1 + tr * tr * 0.5;
   console.log(
     `${index + 1}`.padStart(3) +
       `  ${login.padEnd(24)} ${entry.score.toFixed(0).padStart(8)} ${tenure.toFixed(2).padStart(6)}x ${String(entry.commits).padStart(8)} ${String(entry.prs).padStart(6)} ${String(entry.lines).padStart(10)}  ${fd}`,

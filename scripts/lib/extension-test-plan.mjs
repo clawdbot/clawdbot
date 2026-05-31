@@ -39,7 +39,7 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   "test/vitest/vitest.extension-discord.config.ts": 0.62,
   "test/vitest/vitest.extension-feishu.config.ts": 0.18,
   "test/vitest/vitest.extension-imessage.config.ts": 1.7,
-  "test/vitest/vitest.extension-irc.config.ts": 1.0,
+  "test/vitest/vitest.extension-irc.config.ts": 1,
   "test/vitest/vitest.extension-line.config.ts": 1.1,
   "test/vitest/vitest.extension-matrix.config.ts": 0.28,
   "test/vitest/vitest.extension-mattermost.config.ts": 0.75,

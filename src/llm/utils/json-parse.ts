@@ -64,6 +64,12 @@ export function repairJson(json: string): string {
           index += 5;
           continue;
         }
+        // A \u not followed by four hex digits is an invalid escape: double the
+        // backslash like the other invalid escapes below. Falling through would
+        // hit the valid-escape branch (VALID_JSON_ESCAPES contains "u") and
+        // re-emit the broken \u, leaving the JSON unparseable.
+        repaired += "\\\\";
+        continue;
       }
 
       if (VALID_JSON_ESCAPES.has(nextChar)) {

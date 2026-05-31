@@ -145,7 +145,7 @@ function resolveBundledSkillTarget(rawPath) {
 
 function isTransientCopyError(error) {
   return (
-    !!error &&
+    Boolean(error) &&
     typeof error === "object" &&
     typeof error.code === "string" &&
     TRANSIENT_COPY_ERROR_CODES.has(error.code)

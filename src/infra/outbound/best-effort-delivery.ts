@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,

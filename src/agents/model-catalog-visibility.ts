@@ -9,18 +9,56 @@ import {
 } from "./model-visibility-policy.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
-type ProviderAuthChecker = (provider: string) => boolean | Promise<boolean>;
+type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+]);
 
 function isPromiseLike(value: boolean | Promise<boolean>): value is Promise<boolean> {
   return typeof value === "object" && value !== null && typeof value.then === "function";
 }
 
-async function providerHasAuth(
+function isCodexRoutableOpenAIPlatformCatalogEntry(entry: ModelCatalogEntry): boolean {
+  return (
+    entry.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
+    entry.api !== undefined &&
+    entry.api !== OPENAI_CODEX_RESPONSES_API &&
+    OPENAI_CODEX_ROUTABLE_MODEL_IDS.has(entry.id.trim().toLowerCase())
+  );
+}
+
+async function resolveProviderAuthCheck(
   providerAuthChecker: ProviderAuthChecker,
   provider: string,
+  modelApi?: string,
 ): Promise<boolean> {
-  const result = providerAuthChecker(provider);
+  const result =
+    modelApi === undefined
+      ? providerAuthChecker(provider)
+      : providerAuthChecker(provider, modelApi);
   return isPromiseLike(result) ? await result : result;
+}
+
+async function providerHasAuth(
+  providerAuthChecker: ProviderAuthChecker,
+  entry: ModelCatalogEntry,
+): Promise<boolean> {
+  if (await resolveProviderAuthCheck(providerAuthChecker, entry.provider, entry.api)) {
+    return true;
+  }
+  return isCodexRoutableOpenAIPlatformCatalogEntry(entry)
+    ? await resolveProviderAuthCheck(
+        providerAuthChecker,
+        entry.provider,
+        OPENAI_CODEX_RESPONSES_API,
+      )
+    : false;
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
@@ -77,7 +115,7 @@ export async function resolveVisibleModelCatalog(params: {
       });
     const authBackedCatalog: ModelCatalogEntry[] = [];
     for (const entry of params.catalog) {
-      if (await providerHasAuth(hasAuth, entry.provider)) {
+      if (await providerHasAuth(hasAuth, entry)) {
         authBackedCatalog.push(entry);
       }
     }

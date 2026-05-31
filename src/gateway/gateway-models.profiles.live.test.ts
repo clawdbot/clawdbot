@@ -611,7 +611,7 @@ function shouldSkipEmptyResponseForLiveModel(params: {
     params.provider === "google-antigravity" ||
     params.provider === "minimax" ||
     params.provider === "minimax-portal" ||
-    params.provider === "openai-codex" ||
+    params.provider === "openai" ||
     params.provider === "zai"
   );
 }
@@ -1271,6 +1271,17 @@ function isGoogleModelNotFoundText(text: string): boolean {
   return false;
 }
 
+function isAnthropicModelUnavailableDrift(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) {
+    return false;
+  }
+  if (isModelNotFoundErrorMessage(msg)) {
+    return true;
+  }
+  return /\b404 status code\b/i.test(msg) && /\bno body\b/i.test(msg);
+}
+
 function isGoogleishProvider(provider: string): boolean {
   return provider === "google" || provider.startsWith("google-");
 }
@@ -1407,7 +1418,7 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
     { provider: "minimax", allowNotFoundSkip: true, expected: true },
     { provider: "minimax-portal", allowNotFoundSkip: true, expected: true },
     { provider: "zai", allowNotFoundSkip: true, expected: true },
-    { provider: "openai-codex", allowNotFoundSkip: true, expected: true },
+    { provider: "openai", allowNotFoundSkip: true, expected: true },
     { provider: "xai", allowNotFoundSkip: true, expected: false },
   ])(
     "returns $expected for $provider (allowNotFoundSkip=$allowNotFoundSkip)",
@@ -1415,6 +1426,17 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
       expect(shouldSkipEmptyResponseForLiveModel({ provider, allowNotFoundSkip })).toBe(expected);
     },
   );
+});
+
+describe("isAnthropicModelUnavailableDrift", () => {
+  it("treats Anthropic bare 404 live probe failures as model drift", () => {
+    expect(
+      isAnthropicModelUnavailableDrift(
+        "agent.wait error for runId=run-1 (error=FailoverError: 404 status code (no body))",
+      ),
+    ).toBe(true);
+    expect(isAnthropicModelUnavailableDrift("Error: 503 status code (no body)")).toBe(false);
+  });
 });
 
 describe("isEmptyStreamText", () => {
@@ -1700,7 +1722,6 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
   const timeoutMs = params.timeoutMs ?? 10_000;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let client: GatewayClient | undefined;
     const stop = (err?: Error, nextClient?: GatewayClient) => {
       if (settled) {
         return;
@@ -1716,7 +1737,7 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
         resolve(nextClient as GatewayClient);
       }
     };
-    client = new GatewayClient({
+    const client: GatewayClient | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
       requestTimeoutMs: Math.max(timeoutMs, GATEWAY_LIVE_MODEL_TIMEOUT_MS),
@@ -1758,19 +1779,17 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
         },
         codexProfile: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: 1,
         },
       },
       order: {
-        openai: ["openaiProfile"],
-        "openai-codex": ["codexProfile"],
+        openai: ["codexProfile", "openaiProfile"],
       },
       lastGood: {
-        openai: "openaiProfile",
-        "openai-codex": "codexProfile",
+        openai: "codexProfile",
       },
       usageStats: {
         openaiProfile: { lastUsed: 1 },
@@ -1997,7 +2016,16 @@ async function requestGatewayAgentText(params: {
   );
   const first = await Promise.race([transcriptPromise, agentWaitPromise]);
   if (first.kind === "transcript") {
-    void agentWaitPromise.catch(() => undefined);
+    // Do not start the next live probe while this run is still cleaning up.
+    // The transcript can be visible before the embedded attempt reacquires and
+    // releases its session lock, and back-to-back probes on the same session
+    // can otherwise trip the takeover fence.
+    const waitResult = await agentWaitPromise;
+    if (waitResult.kind === "agent-error") {
+      throw waitResult.error instanceof Error
+        ? waitResult.error
+        : new Error(String(waitResult.error));
+    }
     return first.text;
   }
   void transcriptPromise.catch(() => undefined);
@@ -2513,8 +2541,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     agentDir: process.env.OPENCLAW_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
-  let tempAgentDir: string | undefined;
-  let tempStateDir: string | undefined;
 
   process.env.OPENCLAW_SKIP_CHANNELS = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -2542,9 +2568,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
-  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  const tempStateDir: string | undefined = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-live-state-"),
+  );
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
-  tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
+  const tempAgentDir: string | undefined = path.join(
+    tempStateDir,
+    "agents",
+    DEFAULT_AGENT_ID,
+    "agent",
+  );
   saveAuthProfileStore(sanitizedStore, tempAgentDir);
   const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
   if (tempSessionAgentDir !== tempAgentDir) {
@@ -2986,7 +3019,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
               if (
                 (model.provider === "openai" && model.api === "openai-responses") ||
-                (model.provider === "openai-codex" && model.api === "openai-codex-responses")
+                (model.provider === "openai" && model.api === "openai-chatgpt-responses")
               ) {
                 logProgress(`${progressLabel}: tool-only regression`);
                 const runId2 = randomUUID();
@@ -3081,6 +3114,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
+          if (model.provider === "anthropic" && isAnthropicModelUnavailableDrift(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic model unavailable)`);
+            break;
+          }
           if (
             isEmptyStreamText(message) &&
             shouldSkipEmptyResponseForLiveModel({
@@ -3165,38 +3203,32 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             break;
           }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
-          if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
+          if (model.provider === "openai" && isRefreshTokenReused(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
-          if (model.provider === "openai-codex" && isAccountIdExtractionError(message)) {
+          if (model.provider === "openai" && isAccountIdExtractionError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex account id extraction)`);
             break;
           }
-          if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+          if (model.provider === "openai" && isChatGPTUsageLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
-          if (model.provider === "openai-codex" && isInstructionsRequiredError(message)) {
+          if (model.provider === "openai" && isInstructionsRequiredError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (instructions required)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
-            isOpenAIReasoningSequenceError(message)
-          ) {
+          if (model.provider === "openai" && isOpenAIReasoningSequenceError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (openai reasoning sequence error)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
-            isToolNonceRefusal(message)
-          ) {
+          if (model.provider === "openai" && isToolNonceRefusal(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;

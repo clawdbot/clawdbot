@@ -127,6 +127,7 @@ function spawnInvocation(command, commandArgs, env, platform) {
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
 const jsRuntimeEntrypoints = new Set(["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
+const minimumBlacksmithCrabboxVersion = [0, 22, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
   "while",
@@ -180,6 +181,47 @@ function checkedOutput(command, commandArgs) {
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
+}
+
+function parseCrabboxVersion(value) {
+  const match = `${value}`.match(/\bv?(\d+)\.(\d+)\.(\d+)(?:-([^\s+]+))?(?:\+[^\s]+)?\b/u);
+  if (!match) {
+    return null;
+  }
+  return {
+    tuple: match.slice(1, 4).map((part) => Number.parseInt(part, 10)),
+    suffix: match[4] ?? "",
+  };
+}
+
+function compareVersionTuples(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    const diff = left[index] - right[index];
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+function formatVersionTuple(version) {
+  return version.join(".");
+}
+
+function isPostReleaseDescribeSuffix(suffix) {
+  return /^\d+-g[0-9a-f]+(?:-dirty)?$/iu.test(suffix);
+}
+
+function satisfiesMinimumCrabboxVersion(version, minimum) {
+  const parsed = parseCrabboxVersion(version);
+  if (!parsed) {
+    return false;
+  }
+  const comparison = compareVersionTuples(parsed.tuple, minimum);
+  if (comparison !== 0) {
+    return comparison > 0;
+  }
+  return !parsed.suffix || isPostReleaseDescribeSuffix(parsed.suffix);
 }
 
 function gitOutput(commandArgs) {
@@ -386,7 +428,8 @@ function crabboxOptionArgs(commandArgs) {
   return delimiter >= 0 ? commandArgs.slice(0, delimiter) : commandArgs;
 }
 
-function commandProvider(commandArgs) {
+function commandProvider(commandArgsInput) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
@@ -453,7 +496,8 @@ function enforceBrokeredAws(commandArgs, providerName) {
   process.exit(2);
 }
 
-function optionValue(commandArgs, name) {
+function optionValue(commandArgsInput, name) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
@@ -467,7 +511,8 @@ function optionValue(commandArgs, name) {
   return "";
 }
 
-function hasOption(commandArgs, name) {
+function hasOption(commandArgsInput, name) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   const shortName = name.replace(/^--/u, "-");
   for (const arg of commandArgs) {
@@ -674,7 +719,8 @@ function commandRuntimeEntrypoint(commandArgs) {
   return "";
 }
 
-function commandWordsRuntimeEntrypoint(words) {
+function commandWordsRuntimeEntrypoint(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (jsRuntimeEntrypoints.has(first)) {
@@ -704,7 +750,8 @@ function commandNeedsAwsMacosPackageManager(commandArgs) {
   return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs));
 }
 
-function commandWordsNeedAwsMacosPackageManager(words) {
+function commandWordsNeedAwsMacosPackageManager(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (awsMacosCorepackEntrypoints.has(first)) {
@@ -726,7 +773,8 @@ function isChangedGateCommand(commandArgs) {
   return isChangedGateCommandWords(words);
 }
 
-function isChangedGateCommandWords(words) {
+function isChangedGateCommandWords(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   if (isChangedGateWords(words)) {
     return true;
@@ -738,7 +786,8 @@ function isChangedGateCommandWords(words) {
     : false;
 }
 
-function isChangedGateWords(words) {
+function isChangedGateWords(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   if (words[0] === "corepack") {
     words.shift();
@@ -806,7 +855,8 @@ function normalizeExecutableWords(words) {
   return normalizedCommandWords(stripShellExecutionPrefixes(words));
 }
 
-function stripShellExecutionPrefixes(words) {
+function stripShellExecutionPrefixes(wordsInput) {
+  let words = wordsInput;
   words = [...words];
   for (;;) {
     const first = shellWordBasename(words[0]);
@@ -1826,6 +1876,7 @@ function isProviderAdvertised(provider, advertisedProviders) {
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args, providers);
+const canonicalProvider = providerAliases.get(provider) ?? provider;
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
   ensureAzureWindowsProvider(args, provider, providers),
@@ -1854,9 +1905,22 @@ if (provider && !isProviderAdvertised(provider, providers)) {
   process.exit(2);
 }
 
+if (canonicalProvider === "blacksmith-testbox") {
+  if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
+    console.error(
+      [
+        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for current Testbox sync, queue, and cleanup behavior.`,
+        `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
+        "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
+}
+
 enforceBrokeredAws(normalizedArgs, provider);
 
-if (provider === "blacksmith-testbox") {
+if (canonicalProvider === "blacksmith-testbox") {
   const envProvider = process.env.CRABBOX_PROVIDER?.trim();
   const source = commandProviderValue
     ? "explicit"

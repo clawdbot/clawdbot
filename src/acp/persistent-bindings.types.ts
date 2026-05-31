@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeText } from "./normalize-text.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 

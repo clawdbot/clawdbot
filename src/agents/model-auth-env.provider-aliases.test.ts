@@ -33,6 +33,10 @@ const pluginMetadataMocks = vi.hoisted(() => {
   };
 });
 
+const setupRegistryMocks = vi.hoisted(() => ({
+  resolvePluginSetupProvider: vi.fn(() => undefined),
+}));
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
 }));
@@ -42,7 +46,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider: () => undefined,
+  resolvePluginSetupProvider: setupRegistryMocks.resolvePluginSetupProvider,
 }));
 
 describe("resolveEnvApiKey provider auth aliases", () => {
@@ -53,6 +57,8 @@ describe("resolveEnvApiKey provider auth aliases", () => {
     );
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockReset();
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockReturnValue(pluginMetadataMocks.snapshot);
+    setupRegistryMocks.resolvePluginSetupProvider.mockReset();
+    setupRegistryMocks.resolvePluginSetupProvider.mockReturnValue(undefined);
   });
 
   it("reuses the current scoped metadata snapshot while resolving provider auth aliases", () => {
@@ -79,6 +85,30 @@ describe("resolveEnvApiKey provider auth aliases", () => {
       },
       workspaceDir: "/workspace",
       allowWorkspaceScopedSnapshot: true,
+    });
+  });
+
+  it("passes config and workspace scope to setup-provider fallback", () => {
+    const config = {};
+    const env = {} as NodeJS.ProcessEnv;
+    setupRegistryMocks.resolvePluginSetupProvider.mockReturnValue({
+      resolveConfigApiKey: () => "setup-secret",
+    } as never);
+
+    expect(
+      resolveEnvApiKey("setup-cloud", env, {
+        config,
+        workspaceDir: "/workspace",
+      }),
+    ).toEqual({
+      apiKey: "setup-secret",
+      source: "env",
+    });
+    expect(setupRegistryMocks.resolvePluginSetupProvider).toHaveBeenCalledWith({
+      provider: "setup-cloud",
+      config,
+      workspaceDir: "/workspace",
+      env,
     });
   });
 });

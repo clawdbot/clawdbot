@@ -65,7 +65,7 @@ function expectGatewayCallFields(
   method: string,
   expectedParams: Record<string, unknown>,
 ): Record<string, unknown> {
-  const [, , params] = gatewayCall(method);
+  const params = gatewayCall(method)[2];
   if (params === undefined) {
     throw new Error(`Expected gateway call params for ${method}`);
   }

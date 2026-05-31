@@ -164,7 +164,7 @@ export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 export { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-target-error-cases.js";
-export { sanitizeTerminalText } from "../terminal/safe-text.js";
+export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";

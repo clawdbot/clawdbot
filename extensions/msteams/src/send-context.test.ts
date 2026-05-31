@@ -20,8 +20,8 @@ const sendContextMockState = vi.hoisted(() => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => sendContextMockState.store,
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => sendContextMockState.store,
 }));
 
 vi.mock("./runtime.js", () => ({

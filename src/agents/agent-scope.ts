@@ -3,6 +3,12 @@ import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -15,12 +21,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import {
-  lowercasePreservingWhitespace,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import { resolveUserPath } from "../utils.js";
 import {

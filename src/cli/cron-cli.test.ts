@@ -354,6 +354,48 @@ describe("cron cli", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.run")).toBe(false);
   });
 
+  it("bounds oversized cron run wait poll intervals by the wait timeout", async () => {
+    vi.useFakeTimers();
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, enqueued: true, runId: "manual:job-1:123:0", params };
+        }
+        if (method === "cron.runs") {
+          return { entries: [] };
+        }
+        return { ok: true, params };
+      },
+    );
+    const program = buildProgram();
+    const run = program.parseAsync(
+      [
+        "cron",
+        "run",
+        "job-1",
+        "--wait",
+        "--wait-timeout",
+        "10ms",
+        "--poll-interval",
+        "999999999999999ms",
+      ],
+      { from: "user" },
+    );
+
+    await vi.waitFor(() => {
+      expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(true);
+    });
+
+    const rejection = expect(run).rejects.toThrow("__exit__:1");
+    await vi.advanceTimersByTimeAsync(10);
+    await rejection;
+    expectRuntimeErrorContaining("timed out waiting for cron run");
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",

@@ -1,6 +1,6 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { sanitizeTerminalText } from "../../terminal/safe-text.js";
-import { renderTable } from "../../terminal/table.js";
 import type { PendingRequest } from "./types.js";
 
 export function renderPendingPairingRequestsTable(params: {

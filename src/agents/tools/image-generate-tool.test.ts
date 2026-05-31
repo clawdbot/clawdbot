@@ -510,7 +510,7 @@ describe("createImageGenerateTool", () => {
       },
       {
         id: "openai",
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         defaultModel: "gpt-image-2",
         models: ["gpt-image-2"],
         isConfigured: () => true,
@@ -530,7 +530,7 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: {
               model: {
-                primary: "openai-codex/gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },

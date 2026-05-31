@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
         enabledByDefault: true,
         channels: [],
         cliBackends: [],
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         legacyPluginIds: [],
         contracts: {},
       },

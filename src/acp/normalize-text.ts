@@ -1,1 +1,1 @@
-export { normalizeOptionalString as normalizeText } from "../shared/string-coerce.js";
+export { normalizeOptionalString as normalizeText } from "../../packages/normalization-core/src/string-coerce.js";

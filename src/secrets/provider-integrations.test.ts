@@ -18,8 +18,19 @@ const tempDirs: string[] = [];
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-provider-integrations-"));
+  fs.chmodSync(dir, 0o700);
   tempDirs.push(dir);
   return dir;
+}
+
+function makeSecureDir(dir: string): void {
+  fs.mkdirSync(dir);
+  fs.chmodSync(dir, 0o700);
+}
+
+function writeSecureFile(file: string, contents: string): void {
+  fs.writeFileSync(file, contents, "utf8");
+  fs.chmodSync(file, 0o600);
 }
 
 function createCandidate(
@@ -55,8 +66,8 @@ describe("secret provider integration presets", () => {
   it("materializes plugin manifest exec providers without provider-specific core code", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.mkdirSync(path.join(rootDir, "bin"));
-    fs.writeFileSync(path.join(rootDir, "bin", "resolve.mjs"), "process.stdin.resume();\n");
+    makeSecureDir(path.join(rootDir, "bin"));
+    writeSecureFile(path.join(rootDir, "bin", "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -133,7 +144,7 @@ describe("secret provider integration presets", () => {
   it("normalizes manifest exec provider options to SecretRef provider schema limits", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -322,7 +333,7 @@ describe("secret provider integration presets", () => {
   it("skips presets from disabled installed plugins", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -376,7 +387,7 @@ describe("secret provider integration presets", () => {
   it("applies plugin id aliases when filtering disabled presets", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -400,7 +411,7 @@ describe("secret provider integration presets", () => {
     const config = {
       plugins: {
         entries: {
-          "openai-codex": {
+          openai: {
             enabled: false,
           },
         },
@@ -419,7 +430,7 @@ describe("secret provider integration presets", () => {
   it("exposes bundled presets enabled by platform default", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -463,7 +474,7 @@ describe("secret provider integration presets", () => {
       const linkParent = makeTempDir();
       const linkRoot = path.join(linkParent, "plugin-link");
       fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-      fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+      writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
       fs.writeFileSync(
         path.join(rootDir, "openclaw.plugin.json"),
         JSON.stringify({
@@ -776,11 +787,11 @@ describe("secret provider integration presets", () => {
     const parentDir = makeTempDir();
     const realRoot = path.join(parentDir, "real-plugin");
     const linkedRoot = path.join(parentDir, "linked-plugin");
-    fs.mkdirSync(realRoot);
+    makeSecureDir(realRoot);
     fs.symlinkSync(realRoot, linkedRoot, "dir");
     fs.writeFileSync(path.join(realRoot, "index.ts"), "export default {};\n", "utf8");
-    fs.mkdirSync(path.join(realRoot, "bin"));
-    fs.writeFileSync(path.join(realRoot, "bin", "resolve.mjs"), "process.stdin.resume();\n");
+    makeSecureDir(path.join(realRoot, "bin"));
+    writeSecureFile(path.join(realRoot, "bin", "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(realRoot, "openclaw.plugin.json"),
       JSON.stringify({

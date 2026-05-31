@@ -2,8 +2,10 @@ import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
+  resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
+  resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
   applyAuthProfileConfig,
@@ -92,7 +94,10 @@ function parseDeviceCodeResponse(
 ): DeviceCodeResponse {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
   const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
-  const expiresAt = expiresInMs === undefined ? undefined : issuedAt + expiresInMs;
+  const expiresAt =
+    expiresInMs === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(expiresInMs, { nowMs: issuedAt });
 
   if (
     typeof value.device_code !== "string" ||
@@ -103,7 +108,6 @@ function parseDeviceCodeResponse(
     !value.verification_uri ||
     expiresInMs === undefined ||
     expiresAt === undefined ||
-    !Number.isSafeInteger(expiresAt) ||
     intervalMs === undefined
   ) {
     throw new Error("GitHub device code response missing fields");
@@ -186,11 +190,11 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await new Promise((r) => setTimeout(r, params.intervalMs));
+      await sleepGitHubDevicePollDelay(params.intervalMs, params.expiresAt);
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      await sleepGitHubDevicePollDelay(params.intervalMs + 2000, params.expiresAt);
       continue;
     }
     if (err === "expired_token") {
@@ -209,6 +213,16 @@ async function pollForAccessToken(params: {
     GITHUB_DEVICE_EXPIRED,
     "GitHub device code expired; run login again",
   );
+}
+
+async function sleepGitHubDevicePollDelay(delayMs: number, expiresAt: number): Promise<void> {
+  const requestedDelayMs = Math.max(1, Math.floor(delayMs));
+  const targetAt = Math.min(Date.now() + requestedDelayMs, expiresAt);
+  while (Date.now() < targetAt) {
+    const remainingMs = Math.max(1, targetAt - Date.now());
+    const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(safeDelayMs, remainingMs)));
+  }
 }
 
 function normalizeGitHubDeviceVerificationUrl(raw: string): string {

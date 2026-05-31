@@ -1,9 +1,9 @@
+import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isRich } from "../terminal/theme.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
 import {
   buildNetworkHints,

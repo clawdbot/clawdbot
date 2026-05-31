@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
@@ -60,6 +60,11 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  afterEach(() => {
+    testing.setToolSearchCodeModeSupportedForTest(undefined);
+    testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
+  });
+
   it("enables object config when a mode is set", () => {
     const resolved = testing.resolveToolSearchConfig({
       tools: {
@@ -177,12 +182,13 @@ describe("Tool Search", () => {
       runId: "run-b",
     });
 
-    const [, , , runACallTool] = createToolSearchTools({
+    const runATools = createToolSearchTools({
       sessionId: "session-overlap",
       sessionKey: "agent:main:main",
       runId: "run-a",
       config,
     });
+    const runACallTool = runATools[3];
     await runACallTool.execute("call-run-a", {
       id: "fake_run_a",
       args: { value: "A" },
@@ -225,12 +231,13 @@ describe("Tool Search", () => {
       sessionId: "session-catalog-ref",
     });
 
-    const [, , , callTool] = createToolSearchTools({
+    const tools = createToolSearchTools({
       sessionId: "session-catalog-ref",
       runId: "run-local-ref",
       catalogRef: localRef,
       config,
     });
+    const callTool = tools[3];
     await callTool.execute("call-local-ref", {
       id: "fake_local_ref",
       args: { value: "local" },
@@ -449,13 +456,15 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
     });
 
-    const [runtimeCodeTool, , , runtimeCallTool] = createToolSearchTools({
+    const runtimeTools = createToolSearchTools({
       sessionId: "session-lifecycle",
       sessionKey: "agent:main:main",
       config: {},
       abortSignal: abortController.signal,
       executeTool,
     });
+    const runtimeCodeTool = runtimeTools[0];
+    const runtimeCallTool = runtimeTools[3];
     await runtimeCodeTool.execute(
       "call-lifecycle",
       {
@@ -782,12 +791,13 @@ describe("Tool Search", () => {
   });
 
   it("terminates async continuations that block the event loop after a bridge call", async () => {
+    testing.setToolSearchMinCodeTimeoutMsForTest(100);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_timeout_target", "Target tool for timeout search");
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1000 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 800 },
       },
     } as never;
 
@@ -815,6 +825,7 @@ describe("Tool Search", () => {
   }, 5_000);
 
   it("aborts already-started bridged calls when code mode times out", async () => {
+    testing.setToolSearchMinCodeTimeoutMsForTest(100);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_abort_on_timeout", "Long-running target tool");
     let observedSignal: AbortSignal | undefined;

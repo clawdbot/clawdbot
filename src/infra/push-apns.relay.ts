@@ -1,10 +1,10 @@
 import { URL } from "node:url";
-import type { GatewayConfig } from "../config/types.gateway.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { GatewayConfig } from "../config/types.gateway.js";
 import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,

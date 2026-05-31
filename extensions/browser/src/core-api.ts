@@ -42,6 +42,7 @@ export {
   resolveBrowserConfig,
   resolveBrowserControlAuth,
   resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
   resolveProfile,
   resolveRequestedBrowserProfile,
   startBrowserControlServiceFromConfig,

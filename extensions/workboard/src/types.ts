@@ -25,6 +25,8 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "specified",
+  "decomposed",
   "claimed",
   "heartbeat",
   "execution_updated",
@@ -34,9 +36,12 @@ export const WORKBOARD_EVENT_KINDS = [
   "link_added",
   "proof_added",
   "artifact_added",
+  "attachment_added",
   "diagnostic",
   "notification",
   "dispatch",
+  "orchestration",
+  "protocol_violation",
   "archived",
   "unarchived",
   "stale",
@@ -153,6 +158,31 @@ export type WorkboardArtifact = {
   mimeType?: string;
 };
 
+export type WorkboardAttachment = {
+  id: string;
+  cardId: string;
+  createdAt: number;
+  fileName: string;
+  byteSize: number;
+  mimeType?: string;
+  note?: string;
+};
+
+export type WorkboardWorkerLog = {
+  id: string;
+  createdAt: number;
+  level: "info" | "warning" | "error";
+  message: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type WorkboardWorkerProtocol = {
+  state: "idle" | "running" | "completed" | "blocked" | "violated";
+  updatedAt: number;
+  detail?: string;
+};
+
 export type WorkboardStaleState = {
   detectedAt: number;
   lastSessionUpdatedAt?: number;
@@ -187,6 +217,7 @@ export type WorkboardNotification = {
   id: string;
   kind: WorkboardNotificationKind;
   createdAt: number;
+  sequence?: number;
   message: string;
   sessionKey?: string;
   runId?: string;
@@ -214,12 +245,51 @@ export type WorkboardAutomation = {
   lastDispatchAt?: number;
 };
 
+export type WorkboardBoardMetadata = {
+  id: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  defaultWorkspace?: WorkboardWorkspace;
+  orchestration?: WorkboardOrchestrationSettings;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number;
+};
+
+export type WorkboardOrchestrationSettings = {
+  autoDecompose?: boolean;
+  autoDecomposePerDispatch?: number;
+  defaultAssignee?: string;
+  orchestratorProfile?: string;
+};
+
+export type WorkboardNotificationSubscription = {
+  id: string;
+  boardId: string;
+  cardId?: string;
+  sessionKey?: string;
+  runId?: string;
+  target?: string;
+  eventKinds?: WorkboardNotificationKind[];
+  lastEventAt?: number;
+  lastEventId?: string;
+  lastEventSequence?: number;
+  deliveredEventIds?: string[];
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type WorkboardMetadata = {
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
   artifacts?: WorkboardArtifact[];
+  attachments?: WorkboardAttachment[];
+  workerLogs?: WorkboardWorkerLog[];
+  workerProtocol?: WorkboardWorkerProtocol;
   automation?: WorkboardAutomation;
   claim?: WorkboardClaim;
   diagnostics?: WorkboardDiagnostic[];

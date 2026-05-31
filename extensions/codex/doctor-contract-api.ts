@@ -14,7 +14,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
-  return Object.prototype.hasOwnProperty.call(asRecord(value) ?? {}, "codexDynamicToolsProfile");
+  return Object.hasOwn(asRecord(value) ?? {}, "codexDynamicToolsProfile");
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [

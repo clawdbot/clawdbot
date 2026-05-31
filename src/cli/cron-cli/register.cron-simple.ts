@@ -1,8 +1,12 @@
+import {
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -44,7 +48,7 @@ function parseCronRunWaitDuration(raw: unknown, label: string): number {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     throw new Error(`invalid ${label}`);
   }
-  return durationMs;
+  return resolveTimerTimeoutMs(durationMs, 0, 0);
 }
 
 function parseCronRunPollInterval(raw: unknown): number {
@@ -52,7 +56,7 @@ function parseCronRunPollInterval(raw: unknown): number {
   if (durationMs <= 0) {
     throw new Error("invalid --poll-interval");
   }
-  return durationMs;
+  return resolvePositiveTimerTimeoutMs(durationMs, 2_000);
 }
 
 async function waitForCronRunCompletion(params: {
@@ -73,10 +77,11 @@ async function waitForCronRunCompletion(params: {
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
       return entry;
     }
-    if (Date.now() - startedAt >= params.timeoutMs) {
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= params.timeoutMs) {
       throw new Error(`timed out waiting for cron run ${params.runId}`);
     }
-    await sleep(params.pollIntervalMs);
+    await sleep(Math.min(params.pollIntervalMs, params.timeoutMs - elapsedMs));
   }
 }
 

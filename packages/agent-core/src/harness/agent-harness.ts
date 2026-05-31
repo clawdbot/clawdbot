@@ -1,8 +1,8 @@
-import {
-  type AssistantMessage,
-  type ImageContent,
-  type Model,
-  type UserMessage,
+import type {
+  AssistantMessage,
+  ImageContent,
+  Model,
+  UserMessage,
 } from "../../../llm-core/src/index.js";
 import { runAgentLoop } from "../agent-loop.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";

@@ -1,14 +1,13 @@
-import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
-  type ManifestModelIdNormalizationRecord,
   normalizeBuiltInProviderModelId,
   normalizeConfiguredProviderCatalogModelRef,
   normalizeConfiguredProviderCatalogModelId as normalizeConfiguredProviderCatalogModelIdShared,
   normalizeStaticProviderModelIdWithPolicies,
-} from "../shared/provider-model-id-normalization.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./provider-id.js";
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 
 type StaticModelRef = {
   provider: string;
@@ -18,6 +17,22 @@ type StaticModelRef = {
 export type ProviderModelIdNormalizationOptions = {
   allowManifestNormalization?: boolean;
   manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
+};
+
+export type ManifestModelIdNormalizationProvider = {
+  aliases?: Record<string, string>;
+  stripPrefixes?: string[];
+  prefixWhenBare?: string;
+  prefixWhenBareAfterAliasStartsWith?: {
+    modelPrefix: string;
+    prefix: string;
+  }[];
+};
+
+export type ManifestModelIdNormalizationRecord = {
+  modelIdNormalization?: {
+    providers?: Record<string, ManifestModelIdNormalizationProvider>;
+  };
 };
 
 export function modelKey(provider: string, model: string): string {

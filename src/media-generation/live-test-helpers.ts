@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 type LiveProviderModelConfig =
   | string

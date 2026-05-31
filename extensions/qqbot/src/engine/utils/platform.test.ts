@@ -181,7 +181,7 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     const relative = path.relative(parent, candidate);
     return (
       relative === "" ||
-      (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+      (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
     );
   }
 

@@ -332,6 +332,7 @@ describe("processGatewayAllowlist", () => {
     askFallback: "full" | "allowlist";
     approvedByAsk: boolean;
   }) {
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: params.security,
@@ -355,6 +356,7 @@ describe("processGatewayAllowlist", () => {
       security: params.security,
       ask: "always",
       strictInlineEval: true,
+      sessionKey: "agent:main:main",
     });
   }
 
@@ -1117,7 +1119,12 @@ EOF`,
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        null,
+        expect.objectContaining({
+          approvalId: "req-1",
+          sessionKey: "agent:main:main",
+          turnSourceChannel: undefined,
+          direct: false,
+        }),
         "Exec denied (gateway id=req-1, approval-timeout): python3 -c 'print(1)'",
       );
     });
@@ -1135,7 +1142,12 @@ EOF`,
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        null,
+        expect.objectContaining({
+          approvalId: "req-1",
+          sessionKey: "agent:main:main",
+          turnSourceChannel: undefined,
+          direct: false,
+        }),
         "Exec denied (gateway id=req-1, approval-timeout): python3 -c 'print(1)'",
       );
     });

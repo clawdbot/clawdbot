@@ -50,7 +50,7 @@ function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
 }
 
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
-  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+  return model.provider === "openai" && model.api === "openai-chatgpt-responses";
 }
 
 function resolveOpenClawNativeCodexResponsesStreamFn(params: {
@@ -182,7 +182,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       // Boundary-aware transports read credentials from options.apiKey just
       // like provider-owned streams, but the embedded run layer never gets to
       // inject the resolved runtime key for them. Without this wrap, OAuth
-      // providers (e.g. openai-codex/gpt-5.5) hit the Responses API with an
+      // providers (e.g. openai/gpt-5.5 over ChatGPT OAuth) hit the Responses API with an
       // empty bearer and fail with 401 Missing bearer auth header.
       return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
         runSignal: params.signal,

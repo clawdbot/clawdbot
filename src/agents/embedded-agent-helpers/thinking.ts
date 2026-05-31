@@ -1,5 +1,5 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { isReasoningConstraintErrorMessage } from "./errors.js";
 
 function extractSupportedValues(raw: string): string[] {

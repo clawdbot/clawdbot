@@ -78,10 +78,13 @@ const invokeDoctorMemoryStatus = async (
   });
 };
 
-const invokeDoctorMemoryDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+const invokeDoctorMemoryDreamDiary = async (
+  respond: ReturnType<typeof vi.fn>,
+  params: unknown = {},
+) => {
   await doctorHandlers["doctor.memory.dreamDiary"]({
     req: {} as never,
-    params: {} as never,
+    params: params as never,
     respond: respond as never,
     context: makeRuntimeContext() as never,
     client: null,
@@ -261,6 +264,33 @@ describe("doctor.memory.status", () => {
       managedCronPresent: false,
     });
     expect(close).toHaveBeenCalled();
+  });
+
+  it("returns gateway embedding probe status for the requested agent", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: "/tmp/research-workspace" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond, {
+      params: { agentId: "research-analyst", probe: true },
+    });
+
+    expectRecordFields(mockCallArg(getMemorySearchManager), {
+      agentId: "research-analyst",
+      purpose: "status",
+    });
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      agentId: "research-analyst",
+      provider: "gemini",
+      embedding: { ok: true },
+    });
   });
 
   it("does not live-probe embedding readiness by default", async () => {
@@ -609,6 +639,80 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("scopes dreaming status to the requested agent workspace", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-selected-"));
+    const mainWorkspaceDir = path.join(workspaceRoot, "main");
+    const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
+    const writeStore = async (workspaceDir: string, snippet: string) => {
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      const store = {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          "memory:memory/2026-04-04.md:1:2": {
+            path: "memory/2026-04-04.md",
+            startLine: 1,
+            endLine: 2,
+            snippet,
+            source: "memory",
+            promotedAt: "2026-04-04T00:00:00.000Z",
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2) + "\n", "utf-8");
+    };
+    await writeStore(mainWorkspaceDir, "main agent memory");
+    await writeStore(alphaWorkspaceDir, "alpha agent memory");
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        list: [{ id: "alpha", workspace: alphaWorkspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {},
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
+      if (agentId === "alpha") {
+        return alphaWorkspaceDir;
+      }
+      return mainWorkspaceDir;
+    });
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: alphaWorkspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryStatus(respond, { params: { agentId: "alpha" } });
+      const payload = respondPayload(respond);
+      expectRecordFields(payload, {
+        agentId: "alpha",
+      });
+      const dreaming = expectRecordFields(payload.dreaming, {
+        shortTermCount: 0,
+        promotedTotal: 1,
+      });
+      expectRecordFields((dreaming.promotedEntries as unknown[])[0], {
+        snippet: "alpha agent memory",
+      });
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to the manager workspace when no configured dreaming workspaces resolve", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-fallback-"));
     const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
@@ -934,6 +1038,29 @@ describe("doctor.memory.dreamDiary", () => {
         content: "## Dream Diary\n- staged durable memory\n",
       });
       expect(typeof payload.updatedAtMs).toBe("number");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads DREAMS.md for the requested agent", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-agent-"));
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "## Research Dreams\n", "utf-8");
+    resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
+      agentId === "research-analyst" ? workspaceDir : "/tmp/openclaw",
+    );
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond, { agentId: "research-analyst" });
+      expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.anything(), "research-analyst");
+      const payload = respondPayload(respond);
+      expectRecordFields(payload, {
+        agentId: "research-analyst",
+        found: true,
+        path: "DREAMS.md",
+        content: "## Research Dreams\n",
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

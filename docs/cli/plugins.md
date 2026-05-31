@@ -326,6 +326,8 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 openclaw plugins install -l ./my-plugin
 ```
 
+Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
+
 <Note>
 `--force` is not supported with `--link` because linked installs reuse the source path instead of copying over a managed install target.
 

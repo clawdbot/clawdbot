@@ -1,5 +1,5 @@
-import { asNullableRecord } from "../../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type {
   AcpRuntime,

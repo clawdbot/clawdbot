@@ -11,8 +11,13 @@ import {
 } from "./dreaming.ts";
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
-  return {
+  const props: DreamingProps = {
     active: true,
+    selectedAgentId: "main",
+    agentOptions: [
+      { id: "main", label: "main" },
+      { id: "ceo", label: "ceo" },
+    ],
     shortTermCount: 47,
     groundedSignalCount: 9,
     totalSignalCount: 182,
@@ -184,6 +189,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       ],
     },
     onRefresh: () => {},
+    onSelectAgent: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshMemoryPalace: () => {},
@@ -195,8 +201,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
-    ...overrides,
   };
+  return { ...props, ...overrides };
 }
 
 function renderInto(props: DreamingProps): HTMLDivElement {
@@ -362,7 +368,6 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
     const container = document.createElement("div");
-    let props: DreamingProps;
     const onOpenWikiPage = vi.fn().mockResolvedValue({
       title: "BA flight receipts process",
       path: "sources/chatgpt-2026-04-10-alpha.md",
@@ -371,7 +376,7 @@ describe("dreaming view", () => {
       truncated: true,
     });
     const rerender = () => render(renderDreaming(props), container);
-    props = buildProps({
+    const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onRequestUpdate: rerender,
     });
@@ -432,9 +437,8 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("palace");
     const container = document.createElement("div");
-    let props: DreamingProps;
     const rerender = () => render(renderDreaming(props), container);
-    props = buildProps({ onRequestUpdate: rerender });
+    const props: DreamingProps = buildProps({ onRequestUpdate: rerender });
     rerender();
 
     const card = expectElement(container, "[data-palace-page='syntheses/travel-system.md']");
@@ -456,9 +460,8 @@ describe("dreaming view", () => {
       truncated: false,
     });
     const container = document.createElement("div");
-    let props: DreamingProps;
     const rerender = () => render(renderDreaming(props), container);
-    props = buildProps({
+    const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onRequestUpdate: rerender,
       wikiMemoryPalace: {

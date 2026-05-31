@@ -22,7 +22,6 @@ import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import { time } from "./timings.js";
 import {
   createBashTool,
   createCodingTools,
@@ -218,7 +217,6 @@ export async function createAgentSession(
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
-    time("resourceLoader.reload");
   }
 
   // Check if session has existing data to restore
@@ -296,8 +294,6 @@ export async function createAgentSession(
         ? customToolNames
         : defaultActiveToolNames;
 
-  let agent: Agent;
-
   // Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
   const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
     const converted = convertToLlm(messages);
@@ -342,7 +338,7 @@ export async function createAgentSession(
   const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
 
-  agent = new Agent({
+  const agent: Agent = new Agent({
     initialState: {
       systemPrompt: "",
       model,

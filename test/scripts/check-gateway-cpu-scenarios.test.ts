@@ -26,13 +26,33 @@ describe("gateway CPU scenario guard", () => {
     ).toThrow("--skip-startup and --skip-qa cannot be used together");
   });
 
+  it("accepts package-manager argument separators before script options", () => {
+    expect(
+      testing.parseArgs([
+        "--",
+        "--output-dir",
+        makeTempRoot(),
+        "--startup-case",
+        "default",
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--runs",
+        "2",
+      ]),
+    ).toMatchObject({
+      qaScenarios: ["channel-chat-baseline"],
+      runs: 2,
+      startupCases: ["default"],
+    });
+  });
+
   it("rejects non-decimal numeric options", () => {
-    expect(() =>
-      testing.parseArgs(["--output-dir", makeTempRoot(), "--runs", "1e3"]),
-    ).toThrow("--runs must be a positive integer");
-    expect(() =>
-      testing.parseArgs(["--output-dir", makeTempRoot(), "--warmup", "0x10"]),
-    ).toThrow("--warmup must be a non-negative integer");
+    expect(() => testing.parseArgs(["--output-dir", makeTempRoot(), "--runs", "1e3"])).toThrow(
+      "--runs must be a positive integer",
+    );
+    expect(() => testing.parseArgs(["--output-dir", makeTempRoot(), "--warmup", "0x10"])).toThrow(
+      "--warmup must be a non-negative integer",
+    );
     expect(() =>
       testing.parseArgs(["--output-dir", makeTempRoot(), "--cpu-core-warn", "1e3"]),
     ).toThrow("--cpu-core-warn must be a positive number");
@@ -86,6 +106,74 @@ describe("gateway CPU scenario guard", () => {
       { name: "startup build", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
     ]);
+  });
+
+  it("prebuilds private QA dist before running QA scenarios when it is missing", async () => {
+    const cwd = makeTempRoot();
+    const outputDir = path.join(cwd, "out");
+    const calls: Array<{ args: string[]; env?: Record<string, string | undefined> }> = [];
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--skip-startup",
+      "--qa-scenario",
+      "channel-chat-baseline",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      cwd,
+      silent: true,
+      spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
+        calls.push({ args, env: opts?.env });
+        if (args[0] === "scripts/build-all.mjs") {
+          const pluginSdkDist = path.join(cwd, "dist", "plugin-sdk");
+          mkdirSync(pluginSdkDist, { recursive: true });
+          writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
+          writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
+        }
+        return { status: 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.summary.steps.map((step) => step.name)).toEqual(["private QA build", "qa suite"]);
+    expect(calls[0]?.args).toEqual(["scripts/build-all.mjs", "qaRuntime"]);
+    expect(calls[0]?.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
+    expect(calls[0]?.env?.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS).toBeUndefined();
+  });
+
+  it("does not prebuild private QA dist when the required entries already exist", async () => {
+    const cwd = makeTempRoot();
+    const outputDir = path.join(cwd, "out");
+    const pluginSdkDist = path.join(cwd, "dist", "plugin-sdk");
+    mkdirSync(pluginSdkDist, { recursive: true });
+    writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
+    writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
+    const calls: string[][] = [];
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--skip-startup",
+      "--qa-scenario",
+      "channel-chat-baseline",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      cwd,
+      silent: true,
+      spawnSync: (_command: string, args: string[]) => {
+        calls.push(args);
+        return { status: 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.summary.steps.map((step) => step.name)).toEqual(["qa suite"]);
+    expect(calls.some((args) => args[0] === "scripts/build-all.mjs")).toBe(false);
   });
 
   it("fails when completed runs report hot gateway CPU observations", async () => {

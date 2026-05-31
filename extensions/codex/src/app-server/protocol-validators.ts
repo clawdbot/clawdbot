@@ -107,7 +107,7 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 }
 
 function readDefault(schema: unknown): unknown {
-  if (!isRecord(schema) || !Object.prototype.hasOwnProperty.call(schema, "default")) {
+  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
     return undefined;
   }
   return structuredClone(schema.default);
@@ -176,7 +176,7 @@ function applySchemaDefaults(
     }
     if (isRecord(schema.additionalProperties)) {
       for (const key of Object.keys(nextValue)) {
-        if (Object.prototype.hasOwnProperty.call(schema.properties, key)) {
+        if (Object.hasOwn(schema.properties, key)) {
           continue;
         }
         nextValue[key] = applySchemaDefaults(

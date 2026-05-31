@@ -363,6 +363,65 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("advances cadence after non-retryable disabled skips", async () => {
+    useFakeHeartbeatTime();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const runSpy = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" } as const);
+
+    const intervalMs = 10 * 60_000;
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "10m" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
+
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    const delays = timeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((delay): delay is number => typeof delay === "number");
+    expect(delays[delays.length - 1]).toBeGreaterThan(5_000);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    timeoutSpy.mockRestore();
+    runner.stop();
+  });
+
+  it("advances cadence after flood deferrals without wake-layer retry", async () => {
+    useFakeHeartbeatTime();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 } as const);
+
+    const intervalMs = 1_000;
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "1s" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
+
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(intervalMs);
+    }
+    expect(runSpy).toHaveBeenCalledTimes(5);
+
+    await vi.advanceTimersByTimeAsync(intervalMs);
+    expect(runSpy).toHaveBeenCalledTimes(5);
+
+    const delays = timeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((delay): delay is number => typeof delay === "number");
+    expect(delays[delays.length - 1]).toBeGreaterThan(0);
+
+    timeoutSpy.mockRestore();
+    runner.stop();
+  });
+
   it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
     useFakeHeartbeatTime();
 

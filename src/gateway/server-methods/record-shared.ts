@@ -1,4 +1,4 @@
-export { asOptionalRecord as asRecord } from "../../shared/record-coerce.js";
+export { asOptionalRecord as asRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 
 export function normalizeTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {

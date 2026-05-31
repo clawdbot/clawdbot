@@ -1,4 +1,4 @@
-export { asOptionalRecord as talkEventPayloadRecord } from "../shared/record-coerce.js";
+export { asOptionalRecord as talkEventPayloadRecord } from "../../packages/normalization-core/src/record-coerce.js";
 
 export function firstFiniteTalkEventNumber(
   record: Record<string, unknown> | undefined,

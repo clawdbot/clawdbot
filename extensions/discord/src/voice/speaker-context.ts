@@ -1,3 +1,7 @@
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { Client } from "../internal/discord.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -104,7 +108,9 @@ export class DiscordVoiceSpeakerContextResolver {
     if (!cached) {
       return undefined;
     }
-    if (cached.expiresAt <= Date.now()) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = asDateTimestampMs(cached.expiresAt);
+    if (now === undefined || expiresAt === undefined || expiresAt <= now) {
       this.cache.delete(key);
       return undefined;
     }
@@ -119,9 +125,12 @@ export class DiscordVoiceSpeakerContextResolver {
 
   private setCachedContext(guildId: string, userId: string, context: VoiceSpeakerContext): void {
     const key = this.resolveCacheKey(guildId, userId);
-    this.cache.set(key, {
-      ...context,
-      expiresAt: Date.now() + SPEAKER_CONTEXT_CACHE_TTL_MS,
-    });
+    const expiresAt = resolveExpiresAtMsFromDurationMs(SPEAKER_CONTEXT_CACHE_TTL_MS);
+    if (expiresAt !== undefined) {
+      this.cache.set(key, {
+        ...context,
+        expiresAt,
+      });
+    }
   }
 }

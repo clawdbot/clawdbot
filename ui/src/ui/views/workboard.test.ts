@@ -57,6 +57,42 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
   });
 
+  it("does not render Invalid Date for Date-invalid card timestamps", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Bad timestamp card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 8_640_000_000_000_001,
+        events: [{ id: "event-1", kind: "edited", at: 8_640_000_000_000_001 }],
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Bad timestamp card");
+    expect(container.textContent).not.toContain("Invalid Date");
+  });
+
   it("opens linked cards from the card surface without hijacking action buttons", () => {
     const host = {};
     const state = getWorkboardState(host);

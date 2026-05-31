@@ -153,9 +153,15 @@ const newlineModeFenceCases = (() => {
       expected: [fence],
     },
     {
-      name: "splits between fence and following paragraph",
+      name: "keeps short fenced block and following paragraph together",
       text: `${fence}\n\nAfter`,
       limit: 1000,
+      expected: [`${fence}\n\nAfter`],
+    },
+    {
+      name: "splits oversized fenced block away from following paragraph",
+      text: `${fence}\n\nAfter`,
+      limit: fence.length + 1,
       expected: [fence, "After"],
     },
     {
@@ -523,10 +529,10 @@ describe("chunkTextWithMode", () => {
       expected: ["Line one\nLine two"],
     },
     {
-      name: "newline mode (blank-line split)",
+      name: "newline mode packs short blank-line-separated paragraphs",
       text: "Para one\n\nPara two",
       mode: "newline" as const,
-      expected: ["Para one", "Para two"],
+      expected: ["Para one\n\nPara two"],
     },
   ] as const)(
     "applies mode-specific chunking behavior: $name",
@@ -558,10 +564,10 @@ describe("chunkMarkdownTextWithMode", () => {
       expected: ["Line one\nLine two"],
     },
     {
-      name: "newline mode splits by blank line",
+      name: "newline mode packs short blank-line-separated paragraphs",
       text: "Para one\n\nPara two",
       mode: "newline" as const,
-      expected: ["Para one", "Para two"],
+      expected: ["Para one\n\nPara two"],
     },
   ] as const)("applies markdown/newline mode behavior: $name", ({ text, mode, expected, name }) => {
     expectChunkModeCase({
@@ -580,6 +586,13 @@ describe("chunkMarkdownTextWithMode", () => {
       expect(chunkMarkdownTextWithMode(text, limit, "newline"), name).toEqual(expected);
     },
   );
+
+  it("packs multiple paragraphs up to the limit in newline mode", () => {
+    expect(chunkMarkdownTextWithMode("Alpha\n\nBeta\n\nGamma", 14, "newline")).toEqual([
+      "Alpha\n\nBeta",
+      "Gamma",
+    ]);
+  });
 });
 
 describe("resolveChunkMode", () => {

@@ -1,13 +1,14 @@
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { Model } from "../../llm/types.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
-import { normalizeProviderId } from "../provider-id.js";
 
 function rowMatchesModel(params: {
   row: NormalizedModelCatalogRow;
@@ -24,23 +25,43 @@ function rowMatchesModel(params: {
   );
 }
 
-function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): Model {
+function normalizeStaticCatalogInput(
+  input: NormalizedModelCatalogRow["input"],
+): ProviderRuntimeModel["input"] {
+  const normalizedInput = input.filter(
+    (item): item is "text" | "image" => item === "text" || item === "image",
+  );
+  return normalizedInput.length > 0 ? normalizedInput : ["text"];
+}
+
+function normalizeStaticCatalogCost(
+  cost: NormalizedModelCatalogRow["cost"],
+): ProviderRuntimeModel["cost"] {
+  return {
+    input: cost?.input ?? 0,
+    output: cost?.output ?? 0,
+    cacheRead: cost?.cacheRead ?? 0,
+    cacheWrite: cost?.cacheWrite ?? 0,
+  };
+}
+
+function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
     id: row.id,
     name: row.name || row.id,
     provider: row.provider,
     api: row.api ?? "openai-responses",
-    baseUrl: row.baseUrl,
+    baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
-    input: row.input,
-    cost: row.cost,
-    contextWindow: row.contextWindow,
+    input: normalizeStaticCatalogInput(row.input),
+    cost: normalizeStaticCatalogCost(row.cost),
+    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: row.contextTokens,
-    maxTokens: row.maxTokens,
+    maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     headers: row.headers,
     compat: row.compat,
     mediaInput: row.mediaInput,
-  } as Model;
+  };
 }
 
 type StaticCatalogPlugin = Parameters<
@@ -143,7 +164,8 @@ export function resolveBundledStaticCatalogModel(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): Model | undefined {
+  includeRuntimeDiscovery?: boolean;
+}): ProviderRuntimeModel | undefined {
   const provider = normalizeProviderId(params.provider);
   if (!provider || !params.modelId.trim()) {
     return undefined;
@@ -157,7 +179,10 @@ export function resolveBundledStaticCatalogModel(params: {
     providerFilter: provider,
   });
   for (const entry of plan.entries) {
-    if (entry.discovery !== "static") {
+    if (
+      entry.discovery !== "static" &&
+      !(params.includeRuntimeDiscovery && entry.discovery === "runtime")
+    ) {
       continue;
     }
     const row = entry.rows.find((candidate) =>

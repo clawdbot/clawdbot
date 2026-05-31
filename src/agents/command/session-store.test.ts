@@ -337,7 +337,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           durationMs: 1,
           agentMeta: {
             sessionId,
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.5",
             contextTokens: 400_000,
           },
@@ -350,7 +350,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "openai-codex",
+        defaultProvider: "openai",
         defaultModel: "gpt-5.5",
         result,
       });

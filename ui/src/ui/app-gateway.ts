@@ -10,7 +10,9 @@ import {
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
+  scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -29,6 +31,7 @@ import {
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -84,6 +87,7 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
+import type { ChatSessionRefreshTarget } from "./ui-types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
@@ -122,7 +126,7 @@ type GatewayHost = {
   sessionsShowArchived: boolean;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
-  refreshSessionsAfterChat: Set<string>;
+  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   sessionsLoading?: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
@@ -623,6 +627,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
+        preserveCurrent: true,
+      });
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
         { applyIdentity: false },
@@ -794,12 +801,13 @@ function handleTerminalChatEvent(
     payload?.runId,
   );
   const runId = payload?.runId;
-  if (runId && host.refreshSessionsAfterChat.has(runId)) {
+  const refreshTarget = runId ? host.refreshSessionsAfterChat.get(runId) : undefined;
+  if (runId && refreshTarget) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
-        ...scopedAgentParamsForSession(host, host.sessionKey),
+        ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
       });
     }
   }
@@ -972,7 +980,7 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentParamsForSession(host, host.sessionKey),
+      ...scopedAgentListParamsForSession(host, host.sessionKey),
       publishChatRunStatus: false,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(

@@ -62,7 +62,7 @@ describe("codex plugin lifecycle: cold install", () => {
 });
 
 describe("codex plugin lifecycle: OAuth-only with mixed profiles", () => {
-  it("selects openai-codex OAuth when openai API-key profiles are present", async () => {
+  it("selects openai OAuth when openai API-key profiles are present", async () => {
     const agentDir = await createAgentDir("qa-codex-auth-mixed-");
     await seedAuthProfiles("mixed", agentDir);
 
@@ -74,7 +74,7 @@ describe("codex plugin lifecycle: OAuth-only with mixed profiles", () => {
     }
     expect(selection.profileId).toBe(QA_CODEX_OAUTH_PROFILE_ID);
     expect(selection.profileId).not.toBe(QA_OPENAI_API_KEY_PROFILE_ID);
-    expect(selection.provider).toBe("openai-codex");
+    expect(selection.provider).toBe("openai");
     expect(selection.mode).toBe("oauth");
   });
 });

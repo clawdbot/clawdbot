@@ -5,11 +5,7 @@ import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native"
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
-import {
-  type BaseCommand,
-  type BaseMessageInteractiveComponent,
-  type Modal,
-} from "../internal/discord.js";
+import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
   createAgentComponentControls,

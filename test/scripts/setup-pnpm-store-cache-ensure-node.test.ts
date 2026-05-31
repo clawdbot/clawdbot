@@ -2,9 +2,13 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const ensureNodeScript = resolve(".github/actions/setup-pnpm-store-cache/ensure-node.sh");
+let missingToolcacheCase: {
+  status: number | null;
+  stderr: string;
+};
 
 function writeFakeNode(binDir: string, version: string) {
   mkdirSync(binDir, { recursive: true });
@@ -70,6 +74,39 @@ function runVersionMatch(actual: string, requested: string) {
 }
 
 describe("setup-pnpm-store-cache ensure-node", () => {
+  beforeAll(() => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source "${ensureNodeScript}"`,
+            `openclaw_find_toolcache_node "99.99.99"`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH ?? "",
+            RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
+            AGENT_TOOLSDIRECTORY: join(root, "missing-agent-tools"),
+            ACTIONS_RUNNER_TOOL_CACHE: join(root, "missing-actions-cache"),
+            OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container-cache"),
+          },
+        },
+      );
+      missingToolcacheCase = {
+        status: result.status,
+        stderr: result.stderr,
+      };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses a matching active node", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
@@ -244,34 +281,7 @@ exit 1
   });
 
   it("handles missing toolcache roots under nounset", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
-    try {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          [
-            "set -euo pipefail",
-            `source "${ensureNodeScript}"`,
-            `openclaw_find_toolcache_node "99.99.99"`,
-          ].join("; "),
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            PATH: process.env.PATH ?? "",
-            RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
-            AGENT_TOOLSDIRECTORY: join(root, "missing-agent-tools"),
-            ACTIONS_RUNNER_TOOL_CACHE: join(root, "missing-actions-cache"),
-            OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container-cache"),
-          },
-        },
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).not.toContain("unbound variable");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(missingToolcacheCase.status).toBe(1);
+    expect(missingToolcacheCase.stderr).not.toContain("unbound variable");
   });
 });

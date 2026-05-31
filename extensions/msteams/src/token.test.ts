@@ -1,6 +1,31 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAccessToken } from "./token-response.js";
-import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
+import {
+  hasConfiguredMSTeamsCredentials,
+  resolveDelegatedAccessToken,
+  resolveMSTeamsCredentials,
+} from "./token.js";
+
+const oauthTokenMocks = vi.hoisted(() => ({
+  refreshMSTeamsDelegatedTokens: vi.fn(),
+}));
+
+vi.mock("./oauth.token.js", () => ({
+  refreshMSTeamsDelegatedTokens: oauthTokenMocks.refreshMSTeamsDelegatedTokens,
+}));
+
+vi.mock("./storage.js", () => ({
+  resolveMSTeamsStorePath: ({ filename }: { filename: string }) => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is required for token tests");
+    }
+    return `${stateDir}/${filename}`;
+  },
+}));
 
 vi.mock("./secret-input.js", () => ({
   normalizeSecretInputString: (v: unknown) =>
@@ -19,6 +44,7 @@ const ENV_KEYS = [
   "MSTEAMS_CERTIFICATE_THUMBPRINT",
   "MSTEAMS_USE_MANAGED_IDENTITY",
   "MSTEAMS_MANAGED_IDENTITY_CLIENT_ID",
+  "OPENCLAW_STATE_DIR",
 ] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -249,6 +275,68 @@ describe("token – backward compatibility", () => {
       appPassword: "pw",
       tenantId: "tenant-id",
     });
+  });
+});
+
+describe("resolveDelegatedAccessToken", () => {
+  let stateDir: string | undefined;
+
+  beforeEach(() => {
+    saveAndClearEnv();
+    stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-msteams-token-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    oauthTokenMocks.refreshMSTeamsDelegatedTokens.mockReset();
+  });
+
+  afterEach(() => {
+    restoreEnv();
+    if (stateDir) {
+      rmSync(stateDir, { recursive: true, force: true });
+      stateDir = undefined;
+    }
+  });
+
+  function writeDelegatedTokens(expiresAt: number) {
+    if (!stateDir) {
+      throw new Error("missing stateDir");
+    }
+    writeFileSync(
+      path.join(stateDir, "msteams-delegated.json"),
+      `${JSON.stringify({
+        accessToken: "stale-access",
+        refreshToken: "refresh-token",
+        expiresAt,
+        scopes: ["User.Read"],
+      })}\n`,
+      "utf8",
+    );
+  }
+
+  it("reuses a valid delegated access token before expiry", async () => {
+    writeDelegatedTokens(Date.now() + 60_000);
+
+    await expect(
+      resolveDelegatedAccessToken({
+        tenantId: "tenant",
+        clientId: "client",
+        clientSecret: "secret",
+      }),
+    ).resolves.toBe("stale-access");
+    expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse delegated tokens with invalid Date-range expiry", async () => {
+    writeDelegatedTokens(Number.MAX_VALUE);
+    oauthTokenMocks.refreshMSTeamsDelegatedTokens.mockRejectedValueOnce(new Error("expired"));
+
+    await expect(
+      resolveDelegatedAccessToken({
+        tenantId: "tenant",
+        clientId: "client",
+        clientSecret: "secret",
+      }),
+    ).resolves.toBeUndefined();
+    expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).toHaveBeenCalledOnce();
   });
 });
 

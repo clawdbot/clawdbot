@@ -255,28 +255,26 @@ export async function handleNextcloudTalkInbound(params: {
       runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (reason=${accessReason})`);
       return;
     }
-  } else {
-    if (access.senderAccess.decision !== "allow") {
-      if (access.senderAccess.decision === "pairing") {
-        await pairing.issueChallenge({
-          senderId,
-          senderIdLine: `Your Nextcloud user id: ${senderId}`,
-          meta: { name: senderName || undefined },
-          sendPairingReply: async (text) => {
-            await sendMessageNextcloudTalk(roomToken, text, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-            statusSink?.({ lastOutboundAt: Date.now() });
-          },
-          onReplyError: (err) => {
-            runtime.error?.(`nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`);
-          },
-        });
-      }
-      runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${accessReason})`);
-      return;
+  } else if (access.senderAccess.decision !== "allow") {
+    if (access.senderAccess.decision === "pairing") {
+      await pairing.issueChallenge({
+        senderId,
+        senderIdLine: `Your Nextcloud user id: ${senderId}`,
+        meta: { name: senderName || undefined },
+        sendPairingReply: async (text) => {
+          await sendMessageNextcloudTalk(roomToken, text, {
+            cfg: config,
+            accountId: account.accountId,
+          });
+          statusSink?.({ lastOutboundAt: Date.now() });
+        },
+        onReplyError: (err) => {
+          runtime.error?.(`nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`);
+        },
+      });
     }
+    runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${accessReason})`);
+    return;
   }
 
   if (access.commandAccess.shouldBlockControlCommand) {

@@ -20,6 +20,8 @@ type GatewayModelCatalogCache = {
   appliedGeneration: number;
 };
 
+const loadModelCatalogModule = async () => await import("../agents/model-catalog.js");
+
 function createGatewayModelCatalogCache(): GatewayModelCatalogCache {
   return {
     lastSuccessfulCatalog: null,
@@ -57,7 +59,7 @@ async function resolveLoadModelCatalog(
   if (params?.loadModelCatalog) {
     return params.loadModelCatalog;
   }
-  const { loadModelCatalog } = await import("../agents/model-catalog.js");
+  const { loadModelCatalog } = await loadModelCatalogModule();
   return loadModelCatalog;
 }
 
@@ -96,7 +98,7 @@ export function markGatewayModelCatalogStaleForReload(): void {
 // isolated unit tests harder. Keep this intentionally obscure.
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   resetGatewayModelCatalogState();
-  const { resetModelCatalogCacheForTest } = await import("../agents/model-catalog.js");
+  const { resetModelCatalogCacheForTest } = await loadModelCatalogModule();
   resetModelCatalogCacheForTest();
 }
 

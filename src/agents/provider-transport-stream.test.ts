@@ -45,8 +45,8 @@ describe("provider transport stream contracts", () => {
         alias: "openclaw-openai-responses-transport",
       },
       {
-        api: "openai-codex-responses" as const,
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses" as const,
+        provider: "openai",
         id: "codex-mini-latest",
         baseUrl: "https://chatgpt.com/backend-api",
         alias: "openclaw-openai-responses-transport",
@@ -198,9 +198,9 @@ describe("provider transport stream contracts", () => {
   });
 
   it("keeps Codex defaults on the OpenClaw transport until OpenClaw preserves attribution", () => {
-    const model = buildModel("openai-codex-responses", {
+    const model = buildModel("openai-chatgpt-responses", {
       id: "gpt-5.4",
-      provider: "openai-codex",
+      provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api",
     });
 

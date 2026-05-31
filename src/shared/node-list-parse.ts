@@ -1,5 +1,5 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./node-list-types.js";
-import { asRecord } from "./record-coerce.js";
 
 export function parsePairingList(value: unknown): PairingList {
   const obj = asRecord(value);

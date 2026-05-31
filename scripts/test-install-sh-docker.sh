@@ -444,6 +444,10 @@ else
   if [[ -f "$LATEST_FILE" ]]; then
     LATEST_VERSION="$(cat "$LATEST_FILE")"
   fi
+  public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+  if [[ -n "$public_latest_version" ]]; then
+    LATEST_VERSION="$public_latest_version"
+  fi
 
   echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
   run_install_smoke_container --rm -t \

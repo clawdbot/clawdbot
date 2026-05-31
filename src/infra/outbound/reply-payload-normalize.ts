@@ -1,5 +1,5 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload as InternalReplyPayload } from "../../auto-reply/reply-payload.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 
 export type OutboundReplyPayload = {
   text?: string;

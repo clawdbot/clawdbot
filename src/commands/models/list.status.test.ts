@@ -18,14 +18,14 @@ const mocks = vi.hoisted(() => {
         provider: "anthropic",
         key: "sk-ant-api-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
       },
-      "openai-codex:default": {
+      "openai:default": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "eyJhbGciOi-ACCESS",
         refresh: "oai-refresh-1234567890",
         expires: Date.now() + 60_000,
       },
-      "openai:default": {
+      "openai:api-key": {
         type: "api_key",
         provider: "openai",
         key: "abc123", // pragma: allowlist secret
@@ -87,20 +87,18 @@ const mocks = vi.hoisted(() => {
       google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       minimax: ["MINIMAX_API_KEY"],
       "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
-      openai: ["OPENAI_API_KEY"],
-      "openai-codex": ["OPENAI_OAUTH_TOKEN"],
+      openai: ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"],
       fal: ["FAL_KEY"],
     }),
     resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
     resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
-      aliasMap: { "codex-cli": "openai-codex" },
+      aliasMap: { "codex-cli": "openai" },
       envCandidateMap: {
         anthropic: ["ANTHROPIC_API_KEY"],
         google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         minimax: ["MINIMAX_API_KEY"],
         "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
-        openai: ["OPENAI_API_KEY"],
-        "openai-codex": ["OPENAI_OAUTH_TOKEN"],
+        openai: ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"],
         fal: ["FAL_KEY"],
       },
       authEvidenceMap: {},
@@ -113,7 +111,7 @@ const mocks = vi.hoisted(() => {
         "minimax",
         "minimax-portal",
         "openai",
-        "openai-codex",
+        "openai",
         "fal",
       ]),
     listKnownProviderEnvApiKeyNames: vi
@@ -223,15 +221,15 @@ vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: vi.fn(() => ({ "codex-cli": "openai-codex" })),
+  resolveProviderAuthAliasMap: vi.fn(() => ({ "codex-cli": "openai" })),
   resolveProviderIdForAuth: vi.fn((provider: string) =>
-    provider === "codex-cli" ? "openai-codex" : provider,
+    provider === "codex-cli" ? "openai" : provider,
   ),
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
   isCliProvider: vi.fn(
     (provider: string, cfg?: { agents?: { defaults?: { cliBackends?: object } } }) =>
-      Object.prototype.hasOwnProperty.call(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
+      Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
   ),
 }));
 vi.mock("../../infra/shell-env.js", () => ({
@@ -417,11 +415,7 @@ describe("modelsStatusCommand auth overview", () => {
     expect(openai?.env?.value).toContain("...");
     expect(openai?.profiles.labels.join(" ")).toContain("...");
     expect(openai?.profiles.labels.join(" ")).not.toContain("abc123");
-    expect(
-      (payload.auth.providersWithOAuth as string[]).some((provider) =>
-        provider.startsWith("openai "),
-      ),
-    ).toBe(false);
+    expect(payload.auth.providersWithOAuth).toContain("openai (1)");
     expect(
       requireRecord(requireProvider(providers, "minimax").effective, "minimax effective").kind,
     ).toBe("env");
@@ -432,9 +426,9 @@ describe("modelsStatusCommand auth overview", () => {
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("anthropic")),
     ).toBe(true);
-    expect(
-      (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai-codex")),
-    ).toBe(true);
+    expect((payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai"))).toBe(
+      true,
+    );
   });
 
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
@@ -512,7 +506,7 @@ describe("modelsStatusCommand auth overview", () => {
             provider: string;
             effective?: { kind: string; detail?: string };
           }>
-        ).find((provider) => provider.provider === "openai-codex");
+        ).find((provider) => provider.provider === "openai");
         expect(openAiCodex?.effective).toEqual({
           kind: "profiles",
           detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
@@ -537,10 +531,10 @@ describe("modelsStatusCommand auth overview", () => {
       env: { shellEnv: { enabled: true } },
     });
     mocks.store.profiles = {
-      "openai-codex:default": originalProfiles["openai-codex:default"],
+      "openai:default": originalProfiles["openai:default"],
     };
     mocks.resolveEnvApiKey.mockImplementation((provider: string) =>
-      provider === "openai-codex"
+      provider === "openai"
         ? {
             apiKey: "oauth-token",
             source: "env: OPENAI_OAUTH_TOKEN",
@@ -586,7 +580,7 @@ describe("modelsStatusCommand auth overview", () => {
       models: {
         providers: {
           openai: {
-            apiKey: "oauth:openai-codex",
+            apiKey: "oauth:openai",
           },
         },
       },
@@ -595,7 +589,7 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.store.profiles = {};
     mocks.resolveEnvApiKey.mockImplementation(() => null);
     mocks.getCustomProviderApiKey.mockImplementation((_cfg: unknown, provider: string) =>
-      provider === "openai" ? "oauth:openai-codex" : undefined,
+      provider === "openai" ? "oauth:openai" : undefined,
     );
     mocks.resolveUsableCustomProviderApiKey.mockImplementation(() => null);
 
@@ -605,17 +599,17 @@ describe("modelsStatusCommand auth overview", () => {
       const openai = requireProvider(payload.auth.providers, "openai");
       expect(openai.effective).toEqual({
         kind: "models.json",
-        detail: "marker(oauth:openai-codex)",
+        detail: "marker(oauth:openai)",
       });
       expect(payload.auth.runtimeAuthRoutes).toEqual([
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "missing",
           effective: {
-            kind: "missing",
-            detail: "missing",
+            kind: "models.json",
+            detail: "marker(oauth:openai)",
           },
         },
       ]);
@@ -692,7 +686,7 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "usable",
           effective: {
             kind: "synthetic",
@@ -763,7 +757,7 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "usable",
           effective: {
             kind: "profiles",
@@ -797,14 +791,14 @@ describe("modelsStatusCommand auth overview", () => {
     const originalHealthImpl = buildAuthHealthSummaryMock.getMockImplementation();
     const expiredProfile = {
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "expired-access",
       refresh: "expired-refresh",
       expires: Date.now() - 60_000,
     };
     const usableProfile = {
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "usable-access",
       refresh: "usable-refresh",
       expires: Date.now() + 60_000,
@@ -820,11 +814,11 @@ describe("modelsStatusCommand auth overview", () => {
       env: { shellEnv: { enabled: true } },
     });
     mocks.store.profiles = {
-      "openai-codex:default": expiredProfile,
-      "openai-codex:named": usableProfile,
+      "openai:default": expiredProfile,
+      "openai:named": usableProfile,
     };
     mocks.store.order = {
-      "openai-codex": ["openai-codex:named"],
+      openai: ["openai:named"],
     };
     mocks.resolveEnvApiKey.mockImplementation(() => null);
     buildAuthHealthSummaryMock.mockReturnValue({
@@ -832,27 +826,27 @@ describe("modelsStatusCommand auth overview", () => {
       warnAfterMs: 86_400_000,
       profiles: [
         {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
+          profileId: "openai:default",
+          provider: "openai",
           type: "oauth",
           status: "expired",
           source: "store",
-          label: "openai-codex:default",
+          label: "openai:default",
         },
         {
-          profileId: "openai-codex:named",
-          provider: "openai-codex",
+          profileId: "openai:named",
+          provider: "openai",
           type: "oauth",
           status: "ok",
           expiresAt: Date.now() + 60_000,
           remainingMs: 60_000,
           source: "store",
-          label: "openai-codex:named",
+          label: "openai:named",
         },
       ],
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           status: "ok",
           expiresAt: Date.now() + 60_000,
           remainingMs: 60_000,
@@ -865,11 +859,9 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual([]);
-      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:default").status).toBe(
-        "expired",
-      );
-      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:named").status).toBe("ok");
-      expect(requireProvider(payload.auth.oauth.providers, "openai-codex").status).toBe("ok");
+      expect(requireProfile(payload.auth.oauth.profiles, "openai:default").status).toBe("expired");
+      expect(requireProfile(payload.auth.oauth.profiles, "openai:named").status).toBe("ok");
+      expect(requireProvider(payload.auth.oauth.providers, "openai").status).toBe("ok");
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
@@ -908,9 +900,9 @@ describe("modelsStatusCommand auth overview", () => {
       env: { shellEnv: { enabled: true } },
     });
     mocks.store.profiles = {
-      "openai-codex:default": {
+      "openai:default": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "expired-access",
         refresh: "expired-refresh",
         expires: Date.now() - 60_000,
@@ -922,17 +914,17 @@ describe("modelsStatusCommand auth overview", () => {
       warnAfterMs: 86_400_000,
       profiles: [
         {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
+          profileId: "openai:default",
+          provider: "openai",
           type: "oauth",
           status: "expired",
           source: "store",
-          label: "openai-codex:default",
+          label: "openai:default",
         },
       ],
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           status: "expired",
           expiresAt: Date.now() - 60_000,
           remainingMs: -60_000,
@@ -1237,7 +1229,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("keeps Codex auth fallback scoped away from OpenAI image routes", async () => {
+  it("uses unified OpenAI auth for OpenAI image routes", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalProfiles = { ...mocks.store.profiles };
@@ -1255,10 +1247,10 @@ describe("modelsStatusCommand auth overview", () => {
     });
     mocks.store.profiles = {
       "anthropic:default": originalProfiles["anthropic:default"],
-      "openai-codex:default": originalProfiles["openai-codex:default"],
+      "openai:default": originalProfiles["openai:default"],
     };
     mocks.resolveEnvApiKey.mockImplementation((provider: string) =>
-      provider === "openai-codex"
+      provider === "openai"
         ? {
             apiKey: "oauth-token",
             source: "env: OPENAI_OAUTH_TOKEN",
@@ -1269,8 +1261,8 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = parseFirstJsonLog(localRuntime);
-      expect(payload.auth.missingProvidersInUse).toEqual(["openai"]);
-      expect(localRuntime.exit).toHaveBeenCalledWith(1);
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(localRuntime.exit).toHaveBeenCalledWith(0);
     } finally {
       mocks.store.profiles = originalProfiles;
       if (originalLoadConfig) {

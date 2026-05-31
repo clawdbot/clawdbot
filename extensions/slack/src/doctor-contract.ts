@@ -21,7 +21,7 @@ function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
     return false;
   }
   return Object.values(channels).some((channel) =>
-    Object.prototype.hasOwnProperty.call(asObjectRecord(channel) ?? {}, "allow"),
+    Object.hasOwn(asObjectRecord(channel) ?? {}, "allow"),
   );
 }
 
@@ -34,7 +34,7 @@ function normalizeSlackChannelAllowAliases(params: {
   const nextChannels = { ...params.channels };
   for (const [channelId, channelValue] of Object.entries(params.channels)) {
     const channel = asObjectRecord(channelValue);
-    if (!channel || !Object.prototype.hasOwnProperty.call(channel, "allow")) {
+    if (!channel || !Object.hasOwn(channel, "allow")) {
       continue;
     }
     const nextChannel = { ...channel };

@@ -205,22 +205,22 @@ describe("shared Codex app-server client", () => {
 
     const listPromise = listCodexAppServerModels({
       timeoutMs: 1000,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
     });
     await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
     const bridgeCall = bridgeStartOptionsCall();
-    expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
+    expect(bridgeCall?.authProfileId).toBe("openai:work");
     const applyCall = applyAuthProfileCall();
-    expect(applyCall?.authProfileId).toBe("openai-codex:work");
+    expect(applyCall?.authProfileId).toBe("openai:work");
   });
 
   it("skips target auth resolution when native source auth is requested", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-    const config = { auth: { order: { "openai-codex": ["openai-codex:target"] } } };
+    const config = { auth: { order: { openai: ["openai:target"] } } };
 
     const clientPromise = getSharedCodexAppServerClient({
       timeoutMs: 1000,
@@ -245,8 +245,8 @@ describe("shared Codex app-server client", () => {
   it("resolves the configured implicit auth profile before sharing a client", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
-    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai-codex:work");
+    const config = { auth: { order: { openai: ["openai:work"] } } };
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai:work");
 
     const listPromise = listCodexAppServerModels({
       timeoutMs: 1000,
@@ -263,10 +263,10 @@ describe("shared Codex app-server client", () => {
       config,
     });
     const bridgeCall = bridgeStartOptionsCall();
-    expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
+    expect(bridgeCall?.authProfileId).toBe("openai:work");
     expect(bridgeCall?.config).toBe(config);
     const applyCall = applyAuthProfileCall();
-    expect(applyCall?.authProfileId).toBe("openai-codex:work");
+    expect(applyCall?.authProfileId).toBe("openai:work");
     expect(applyCall?.config).toBe(config);
   });
 
@@ -276,7 +276,7 @@ describe("shared Codex app-server client", () => {
 
     const listPromise = listCodexAppServerModels({
       timeoutMs: 1000,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       agentDir: "/tmp/openclaw-agent-nova",
     });
     await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
@@ -285,10 +285,10 @@ describe("shared Codex app-server client", () => {
     await expect(listPromise).resolves.toEqual({ models: [] });
     const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
-    expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
+    expect(bridgeCall?.authProfileId).toBe("openai:work");
     const applyCall = applyAuthProfileCall();
     expect(applyCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
-    expect(applyCall?.authProfileId).toBe("openai-codex:work");
+    expect(applyCall?.authProfileId).toBe("openai:work");
   });
 
   it("migrates legacy singleton global state into the keyed registry", async () => {

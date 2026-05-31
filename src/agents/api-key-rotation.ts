@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -7,7 +8,6 @@ import {
   shouldRetrySameKeyProviderOperation,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
 
 type ApiKeyRetryParams = {

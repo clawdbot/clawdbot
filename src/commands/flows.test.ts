@@ -19,6 +19,11 @@ vi.mock("../config/config.js", () => ({
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -95,8 +100,8 @@ describe("flows commands", () => {
         status: "blocked",
         flows: [
           {
-            ...JSON.parse(JSON.stringify(flow)),
-            tasks: [JSON.parse(JSON.stringify(childTask))],
+            ...jsonRoundTrip(flow),
+            tasks: [jsonRoundTrip(childTask)],
             taskSummary: {
               total: 1,
               active: 1,
@@ -169,6 +174,27 @@ describe("flows commands", () => {
         "Linked tasks:",
         `- ${task.taskId} running run-child-2 Collect logs`,
       ]);
+    });
+  });
+
+  it("shows TaskFlows with Date-invalid timestamps without crashing", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect malformed flow timestamp",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 8_700_000_000_000_000,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain(`flowId: ${flow.flowId}`);
+      expect(lines).toContain("createdAt: 1970-01-01T00:00:00.100Z");
+      expect(lines).toContain("updatedAt: n/a");
     });
   });
 

@@ -147,6 +147,51 @@ describe("webHandlers web.login.start", () => {
     expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default");
     expect(startChannel).not.toHaveBeenCalled();
   });
+
+  it("preserves gateway method receiver state for login start", async () => {
+    const gateway = {
+      marker: "gateway-state",
+      async loginWithQrStart(this: { marker: string }) {
+        return {
+          connected: true,
+          message: this.marker,
+        };
+      },
+    };
+    const loginWithQrStart = vi.spyOn(gateway, "loginWithQrStart");
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start"],
+        gateway,
+      },
+    ]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(loginWithQrStart).toHaveBeenCalledWith({
+      accountId: "default",
+      force: false,
+      timeoutMs: undefined,
+      verbose: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        connected: true,
+        message: "gateway-state",
+      },
+      undefined,
+    );
+  });
 });
 
 describe("webHandlers web.login.wait", () => {

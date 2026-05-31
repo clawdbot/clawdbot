@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "../shared/record-coerce.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 function readToolName(value: unknown): string | undefined {
   const record = asOptionalRecord(value);

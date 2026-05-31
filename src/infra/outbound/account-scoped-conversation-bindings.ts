@@ -140,8 +140,6 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     channel: params.channel,
     accountId,
   });
-
-  let sessionBindingAdapter: SessionBindingAdapter;
   const manager: AccountScopedConversationBindingManager<TKind> = {
     accountId,
     getByConversationId: (conversationId) =>
@@ -241,7 +239,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
   };
 
-  sessionBindingAdapter = {
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: params.channel,
     accountId,
     capabilities: {

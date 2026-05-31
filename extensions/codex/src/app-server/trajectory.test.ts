@@ -114,8 +114,8 @@ describe("Codex trajectory recorder", () => {
     const parsed = JSON.parse(
       fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
     );
-    expect(parsed.provider).toBe("openai-codex");
-    expect(parsed.modelApi).toBe("openai-codex-responses");
+    expect(parsed.provider).toBe("openai");
+    expect(parsed.modelApi).toBe("openai-chatgpt-responses");
     expect(parsed.modelId).toBe("gpt-5.5");
   });
 

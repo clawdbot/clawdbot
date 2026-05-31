@@ -38,7 +38,11 @@ export async function persistSessionEntry(
       store[params.sessionKey] = merged;
       return merged;
     },
-    { takeCacheOwnership: true },
+    {
+      resolveSingleEntryPersistence: (entry) =>
+        entry ? { sessionKey: params.sessionKey, entry } : null,
+      takeCacheOwnership: true,
+    },
   );
   if (persisted) {
     params.sessionStore[params.sessionKey] = persisted;

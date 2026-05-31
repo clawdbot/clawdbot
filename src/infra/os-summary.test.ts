@@ -5,7 +5,9 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessSpawnSync(spawnSyncMock);
+  return mockNodeChildProcessSpawnSync(spawnSyncMock, () =>
+    vi.importActual<typeof import("node:child_process")>("node:child_process"),
+  );
 });
 
 import { resolveOsSummary } from "./os-summary.js";

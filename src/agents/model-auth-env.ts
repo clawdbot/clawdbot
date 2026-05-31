@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString as normalizeOptionalPathInput } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString as normalizeOptionalPathInput } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
 
 export type EnvApiKeyResult = {
   apiKey: string;
@@ -142,6 +142,8 @@ export function resolveEnvApiKey(
 
   const setupProvider = resolvePluginSetupProvider({
     provider: normalized,
+    config: options.config,
+    workspaceDir: options.workspaceDir,
     env,
   });
   if (setupProvider?.resolveConfigApiKey) {

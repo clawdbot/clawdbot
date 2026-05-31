@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
@@ -6,15 +8,13 @@ import type {
   DiagnosticStabilityBundle,
   ReadDiagnosticStabilityBundleResult,
 } from "../../logging/diagnostic-stability-bundle.js";
-import {
-  type DiagnosticStabilityEventRecord,
-  type DiagnosticStabilitySnapshot,
+import type {
+  DiagnosticStabilityEventRecord,
+  DiagnosticStabilitySnapshot,
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -34,7 +34,7 @@ const bonjourDiscoveryModuleLoader = createLazyImportLoader(
 );
 const wideAreaDnsModuleLoader = createLazyImportLoader(() => import("../../infra/widearea-dns.js"));
 const healthStyleModuleLoader = createLazyImportLoader(
-  () => import("../../terminal/health-style.js"),
+  () => import("../../../packages/terminal-core/src/health-style.js"),
 );
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
 const stabilityBundleModuleLoader = createLazyImportLoader(

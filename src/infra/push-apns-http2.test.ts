@@ -1,6 +1,6 @@
 import type http2 from "node:http2";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HttpConnectTunnelParams } from "./net/http-connect-tunnel.js";
 import {
   resetActiveManagedProxyStateForTests,

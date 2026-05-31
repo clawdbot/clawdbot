@@ -1,6 +1,6 @@
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { restoreTerminalState } from "../terminal/restore.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runSetupWizard } from "../wizard/setup.js";

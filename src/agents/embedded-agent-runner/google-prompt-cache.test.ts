@@ -385,6 +385,53 @@ describe("google prompt cache", () => {
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
   });
 
+  it("does not bypass failed-cache backoff when the process clock is invalid", async () => {
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
+    const sessionManager = makeSessionManager([
+      {
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(1_000).toISOString(),
+        type: "custom",
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "failed",
+          timestamp: 1_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          retryAfter: Date.parse("2030-01-01T00:00:00.000Z"),
+        },
+      },
+    ]);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-invalid-clock",
+      expireTime: "2030-01-01T00:00:00.000Z",
+    });
+    const innerStreamFn = vi.fn(() => "stream" as never);
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now: Number.NaN,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: "Follow policy.", messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
   it("stays out of the way when cachedContent is already configured explicitly", async () => {
     const fetchMock = vi.fn();
 

@@ -1,5 +1,5 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, type ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
-import { resolveIntegerOption } from "../../../shared/number-coercion.js";
 
 export type UnauthorizedFloodGuardOptions = {
   closeAfter?: number;

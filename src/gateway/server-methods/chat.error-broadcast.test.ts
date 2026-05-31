@@ -118,6 +118,15 @@ describe("chat.send error broadcast", () => {
       expect.objectContaining({
         agentId: "main",
         state: "error",
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("LLM timeout"),
+            }),
+          ],
+        }),
       }),
     );
   });

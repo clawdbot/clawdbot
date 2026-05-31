@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
@@ -318,6 +319,58 @@ describe("matrix monitor handler pairing account scope", () => {
       expect(readAllowFromStore).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("does not reuse account-scoped allowFrom cache while the process clock is invalid", async () => {
+    const readAllowFromStore = vi.fn(async () => [] as string[]);
+    const nowSpy = vi.spyOn(Date, "now");
+    const { handler } = createMatrixHandlerTestHarness({
+      readAllowFromStore,
+      dmPolicy: "pairing",
+      buildPairingReply: () => "pairing",
+    });
+    const makeEvent = (id: string): MatrixRawEvent =>
+      createMatrixTextMessageEvent({
+        eventId: id,
+        body: "@room hello",
+        mentions: { room: true },
+      });
+
+    try {
+      nowSpy.mockReturnValue(Number.NaN);
+      await handler("!room:example.org", makeEvent("$event1"));
+      await handler("!room:example.org", makeEvent("$event2"));
+
+      expect(readAllowFromStore).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("does not cache account-scoped allowFrom reads when cache expiry overflows", async () => {
+    const readAllowFromStore = vi.fn(async () => [] as string[]);
+    const nowSpy = vi.spyOn(Date, "now");
+    const { handler } = createMatrixHandlerTestHarness({
+      readAllowFromStore,
+      dmPolicy: "pairing",
+      buildPairingReply: () => "pairing",
+    });
+    const makeEvent = (id: string): MatrixRawEvent =>
+      createMatrixTextMessageEvent({
+        eventId: id,
+        body: "@room hello",
+        mentions: { room: true },
+      });
+
+    try {
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+      await handler("!room:example.org", makeEvent("$event1"));
+      await handler("!room:example.org", makeEvent("$event2"));
+
+      expect(readAllowFromStore).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
     }
   });
 

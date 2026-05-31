@@ -422,6 +422,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "user:123",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:guildchat:direct:123",
@@ -438,6 +439,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "channel:456",
         kind: "channel" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:guildchat:channel:456",
@@ -456,6 +458,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "user:dthcxgoxhifn3pwh65cut3ud3w",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:boardchat:direct:dthcxgoxhifn3pwh65cut3ud3w",

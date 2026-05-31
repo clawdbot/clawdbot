@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 export type HeartbeatTask = {

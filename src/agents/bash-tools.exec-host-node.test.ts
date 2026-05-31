@@ -168,7 +168,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   buildDefaultExecApprovalRequestArgs: vi.fn(() => ({})),
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
   shouldResolveExecApprovalUnavailableInline: vi.fn(() => false),
-  buildExecApprovalFollowupTarget: vi.fn(() => ({ approvalId: "approval-1" })),
+  buildExecApprovalFollowupTarget: vi.fn((value) => value),
   resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
   createExecApprovalDecisionState: createExecApprovalDecisionStateMock,
   enforceStrictInlineEvalApprovalBoundary: enforceStrictInlineEvalApprovalBoundaryMock,
@@ -1365,7 +1365,10 @@ describe("executeNodeHostCommand", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): bun ./script.ts",
       );
     });
@@ -1638,7 +1641,10 @@ describe("executeNodeHostCommand", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): echo 'unterminated",
       );
     });
@@ -1693,7 +1699,10 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): bun ./script.ts",
       );
     });
@@ -2057,7 +2066,10 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): python3 -c 'print(1)'",
       );
     });

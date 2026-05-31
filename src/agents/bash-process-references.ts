@@ -1,4 +1,3 @@
-import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { listRunningSessions } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
@@ -62,13 +61,4 @@ export function listActiveProcessSessionReferences(params: {
       tail: session.tail,
       truncated: session.truncated,
     }));
-}
-
-export function formatActiveProcessSessionReference(
-  session: ActiveProcessSessionReference,
-): string {
-  const runtime = formatDurationCompact(session.runtimeMs) ?? "unknown";
-  const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-  const cwd = session.cwd ? ` cwd=${session.cwd}` : "";
-  return `${session.sessionId} ${session.status} ${runtime}${pid}${cwd} :: ${session.name}`;
 }

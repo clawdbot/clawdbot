@@ -434,6 +434,17 @@ describe("buildQaRuntimeEnv", () => {
     ).rejects.toThrow("qa gateway child did not reach restart boundary");
   });
 
+  it("keeps oversized restart-boundary poll intervals within the timeout", async () => {
+    await expect(
+      testing.waitForQaGatewayRestartBoundary({
+        logs: () => "signal SIGUSR1 received\n",
+        offset: 0,
+        pollMs: Number.MAX_SAFE_INTEGER,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow("qa gateway child did not reach restart boundary");
+  });
+
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-setup-token-state-"));
     cleanups.push(async () => {
@@ -500,7 +511,7 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it("stages the OpenAI API-key fallback for live OpenAI Codex QA workers", async () => {
+  it("stages the OpenAI API-key fallback for live OpenAI QA workers", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-codex-api-key-state-"));
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
@@ -509,7 +520,7 @@ describe("buildQaRuntimeEnv", () => {
     const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {},
       stateDir,
-      providerIds: ["openai-codex"],
+      providerIds: ["openai"],
       env: {
         OPENCLAW_LIVE_OPENAI_KEY: "qa-live-codex-fallback-key",
       },
@@ -517,7 +528,7 @@ describe("buildQaRuntimeEnv", () => {
 
     for (const [profileId, provider] of [
       ["qa-live-openai-env", "openai"],
-      ["qa-live-openai-codex-env", "openai-codex"],
+      ["qa-live-openai-env", "openai"],
     ] as const) {
       const configProfile = requireAuthProfile(cfg.auth?.profiles, profileId);
       expect(configProfile.provider).toBe(provider);
@@ -532,7 +543,7 @@ describe("buildQaRuntimeEnv", () => {
       const storeProfiles = parseAuthProfileStore(storeRaw).profiles;
       for (const [profileId, provider] of [
         ["qa-live-openai-env", "openai"],
-        ["qa-live-openai-codex-env", "openai-codex"],
+        ["qa-live-openai-env", "openai"],
       ] as const) {
         const storeProfile = requireAuthProfile(storeProfiles, profileId);
         expect(storeProfile.type).toBe("api_key");
@@ -542,7 +553,7 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it("stages direct live Codex API-key aliases for isolated QA workers", async () => {
+  it("stages direct live OpenAI API-key aliases for isolated QA workers", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-codex-direct-key-state-"));
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
@@ -551,7 +562,7 @@ describe("buildQaRuntimeEnv", () => {
     const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {},
       stateDir,
-      providerIds: ["openai-codex"],
+      providerIds: ["openai"],
       env: {
         OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
       },
@@ -563,16 +574,16 @@ describe("buildQaRuntimeEnv", () => {
     );
     const storeProfile = requireAuthProfile(
       parseAuthProfileStore(storeRaw).profiles,
-      "qa-live-openai-codex-env",
+      "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai-codex");
+    expect(storeProfile.provider).toBe("openai");
     expect(storeProfile.key).toBe("qa-live-direct-codex-key");
 
     expect(() =>
       testing.assertQaLiveCodexAuthAvailable({
         cfg,
-        providerIds: ["openai-codex"],
+        providerIds: ["openai"],
         env: {
           OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
         },
@@ -581,11 +592,11 @@ describe("buildQaRuntimeEnv", () => {
     ).not.toThrow();
   });
 
-  it("fails fast when live OpenAI Codex runs have no portable QA auth", () => {
+  it("fails fast when live OpenAI runs have no portable QA auth", () => {
     expect(() =>
       testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
-        providerIds: ["openai-codex"],
+        providerIds: ["openai"],
         env: {
           CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
         },
@@ -657,7 +668,7 @@ describe("buildQaRuntimeEnv", () => {
     ).not.toThrow();
   });
 
-  it("stages configured OpenAI Codex API keys for live QA runs", async () => {
+  it("stages configured OpenAI API keys for live QA runs", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-codex-config-key-state-"));
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
@@ -666,7 +677,7 @@ describe("buildQaRuntimeEnv", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "",
               models: [],
               apiKey: "qa-configured-not-a-real-key",
@@ -675,12 +686,12 @@ describe("buildQaRuntimeEnv", () => {
         },
       },
       stateDir,
-      providerIds: ["openai-codex"],
+      providerIds: ["openai"],
       env: {},
     });
 
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-codex-env");
-    expect(configProfile.provider).toBe("openai-codex");
+    const configProfile = requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env");
+    expect(configProfile.provider).toBe("openai");
     expect(configProfile.mode).toBe("api_key");
     for (const agentId of ["main", "qa"]) {
       const storeRaw = await readFile(
@@ -689,24 +700,24 @@ describe("buildQaRuntimeEnv", () => {
       );
       const storeProfile = requireAuthProfile(
         parseAuthProfileStore(storeRaw).profiles,
-        "qa-live-openai-codex-env",
+        "qa-live-openai-env",
       );
       expect(storeProfile.type).toBe("api_key");
-      expect(storeProfile.provider).toBe("openai-codex");
+      expect(storeProfile.provider).toBe("openai");
       expect(storeProfile.key).toBe("qa-configured-not-a-real-key");
     }
 
     expect(() =>
       testing.assertQaLiveCodexAuthAvailable({
         cfg,
-        providerIds: ["openai-codex"],
+        providerIds: ["openai"],
         env: {},
         readCodexCredentials: () => null,
       }),
     ).not.toThrow();
   });
 
-  it("stages configured OpenAI Codex env secret refs for default OpenAI live QA runs", async () => {
+  it("stages configured OpenAI env secret refs for default OpenAI live QA runs", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-codex-config-ref-state-"));
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
@@ -718,7 +729,7 @@ describe("buildQaRuntimeEnv", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "",
               models: [],
               apiKey: {
@@ -741,10 +752,10 @@ describe("buildQaRuntimeEnv", () => {
     );
     const storeProfile = requireAuthProfile(
       parseAuthProfileStore(storeRaw).profiles,
-      "qa-live-openai-codex-env",
+      "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai-codex");
+    expect(storeProfile.provider).toBe("openai");
     expect(storeProfile.key).toBe("qa-configured-env-ref-not-a-real-key");
 
     expect(() =>
@@ -757,7 +768,7 @@ describe("buildQaRuntimeEnv", () => {
     ).not.toThrow();
   });
 
-  it("stages configured OpenAI Codex env markers for live QA runs", async () => {
+  it("stages configured OpenAI env markers for live QA runs", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-codex-config-marker-state-"));
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
@@ -766,7 +777,7 @@ describe("buildQaRuntimeEnv", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "",
               models: [],
               apiKey: "OPENCLAW_LIVE_CODEX_API_KEY",
@@ -775,7 +786,7 @@ describe("buildQaRuntimeEnv", () => {
         },
       },
       stateDir,
-      providerIds: ["openai-codex"],
+      providerIds: ["openai"],
       env: {
         OPENCLAW_LIVE_CODEX_API_KEY: "qa-configured-marker-not-a-real-key",
       },
@@ -787,26 +798,26 @@ describe("buildQaRuntimeEnv", () => {
     );
     const storeProfile = requireAuthProfile(
       parseAuthProfileStore(storeRaw).profiles,
-      "qa-live-openai-codex-env",
+      "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai-codex");
+    expect(storeProfile.provider).toBe("openai");
     expect(storeProfile.key).toBe("qa-configured-marker-not-a-real-key");
 
     expect(() =>
       testing.assertQaLiveCodexAuthAvailable({
         cfg,
-        providerIds: ["openai-codex"],
+        providerIds: ["openai"],
         env: {},
         readCodexCredentials: () => null,
       }),
     ).not.toThrow();
   });
 
-  it("accepts a logged-in Codex CLI home for live OpenAI Codex QA runs", () => {
+  it("accepts a logged-in Codex CLI home for live OpenAI QA runs", () => {
     const readCodexCredentials = vi.fn(() => ({
       type: "oauth" as const,
-      provider: "openai-codex",
+      provider: "openai",
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
@@ -815,7 +826,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(() =>
       testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
-        providerIds: ["openai-codex"],
+        providerIds: ["openai"],
         env: {
           CODEX_HOME: "/host/.codex",
         },
@@ -1575,7 +1586,7 @@ describe("qa bundled plugin dir", () => {
       path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
       JSON.stringify({
         id: "openai",
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         cliBackends: ["codex-cli"],
       }),
       "utf8",
@@ -1680,7 +1691,7 @@ describe("qa bundled plugin dir", () => {
     expect(overrides["custom-openai"]?.api).toBe("openai-responses");
   });
 
-  it("copies OpenAI Codex auth-only live provider configs for default OpenAI runs", async () => {
+  it("copies OpenAI auth-only live provider configs for default OpenAI runs", async () => {
     const configPath = path.join(
       await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
       "openclaw.json",
@@ -1693,7 +1704,7 @@ describe("qa bundled plugin dir", () => {
       JSON.stringify({
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               apiKey: {
                 source: "env",
                 id: "OPENCLAW_LIVE_CODEX_API_KEY",
@@ -1709,16 +1720,16 @@ describe("qa bundled plugin dir", () => {
       providerIds: ["openai"],
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
-    expect(Object.keys(overrides)).toEqual(["openai-codex"]);
-    expect(overrides["openai-codex"]?.baseUrl).toBe("");
-    expect(overrides["openai-codex"]?.models).toEqual([]);
-    expect(overrides["openai-codex"]?.apiKey).toEqual({
+    expect(Object.keys(overrides)).toEqual(["openai"]);
+    expect(overrides["openai"]?.baseUrl).toBe("");
+    expect(overrides["openai"]?.models).toEqual([]);
+    expect(overrides["openai"]?.apiKey).toEqual({
       source: "env",
       id: "OPENCLAW_LIVE_CODEX_API_KEY",
     });
   });
 
-  it("does not copy OpenAI Codex provider configs for custom OpenAI-compatible runs", async () => {
+  it("does not copy OpenAI provider configs for custom OpenAI-compatible runs", async () => {
     const configPath = path.join(
       await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
       "openclaw.json",
@@ -1734,8 +1745,6 @@ describe("qa bundled plugin dir", () => {
             openai: {
               baseUrl: "https://proxy.example.test/v1",
               models: [],
-            },
-            "openai-codex": {
               apiKey: {
                 source: "env",
                 id: "OPENCLAW_LIVE_CODEX_API_KEY",
@@ -1753,7 +1762,6 @@ describe("qa bundled plugin dir", () => {
     });
     expect(Object.keys(overrides)).toEqual(["openai"]);
     expect(overrides.openai?.baseUrl).toBe("https://proxy.example.test/v1");
-    expect(overrides["openai-codex"]).toBeUndefined();
   });
 
   it("raises the QA runtime host version to the highest allowed plugin floor", async () => {

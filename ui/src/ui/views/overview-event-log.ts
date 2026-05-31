@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
+import { formatTimeMs } from "../format.ts";
 import { icons } from "../icons.ts";
 import { formatEventPayload } from "../presenter.ts";
 
@@ -26,7 +27,7 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
         ${visible.map(
           (entry) => html`
             <div class="ov-event-log-entry">
-              <span class="ov-event-log-ts">${new Date(entry.ts).toLocaleTimeString()}</span>
+              <span class="ov-event-log-ts">${formatTimeMs(entry.ts, undefined, "")}</span>
               <span class="ov-event-log-name">${entry.event}</span>
               ${entry.payload
                 ? html`<span class="ov-event-log-payload muted"

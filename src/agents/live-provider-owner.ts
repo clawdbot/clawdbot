@@ -1,6 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type LiveProviderOwnerContext = {
   config?: OpenClawConfig;

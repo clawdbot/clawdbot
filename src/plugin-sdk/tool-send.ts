@@ -1,4 +1,4 @@
-import { readStringValue } from "../shared/string-coerce.js";
+import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type { ChannelToolSend } from "../channels/plugins/types.public.js";
 

@@ -36,6 +36,29 @@
       "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
       "@openclaw/llm-runtime": ["./packages/llm-runtime/src/index.ts"],
       "@openclaw/llm-runtime/*": ["./packages/llm-runtime/src/*"],
+      "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
+      "@openclaw/model-catalog-core/configured-model-refs": [
+        "./packages/model-catalog-core/src/configured-model-refs.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-normalize": [
+        "./packages/model-catalog-core/src/model-catalog-normalize.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-refs": [
+        "./packages/model-catalog-core/src/model-catalog-refs.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-types": [
+        "./packages/model-catalog-core/src/model-catalog-types.ts"
+      ],
+      "@openclaw/model-catalog-core/provider-id": [
+        "./packages/model-catalog-core/src/provider-id.ts"
+      ],
+      "@openclaw/model-catalog-core/provider-model-id-normalization": [
+        "./packages/model-catalog-core/src/provider-model-id-normalization.ts"
+      ],
+      "@openclaw/model-catalog-core/provider-model-id-normalize": [
+        "./packages/model-catalog-core/src/provider-model-id-normalize.ts"
+      ],
+      "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
       "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
@@ -65,6 +88,12 @@
         "./packages/media-generation-core/src/normalization.ts"
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
+      "@openclaw/media-understanding-common": [
+        "./packages/media-understanding-common/src/index.ts"
+      ],
+      "@openclaw/media-understanding-common/*": [
+        "./packages/media-understanding-common/src/*"
+      ],
       "@openclaw/markdown-core": ["./packages/markdown-core/src/index.ts"],
       "@openclaw/markdown-core/code-spans": ["./packages/markdown-core/src/code-spans.ts"],
       "@openclaw/markdown-core/fences": ["./packages/markdown-core/src/fences.ts"],
@@ -77,6 +106,55 @@
       "@openclaw/markdown-core/tables": ["./packages/markdown-core/src/tables.ts"],
       "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
       "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
+      "@openclaw/normalization-core": ["./packages/normalization-core/src/index.ts"],
+      "@openclaw/normalization-core/number-coercion": [
+        "./packages/normalization-core/src/number-coercion.ts"
+      ],
+      "@openclaw/normalization-core/record-coerce": [
+        "./packages/normalization-core/src/record-coerce.ts"
+      ],
+      "@openclaw/normalization-core/string-coerce": [
+        "./packages/normalization-core/src/string-coerce.ts"
+      ],
+      "@openclaw/normalization-core/string-normalization": [
+        "./packages/normalization-core/src/string-normalization.ts"
+      ],
+      "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
+      "@openclaw/terminal-core": ["./packages/terminal-core/src/index.ts"],
+      "@openclaw/terminal-core/ansi": ["./packages/terminal-core/src/ansi.ts"],
+      "@openclaw/terminal-core/decorative-emoji": [
+        "./packages/terminal-core/src/decorative-emoji.ts"
+      ],
+      "@openclaw/terminal-core/health-style": [
+        "./packages/terminal-core/src/health-style.ts"
+      ],
+      "@openclaw/terminal-core/links": ["./packages/terminal-core/src/links.ts"],
+      "@openclaw/terminal-core/note": ["./packages/terminal-core/src/note.ts"],
+      "@openclaw/terminal-core/osc-progress": ["./packages/terminal-core/src/osc-progress.ts"],
+      "@openclaw/terminal-core/palette": ["./packages/terminal-core/src/palette.ts"],
+      "@openclaw/terminal-core/progress-line": [
+        "./packages/terminal-core/src/progress-line.ts"
+      ],
+      "@openclaw/terminal-core/prompt-select-styled": [
+        "./packages/terminal-core/src/prompt-select-styled.ts"
+      ],
+      "@openclaw/terminal-core/prompt-select-styled-params": [
+        "./packages/terminal-core/src/prompt-select-styled-params.ts"
+      ],
+      "@openclaw/terminal-core/prompt-style": [
+        "./packages/terminal-core/src/prompt-style.ts"
+      ],
+      "@openclaw/terminal-core/restore": ["./packages/terminal-core/src/restore.ts"],
+      "@openclaw/terminal-core/safe-text": ["./packages/terminal-core/src/safe-text.ts"],
+      "@openclaw/terminal-core/stream-writer": [
+        "./packages/terminal-core/src/stream-writer.ts"
+      ],
+      "@openclaw/terminal-core/table": ["./packages/terminal-core/src/table.ts"],
+      "@openclaw/terminal-core/terminal-link": [
+        "./packages/terminal-core/src/terminal-link.ts"
+      ],
+      "@openclaw/terminal-core/theme": ["./packages/terminal-core/src/theme.ts"],
+      "@openclaw/terminal-core/*": ["./packages/terminal-core/src/*"],
       "@openclaw/net-policy": ["./packages/net-policy/src/index.ts"],
       "@openclaw/net-policy/ip": ["./packages/net-policy/src/ip.ts"],
       "@openclaw/net-policy/ipv4": ["./packages/net-policy/src/ipv4.ts"],
@@ -85,6 +163,11 @@
       ],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
+      "@openclaw/web-content-core": ["./packages/web-content-core/src/index.ts"],
+      "@openclaw/web-content-core/provider-runtime-shared": [
+        "./packages/web-content-core/src/provider-runtime-shared.ts"
+      ],
+      "@openclaw/web-content-core/*": ["./packages/web-content-core/src/*"],
       "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/api": ["./packages/speech-core/api.ts"],
       "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],

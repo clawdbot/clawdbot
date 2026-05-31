@@ -30,6 +30,7 @@ describe("runHeartbeatOnce commitments", () => {
     id: string;
     sessionKey: string;
     to: string;
+    dueWindow?: CommitmentRecord["dueWindow"];
     sourceUserText?: string;
     sourceAssistantText?: string;
   }): CommitmentRecord {
@@ -48,7 +49,7 @@ describe("runHeartbeatOnce commitments", () => {
       suggestedText: "How did the interview go?",
       dedupeKey: "interview:2026-04-28",
       confidence: 0.92,
-      dueWindow: {
+      dueWindow: params.dueWindow ?? {
         earliestMs: nowMs - 60_000,
         latestMs: nowMs + 60 * 60_000,
         timezone: "America/Los_Angeles",
@@ -76,6 +77,7 @@ describe("runHeartbeatOnce commitments", () => {
   async function setupCommitmentCase(params?: {
     replyText?: string;
     target?: "last" | "none";
+    dueWindow?: CommitmentRecord["dueWindow"];
     sourceUserText?: string;
     sourceAssistantText?: string;
     legacyRawSourceText?: boolean;
@@ -111,6 +113,7 @@ describe("runHeartbeatOnce commitments", () => {
             id: "cm_interview",
             sessionKey,
             to: "155462274",
+            dueWindow: params?.dueWindow,
             sourceUserText: params?.sourceUserText,
             sourceAssistantText: params?.sourceAssistantText,
           }),
@@ -380,6 +383,25 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase();
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("tolerates Date-invalid commitment due timestamps in heartbeat prompts", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      dueWindow: {
+        earliestMs: nowMs - 60_000,
+        latestMs: 8_700_000_000_000_000,
+        timezone: "UTC",
+      },
+    });
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();

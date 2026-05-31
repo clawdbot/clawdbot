@@ -284,7 +284,7 @@ export async function runGeminiEmbeddingBatches(
       maxRequests: GEMINI_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: gemini batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitGeminiBatch({
         gemini: params.gemini,
         requests: group,
@@ -326,8 +326,8 @@ export async function runGeminiEmbeddingBatches(
               gemini: params.gemini,
               batchName,
               wait: params.wait,
-              pollIntervalMs: params.pollIntervalMs,
-              timeoutMs: params.timeoutMs,
+              pollIntervalMs,
+              timeoutMs,
               debug: params.debug,
               initial: batchInfo,
             });

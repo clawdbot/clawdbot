@@ -1,3 +1,4 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import {
   applyOpenClawManifestInstallCommonFields,
@@ -10,7 +11,6 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../shared/frontmatter.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import type {
   OpenClawHookMetadata,
   HookEntry,
@@ -64,7 +64,7 @@ export function resolveOpenClawMetadata(
     export: readStringValue(metadataObj.export),
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
-    requires: requires,
+    requires,
     install: install.length > 0 ? install : undefined,
   };
 }

@@ -1,15 +1,26 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
 }));
 
+vi.mock("./client.js", () => ({
+  createIMessageRpcClient: createIMessageRpcClientMock,
+}));
+
 const { imessageActionsRuntime, findChatGuidForTest, normalizeDirectChatIdentifierForTest } =
   await import("./actions.runtime.js");
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  createIMessageRpcClientMock.mockReset();
+  spawnMock.mockReset();
+});
 
 function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: true }) {
   spawnMock.mockImplementationOnce(() => {
@@ -27,6 +38,13 @@ function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: tru
     });
     return child;
   });
+}
+
+function mockRpcChatList(chats: Array<Record<string, unknown>>) {
+  const request = vi.fn().mockResolvedValue({ chats });
+  const stop = vi.fn().mockResolvedValue(undefined);
+  createIMessageRpcClientMock.mockResolvedValueOnce({ request, stop });
+  return { request, stop };
 }
 
 describe("imessage actions runtime", () => {
@@ -62,6 +80,58 @@ describe("imessage actions runtime", () => {
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
+  });
+
+  it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);
+    const firstClient = mockRpcChatList([{ id: 1, guid: "iMessage;+;first" }]);
+    const secondClient = mockRpcChatList([{ id: 2, guid: "iMessage;+;second" }]);
+
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 1 },
+        options: { cliPath: "imsg-invalid-clock" },
+      }),
+    ).resolves.toBe("iMessage;+;first");
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 2 },
+        options: { cliPath: "imsg-invalid-clock" },
+      }),
+    ).resolves.toBe("iMessage;+;second");
+
+    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
+    expect(firstClient.request).toHaveBeenCalledWith(
+      "chats.list",
+      { limit: 1000 },
+      { timeoutMs: undefined },
+    );
+    expect(secondClient.request).toHaveBeenCalledWith(
+      "chats.list",
+      { limit: 1000 },
+      { timeoutMs: undefined },
+    );
+  });
+
+  it("does not cache chats.list when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    mockRpcChatList([{ id: 1, guid: "iMessage;+;first" }]);
+    mockRpcChatList([{ id: 2, guid: "iMessage;+;second" }]);
+
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 1 },
+        options: { cliPath: "imsg-overflow-clock" },
+      }),
+    ).resolves.toBe("iMessage;+;first");
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 2 },
+        options: { cliPath: "imsg-overflow-clock" },
+      }),
+    ).resolves.toBe("iMessage;+;second");
+
+    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
   });
 });
 

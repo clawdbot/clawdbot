@@ -6,11 +6,11 @@
 // Keep the runtime class on the package specifier so built agent-core shares
 // constructor identity with @openclaw/llm-core; source types keep SDK d.ts bundled.
 import { EventStream as LlmEventStream } from "@openclaw/llm-core";
-import {
-  type AssistantMessage,
-  type Context,
-  type EventStream,
-  type ToolResultMessage,
+import type {
+  AssistantMessage,
+  Context,
+  EventStream,
+  ToolResultMessage,
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";

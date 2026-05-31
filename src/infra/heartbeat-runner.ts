@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -89,10 +94,6 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -894,8 +895,8 @@ function buildCommitmentHeartbeatPrompt(params: {
     reason: commitment.reason,
     suggestedText: commitment.suggestedText,
     due: {
-      earliest: new Date(commitment.dueWindow.earliestMs).toISOString(),
-      latest: new Date(commitment.dueWindow.latestMs).toISOString(),
+      earliest: timestampMsToIsoString(commitment.dueWindow.earliestMs) ?? "n/a",
+      latest: timestampMsToIsoString(commitment.dueWindow.latestMs) ?? "n/a",
       timezone: commitment.dueWindow.timezone,
     },
     sourceMessageId: commitment.sourceMessageId,
@@ -2170,6 +2171,20 @@ export function startHeartbeatRunner(opts: {
     agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
   };
 
+  const advanceStaleScheduleAfterDeferral = (
+    agent: HeartbeatAgentState,
+    now: number,
+    reason?: string,
+    decision?: DeferDecision,
+  ) => {
+    if (!decision?.defer || decision.reason === "not-due" || agent.nextDueMs > now) {
+      return;
+    }
+    // Deferrals that do not have wake-layer retry ownership still need to move
+    // the due slot forward; otherwise scheduleNext() will keep rearming at 0ms.
+    advanceAgentSchedule(agent, now, reason);
+  };
+
   // Centralized cooldown gate. Both targeted and broadcast dispatch branches
   // call this before invoking `runOnce`. Manual wakes are never deferred.
   // Everything else respects `nextDueMs`, the min-spacing floor, and the flood
@@ -2365,6 +2380,7 @@ export function startHeartbeatRunner(opts: {
         }
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
         if (deferral.defer) {
+          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
           return { status: "skipped", reason: deferral.reason };
         }
         try {
@@ -2394,11 +2410,10 @@ export function startHeartbeatRunner(opts: {
             return res;
           }
           // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
-          // bookkeeping so subsequent wakes within the cooldown window defer.
+          // bookkeeping and move the due slot so scheduleNext() cannot hot-loop
+          // on a stale past-due agent.
           recordRunBookkeeping(targetAgent, now);
-          if (res.status !== "skipped" || res.reason !== "disabled") {
-            advanceAgentSchedule(targetAgent, now, reason);
-          }
+          advanceAgentSchedule(targetAgent, now, reason);
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
           const errMsg = formatErrorMessage(err);
@@ -2427,6 +2442,7 @@ export function startHeartbeatRunner(opts: {
       const runOneAgent = async (agent: HeartbeatAgentState): Promise<AgentWakeOutcome> => {
         const deferral = evaluateWakeDeferral(agent, now, reason, intent);
         if (deferral.defer) {
+          advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
           return { ran: false };
         }
 
@@ -2461,9 +2477,7 @@ export function startHeartbeatRunner(opts: {
         }
         // Non-retryable outcome — record bookkeeping for cooldown gates.
         recordRunBookkeeping(agent, now);
-        if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(agent, now, reason);
-        }
+        advanceAgentSchedule(agent, now, reason);
         let agentRan = res.status === "ran";
 
         const defaultSessionKey = resolveHeartbeatSession(

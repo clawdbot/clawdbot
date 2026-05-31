@@ -1376,6 +1376,39 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expectMainScopedDmClassification(prepared);
   });
 
+  it("preserves MessageThreadId for normalized DM assistant thread roots", async () => {
+    const cases: Array<{
+      name: string;
+      message: SlackMessageEvent;
+    }> = [
+      {
+        name: "raw im",
+        message: createMainScopedDmMessage({ channel_type: "im", thread_ts: "1.000" }),
+      },
+      {
+        name: "wrong channel_type",
+        message: createMainScopedDmMessage({ channel_type: "channel", thread_ts: "1.000" }),
+      },
+      {
+        name: "missing channel_type",
+        message: createMainScopedDmMessage({ thread_ts: "1.000" }),
+      },
+    ];
+    delete cases[2].message.channel_type;
+
+    for (const testCase of cases) {
+      const prepared = await prepareMessageWith(
+        createDmScopeMainSlackCtx(),
+        createSlackAccount(),
+        testCase.message,
+      );
+
+      expectMainScopedDmClassification(prepared, { includeFromCheck: testCase.name !== "raw im" });
+      expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
+      expect(prepared!.ctxPayload.ReplyToId).toBe("1.000");
+    }
+  });
+
   it("sets MessageThreadId for top-level messages when replyToMode=all", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),

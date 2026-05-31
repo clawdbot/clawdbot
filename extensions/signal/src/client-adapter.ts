@@ -7,6 +7,10 @@
  */
 
 import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   containerCheck,
   containerRpcRequest,
   streamContainerEvents,
@@ -74,24 +78,33 @@ async function resolveAutoApiMode(
   timeoutMs = DEFAULT_TIMEOUT_MS,
   options: { account?: string; requireContainerReceive?: boolean } = {},
 ): Promise<"native" | "container"> {
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
   const cached = detectedModeCache.get(baseUrl);
-  if (cached && cached.expiresAt > Date.now()) {
-    if (
-      cached.mode !== "container" ||
-      !options.requireContainerReceive ||
-      (Boolean(options.account?.trim()) && cached.receiveAccount === options.account?.trim())
-    ) {
-      return cached.mode;
+  if (cached) {
+    if (now !== undefined && cached.expiresAt > now) {
+      if (
+        cached.mode !== "container" ||
+        !options.requireContainerReceive ||
+        (Boolean(options.account?.trim()) && cached.receiveAccount === options.account?.trim())
+      ) {
+        return cached.mode;
+      }
+    } else {
+      detectedModeCache.delete(baseUrl);
     }
   }
   const detected = await detectSignalApiMode(baseUrl, timeoutMs, options);
-  detectedModeCache.set(baseUrl, {
-    mode: detected,
-    expiresAt: Date.now() + MODE_CACHE_TTL_MS,
-    ...(detected === "container" && options.requireContainerReceive && options.account
-      ? { receiveAccount: options.account }
-      : {}),
-  });
+  const expiresAt = resolveExpiresAtMsFromDurationMs(MODE_CACHE_TTL_MS, { nowMs: rawNow });
+  if (expiresAt !== undefined) {
+    detectedModeCache.set(baseUrl, {
+      mode: detected,
+      expiresAt,
+      ...(detected === "container" && options.requireContainerReceive && options.account
+        ? { receiveAccount: options.account }
+        : {}),
+    });
+  }
   return detected;
 }
 

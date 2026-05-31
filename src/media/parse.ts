@@ -28,6 +28,7 @@ export type ParsedMediaOutputSegment =
 
 export type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
+  extractMediaDirectives?: boolean;
 };
 
 export function normalizeMediaSource(src: string) {
@@ -493,7 +494,8 @@ export function splitMediaFromOutput(
     return { text: "" };
   }
   const extractMarkdownImages = options.extractMarkdownImages === true;
-  const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const extractMediaDirectives = options.extractMediaDirectives !== false;
+  const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
@@ -535,7 +537,7 @@ export function splitMediaFromOutput(
     }
 
     const trimmedStart = line.trimStart();
-    if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+    if (!extractMediaDirectives || !trimmedStart.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({ line, media })
         : { lineSegments: [], foundMedia: false };

@@ -1,8 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getActivePluginChannelRegistry,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelPlugin } from "./types.plugin.js";

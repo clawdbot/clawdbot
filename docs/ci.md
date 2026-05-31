@@ -566,6 +566,13 @@ The repo wrapper refuses a stale Crabbox binary that does not advertise `blacksm
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
+Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. When using the sibling checkout, rebuild the ignored local binary before timing or proof work:
+
+```bash
+version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
+  && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
+```
+
 Changed gate:
 
 ```bash

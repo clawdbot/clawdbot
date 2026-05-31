@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -38,6 +38,10 @@ describe("short-term promotion", () => {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
@@ -89,19 +93,31 @@ describe("short-term promotion", () => {
     return candidate.promotedAt;
   }
 
-  async function readRecallStoreEntries(
-    workspaceDir: string,
-  ): Promise<
+  async function readRecallStoreEntries(workspaceDir: string): Promise<
     Record<
       string,
-      { claimHash?: unknown; recallCount?: unknown; snippet?: unknown; totalScore?: unknown }
+      {
+        claimHash?: unknown;
+        firstRecalledAt?: unknown;
+        lastRecalledAt?: unknown;
+        recallCount?: unknown;
+        snippet?: unknown;
+        totalScore?: unknown;
+      }
     >
   > {
     const raw = await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8");
     const store = JSON.parse(raw) as {
       entries?: Record<
         string,
-        { claimHash?: unknown; recallCount?: unknown; snippet?: unknown; totalScore?: unknown }
+        {
+          claimHash?: unknown;
+          firstRecalledAt?: unknown;
+          lastRecalledAt?: unknown;
+          recallCount?: unknown;
+          snippet?: unknown;
+          totalScore?: unknown;
+        }
       >;
     };
     return store.entries ?? {};
@@ -157,6 +173,35 @@ describe("short-term promotion", () => {
       const raw = await fs.readFile(storePath, "utf-8");
       const store = JSON.parse(raw) as Record<string, unknown>;
       expect(Object.keys(store).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("falls back when the injected recall timestamp is outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-05-30", [
+        "Bounded recall timestamp note.",
+      ]);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "bounded recall",
+        nowMs: 8_640_000_000_000_001,
+        results: [
+          {
+            path: path.relative(workspaceDir, notePath).replaceAll("\\", "/"),
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Bounded recall timestamp note.",
+          },
+        ],
+      });
+
+      const [entry] = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entry?.firstRecalledAt).toBe("2026-05-30T12:00:00.000Z");
+      expect(entry?.lastRecalledAt).toBe("2026-05-30T12:00:00.000Z");
     });
   });
 

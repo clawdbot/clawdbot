@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTempDir } from "./test-helpers/temp-dir.js";
 import {
   ensureDir,
@@ -30,6 +31,22 @@ describe("sleep", () => {
       vi.advanceTimersByTime(1000);
       await expect(promise).resolves.toBeUndefined();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized sleep delays before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const promise = sleep(Number.MAX_SAFE_INTEGER);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+      vi.advanceTimersByTime(MAX_TIMER_TIMEOUT_MS);
+      await expect(promise).resolves.toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });

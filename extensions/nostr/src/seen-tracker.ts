@@ -3,6 +3,8 @@
  * Prevents unbounded memory growth under high load or abuse.
  */
 
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+
 interface SeenTrackerOptions {
   /** Maximum number of entries to track (default: 100,000) */
   maxEntries?: number;
@@ -42,7 +44,7 @@ interface Entry {
  * Create a new seen tracker with LRU eviction and TTL expiration.
  */
 export function createSeenTracker(options?: SeenTrackerOptions): SeenTracker {
-  const maxEntries = options?.maxEntries ?? 100_000;
+  const maxEntries = resolveIntegerOption(options?.maxEntries, 100_000, { min: 1 });
   const ttlMs = options?.ttlMs ?? 60 * 60 * 1000; // 1 hour
   const pruneIntervalMs = options?.pruneIntervalMs ?? 10 * 60 * 1000; // 10 minutes
 

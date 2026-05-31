@@ -1,5 +1,5 @@
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { uniqueValues } from "../../shared/string-normalization.js";
 import {
   testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,

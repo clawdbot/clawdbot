@@ -986,6 +986,20 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("skips auto TTS for legacy final media directives", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-media-directive-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Here is the render.\nMEDIA:/tmp/render.png" },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Here is the render.\nMEDIA:/tmp/render.png" });
+  });
+
   it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
     const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
     const result = await maybeApplyTtsToPayload({

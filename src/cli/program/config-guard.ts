@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { withSuppressedNotes } from "../../terminal/note.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
@@ -57,6 +57,15 @@ function isLegacyWhatsAppAuthFile(name: string): boolean {
   return name.endsWith(".json") && /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
 }
 
+function isLegacyTelegramStateFile(name: string): boolean {
+  return (
+    (name.startsWith("bot-info-") && name.endsWith(".json")) ||
+    (name.startsWith("update-offset-") && name.endsWith(".json")) ||
+    name === "sticker-cache.json" ||
+    (name.startsWith("thread-bindings-") && name.endsWith(".json"))
+  );
+}
+
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
   if (fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json"))) {
     return true;
@@ -66,10 +75,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   }
   if (
     fileOrDirExists(path.join(oauthDir, "telegram-allowFrom.json")) ||
-    dirHasFile(
-      path.join(stateDir, "telegram"),
-      (name) => name.startsWith("bot-info-") && name.endsWith(".json"),
-    )
+    dirHasFile(path.join(stateDir, "telegram"), isLegacyTelegramStateFile)
   ) {
     return true;
   }
@@ -215,7 +221,7 @@ export async function ensureConfigReady(params: {
     { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
     { formatPluginPackagingRuntimeOutputRecoveryHint },
   ] = await Promise.all([
-    import("../../terminal/theme.js"),
+    import("../../../packages/terminal-core/src/theme.js"),
     import("../../utils.js"),
     import("../command-format.js"),
     import("../../config/recovery-policy.js"),

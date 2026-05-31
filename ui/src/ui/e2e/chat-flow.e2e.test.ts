@@ -46,6 +46,33 @@ async function waitForRequests(
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
 }
 
+function chatSessionListResponse() {
+  return {
+    count: 2,
+    defaults: {
+      contextTokens: null,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    },
+    path: "",
+    sessions: [
+      {
+        key: "agent:main:session-a",
+        kind: "direct",
+        label: "Session A",
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:session-b",
+        kind: "direct",
+        label: "Session B",
+        updatedAt: 1,
+      },
+    ],
+    ts: Date.now(),
+  };
+}
+
 describeControlUiE2e("Control UI mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -196,6 +223,67 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a session model override selected after switching away and back", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+      },
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
+      ],
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const main = page.getByRole("main");
+      const modelSelect = main.locator('select[data-chat-model-select="true"]');
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await modelSelect.inputValue()).toBe("");
+
+      await modelSelect.selectOption("bedrock/claude-opus-4.5");
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key: "agent:main:session-a",
+        model: "bedrock/claude-opus-4.5",
+      });
+      expect(await modelSelect.inputValue()).toBe("bedrock/claude-opus-4.5");
+
+      await main.getByRole("button", { name: "Chat session" }).click();
+      await page
+        .locator(
+          'button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-b"]',
+        )
+        .click();
+      await main.getByRole("button", { name: "Chat session" }).getByText("Session B").waitFor({
+        timeout: 10_000,
+      });
+      expect(await modelSelect.inputValue()).toBe("");
+
+      await main.getByRole("button", { name: "Chat session" }).click();
+      await page
+        .locator(
+          'button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-a"]',
+        )
+        .click();
+      await main.getByRole("button", { name: "Chat session" }).getByText("Session A").waitFor({
+        timeout: 10_000,
+      });
+
+      expect(await modelSelect.inputValue()).toBe("bedrock/claude-opus-4.5");
     } finally {
       await context.close();
     }

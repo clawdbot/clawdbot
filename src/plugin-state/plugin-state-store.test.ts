@@ -1,5 +1,6 @@
 import { rmSync, statSync } from "node:fs";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -18,6 +19,7 @@ import {
   PluginStateStoreError,
   probePluginStateStore,
   resetPluginStateStoreForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
@@ -36,6 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  setMaxPluginStateEntriesPerPluginForTests(undefined);
   resetPluginStateStoreForTests({ closeDatabase: false });
 });
 
@@ -248,6 +251,8 @@ describe("plugin state keyed store", () => {
 
   it("registerIfAbsent preserves eviction and plugin row cap behavior", async () => {
     await withPluginStateTestState(async () => {
+      const maxPluginEntries = 40;
+      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
       vi.useFakeTimers();
       const evicting = createPluginStateKeyedStore<number>("discord", {
         namespace: "claims-evict",
@@ -262,7 +267,7 @@ describe("plugin state keyed store", () => {
       expect((await evicting.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
 
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 1 }, (_, entryIndex) => ({
+        ...Array.from({ length: maxPluginEntries - 1 }, (_, entryIndex) => ({
           pluginId: "limited-plugin",
           namespace: "limit",
           key: `k-${entryIndex}`,
@@ -277,7 +282,7 @@ describe("plugin state keyed store", () => {
       ]);
       const limited = createPluginStateKeyedStore("limited-plugin", {
         namespace: "limit",
-        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN + 1,
+        maxEntries: maxPluginEntries + 1,
       });
       const sibling = createPluginStateKeyedStore("limited-plugin", {
         namespace: "sibling",
@@ -342,6 +347,31 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("rejects plugin state ttl when expiry cannot fit in a Date timestamp", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore("discord", {
+        namespace: "ttl-bounds",
+        maxEntries: 10,
+      });
+
+      await expectPluginStateStoreError(store.register("huge", true, { ttlMs: Number.MAX_VALUE }), {
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: "register",
+      });
+
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+        await expectPluginStateStoreError(store.register("overflow", true, { ttlMs: 60_000 }), {
+          code: "PLUGIN_STATE_INVALID_INPUT",
+          operation: "register",
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
   it("evicts oldest live entries over maxEntries", async () => {
     await withPluginStateTestState(async () => {
       vi.useFakeTimers();
@@ -393,8 +423,10 @@ describe("plugin state keyed store", () => {
 
   it("evicts current namespace rows when sibling namespaces consume plugin row budget", async () => {
     await withPluginStateTestState(async () => {
+      const maxPluginEntries = 40;
+      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 11 }, (_, entryIndex) => ({
+        ...Array.from({ length: maxPluginEntries - 11 }, (_, entryIndex) => ({
           pluginId: "telegram",
           namespace: "telegram.message-cache",
           key: `k-${entryIndex}`,
@@ -410,7 +442,7 @@ describe("plugin state keyed store", () => {
 
       const messageStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.message-cache",
-        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+        maxEntries: maxPluginEntries,
       });
       const topicStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.topic-name-cache",
@@ -430,9 +462,7 @@ describe("plugin state keyed store", () => {
         kind: "topic",
         entryIndex: 0,
       });
-      await expect(messageStore.entries()).resolves.toHaveLength(
-        MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 11,
-      );
+      await expect(messageStore.entries()).resolves.toHaveLength(maxPluginEntries - 11);
       await expect(topicStore.entries()).resolves.toHaveLength(11);
     });
   });
@@ -489,8 +519,10 @@ describe("plugin state keyed store", () => {
 
   it("rejects plugin overflow when the current namespace cannot shed old rows", async () => {
     await withPluginStateTestState(async () => {
+      const maxPluginEntries = 40;
+      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
       seedPluginStateEntriesForTests(
-        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, entryIndex) => ({
+        Array.from({ length: maxPluginEntries }, (_, entryIndex) => ({
           pluginId: "telegram",
           namespace: "telegram.topic-name-cache",
           key: `topic-${entryIndex}`,
@@ -500,11 +532,11 @@ describe("plugin state keyed store", () => {
 
       const messageStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.message-cache",
-        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+        maxEntries: maxPluginEntries,
       });
       const topicStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.topic-name-cache",
-        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+        maxEntries: maxPluginEntries,
       });
 
       await expectPluginStateStoreError(messageStore.register("new-message", { fresh: true }), {
@@ -681,6 +713,28 @@ describe("plugin state keyed store", () => {
       const failedSteps = result.steps.filter((step) => !step.ok);
       expect(failedSteps).toStrictEqual([]);
       expect(JSON.stringify(result)).not.toContain("probe-value");
+    });
+  });
+
+  it("reports an unhealthy probe when the clock cannot produce a valid ttl expiry", async () => {
+    await withPluginStateTestState(async () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+
+      try {
+        const result = probePluginStateStore();
+
+        expect(result.ok).toBe(false);
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            name: "probe",
+            ok: false,
+            code: "PLUGIN_STATE_INVALID_INPUT",
+          }),
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 });

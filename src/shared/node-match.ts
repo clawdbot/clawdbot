@@ -2,7 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "./string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export type NodeMatchCandidate = {
   nodeId: string;

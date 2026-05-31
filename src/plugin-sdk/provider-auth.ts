@@ -1,6 +1,12 @@
 // Public auth/onboarding helpers for provider plugins.
 
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromEpochSeconds,
+  parseStrictNonNegativeInteger,
+} from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -12,6 +18,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -20,8 +27,6 @@ import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
@@ -103,7 +108,7 @@ export {
   resolveOpenAICodexAuthIdentity,
   resolveOpenAICodexImportProfileName,
   type OpenAICodexAuthIdentity,
-} from "./provider-openai-codex-auth.js";
+} from "./provider-openai-chatgpt-auth.js";
 export {
   generateHexPkceVerifierChallenge,
   generatePkceVerifierChallenge,
@@ -140,7 +145,27 @@ function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function isCopilotTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
-  return cache.integrationId === COPILOT_INTEGRATION_ID && cache.expiresAt - now > 5 * 60 * 1000;
+  const expiresAt = asDateTimestampMs(cache.expiresAt);
+  return (
+    cache.integrationId === COPILOT_INTEGRATION_ID &&
+    expiresAt !== undefined &&
+    expiresAt - now > 5 * 60 * 1000
+  );
+}
+
+function resolveCopilotTokenExpiresAtMs(expiresAt: unknown): number | undefined {
+  const parsed =
+    typeof expiresAt === "number" && Number.isFinite(expiresAt)
+      ? expiresAt
+      : typeof expiresAt === "string" && expiresAt.trim().length > 0
+        ? parseStrictNonNegativeInteger(expiresAt)
+        : undefined;
+  if (parsed === undefined) {
+    return undefined;
+  }
+  return parsed < 100_000_000_000
+    ? resolveExpiresAtMsFromEpochSeconds(parsed)
+    : asDateTimestampMs(parsed);
 }
 
 function parseCopilotTokenResponse(value: unknown): {
@@ -157,17 +182,16 @@ function parseCopilotTokenResponse(value: unknown): {
     throw new Error("Copilot token response missing token");
   }
 
-  let expiresAtMs: number;
-  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
-    expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
-  } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
-    const parsed = parseStrictNonNegativeInteger(expiresAt);
-    if (parsed === undefined) {
-      throw new Error("Copilot token response has invalid expires_at");
-    }
-    expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
-  } else {
+  const expiresAtMs = resolveCopilotTokenExpiresAtMs(expiresAt);
+  if (
+    expiresAt === undefined ||
+    expiresAt === null ||
+    (typeof expiresAt === "string" && expiresAt.trim().length === 0)
+  ) {
     throw new Error("Copilot token response missing expires_at");
+  }
+  if (expiresAtMs === undefined) {
+    throw new Error("Copilot token response has invalid expires_at");
   }
 
   return { token, expiresAt: expiresAtMs };
@@ -279,6 +303,7 @@ export async function resolveCopilotApiToken(params: {
 export function isProviderApiKeyConfigured(params: {
   provider: string;
   agentDir?: string;
+  profileTypes?: readonly AuthProfileCredential["type"][];
 }): boolean {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
@@ -290,7 +315,15 @@ export function isProviderApiKeyConfigured(params: {
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  return listProfilesForProvider(store, params.provider).length > 0;
+  const profileIds = listProfilesForProvider(store, params.provider);
+  if (!params.profileTypes?.length) {
+    return profileIds.length > 0;
+  }
+  const allowedTypes = new Set(params.profileTypes);
+  return profileIds.some((profileId) => {
+    const type = store.profiles[profileId]?.type;
+    return type !== undefined && allowedTypes.has(type);
+  });
 }
 
 export function listUsableProviderAuthProfileIds(params: {
@@ -372,7 +405,6 @@ function resolveUsableProviderAuthProfiles(params: {
 
   const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: true,
   });
   return {
     agentDir,

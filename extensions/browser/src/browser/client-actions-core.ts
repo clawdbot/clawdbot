@@ -1,3 +1,8 @@
+import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   BrowserActionOk,
   BrowserActionPathResult,
@@ -26,9 +31,7 @@ type BrowserActResponse = {
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return clampPositiveTimerTimeoutMs(value);
 }
 
 function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
@@ -36,11 +39,13 @@ function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
   const candidateTimeouts =
     explicitTimeout === undefined
       ? [DEFAULT_BROWSER_ACTION_TIMEOUT_MS]
-      : [explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS];
+      : [addTimerTimeoutGraceMs(explicitTimeout, BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS) ?? 1];
   if (req.kind === "wait") {
     const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
     if (waitDuration !== undefined) {
-      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+      candidateTimeouts.push(
+        addTimerTimeoutGraceMs(waitDuration, BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS) ?? 1,
+      );
     }
   }
   return Math.max(...candidateTimeouts);
@@ -127,10 +132,7 @@ export async function browserAct(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    timeoutMs:
-      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-        ? Math.max(1, Math.floor(opts.timeoutMs))
-        : resolveBrowserActRequestTimeoutMs(req),
+    timeoutMs: resolveTimerTimeoutMs(opts?.timeoutMs, resolveBrowserActRequestTimeoutMs(req)),
   });
 }
 
@@ -148,10 +150,7 @@ export async function browserScreenshotAction(
   },
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  const timeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-      ? Math.max(1, Math.floor(opts.timeoutMs))
-      : undefined;
+  const timeoutMs = clampPositiveTimerTimeoutMs(opts.timeoutMs);
   const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/screenshot${q}`), {
     method: "POST",

@@ -104,7 +104,6 @@ function run(command, args, cwd, options = {}) {
     let stdout = "";
     let stdoutBytes = 0;
     let settled = false;
-    let timeout;
     let forceKillTimeout;
     const maxCapturedStdoutBytes = Math.max(
       1,
@@ -152,7 +151,7 @@ function run(command, args, cwd, options = {}) {
       forceKillTimeout.unref?.();
     };
     ACTIVE_CHILD_KILLERS.add(killChild);
-    timeout =
+    const timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {

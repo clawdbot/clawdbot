@@ -1,10 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "./device-auth.js";
-import { isRecord } from "./record-coerce.js";
 export type { DeviceAuthEntry, DeviceAuthStore } from "./device-auth.js";
 
 export type DeviceAuthStoreAdapter = {

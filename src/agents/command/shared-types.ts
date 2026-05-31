@@ -3,6 +3,8 @@ export type AgentStreamParams = {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  /** Stop sequences forwarded to the provider (best-effort). */
+  stop?: string[];
   /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;
   responseFormat?: Record<string, unknown>;

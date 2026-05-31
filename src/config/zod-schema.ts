@@ -1,11 +1,11 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
@@ -215,6 +215,14 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const McpOAuthClientMetadataUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.pathname !== "/";
+  }, "Expected https:// URL with a non-root pathname");
+
 const ResponsesEndpointUrlFetchShape = {
   allowUrl: z.boolean().optional(),
   urlAllowlist: z.array(z.string()).optional(),
@@ -344,6 +352,7 @@ const TalkSchema = z
 
 const McpServerSchema = z
   .object({
+    enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
@@ -356,6 +365,35 @@ const McpServerSchema = z
         z.string(),
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
+      .optional(),
+    connectionTimeoutMs: z.number().finite().positive().optional(),
+    connectTimeout: z.number().finite().positive().optional(),
+    connect_timeout: z.number().finite().positive().optional(),
+    requestTimeoutMs: z.number().finite().positive().optional(),
+    timeout: z.number().finite().positive().optional(),
+    supportsParallelToolCalls: z.boolean().optional(),
+    supports_parallel_tool_calls: z.boolean().optional(),
+    auth: z.literal("oauth").optional(),
+    oauth: z
+      .object({
+        scope: z.string().trim().min(1).optional(),
+        redirectUrl: HttpUrlSchema.optional(),
+        clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    sslVerify: z.boolean().optional(),
+    ssl_verify: z.boolean().optional(),
+    clientCert: z.string().optional(),
+    client_cert: z.string().optional(),
+    clientKey: z.string().optional(),
+    client_key: z.string().optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
       .optional(),
     codex: z
       .object({
@@ -1181,6 +1219,20 @@ export const OpenClawSchema = z
             maxSkillsInPrompt: z.number().int().min(0).optional(),
             maxSkillsPromptChars: z.number().int().min(0).optional(),
             maxSkillFileBytes: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
           })
           .strict()
           .optional(),

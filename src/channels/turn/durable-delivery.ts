@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,7 +11,6 @@ import {
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import { sendDurableMessageBatch } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";

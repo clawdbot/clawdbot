@@ -159,7 +159,7 @@ function loadExternalChannelSecretContractFromRecord(
 function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boolean {
   return (
     record.channels.includes(channelId) ||
-    Object.prototype.hasOwnProperty.call(record.channelConfigs ?? {}, channelId) ||
+    Object.hasOwn(record.channelConfigs ?? {}, channelId) ||
     record.channelCatalogMeta?.id === channelId ||
     record.packageChannel?.id === channelId
   );

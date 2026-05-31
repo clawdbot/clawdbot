@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readHeaderNumber, readResetAt } from "./rest-routes.js";
 
@@ -34,5 +35,55 @@ describe("Discord REST rate limit header parsing", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("rounds fractional millisecond reset-after headers up", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
+    try {
+      const response = new Response(null, {
+        headers: { "X-RateLimit-Reset-After": "0.0004" },
+      });
+
+      expect(readResetAt(response)).toBe(Date.now() + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps immediate reset-after headers working", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
+    try {
+      const response = new Response(null, {
+        headers: { "X-RateLimit-Reset-After": "0" },
+      });
+
+      expect(readResetAt(response)).toBe(Date.now());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops reset-after headers when the expiry would exceed the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
+    try {
+      const response = new Response(null, {
+        headers: { "X-RateLimit-Reset-After": "1" },
+      });
+
+      expect(readResetAt(response)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops absolute reset headers outside the Date range", () => {
+    const response = new Response(null, {
+      headers: { "X-RateLimit-Reset": String(MAX_DATE_TIMESTAMP_MS / 1000 + 1) },
+    });
+
+    expect(readResetAt(response)).toBeUndefined();
   });
 });

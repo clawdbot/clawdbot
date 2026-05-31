@@ -9,7 +9,7 @@ const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
     return Object.entries(config.channels ?? {})
       .filter(([, value]) => {
         return (
-          !!value &&
+          Boolean(value) &&
           typeof value === "object" &&
           !Array.isArray(value) &&
           (value as { enabled?: unknown }).enabled === false
@@ -23,7 +23,7 @@ const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
   vi.fn((value: unknown) => {
     return (
-      !!value &&
+      value !== null &&
       typeof value === "object" &&
       !Array.isArray(value) &&
       Object.keys(value).some((key) => key !== "enabled")
@@ -163,7 +163,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         channels: [],
         origin: "bundled",
         enabledByDefault: true,
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         cliBackends: [],
         contracts: {
           speechProviders: ["openai"],
@@ -648,7 +648,7 @@ function createStartupConfig(params: {
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+      if (Object.hasOwn(config, "channels")) {
         return Object.keys(config.channels ?? {});
       }
       return ["demo-channel"];
@@ -662,7 +662,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         }));
       });
     hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+      if (Object.hasOwn(config, "channels")) {
         return Object.keys(config.channels ?? {}).length > 0;
       }
       return true;
@@ -1822,7 +1822,7 @@ describe("resolveGatewayStartupPluginIds", () => {
 describe("resolveConfiguredChannelPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+      if (Object.hasOwn(config, "channels")) {
         return Object.keys(config.channels ?? {});
       }
       return [];
@@ -1836,7 +1836,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
         }));
       });
     hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+      if (Object.hasOwn(config, "channels")) {
         return Object.keys(config.channels ?? {}).length > 0;
       }
       return false;

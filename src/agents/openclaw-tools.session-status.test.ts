@@ -743,7 +743,7 @@ describe("session_status tool", () => {
     });
 
     const tool = getSessionStatusTool("main", {
-      activeModelProvider: "openai-codex",
+      activeModelProvider: "openai",
       activeModelId: "gpt-5.2",
     });
 
@@ -761,7 +761,7 @@ describe("session_status tool", () => {
     });
     const agent = statusArg.agent as Record<string, unknown>;
     const model = agent.model as Record<string, unknown>;
-    expect(model.primary).not.toBe("openai-codex/gpt-5.2");
+    expect(model.primary).not.toBe("openai/gpt-5.2");
   });
 
   it("resolves sessionKey=current for a channel-plugin requester via implicit fallback", async () => {
@@ -822,7 +822,7 @@ describe("session_status tool", () => {
     });
 
     const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai-codex",
+      activeModelProvider: "openai",
       activeModelId: "gpt-5.2",
     });
 
@@ -830,7 +830,7 @@ describe("session_status tool", () => {
 
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai-codex/gpt-5.2" });
+    expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
   });
 
   it("renders the active run model for omitted sessionKey lookups", async () => {
@@ -842,7 +842,7 @@ describe("session_status tool", () => {
     });
 
     const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai-codex",
+      activeModelProvider: "openai",
       activeModelId: "gpt-5.2",
     });
 
@@ -850,7 +850,7 @@ describe("session_status tool", () => {
 
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai-codex/gpt-5.2" });
+    expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
   });
 
   it("renders the active run model for current lookups with persisted overrides", async () => {
@@ -864,7 +864,7 @@ describe("session_status tool", () => {
     });
 
     const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai-codex",
+      activeModelProvider: "openai",
       activeModelId: "gpt-5.2",
     });
 
@@ -875,7 +875,7 @@ describe("session_status tool", () => {
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
     const agent = statusArg.agent as Record<string, unknown>;
-    expectRecordFields(agent.model, { primary: "openai-codex/gpt-5.2" });
+    expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
   });
 
   it("does not reuse the active run model after a semantic current reset", async () => {
@@ -883,13 +883,13 @@ describe("session_status tool", () => {
       "agent:main:scope:scopy:direct:scopy": {
         sessionId: "current-reset-model",
         updatedAt: 10,
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.2",
       },
     });
 
     const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
-      activeModelProvider: "openai-codex",
+      activeModelProvider: "openai",
       activeModelId: "gpt-5.2",
     });
 

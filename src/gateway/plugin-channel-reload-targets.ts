@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/index.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ChannelPluginReloadTarget = {
   channelId: ChannelId;

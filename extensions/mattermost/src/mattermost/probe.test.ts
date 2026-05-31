@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeMattermost } from "./probe.js";
 
@@ -85,6 +86,24 @@ describe("probeMattermost", () => {
 
     const fetchCall = requireFirstFetchCall();
     expect(fetchCall?.policy).toStrictEqual({ allowPrivateNetwork: true });
+  });
+
+  it("clamps oversized probe timeouts before scheduling", async () => {
+    mockFetchGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ id: "bot-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: mockRelease,
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await probeMattermost("https://mm.example.com", "bot-token", Number.MAX_SAFE_INTEGER);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("returns API error details from JSON response", async () => {

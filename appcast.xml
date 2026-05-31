@@ -3,6 +3,70 @@
     <channel>
         <title>OpenClaw</title>
         <item>
+            <title>2026.5.28</title>
+            <pubDate>Sat, 30 May 2026 21:21:09 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <sparkle:version>2026052890</sparkle:version>
+            <sparkle:shortVersionString>2026.5.28</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.5.28</h2>
+<h3>Highlights</h3>
+<ul>
+<li>Agent and Codex runtime recovery is steadier: subagents keep cwd/workspace separation, hook context stays prompt-local, session locks release on timeout abort while live OpenClaw locks survive cleanup, stale restart continuations are avoided, and Codex app-server/helper failures no longer tear down shared runtime state. (#87218, #86875, #87409, #87399, #87375, #88129)</li>
+<li>Channel delivery and session identity got safer across outbound plugin hooks, Matrix room ids, iMessage reactions/approvals, Slack final replies, Discord recovered tool warnings, runtime-config message actions, WhatsApp profile auth roots, Telegram polling, and Microsoft Teams service URL trust checks. (#73706, #75670, #87366, #87451, #87334, #84535, #82492, #83304, #87160)</li>
+<li>Mobile and chat surfaces got a broader refresh: the iOS Pro UI, hosted push relay default, realtime Talk tab playback, Gateway chat transport, onboarding, Talk permissions, WebChat reconnect delivery, and session picker behavior now preserve more state across reconnects and empty searches. (#87367, #87531, #87682, #88096, #88105) Thanks @ngutman.</li>
+<li>Browser, channel, and automation inputs are stricter: Browser tool timeouts, viewport/tab indices, Gateway ports, cron retry handling, Discord component ids, schema array refs, Telegram callback pages, and channel progress callbacks now reject malformed values earlier and preserve the intended delivery context. (#82887)</li>
+<li>Provider, media, and document coverage expands with Claude Opus 4.8, Fal Krea image schemas, NVIDIA featured models, MiniMax streaming music responses, encrypted PDF extraction, voice model catalogs, GitHub Copilot agent runtime support, and a Codex Supervisor plugin path for delegated Codex workflows. (#87845, #87890, #80775, #84764, #87751, #87794)</li>
+<li>CLI, auth, doctor, and provider paths fail faster and recover more clearly: malformed numeric/version options are rejected, workspace dotenv provider credentials are ignored, heartbeat defaults, OAuth/token lifetimes, and local service startup requests are bounded, agent auth health labels are clearer, legacy <code>api_key</code> auth profiles migrate to canonical form, and restart guidance is actionable. (#87398, #86281, #87361, #88133, #83655, #87559, #88088, #85924) Thanks @vincentkoc and @giodl73-repo.</li>
+<li>Plugin and Gateway hot paths do less repeated work while preserving cache correctness for install records, config JSON parsing, tool search catalogs, session stores, manifest model rows, auto-enabled plugin config, browser tokens, viewer assets, and release-split external plugin packages. (#86699)</li>
+<li>Release, QA, and E2E validation now bound more log, artifact, harness, and cross-OS waits so failing lanes produce proof instead of hanging or false-greening.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li>Status: show active subagent details in status output.</li>
+<li>Diffs: split the default language pack and expand default Diffs language coverage while keeping the host floor aligned. (#87370, #87372) Thanks @RomneyDa.</li>
+<li>ClawHub: add plugin display names plus skill verification and trust surfaces. (#87354, #86699) Thanks @thewilloftheshadow and @Patrick-Erichsen.</li>
+<li>iOS: refresh the dev app with Pro Command, Chat, Agents, Settings, hosted push relay defaults, and realtime Talk playback wired to gateway sessions, diagnostics, chat, and realtime Talk. (#87367, #88096, #88105) Thanks @Solvely-Colin and @ngutman.</li>
+<li>Docs: clarify Codex computer-use setup, paste-token stdin auth setup, macOS gateway sleep troubleshooting, native Codex hook relay recovery, container model auth, install deployment cards, device-token admin gating, CLI setup flow compatibility, Notte cloud browser CDP setup, and backport targets. (#87313, #63050, #87685) Thanks @bdjben, @liaoandi, and @thewilloftheshadow.</li>
+<li>PDF/tools: use ClawPDF for PDF extraction, support encrypted PDF extraction, and surface MCP structured content in agent tool results. (#87670, #87751)</li>
+<li>Providers: add Claude Opus 4.8 support, Fal Krea image model schemas, NVIDIA featured model catalogs, MiniMax streaming music responses, and provider-backed voice model catalogs. (#87845, #87890, #80775, #84764, #87794) Thanks @eleqtrizit and @vincentkoc.</li>
+<li>Codex/GitHub: add the GitHub Copilot agent runtime and the Codex Supervisor plugin package.</li>
+<li>Plugins: externalize GitHub Copilot and Tokenjuice as official install-on-demand plugins with npm and ClawHub publish metadata.</li>
+<li>Workboard: add agent coordination tools for tracking and handing off active agent work.</li>
+<li>Discord: show commentary in progress drafts so live Discord runs expose useful in-progress context. (#85200)</li>
+<li>Plugin SDK: add a reply payload sending hook for plugins that need to deliver channel-owned replies and flatten package types for SDK declarations. (#82823, #87165) Thanks @RomneyDa.</li>
+<li>Policy: add policy comparison, ingress-channel conformance, and sandbox-posture conformance checks. (#85572, #85744, #86768)</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Agents: fall back to local config pruning when the optional <code>agents delete</code> Gateway probe cannot authenticate, so offline installs can still delete agents without removing shared workspaces.</li>
+<li>Tighten phone-control mutation authorization [AI]. (#87150) Thanks @pgondhi987.</li>
+<li>Clarify directive persistence authorization policy [AI]. (#86369) Thanks @pgondhi987.</li>
+<li>Agents/Codex: keep spawned agent cwd/workspace state separated, forward ACP spawn attachments, keep hook context prompt-local, release session locks on timeout abort and runtime teardown without deleting live OpenClaw-owned locks during cleanup, avoid session event queue self-wait, clean up exec abort listeners, stream assistant deltas incrementally, recover raw missing-thread compaction failures, preserve rotated compaction session identity, keep compaction-timeout snapshots continuable, preserve shared app-server state across startup or helper failures, keep native hook relay alive across restarts and prune stale bridge files, close native hook relay replacement races, keep Claude live tool progress visible for watchdog recovery, suppress abandoned requester completion handoff, route workspace memory through tools, resolve Codex runtime models first, report quarantined dynamic tools, format <code>skills</code> command output, bind node auto-review to prepared plans, retry Claude CLI transcript probes, and bound compaction/steering retries. (#87218, #86875, #86123, #88129, #87399, #87375, #72574, #87383, #87400, #83022, #87671, #87738, #87747, #87706, #87546, #87541, #81048) Thanks @mbelinky, @Alix-007, @luoyanglang, @yetval, @sjf, @joshavant, and @benjamin1492.</li>
+<li>Codex Supervisor: keep real-home app-server MCP session listing on the loaded state path, bound stored history scans, and close WebSocket probes cleanly.</li>
+<li>Channels: thread canonical session keys into outbound hooks, preserve Matrix room-id case, keep fallback tool warnings mention-inert, retain delivered Slack final replies during late cleanup, continue iMessage polling after denied reactions, suppress duplicate native exec approvals, resolve Gateway message actions against the active runtime config, preserve Telegram SecretRef prompt config and polling keepalives, preserve WhatsApp profile auth roots, QR display, document filenames, and plugin hook config, suppress Discord recovered tool warnings, preserve the Discord voice outbound helper, cap Discord/Signal/Zalo channel request and container timeouts, and block untrusted Teams service URLs while keeping TeamsSDK patterns aligned. (#73706, #75670, #87366, #87451, #87465, #87334, #84535, #76262, #83304, #82492, #87581, #77114, #86426, #85529, #87160) Thanks @zeroaltitude, @lukeboyett, @xiaotian, @funmerlin, @joshavant, @eleqtrizit, @heyitsaamir, @amittell, @liorb-mountapps, @masatohoshino, @bladin, and @giodl73-repo.</li>
+<li>CLI/auth/doctor/providers: reject malformed numeric/timeout/subcommand-version inputs, ignore workspace dotenv provider credentials, wait for respawn child shutdown, bound heartbeat defaults plus Codex, GitHub Copilot, OpenAI, Anthropic, Google, Feishu, LM Studio, MiniMax, Xiaomi TTS, and local-provider OAuth/token/model requests, harden Codex auth probes, label auth health by agent, preserve explicit agentRuntime pins during Codex model migration, warm provider auth off the main thread, honor Codex response timeouts, stop migrating current Claude Haiku 4.5 profiles to Sonnet, bound local service startup, resolve GPT-5.5 without cached catalog, migrate legacy memory auto-provider config, rewrite non-canonical <code>api_key</code> auth profiles, and make doctor restart follow-ups actionable. (#87398, #86281, #87361, #88133, #83655, #87559, #87719, #88088, #85924, #84362) Thanks @Patrick-Erichsen, @samzong, @giodl73-repo, @alkor2000, @mmaps, @nxmxbbd, and @vincentkoc.</li>
+<li>Gateway/security/session state: expire browser tokens after auth rotation, scope assistant idempotency dedupe, drain probe client closes, avoid stale restart continuation reuse, preserve retry-after fallbacks and stale rate-limit cooldown probes, bound webchat image and artifact transcript scans, include seconds in inbound metadata timestamps, clear completed session active runs, clear stale chat stream buffers, and evict current plugin-state namespaces at row caps. (#87810, #87833, #75089) Thanks @joshavant and @litang9.</li>
+<li>Config/parsing/network: reject partial numeric parsing, parse provider/Discord retry headers and dates strictly, honor IPv6 and bare IPv6 <code>no_proxy</code> entries, preserve empty plugin allowlists, canonicalize secret target array indexes, and reject malformed media content lengths, inspected TCP ports, marketplace content lengths, cron epochs, sandbox stat fields, unsafe duration values, empty config path segments, noncanonical schema array refs, unsafe Telegram callback pages, and invalid Teams attachment-fetch DNS targets. (#87883) Thanks @zhangguiping-xydt.</li>
+<li>Browser/input hardening: reject invalid tab indexes, excessive viewport resizes, explicit zero CDP ports, malformed geolocation options, unsafe screenshot or permission-grant timeouts, loose response-body limits, invalid cookie expiries, and non-finite Browser tool delays/timeouts.</li>
+<li>Cron/automation: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot, and preflight model fallbacks before skipping scheduled work. (#82887)</li>
+<li>Auto-reply/directives: respect provider and relayed channel metadata during directive persistence so channel-originated decisions keep their intended context. (#87683)</li>
+<li>WhatsApp: resolve the auth directory from the active profile so profile-scoped WhatsApp installs do not drift to the wrong credential root. (#82492)</li>
+<li>Gateway/session state: clear completed session active runs, avoid cold-loading providers for MCP inventory, cache single-session child indexes, cap handshake timers, and bound preauth, auth-guard, media, transcript, readiness, and port options.</li>
+<li>Channels/replies: preserve channel-owned progress callbacks when verbose output is off, keep group-room progress suppression intact, prefer external session delivery context, escape Discord component id delimiters, force final TUI chat repaints, show Slack reasoning previews, and normalize Discord/Matrix/Mattermost channel numeric options. (#87476, #87423)</li>
+<li>Agents/tool args: harden smart-quoted argument repair for edit arrays and exact escaped arguments so model-produced tool calls recover without corrupting valid input. (#86611)</li>
+<li>Providers/agents: preserve seeded Anthropic signatures, preserve signed thinking payloads, concatenate signature-delta chunks, preserve DeepSeek <code>reasoning_content</code> replay across tier suffixes, apply OpenRouter strict9 ids to Mistral routes, promote Ollama plain-text tool calls, load NVIDIA featured model catalogs, stream MiniMax music generation responses, and recover empty preflight compaction. (#87593, #87493, #80775, #84764) Thanks @eleqtrizit.</li>
+<li>Media/images: skip CLI image cache refs when resolving generated images, allow trusted generated HTML attachments, and bound generated video downloads so stale refs and slow providers fail cleanly. (#87523, #87982)</li>
+<li>File transfer: handle late tar stdin pipe errors after archive validation or unpacking has already settled.</li>
+<li>Performance: trust install-record caches between reloads, prefer native JSON parsing, reuse unchanged tool-search catalogs, reuse gateway session and plugin metadata paths, skip unchanged store serialization, patch single-entry session writes, add precomputed session patch writers, reduce store clone allocations, cache manifest model catalog rows and auto-enabled plugin config, avoid full session snapshots for entry reads, defer configured Slack full startup, prefer bundled plugin dist entries, and slim current metadata identity caches. (#87760)</li>
+<li>Docker/release/QA: package runtime workspace templates, stream cross-OS served artifacts, preserve sparse Crabbox run artifacts, isolate npm plugin installs per package, reject incompatible package plugin API installs, drop the leftover root Sharp dependency from package manifests after the Rastermill migration, bound OpenClaw instance logs, plugin gauntlet relay logs, MCP channel buffers, kitchen-sink scans, agent-turn assertions, QA-Lab credential broker calls, QA Matrix substrate requests, and release scenario logs, and keep release/google live guards current. (#87647, #87477) Thanks @rohitjavvadi and @vincentkoc.</li>
+<li>Release/CI: bound manual git fetches, ClawHub verifier responses, ClawHub owner metadata, dependency-guard error bodies, Parallels limits, startup/test/memory budget parsing, and diffs viewer build warnings so release lanes fail with useful proof instead of hanging. (#87839)</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.5.28/OpenClaw-2026.5.28.zip" length="54750142" type="application/octet-stream" sparkle:edSignature="U4O55uMdPU+OqSx9QR1ApUJ8wg65wxTydzD7iyCn1GHtm1MBK9noEeiA/yoUKkqb/bx0hzi1gNhn+ye19RXnCA=="/>
+        </item>
+        <item>
             <title>2026.5.27</title>
             <pubDate>Thu, 28 May 2026 12:12:19 +0000</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
@@ -257,285 +321,6 @@
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.5.26/OpenClaw-2026.5.26.zip" length="54484748" type="application/octet-stream" sparkle:edSignature="y4WXG7JT8ktJ+K7YDgllY7u5Z9BSKR/SwGiwEh0gikOJ/SWqwcQd+z2tWa2zgwvCJKWsAUFwJs1ATor880SUBg=="/>
-        </item>
-        <item>
-            <title>2026.5.22</title>
-            <pubDate>Sun, 24 May 2026 01:41:27 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
-            <sparkle:version>2026052290</sparkle:version>
-            <sparkle:shortVersionString>2026.5.22</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.5.22</h2>
-<h3>Changes</h3>
-<ul>
-<li>Gateway/perf: reuse process-stable channel catalog reads, avoid repeated bundled-channel boundary checks, and rotate gateway watch CPU profiles so benchmark runs do not accumulate unbounded artifacts.</li>
-<li>Gateway/perf: reuse immutable plugin metadata snapshots across startup, config, model, channel, setup, and secret metadata readers so hot paths avoid repeated plugin file stats and manifest registry reloads.</li>
-<li>Gateway/perf: lazy-load startup-idle plugin work, core gateway method handlers, and the embedded ACPX runtime so Gateway health and ready signals no longer wait on unused handler trees or ACPX probes.</li>
-<li>Gateway/perf: cache plugin SDK public-surface alias maps and skip irrelevant macOS Linuxbrew PATH probes so Gateway startup avoids repeated filesystem walks and slow missing-directory stats.</li>
-<li>Meeting Notes: add a source-only external meeting-notes plugin and SDK source-provider contract outside the core npm package, with auto-start capture config, manual transcript imports, read-only <code>openclaw meeting-notes</code> CLI access, and Discord voice as the first live source.</li>
-<li>Docs/channels/config: add Signal <code>configPath</code>, Telegram wildcard topic defaults, local-time backup archive names, Termux home fallback, include-path validation, secret-scanner-safe placeholder guidance, Gemini CLI/Antigravity media guidance, and macOS VM auto-login guidance. Thanks @NorseGaud, @yudistiraashadi, @huangqian8, @VibhorGautam, @maweibin, @tianxingleo, @IgnacioPro, and @xzcxzcyy-claw.</li>
-<li>Docs: clarify model-usage portability, Codex migration prerequisites, status bootstrap wording, thread-bound subagent limits, hook ownership, and config-preserving safety guidance. Thanks @aniruddhaadak80, @leno23, @TomDjerry, @matthewxmurphy, @vincentkoc, and @stablegenius49.</li>
-<li>Docs: clarify README onboarding and Gateway startup paths, WhatsApp QR/408 recovery, cron output language prompts, skill advanced features, gateway upstream 403 troubleshooting, and plugin fallback override guidance. Thanks @deepujain, @Zacxxx, @Jah-yee, @neyric, @usimic, @Renu-Cybe, @BigUncle, and @SeashoreShi.</li>
-<li>Docs: clarify context-pruning ratio bounds, local dashboard recovery, CLI env markers, remote onboarding token behavior, and Peekaboo Bridge permissions for subprocess agents. Thanks @ayesha-aziz123, @dishraters, @hougangdev, and @brandonlipman.</li>
-<li>Docs: clarify browser CDP diagnostics, Plugin SDK allowlist imports, status-reaction timing defaults, queue steering behavior, limited-tool troubleshooting, cron HEARTBEAT handling, Telegram multi-agent groups, Bitwarden SecretRef setup, and EasyRunner deployments. Thanks @Quratulain-bilal, @mbelinky, @Mickey-, @vancece, @xenouzik, @posigit, @surlymochan, @janaka, and @choiking.</li>
-<li>Crabbox/Testbox: run clean sparse-checkout Testbox syncs from a temporary full checkout and route remote changed gates through Corepack pnpm.</li>
-<li>Docs: clarify IPv4-only Gateway BYOH binding, trusted-proxy scope clearing, Android pairing approval, macOS Accessibility grants, Zalo profile env vars, password-store SecretRef setup, and Chinese memory navigation. Thanks @itskai-dev, @gwh7078, @longstoryscott, @MoeJaberr, and @yuaiccc.</li>
-<li>Docs: consolidate GLM under Z.AI, add the Upstash Box install guide and Gateway exposure runbook, clarify MEDIA directives, Copilot and Voyage setup, config path quoting, real behavior proof, and memory-file write guidance. Thanks @BobDu, @alitariksahin, @Jefsky, @musaabhasan, @OmerZeyveli, @leno23, @WuKongAI-CMU, @luoyanglang, and @majin1102.</li>
-<li>Docs: clarify media provider credentials, Codex/OpenClaw code-mode boundaries, Slack and Telegram ack reactions, Feishu dynamic agents, secrets plaintext boundaries, memory guidance, and Chinese glossary terms. Thanks @nielskaspers, @cosmopolitan033, @drclaw-iq, @alexgduarte, @zccyman, @chengoak, and @cassthebandit.</li>
-<li>Packaging: exclude documentation images and assets from the npm tarball, reducing published package size without affecting runtime docs search or CLI behavior. Thanks @SebTardif.</li>
-<li>Media understanding: stop auto-probing Gemini CLI and use Antigravity CLI only as a lower-priority image/video fallback after configured provider APIs.</li>
-<li>Agents/subagents: limit default sub-agent bootstrap context to <code>AGENTS.md</code> and <code>TOOLS.md</code>, keeping persona, identity, user, memory, heartbeat, and setup files out of delegated workers by default. (#85283) Thanks @100yenadmin.</li>
-<li>Maintainer skills: exclude plugin SDK/API boundary work from <code>openclaw-landable-bug-sweep</code> so bugbash sweeps stay focused on small paper-cut fixes.</li>
-<li>QA-Lab/diagnostics: extend the OpenTelemetry smoke harness to prove trace, metric, and log export, and add first-class Prometheus and observability smoke aliases.</li>
-<li>Plugin SDK: add a generic channel-message poll sender so channel plugins can expose poll delivery without depending on channel-specific SDK facades.</li>
-<li>Crabbox: keep the local wrapper's provider validation synced with the installed Crabbox binary while preserving supported aliases such as <code>docker</code> and <code>blacksmith</code>. (#85302) Thanks @hxy91819.</li>
-<li>Maintainer skills: add <code>openclaw-landable-bug-sweep</code> for producing five small, reviewed, CI-green OpenClaw bugfix PRs from issue/PR sweeps.</li>
-<li>Control UI/chat: add search and Load More pagination to the chat session picker, keeping initial session loads bounded while making older conversations reachable. (#85237) Thanks @amknight.</li>
-<li>CLI/onboarding: start classic onboarding when bare <code>openclaw</code> runs before an authored config exists, while keeping configured installs on Crestodian. (#72343) Thanks @fuller-stack-dev.</li>
-<li>Discord: allow configuring a bounded <code>agentComponents.ttlMs</code> callback registry lifetime for long-running component workflows, with per-account overrides and a 24-hour cap. (#84189) Thanks @100menotu001.</li>
-<li>xAI/Grok: reuse xAI OAuth auth profiles for Grok <code>web_search</code>, thread active-agent auth through web search, add Grok model aliases, and let media providers declare default operation timeouts. (#85182) Thanks @fuller-stack-dev.</li>
-<li>Plugin SDK: add row-level session workflow helpers and deprecate <code>loadSessionStore</code> so plugins can read and patch sessions without depending on the legacy whole-store shape. (#84693) Thanks @efpiva.</li>
-<li>Gateway/plugins: reuse a compatible Gateway startup plugin registry during dispatch so safe plugin dispatches avoid redundant registry loading. (#84324) Thanks @ai-hpc.</li>
-<li>Plugins/SDK: add a general <code>embeddingProviders</code> capability contract and registration API so embeddings can become a reusable provider surface outside memory-specific adapters.</li>
-<li>Dependencies: refresh provider, plugin, UI, and tooling packages, update <code>protobufjs</code> to 8.4.0 to clear the current npm advisory, and carry the Claude ACP completion patch forward to <code>@agentclientprotocol/claude-agent-acp</code> 0.36.1.</li>
-<li>Agents/tools: remove the old sender-owner tool gating path so configured tools stay visible for trusted sessions while command and channel-action auth still carry real sender identity.</li>
-<li>QA-Lab: add curated mock JSONL replay fixtures and first-drift reporting for runtime-parity audits. (#80323, refs #80176) Thanks @100yenadmin.</li>
-<li>QA-Lab: add a QA bus tool-trace visibility scenario for sanitized tool-call assertions.</li>
-<li>QA-Lab: replace generic evidence framing in seeded scenario prompts with concrete observed QA behavior.</li>
-<li>QA-Lab: list named scenario packs in the coverage report so personal-agent privacy coverage stays visible in audits.</li>
-<li>QA-Lab: list live transport lane membership in the coverage report so real transport checks stay separate from seeded qa-channel scenarios.</li>
-<li>Release/package: run package integrity checks before package acceptance lanes so public install/update validation fails before private QA assets can leak into the package.</li>
-<li>QA-Lab: include the optional 100-turn runtime parity soak in release-soak artifacts so long-run Codex/Pi transcript drift stays visible outside the default gate. (#80395) Thanks @100yenadmin.</li>
-<li>QA-Lab: add a live-only long-context progress watchdog scenario for Codex app-server timeout and stalled-run sentinels. (#80323) Thanks @100yenadmin.</li>
-<li>QA-Lab: tag gateway restart recovery and streaming final-integrity scenarios as live-only runtime parity lanes. (#80323) Thanks @100yenadmin.</li>
-<li>QA-Lab: add a personal-agent failure recovery scenario that checks honest partial status, retry boundaries, and local recovery artifacts. (#83872) Thanks @iFiras-Max1.</li>
-<li>QA-Lab: include an opt-in <code>update.run</code> package self-upgrade sentinel for destructive latest-package recovery checks.</li>
-<li>QA-Lab: add Codex plugin lifecycle and auth-profile fixture coverage for missing installs, pinned-version drift, first-turn install ordering, and doctor migration safety. (#80323, refs #80174) Thanks @100yenadmin.</li>
-<li>Models/perf: pre-warm the provider auth-state map at gateway startup so <code>/models</code> and every model-listing call short-circuits the per-provider plugin / external-CLI discovery on the hot path. Per-call cost drops from ~20 s to ~5 ms (~4,100×); the one-time startup warm resets and re-warms after hot reloads. (#84816) Thanks @sjf.</li>
-<li>Release/security: ship the root npm package and OpenClaw-owned npm plugins with generated shrinkwrap, support bundled plugin runtime dependencies for suitable plugin tarballs, and require review for lockfile/shrinkwrap changes so published installs use locked dependency graphs.</li>
-<li>Tests/perf: isolate doctor core health check unit coverage from real skills/workspace discovery so <code>doctor-core-checks</code> no longer dominates unit perf while keeping one real skills-readiness smoke. (#84493) Thanks @frankekn.</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>WebChat: summarize internal message-tool source replies so tool cards no longer duplicate the visible reply body. (#84773) Thanks @jason-allen-oneal.</li>
-<li>Gateway: preserve deferred lifecycle-error cleanup across later non-terminal events so provider timeouts can persist failed session state instead of leaving sessions stuck running. (#85256, fixes #63819) Thanks @samzong.</li>
-<li>Agents/subagents: report tool-only child progress during timeout summaries instead of showing no visible output.</li>
-<li>Telegram/ACP: preserve explicit <code>:topic:</code> conversation suffixes when inbound ACP targets do not carry a separate thread id.</li>
-<li>Browser/proxy: bypass the managed proxy for the exact local managed Chrome CDP readiness and DevTools WebSocket endpoints, so <code>openclaw browser start</code> works when the operator proxy blocks loopback egress. (#83255) Thanks @lightcap.</li>
-<li>Ollama: bypass the managed proxy for configured local embedding origins while keeping SSRF guardrails on unconfigured targets. Thanks @Kaspre.</li>
-<li>OpenAI/images: route Codex API-key image generation through the native OpenAI Images API instead of the Codex OAuth streaming backend, avoiding 401s from valid API keys.</li>
-<li>Agents/OpenAI completions: omit empty tool payload fields for proxy-like OpenAI-compatible endpoints so strict vLLM-style servers accept tool-free turns. (#85835) Thanks @rendrag-git.</li>
-<li>Checks/Windows: route full <code>pnpm check</code> stage commands through the managed child runner so Windows avoids Node shell-argv deprecation warnings there too.</li>
-<li>Checks/Windows: run managed child commands through explicit <code>cmd.exe</code> wrapping instead of Node shell mode with argv, avoiding Node 24 subprocess deprecation warnings during changed checks.</li>
-<li>Gateway: omit internal stream-error placeholder entries from agent prompt history so failed assistant turns are not replayed as model-authored text. (#85652) Thanks @anyech.</li>
-<li>Sessions: enforce the session write-lock max-hold policy during lock acquisition so long-held locks can be reclaimed before the stale-lock window. (#85764) Thanks @njuboy11.</li>
-<li>Models: prune retired Groq, GitHub Copilot, OpenAI, xAI, and old Claude catalog entries, with doctor migration to upgrade existing configs to current provider refs.</li>
-<li>Doctor/update: recognize junction-backed source checkouts as git installs by comparing canonical paths before showing package-manager update guidance. Fixes #82215. Thanks @igormf.</li>
-<li>Channels: honor <code>/verbose on</code> for tool/progress summaries across direct chats, groups, channels, and forum topics while preserving quiet default behavior. (#85488) Thanks @kurplunkin.</li>
-<li>CLI/skills: show an all-ready note with next-step commands when skill setup has no missing dependencies to install. (#85032) Thanks @aniruddhaadak80.</li>
-<li>Microsoft Foundry: route DeepSeek V4 Pro and Flash models through the Foundry Responses API while keeping older DeepSeek models on their existing path. (#85549) Thanks @roslinmahmud.</li>
-<li>Status/usage: show configured cost estimates for AWS SDK models in full usage output while keeping token-only usage replies cost-free. (#85619) Thanks @ItsOtherMauridian.</li>
-<li>Agents/OpenAI Responses: retry non-visible reasoning-only turns for OpenAI Responses API families instead of treating them as empty failed turns. (#85603) Thanks @SebTardif.</li>
-<li>Directive tags: preserve message and content-part object identity when display stripping makes no directive-tag changes. (#85682) Thanks @willamhou.</li>
-<li>Telegram: send local <code>path</code>/<code>filePath</code> and structured attachment media from <code>sendMessage</code> actions instead of dropping them or sending text-only messages. (#85219) Thanks @keshavbotagent.</li>
-<li>Sessions/status: show the estimated context budget when fresh provider usage is unavailable and clear stale estimates across session resets and compaction boundaries. (#84830) Thanks @giodl73-repo.</li>
-<li>Gateway/config: pin relative <code>OPENCLAW_STATE_DIR</code> overrides to an absolute path at startup so later working-directory changes cannot retarget gateway state. (#52264) Thanks @PerfectPan.</li>
-<li>Release/package: run npm release, prepublish, and postpublish verification through Windows-safe npm command shims so native Windows checks can execute <code>npm.cmd</code> instead of treating it as a binary.</li>
-<li>Agents/harness: pass CLI runtime aliases through harness selection so provider-owned CLI aliases no longer get rejected before reaching the right runtime. (#85631) Thanks @potterdigital.</li>
-<li>Secrets: show the irreversible apply warning after interactive <code>secrets configure</code> confirmation so confirmed migrations still get the final safety prompt. (#85638) Thanks @alkor2000.</li>
-<li>Agents/CLI output: ignore cumulative Claude <code>stream-json</code> result usage when assistant usage events are present, preventing inflated cache-read accounting. (#85625) Thanks @zhouhe-xydt.</li>
-<li>CLI: keep <code>waitForever()</code> alive by leaving its keep-alive interval ref'd so the public helper no longer exits immediately with Node's unsettled-await code. (#85694) Thanks @m1qaweb.</li>
-<li>Agents/bootstrap: guard bootstrap name checks against missing file names so malformed bootstrap entries warn and truncate instead of crashing. Fixes #85523. (#85615) Thanks @zhouhe-xydt.</li>
-<li>CLI/tasks: reject partially numeric <code>openclaw tasks audit --limit</code> values so audit limits must be real positive integers instead of accepting strings like <code>5abc</code>. (#84901) Thanks @jbetala7.</li>
-<li>Status/diagnostics: bound deep Docker audit probes so <code>openclaw status --deep</code> reports slow container checks instead of hanging behind unbounded inspection. (#85476) Thanks @giodl73-repo.</li>
-<li>Providers/Anthropic: migrate 1M context handling to GA-capable Claude 4.x models by sizing eligible models at 1M without the retired <code>context-1m-2025-08-07</code> beta, ignoring that retired beta in older configs, and preserving OAuth-required Anthropic beta headers. (#45613) Thanks @haoyu-haoyu.</li>
-<li>Cron/Telegram: parse forum-topic delivery targets through the Telegram plugin instead of cron core, including <code>:topic:</code> and <code>:topicId</code> forms for announce delivery. Thanks @etticat.</li>
-<li>Twitch: keep stale message-handler cleanup callbacks from removing newer handler registrations for the same account, preserving inbound message delivery after reconnects. Fixes #83888. (#85425) Thanks @alkor2000.</li>
-<li>Memory/LanceDB: expose public memory artifacts through the active memory provider bridge so memory-wiki imports durable memory files, daily notes, dream reports, and event logs without depending on memory-core internals. Fixes #83604. (#85060) Thanks @brokemac79.</li>
-<li>Crabbox: keep AWS hydration compatible with local Actions replay by inlining the hydrate workflow's Node/pnpm setup instead of invoking repo-local composite actions.</li>
-<li>Agents/subagents: simplify native sub-agent completion handoff so children report their latest visible assistant result to the requester without using <code>message</code>, while keeping parent-owned message-tool delivery policy intact. Fixes #85070. (#85089) Thanks @brokemac79.</li>
-<li>Docker setup: stop printing the Gateway bearer token in setup logs and printed follow-up commands.</li>
-<li>Agents: let embedded compaction fallback retries proceed when PI-compatible candidates do not need agent harness plugin preparation.</li>
-<li>Agents/tools: honor configured custom provider API keys when deciding whether media, image-generation, video-generation, music-generation, and PDF tools are available. (#85570)</li>
-<li>StepFun: stop advertising stale generic API key auth choices so onboarding only offers runtime-backed Standard and Step Plan choices.</li>
-<li>Diagnostics: keep OpenTelemetry log bodies behind explicit content capture and scrub scoped agent-session keys from OpenTelemetry and Prometheus labels while preserving bounded queue-lane prefixes.</li>
-<li>Windows installer: fail Git checkout installs when <code>pnpm install</code> or <code>pnpm build</code> fails instead of writing a wrapper to a missing CLI build.</li>
-<li>Sessions: surface previous-transcript archive failures during <code>/new</code> rotation so disk rename errors are logged instead of silently hiding stranded transcript files. Fixes #81984. (#85586, from #82081) Thanks @0xghost42.</li>
-<li>TUI/agents: mirror internal-ui message-tool replies into final chat output so message-tool-only agents remain visible in <code>openclaw tui</code>. Fixes #85538. Thanks @danpolasek.</li>
-<li>Agents: keep parallel OpenAI-compatible tool-call deltas in separate argument buffers so interleaved tool calls no longer corrupt streamed arguments. (#82263) Thanks @luna-system.</li>
-<li>Memory/doctor: report missing or unusable QMD workspace directories as workspace failures instead of generic binary failures. (#63167) Thanks @sercada.</li>
-<li>Debug proxy: record CONNECT client-socket errors and destroy the paired upstream socket so abrupt client disconnects no longer leak tunnel resources. (#82444) Thanks @SebTardif.</li>
-<li>Diffs: continue hydrating later diff cards when one card fails so a single broken card no longer blanks the whole diff viewer. (#84775) Thanks @cosmopolitan033.</li>
-<li>Mac app: use the native settings sidebar window chrome so the sidebar toggle stays on the left and content no longer clips under oversized titlebar padding.</li>
-<li>QA-Lab/Codex: bundle auth/plugin fixture imports for flow scenarios and let terminal async media tools end Codex app-server turns without timing out. (#80397, refs #80323) Thanks @100yenadmin.</li>
-<li>Gateway/agents: preserve fresh session overrides and metadata when stale cached agent-session entries race with store updates, so subagent model/provider overrides and routing policy survive concurrent writes. (#19328) Thanks @CodeReclaimers.</li>
-<li>Control UI/chat: keep chat session search inline with the session selector so the header no longer shows a duplicate standalone search row.</li>
-<li>Control UI/chat: collapse focused-mode header chrome and suppress hidden-header scroll updates so focus mode no longer jumps while scrolling. Thanks @amknight.</li>
-<li>Codex app-server: restart the native app-server and retry once when server-side compaction times out, so preflight compaction stalls recover instead of failing every dispatch. (#85500)</li>
-<li>Restore Control UI gateway token pairing [AI]. (#85459) Thanks @pgondhi987.</li>
-<li>OpenAI video: honor configured provider request private-network opt-in for local/custom video endpoints so explicitly trusted mock and self-hosted providers are not blocked. Thanks @shakkernerd.</li>
-<li>OpenAI video: send uploaded video edit requests to the documented <code>/videos/edits</code> endpoint with a <code>video</code> file instead of posting MP4 references to <code>/videos</code>. Thanks @shakkernerd.</li>
-<li>Agents/channels: preserve message-tool delivery evidence through gateway agent completion handoffs so successful generated media sends are not followed by false failure messages. Thanks @shakkernerd.</li>
-<li>CLI/update: repair managed npm plugin <code>openclaw</code> peer links during post-core convergence and reject stale or wrong-target peer links before restart. (#83794) Thanks @fuller-stack-dev.</li>
-<li>CLI/agents: default new omitted-account bindings to all accounts when the channel has multiple configured accounts, and clarify account-scope docs. (#49769) Thanks @Gcaufy.</li>
-<li>Codex app-server: let authorized <code>/codex</code> control commands such as <code>/codex detach</code> escape plugin-owned conversation bindings while keeping unknown or unauthorized slash text routed to the bound plugin. Fixes #85157. (#85188) Thanks @TurboTheTurtle.</li>
-<li>Auto-reply/models: keep <code>/models</code> browse replies fast by sharing the bounded read-only catalog path with Gateway model listing. (#84735) Thanks @safrano9999.</li>
-<li>Codex app-server: disable native Code Mode when the effective exec host is <code>node</code> and keep OpenClaw <code>exec</code>/<code>process</code> available, so <code>/exec host=node</code> routes shell commands through the selected node instead of the gateway. Fixes #85012. (#85090) Thanks @sahilsatralkar.</li>
-<li>Agents: bound embedded auto-compaction session write-lock watchdogs to the compaction timeout instead of the full run timeout, so stuck compaction cannot hold the live session lock for the whole run window. (#84949) Thanks @luoyanglang.</li>
-<li>Gateway/agents: return phase-aware <code>agent.wait</code> timeout attribution and only cool auth profiles on provider-started timeouts. Refs #65504. Thanks @100yenadmin.</li>
-<li>Gateway: defer provider auth-state prewarm until after startup readiness so early gateway tool/session requests are not blocked by provider auth discovery. (#85272) Thanks @dutifulbob.</li>
-<li>Gateway/models: coalesce provider auth-state rewarms after auth-profile failures and log event-loop delay for warm/rewarm work, so provider auth bursts no longer stack full auth sweeps behind channel replies.</li>
-<li>Gateway/models: stop cancelled provider auth-state prewarms from continuing full provider sweeps, so reload and auth-failure bursts no longer keep startup busy.</li>
-<li>Agents/Codex: show the first plan update as a transient chat status notice without counting it as final assistant content.</li>
-<li>CLI/update: walk the macOS process ancestry and honor the inherited Gateway runtime PID before package updates stop the managed Gateway service, so nested in-band updater children can refuse instead of killing the LaunchAgent-supervised Gateway that owns them. Fixes #85120.</li>
-<li>Gateway/LaunchAgent: wait for launchd reload bootout to finish and fall back to kickstart when bootstrap races, so reload handoff does not leave the service deregistered. Fixes #84630. (#84641) Thanks @NianJiuZst.</li>
-<li>Gateway/LaunchAgent: treat a concurrent launchd bootstrap as a successful restart when the service is already loaded, avoiding false macOS Gateway restart failures. Fixes #84721. (#84722) Thanks @googlerest.</li>
-<li>Gateway/service: include the active <code>openclaw</code> command bin directory in managed service PATH generation and doctor audit expectations for npm-global macOS installs. Fixes #84201. (#84475) Thanks @jbetala7.</li>
-<li>Control UI/chat: disable the thinking selector for known non-reasoning models instead of showing duplicate Off choices. Fixes #84069. Thanks @DrippingMellow.</li>
-<li>Memory: expand <code>~</code> in configured extra memory paths before resolving them, so home-relative folders are not treated as workspace-relative. Fixes #58026. Thanks @stadman.</li>
-<li>Skills: treat <code>openclaw.os: macos</code> as Darwin when checking skill requirements, so macOS-only skills no longer report as missing on macOS hosts. Fixes #61338. Thanks @Jessecq1995.</li>
-<li>Control UI/logs: strip ANSI escape sequences from displayed Gateway log messages so color codes no longer appear as raw text. Fixes #64399. Thanks @guguangxin-eng.</li>
-<li>Docker: pre-create the workspace and auth-profile config mount points with <code>node</code> ownership so first-run named volumes do not start root-owned. Fixes #85076. Thanks @Noerr.</li>
-<li>Telegram: pass configured markdown table mode through outbound markdown chunking so chunked sends render tables consistently. Fixes #85085. Thanks @ShuaiHui.</li>
-<li>CLI/update: preserve managed Gateway service environment during package cutovers so macOS LaunchAgent repair/restart reads the pre-update service state instead of caller shell state. (#83026)</li>
-<li>Agents/providers: honor per-model <code>api</code> and <code>baseUrl</code> overrides in custom provider auth hooks and transport selection. Fixes #80487. (#80488) Thanks @huveewomg.</li>
-<li>Gateway/restart: eager-load the lifecycle runtime before in-place upgrade signal handling so package replacement does not deadlock restart imports. (#84890) Thanks @myps6415.</li>
-<li>CLI/update: start managed Gateway update handoff helpers from a stable existing directory and tolerate deleted cwd/package roots during macOS LaunchAgent handoff. Fixes #83808. (#83875) Thanks @jason-allen-oneal.</li>
-<li>Skills: watch each shared skill directory once across agent workspaces instead of once per agent, preventing file-descriptor exhaustion (<code>EMFILE</code>) that disposed bundle-mcp processes and stalled sessions on multi-agent gateways. Fixes #84968. (#85130) Thanks @openperf.</li>
-<li>Release/security: keep generated npm shrinkwrap package versions inside the pnpm lock graph so published package locks cannot bypass pnpm dependency age and override policy.</li>
-<li>Cron: honor <code>cron.retry.retryOn: ["network"]</code> for common network error codes such as <code>EAI_AGAIN</code>, <code>EHOSTUNREACH</code>, and <code>ENETUNREACH</code>.</li>
-<li>Gateway chat: broadcast returned agent-run error payloads after an agent starts so ACP/WebChat clients receive terminal idle-timeout errors. Fixes #84945.</li>
-<li>Gateway chat display: preserve OpenAI-compatible <code>prompt_tokens</code>, <code>completion_tokens</code>, and <code>total_tokens</code> usage fields in sanitized chat history so llama.cpp sessions keep context counts. Fixes #77992. Thanks @MarTT79.</li>
-<li>Dashboard/CLI: allow macOS browser launching through <code>open</code> even when SSH environment variables are present, while preserving Linux SSH no-display protection. Fixes #67088. Thanks @theglove44.</li>
-<li>Codex app-server: keep native web search observations out of mirrored chat transcripts while preserving tool progress telemetry. Fixes #85109. Thanks @ugitmebaby.</li>
-<li>OpenCode Go: strip unsupported Kimi reasoning replay fields before provider requests so repeated <code>kimi-k2.6</code> turns do not fail schema validation. Fixes #83812. Thanks @Sleeck.</li>
-<li>Browser/CDP: add a WSL2 portproxy self-loop hint when Chrome DevTools endpoints accept connections but return an empty HTTP reply. Fixes #59209. Thanks @Owlock.</li>
-<li>Agents/OpenAI: preserve structured provider error code, type, and redacted body metadata on boundary-aware transport failures.</li>
-<li>Doctor/Codex: point native Codex asset warnings at the canonical <code>openclaw migrate plan codex</code> preview command. Fixes #84948. Thanks @markoa.</li>
-<li>CLI/models: make <code>capability model auth logout --agent</code> remove auth profiles from the selected non-default agent store. Fixes #85092. Thanks @islandpreneur007.</li>
-<li>Gateway/models: reuse prepared provider auth metadata during model-listing auth checks so repeated lookups avoid broad plugin discovery while preserving synthetic local auth.</li>
-<li>CLI/status: suppress systemd user-service setup hints when <code>openclaw status --deep</code> can already reach a running Gateway RPC service. Fixes #85094. Thanks @islandpreneur007.</li>
-<li>CLI/devices: recover local approval when a same-device repair request replaces the request ID being approved.</li>
-<li>CLI/agents: retry transient normal-close Gateway handshakes before falling back to embedded <code>openclaw agent</code> execution.</li>
-<li>CLI/update: keep managed Gateway service stop/restart status lines out of <code>openclaw update --json</code> stdout so package-update automation can parse the JSON payload.</li>
-<li>Plugins: resolve OpenClaw plugin SDK subpaths for native external plugin runtimes without mutating package installs or broadening process-wide module resolution.</li>
-<li>Agents/OpenAI: preserve Responses and Chat Completions <code>reasoning_tokens</code> usage metadata without double-counting it in aggregate output tokens. (#85319)</li>
-<li>Control UI/chat: convert pasted <code>data:image/...;base64,...</code> clipboard text into an image attachment instead of dumping the payload into the composer. Fixes #62604. Thanks @cpwilhelmi.</li>
-<li>Providers/Gemini: strip fractional seconds from web-search time range filters so Gemini accepts freshness-bound search requests. (#85071) Thanks @Noerr.</li>
-<li>OpenAI Codex: preserve image input support for sparse <code>openai-codex/gpt-5.5</code> catalog rows. (#85095) Thanks @sercada.</li>
-<li>CLI/models: add a piped or pasted API-key path for OpenAI Codex auth and warn when API keys are pasted into token-mode auth. (#85533) Thanks @joshavant.</li>
-<li>Telegram: dead-letter missing-harness isolated ingress failures so a poisoned spooled update no longer blocks later same-lane messages. Fixes #85470. (#85605) Thanks @joshavant.</li>
-<li>Plugins/discovery: strip <code>-plugin</code> package suffixes when deriving plugin id hints so package names line up with manifest ids. (#85170) Thanks @JulyanXu.</li>
-<li>Tlon: stop advertising a non-existent agent tool contract in the plugin manifest.</li>
-<li>Telegram: preserve fenced code block languages through Markdown rendering so Telegram receives <code>language-*</code> code classes. (#85209) Thanks @leno23.</li>
-<li>Windows installer: run npm and Corepack command shims from a Windows-local directory so installs launched from WSL2 UNC paths do not fail before OpenClaw is installed.</li>
-<li>Windows updates: roll back git-backed updates to the previous checkout when dependency install, build, UI build, or doctor repair fails.</li>
-<li>Windows installer: persist user-local portable Git on PATH and activate the repo-pinned pnpm version for git-backed installs and updates.</li>
-<li>Windows installer: bootstrap a user-local portable Node.js when native Windows has no Node and no winget, Chocolatey, or Scoop, so first-run installs can continue on raw hosts.</li>
-<li>Windows installer: extract the downloaded portable Node.js directory with native <code>tar</code> before falling back to .NET zip extraction, avoiding PowerShell 5.1 archive and path-length failures.</li>
-<li>fix(integrations): enforce channel read target allowlists [AI]. (#84982) Thanks @pgondhi987.</li>
-<li>Agents/heartbeat: route single-owner <code>session.dmScope=main</code> direct-message exec and cron event wakes back to the agent main session so async completions no longer strand context in orphan direct-DM queues. Fixes #71581. (#83743) Thanks @Kaspre.</li>
-<li>Agents/code-mode: expose outer code-mode <code>exec</code> source through the <code>command</code> hook alias with <code>toolKind</code>/<code>toolInputKind</code> discriminators so exec-shaped policies can distinguish code-mode cells. (#83483) Thanks @Kaspre.</li>
-<li>Agents/code mode: return structured timeout and runtime-unavailable error codes for known worker failures. Fixes #83389. (#83444) Thanks @Kaspre.</li>
-<li>QA-Lab: isolate multi-scenario suite workers when scenarios need startup config patches, preventing message-routing config from leaking into unrelated scenarios.</li>
-<li>QA-Lab: make the commitments heartbeat-target-none scenario request an immediate heartbeat instead of waiting for the next scheduled heartbeat.</li>
-<li>Codex/Plugin SDK: deliver Codex-native subagent completions through a generic harness task runtime so harness-backed plugins can mirror durable task lifecycle and completion delivery without Codex-specific SDK imports. (#83445) Thanks @bryanpearson.</li>
-<li>Gateway CLI: surface local post-challenge connect assembly failures immediately instead of waiting for the wrapper timeout. Fixes #68944. (#85253) Thanks @samzong.</li>
-<li>Messages: strip unsupported web-search citation control markers from outbound replies before they reach WebChat or external channels. Fixes #85193. (#85204) Thanks @neeravmakwana.</li>
-<li>Agents/exec: treat denied exec approvals as terminal instead of feeding them back into agent follow-up work, and recognize Chinese stop phrases in abort handling. Fixes #69386. (#85194) Thanks @samzong.</li>
-<li>CLI/agents: abort accepted Gateway-backed <code>openclaw agent</code> runs on SIGINT/SIGTERM so cron and supervisor timeouts do not leave remote agent work alive. Fixes #71710. (#84381) Thanks @Kaspre.</li>
-<li>Codex app-server: retry replay-safe stdio client-close turns once using structured failure metadata, while surfacing idle <code>turn/completed</code> timeouts instead of blindly replaying active shared-server turns. Thanks @VACInc.</li>
-<li>Codex app-server: reject command overrides that embed Node or package-manager arguments and point users to <code>appServer.args</code>, so Windows startup avoids shell parsing failures. (#84417) Thanks @TurboTheTurtle.</li>
-<li>Agents/Copilot: drop unsafe GitHub Copilot Responses reasoning replay items before send so Telegram direct sessions no longer fail on overlong replay IDs. Fixes #85197. (#85198) Thanks @galiniliev.</li>
-<li>UI: add accessible tooltips to the topbar color-mode buttons so System, Light, and Dark choices are labeled on hover and focus. (#85227) Thanks @amknight.</li>
-<li>fix: constrain Windows task script names [AI]. (#85064) Thanks @pgondhi987.</li>
-<li>Control UI: keep the chat session picker from hiding older or cross-agent configured conversations while preserving the bounded configured-agent refresh. (#85211) Thanks @amknight.</li>
-<li>Agents/Anthropic: preserve unsafe integer tool-call input values in streamed Anthropic tool-use JSON, preventing Discord-style IDs from being rounded before dispatch. Fixes #47229. (#83063) Thanks @leno23.</li>
-<li>Agents/Codex: estimate tool-heavy prompt pressure at the LLM boundary before provider submission, so persistent sessions compact before overflowing context windows. (#85541) Thanks @fuller-stack-dev and @joshavant.</li>
-<li>Agents/hooks: wait for local one-shot CLI and Codex <code>agent_end</code> plugin hooks before process cleanup so terminal observability flushes reliably. (#85007)</li>
-<li>Providers/Google: preserve Gemini 3 cron <code>thinkingDefault: "low"</code> when stale catalog metadata says <code>reasoning:false</code>, so scheduled runs keep provider-supported thinking instead of downgrading to off. (#85185) Thanks @neeravmakwana.</li>
-<li>CLI/agents: allow <code>openclaw agent --session-key</code> to target explicit session keys, including agent-scoped legacy keys. (#85121) Thanks @Kaspre.</li>
-<li>Auto-reply/ACP: wait for same-channel block reply delivery before starting tool work, while still honoring ACP dispatch aborts so stopped turns do not wait on slow channel sends. (#83722) Thanks @IWhatsskill.</li>
-<li>Codex/ACP: mark required child-run completions that only report progress, omit a final deliverable, or fail requester delivery as blocked while preserving real final reports. (#85110) Thanks @IWhatsskill.</li>
-<li>Channels: treat bare abort messages such as <code>stop</code>, <code>abort</code>, and <code>wait</code> as immediate control commands in inbound debounce paths so stop requests are not delayed behind pending message coalescing. (#83348) Thanks @IWhatsskill.</li>
-<li>Channels/message tool: resolve configured external channel plugins during in-agent channel selection, so <code>openclaw agent --local</code> message-tool sends no longer report an available channel as unavailable. (#85022) Thanks @Kaspre.</li>
-<li>Agents/heartbeat: honor group/channel <code>message_tool</code> visible-reply policy and model-specific Codex runtime config for scheduled heartbeat runs, so failed internal tool output stays private. Fixes #85310. (#85357) Thanks @neeravmakwana.</li>
-<li>Gateway/ACP: close child ACP sessions spawned via <code>sessions_spawn</code> when their parent session is reset or deleted, instead of leaving orphaned <code>claude-agent-acp</code> processes that accumulate and exhaust memory. Fixes #68916. (#85190) Thanks @openperf.</li>
-<li>Codex app-server: block native execution paths when OpenClaw exec resolves to a node host while preserving the first-party CLI node binding path. Fixes #85012. (#85534) Thanks @joshavant.</li>
-<li>Diagnostics: bound cleanup timeout detail logs, emit drop summaries when async diagnostic bursts exceed the queue cap, and surface async queue drops through diagnostic telemetry.</li>
-<li>Agents/subagents: surface blocked child-run completions as errors instead of successful subagent finishes. (#80886) Thanks @TurboTheTurtle.</li>
-<li>Context engines: fail closed with a descriptive error when the selected agent runtime cannot satisfy declared context-engine host requirements.</li>
-<li>Agents/Pi: treat accepted embedded <code>sessions_spawn</code> child-session handoffs as terminal progress so parent turns no longer report false non-deliverable failures. (#85054) Thanks @samzong.</li>
-<li>CLI/models: resolve <code>openclaw models set</code> aliases from the runtime config while keeping authored aliases ahead of runtime-only defaults. (#83262) Thanks @IWhatsskill.</li>
-<li>Doctor: show personal Codex CLI asset notices as info instead of warnings. Fixes #84859.</li>
-<li>WhatsApp: update Baileys to <code>7.0.0-rc13</code> and drop the obsolete logger type patch.</li>
-<li>CLI/update: pre-pack GitHub/git package update targets before the staged npm install, restoring <code>openclaw update --tag main</code> for one-off package updates. (#81296) Thanks @fuller-stack-dev.</li>
-<li>Gateway: mirror successful same-source message-tool sends into session transcripts so delivered replies stay in later history/context. (#84837) Thanks @iFiras-Max1.</li>
-<li>Media generation: keep image, music, and video completion delivery from duplicating or losing task ownership when generated media finishes through active session replies. (#84006) Thanks @fuller-stack-dev.</li>
-<li>Infra/json: retry transient <code>File changed during read</code> races while loading JSON state so config and state reads recover instead of failing the turn. (#84285)</li>
-<li>Plugins/providers: fail closed for workspace provider plugins during setup-mode discovery unless explicitly trusted, preventing untrusted workspace plugin code from running during provider setup. (#81069) Thanks @mmaps.</li>
-<li>Providers/Ollama: resolve configured Ollama Cloud <code>OLLAMA_API_KEY</code> markers to the real discovery key so cloud provider entries keep authenticated model catalog access. (#85037)</li>
-<li>Discord: keep persistent component registry fallback warnings actionable by forwarding structured error and cause metadata through the runtime logger. Fixes #84185. (#84190) Thanks @100menotu001.</li>
-<li>Gateway/sessions: preserve compatible session auth profile overrides when switching models within the same provider, including provider-auth aliases. Fixes #81837. (#81886) Thanks @TurboTheTurtle.</li>
-<li>Gateway/status: surface inbound delivery telemetry counters and transport-liveness warnings in <code>openclaw status --all</code>. Fixes #49577. (#72724)</li>
-<li>Docker: prune package-excluded plugin source workspaces and dependency closures so runtime images do not keep packages for plugins that were not opted in.</li>
-<li>Providers/Ollama: treat Docker/OrbStack host aliases as local Ollama endpoints so <code>ollama-local</code> marker auth works when OpenClaw runs inside a VM/container and Ollama runs on the host. Fixes #84875.</li>
-<li>QA-Lab: keep explicitly searchable/deferred OpenClaw dynamic tool rows report-only by default so tool-coverage gates do not treat mock discovery gaps as hard product failures. (#80319) Thanks @100yenadmin.</li>
-<li>Agents/config: keep non-Google provider model refs from being rewritten by Google Gemini preview-id normalization. (#84762) Thanks @zhangguiping-xydt.</li>
-<li>Installer: require a real controlling terminal before launching onboarding so headless <code>curl | bash</code> installs finish cleanly after installing the CLI.</li>
-<li>Agents/Codex: promote a completed final assistant response when a prompt timeout races Codex app-server completion instead of returning an empty timeout envelope. Refs #84516.</li>
-<li>Codex app-server: keep interrupted turn statuses from being treated as OpenClaw aborts by themselves, so tool-only turns remain eligible for no-visible-answer recovery. Fixes #84492.</li>
-<li>Agents: cap heartbeat model bleed context hints by the stored session window when runtime model metadata is unavailable, so overflow recovery advice does not suggest a larger window than the active session actually has.</li>
-<li>Control UI/Web Push: use <code>https://openclaw.ai</code> as the generated default VAPID subject instead of the old localhost mailbox so iOS PWA push setup uses an Apple-acceptable subject when <code>OPENCLAW_VAPID_SUBJECT</code> is unset. Fixes #83134. (#83317) Thanks @IWhatsskill.</li>
-<li>Control UI: distinguish inherited thinking-off settings from explicit Off selections so the thinking selector no longer shows two identical Off rows. (#85223) Thanks @amknight.</li>
-<li>Agents/Pi: keep embedded session transcript writes from tripping false takeover detection after packaged npm onboarding agent turns.</li>
-<li>Codex/TUI: surface Codex-native post-turn compaction failures instead of continuing uncompacted, and keep successful native compaction serialized before local idle/next-turn handling. Fixes #84305. (#85160) Thanks @joshavant.</li>
-<li>Memory/search: stop recall tracking from writing dreaming side-effect artifacts when <code>dreaming.enabled=false</code>, while preserving normal search results. Fixes #84436. (#84444) Thanks @NianJiuZst.</li>
-<li>Diffs: render viewer toolbar icons from a closed icon-name map instead of HTML strings, removing the toolbar icon XSS sink. (#83955) Thanks @tanshanshan.</li>
-<li>QA: keep <code>pnpm qa:e2e</code> self-check runs inside the private QA runtime envelope even when inherited shell env disables bundled plugins.</li>
-<li>fix(config): validate browser sandbox bind sources [AI]. (#84799) Thanks @pgondhi987.</li>
-<li>doctor: constrain legacy plugin cleanup paths [AI]. (#84801) Thanks @pgondhi987.</li>
-<li>Update/doctor: prune stale local bundled plugin install records that point at old compiled bundled output so current bundled plugin schemas win after upgrade. (#84863) Thanks @fuller-stack-dev.</li>
-<li>Providers/Ollama: preserve native Ollama tool-call IDs across assistant replay so Gemini over Ollama Cloud can keep its hidden function-call thought-signature handle.</li>
-<li>Discord: keep session recovery and <code>/stop</code> abort ownership on the source dispatch lane while bound ACP turns continue routing to their target session, so stalled pre-run work and late replies are cleared instead of leaking after stop. Fixes #84477. (#85100) Thanks @joshavant.</li>
-<li>Codex app-server: mark missing turn completion after observed execution as replay-unsafe and release the session so follow-up turns can run. Fixes #84076. (#85107) Thanks @joshavant.</li>
-<li>Codex app-server: give visible <code>message</code> dynamic tool sends a longer timeout budget so slow channel delivery can return its own result or error instead of hitting the 30-second Codex wrapper. (#85216) Thanks @amknight.</li>
-<li>Codex app-server: add a dedicated post-tool raw assistant completion idle timeout config so trusted heavy turns can wait longer after tool handoff without weakening final assistant release.</li>
-<li>Matrix: keep explicitly configured two-person rooms on the room route before stale <code>m.direct</code> or strict two-member DM fallback can bypass mention gating. Fixes #85017. (#85137) Thanks @joshavant.</li>
-<li>Agents/subagents: require explicit subagent allowlist targets to be configured agents so stale deleted-agent ids are omitted from <code>agents_list</code> and rejected by <code>sessions_spawn</code>. Fixes #84811. (#85154) Thanks @joshavant.</li>
-<li>PDF tool: time out idle remote PDF body reads after 120 seconds so stalled remote documents return an error instead of wedging the session. Fixes #68649. (#84768) Thanks @luoyanglang.</li>
-<li>Diagnostics/OpenTelemetry plugin: suppress handled OTLP exporter promise rejections so collector shutdowns no longer crash the Gateway. (#81085) Thanks @luoyanglang.</li>
-<li>Agents/exec: omit raw command text and env values from denied exec failure logs while keeping safe correlation metadata. Fixes #85049. (#85140) Thanks @joshavant.</li>
-<li>Media/audio: skip empty structured sherpa-onnx transcripts instead of treating the raw JSON payload as spoken text. (#84667) Thanks @TurboTheTurtle.</li>
-<li>Agents/exec: preserve inherited XDG base-directory environment values for subprocesses while still rejecting agent-supplied XDG overrides. Fixes #84854. (#85139) Thanks @joshavant.</li>
-<li>Node/Linux: keep <code>OPENCLAW_GATEWAY_TOKEN</code> out of generated systemd unit files by writing node service token values to a node-specific env file. (#84408)</li>
-<li>Memory-core/dreaming: reuse stable narrative subagent session keys per workspace and phase while keeping per-run idempotency and bounded cleanup, so stale <code>dreaming-narrative-*</code> sessions do not accumulate. Fixes #68252, #69187, and #70402. (#70464) Thanks @chiyouYCH.</li>
-<li>Trajectory/support: tolerate partial skill snapshot entries when building support metadata so rejected skill path scans no longer abort trajectory capture. (#71185) Thanks @lukeboyett.</li>
-<li>TUI: coalesce repeated idle Esc abort notices into a single <code>no active run xN</code> system row instead of appending duplicate rows.</li>
-<li>Telegram: honor <code>channels.telegram.pollingStallThresholdMs</code> in the default isolated polling path, restarting silent workers instead of leaving inbound updates wedged. Fixes #83950. (#84861) Thanks @joshavant.</li>
-<li>Telegram: dedupe replayed message dispatches by Telegram chat/message identity so isolated-ingress replays do not trigger duplicate model dispatches. Fixes #84886. (#85208) Thanks @joshavant.</li>
-<li>Slack: suppress reasoning payloads before reply delivery and dispatch accounting, so Slack monitor, slash-command, fallback, and direct reply paths do not leak model reasoning. Fixes #84319. (#84322) Thanks @ffluk3 and @joshavant.</li>
-<li>Slack: deliver native plugin approval prompts and updates when Slack native approvals are enabled, while keeping plugin approval authorization separate from exec approvers.</li>
-<li>Slack: keep native plugin approval prompts in the originating app conversation thread when the live Slack turn source is a <code>D...</code> conversation.</li>
-<li>Agents/Pi: disable the embedded pi-coding-agent runtime auto-retry so OpenClaw's own retry and failover loop does not replay failed tool calls through a nested SDK retry. Fixes #73781. (#74434) Thanks @yelog.</li>
-<li>CLI/perf: keep <code>setup --help</code>, <code>onboard --help</code>, and <code>configure --help</code> out of the full wizard runtime while preserving the existing help output. (#84488) Thanks @frankekn.</li>
-<li>CLI/perf: keep <code>agents --help</code> out of agents action/runtime imports so help, completion, and command discovery paths avoid loading the full agents runtime. (#84483) Thanks @frankekn.</li>
-<li>CLI/perf: keep <code>secrets --help</code> and <code>nodes --help</code> on the precomputed help path so parent help avoids loading action-heavy command runtime modules. (#84818) Thanks @frankekn.</li>
-<li>CLI/perf: serve <code>doctor</code>, <code>gateway</code>, <code>models</code>, and <code>plugins</code> parent help from startup metadata so common subcommand help avoids full CLI program construction. (#84786) Thanks @frankekn.</li>
-<li>Codex/Lossless: keep context-engine history on the canonical run session when Telegram DMs use per-peer runtime policy keys. Fixes #84936. (#84954) Thanks @neeravmakwana.</li>
-<li>Codex: keep heartbeat response tool schemas durable without exposing dynamic tools disabled by turn policy, so heartbeat wakeups can reuse threads while scoped tool allowlists stay enforced. (#84681) Thanks @jalehman.</li>
-<li>Auth/OAuth: skip the refresh adapter when a stored OAuth credential has no refresh token so agent turns fail fast on missing-key instead of waiting on the 120s refresh timeout. Thanks @romneyda.</li>
-<li>Auth/Codex: load legacy OAuth sidecar credentials in the embedded runner's secrets-runtime auth loaders so Telegram replies, cron-triggered turns, and other isolated sub-agent lanes can reach the existing #83312 refresh-and-rewrite migration instead of failing with <code>No API key found for provider "openai-codex"</code> until the user runs <code>openclaw doctor</code>. Thanks @Totalsolutionsync and @romneyda.</li>
-<li>Codex/failover: classify <code>deactivated_workspace</code> as a permanent auth failure so configured fallback models can advance when a Codex workspace is deactivated. (#55893) Thanks @litang9.</li>
-<li>Exec: keep configured <code>tools.exec.pathPrepend</code> entries ahead of user shell startup PATH changes on POSIX gateway runs. (#81403) Thanks @medns.</li>
-<li>Gateway/sessions: allow shared-secret bearer callers to read and stream session history without an explicit scope header. (#81815) Thanks @medns.</li>
-<li>Agents/embedded runner: classify HTML auth provider responses as <code>auth_html</code> and return a re-authentication hint instead of the CDN-blocked copy that <code>upstream_html</code> returns. Cloudflare Access login pages, nginx basic-auth challenges, and gateway login walls all produce HTML auth bodies that were previously misdiagnosed as transient CDN blocks. (#79900) Thanks @martingarramon.</li>
-<li>TUI/streaming watchdog: dismiss the <code>This response is taking longer than expected</code> notice as soon as a chat event for the same run arrives, so the message no longer sits next to the recovered response when the run was only briefly silent. Refs #67052, #69081 (closed), prior attempt #69026. Thanks @jpruit20 and @romneyda.</li>
-<li>Agents/Pi: tolerate OpenClaw-owned transcript writes while embedded prompts are released for model I/O, keeping long-running Feishu, Slack, Telegram, and cron turns from failing with false session-takeover errors. Fixes #84059. (#84250) Thanks @tianxiaochannel-oss88.</li>
-</ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.5.22/OpenClaw-2026.5.22.zip" length="54409357" type="application/octet-stream" sparkle:edSignature="am1mwLOmUHor9QuQWtxSsKoBOCySUBo4fB+0Qdcrz0E3wf6ESIMTfOC0k+dKJSh9gtLZw5jzpWVqTBzEdU36Aw=="/>
         </item>
     </channel>
 </rss>

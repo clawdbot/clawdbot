@@ -320,7 +320,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   function isSelectOpen(): boolean {
     const active = document.activeElement;
-    return !!active && root.contains(active) && active.tagName === "SELECT";
+    return active !== null && root.contains(active) && active.tagName === "SELECT";
   }
 
   /* ---------- Data fetching ---------- */

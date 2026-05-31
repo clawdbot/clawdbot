@@ -308,7 +308,7 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
-    authProfileId: "openai-codex:work",
+    authProfileId: "openai:work",
     authProfileIdSource: "user",
     ...overrides,
   } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0];
@@ -342,7 +342,7 @@ describe("runCodexAppServerSideQuestion", () => {
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
       cwd: "/tmp/workspace",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -737,7 +737,7 @@ describe("runCodexAppServerSideQuestion", () => {
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
       cwd: "/tmp/workspace",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       model: "gpt-5.5",
       approvalPolicy: "never",
       sandbox: "workspace-write",
@@ -1233,7 +1233,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     expect(refreshCodexAppServerAuthTokensMock).toHaveBeenCalledWith({
       agentDir: "/tmp/agent",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       config: {},
     });
   });

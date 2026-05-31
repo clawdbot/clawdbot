@@ -129,7 +129,7 @@ function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
   const resolvedTarget = path.resolve(targetPath);
   const resolvedRoot = path.resolve(rootPath);
   const relative = path.relative(resolvedRoot, resolvedTarget);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -740,7 +740,7 @@ async function repairFeishuDoctorState(params: {
         (store) => {
           const removed: typeof group.entries = [];
           for (const key of keys) {
-            if (Object.prototype.hasOwnProperty.call(store, key)) {
+            if (Object.hasOwn(store, key)) {
               delete store[key];
               const entry = group.entries.find((candidate) => candidate.key === key);
               if (entry) {

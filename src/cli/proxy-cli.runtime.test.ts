@@ -378,7 +378,7 @@ describe("proxy cli runtime", () => {
 
   it("applies the terminal color theme when rich output is enabled", async () => {
     vi.resetModules();
-    vi.doMock("../terminal/theme.js", () => ({
+    vi.doMock("../../packages/terminal-core/src/theme.js", () => ({
       colorize: (rich: boolean, color: (value: string) => string, value: string) =>
         rich ? color(value) : value,
       isRich: () => true,
@@ -400,7 +400,7 @@ describe("proxy cli runtime", () => {
       expect(output).toContain("<heading>Checks</heading>");
       expect(output).toContain("<success>✓</success>");
     } finally {
-      vi.doUnmock("../terminal/theme.js");
+      vi.doUnmock("../../packages/terminal-core/src/theme.js");
     }
   });
 

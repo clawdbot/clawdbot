@@ -1205,6 +1205,13 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
+      expect(gatewayLog.warn).toHaveBeenCalledTimes(2);
+      expect(gatewayLog.warn).toHaveBeenNthCalledWith(
+        2,
+        "An unauthorized SIGUSR1 restart signal was received and ignored. " +
+          "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
+          "or restart the gateway through your service manager.",
+      );
     });
   });
 

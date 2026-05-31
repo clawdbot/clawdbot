@@ -1,3 +1,4 @@
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
@@ -124,7 +125,7 @@ export function startGatewayMaintenanceTimers(params: {
         return false;
       }
       const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
-      return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) && expiresAtMs > now;
+      return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
@@ -183,7 +184,7 @@ export function startGatewayMaintenanceTimers(params: {
     };
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (now <= entry.expiresAtMs) {
+      if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
       abortChatRunById(

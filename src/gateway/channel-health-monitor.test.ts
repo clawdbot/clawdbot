@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
 
@@ -167,6 +168,16 @@ describe("channel-health-monitor", () => {
 
     expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
     expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
+  });
+
+  it("normalizes oversized check intervals before arming timers", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const monitor = startDefaultMonitor(createMockChannelManager(), {
+      checkIntervalMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    monitor.stop();
   });
 
   it("does not run before the grace period", async () => {

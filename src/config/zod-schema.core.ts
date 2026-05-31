@@ -1,13 +1,13 @@
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import type { MediaToolsConfig } from "./types.tools.js";
@@ -439,7 +439,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "nvidia",
   "ollama",
   "openai",
-  "openai-codex",
+  "openai",
   "opencode",
   "opencode-go",
   "openrouter",
@@ -460,6 +460,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "vydra",
   "xai",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ]);
 

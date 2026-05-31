@@ -1,6 +1,10 @@
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
@@ -86,7 +90,7 @@ function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void
   const recent = Array.isArray(metadata.recentTalkEvents)
     ? metadata.recentTalkEvents.filter(
         (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
-          !!entry && typeof entry === "object" && !Array.isArray(entry),
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
       )
     : [];
   recent.push({
@@ -810,10 +814,13 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private pruneReplayResponses(now: number): void {
-    for (const [key, entry] of this.replayResponses) {
-      if (entry.expiresAt <= now) {
-        this.replayResponses.delete(key);
+  private pruneReplayResponses(rawNow: number): void {
+    const now = asDateTimestampMs(rawNow);
+    if (now !== undefined) {
+      for (const [key, entry] of this.replayResponses) {
+        if (entry.expiresAt <= now) {
+          this.replayResponses.delete(key);
+        }
       }
     }
     while (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
@@ -826,9 +833,9 @@ export class VoiceCallWebhookServer {
   }
 
   private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {
-    const now = Date.now();
+    const now = asDateTimestampMs(Date.now());
     const entry = this.replayResponses.get(key);
-    if (!entry) {
+    if (!entry || now === undefined) {
       return null;
     }
     if (entry.expiresAt <= now) {
@@ -843,6 +850,9 @@ export class VoiceCallWebhookServer {
     buildResponse: () => Promise<WebhookResponsePayload>,
   ): Promise<WebhookResponsePayload> {
     const now = Date.now();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(WEBHOOK_REPLAY_RESPONSE_TTL_MS, {
+      nowMs: now,
+    });
     this.replayResponseCacheCalls += 1;
     if (this.replayResponseCacheCalls % WEBHOOK_REPLAY_RESPONSE_PRUNE_INTERVAL === 0) {
       this.pruneReplayResponses(now);
@@ -854,10 +864,12 @@ export class VoiceCallWebhookServer {
         this.replayResponses.delete(key);
         throw err;
       });
-    this.replayResponses.set(key, {
-      expiresAt: now + WEBHOOK_REPLAY_RESPONSE_TTL_MS,
-      response,
-    });
+    if (expiresAt !== undefined) {
+      this.replayResponses.set(key, {
+        expiresAt,
+        response,
+      });
+    }
     if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
       this.pruneReplayResponses(now);
     }

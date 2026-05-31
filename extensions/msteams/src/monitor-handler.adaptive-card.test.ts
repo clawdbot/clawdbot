@@ -77,11 +77,9 @@ function createActivityHandler() {
       await handler(context, async () => {});
     }
   });
-
-  let handler: MSTeamsActivityHandler & {
+  const handler: MSTeamsActivityHandler & {
     run: NonNullable<MSTeamsActivityHandler["run"]>;
-  };
-  handler = {
+  } = {
     onMessage: (nextHandler) => {
       messageHandlers.push(nextHandler);
       return handler;

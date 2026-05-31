@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
@@ -19,8 +21,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
@@ -474,7 +474,7 @@ export async function getReplyFromConfig(
           commandAuthorized,
         }),
       );
-  let {
+  const {
     sessionCtx,
     sessionEntry,
     previousSessionEntry,
@@ -484,7 +484,6 @@ export async function getReplyFromConfig(
     isNewSession,
     resetTriggered,
     systemSent,
-    abortedLastRun,
     storePath,
     sessionScope,
     groupResolution,
@@ -492,6 +491,7 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
@@ -754,21 +754,16 @@ export async function getReplyFromConfig(
     logResolverTiming("completed", "directive_reply");
     return directiveResult.reply;
   }
-
-  let {
+  const {
     commandSource,
     command,
     allowTextCommands,
     skillCommands,
-    directives,
-    cleanedBody,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
-    resolvedThinkLevel,
     resolvedVerboseLevel,
-    resolvedReasoningLevel,
     resolvedElevatedLevel,
     execOverrides,
     blockStreamingEnabled,
@@ -783,6 +778,8 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
+  let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
+    directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 

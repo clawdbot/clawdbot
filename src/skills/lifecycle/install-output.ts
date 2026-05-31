@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 type InstallCommandResult = {
   code: number | null;

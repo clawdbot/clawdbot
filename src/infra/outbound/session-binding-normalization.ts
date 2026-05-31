@@ -1,8 +1,8 @@
-import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeAccountId } from "../../routing/session-key.js";
 
 export type ConversationRefShape = {
   channel: string;

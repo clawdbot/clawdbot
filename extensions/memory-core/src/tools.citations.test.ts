@@ -38,7 +38,7 @@ function collectWikiResultPaths(results: readonly { corpus: string; path: string
   return paths;
 }
 
-async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
   let value: T | undefined;
   await vi.waitFor(
     async () => {

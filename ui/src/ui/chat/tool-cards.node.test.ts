@@ -294,6 +294,21 @@ with Example Deck
     expect(card?.preview?.preferredHeight).toBe(420);
   });
 
+  it("uses transcript metadata ids for history-backed tool messages", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "browser.open",
+        content: [{ type: "text", text: "Opened page" }],
+        __openclaw: { id: "msg-tool-history-1", seq: 7 },
+      },
+      "msg:history",
+    );
+
+    expect(card?.messageId).toBe("msg-tool-history-1");
+    expect(card?.outputText).toBe("Opened page");
+  });
+
   it("does not create previews for non-assistant canvas or generic outputs", () => {
     const cases = [
       {

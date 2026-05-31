@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import {
@@ -8,7 +9,6 @@ import {
 } from "../../infra/parse-finite-number.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
 

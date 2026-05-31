@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendBoundedWatchLog,
   hasGatewayReadyLog,
+  parseArgs,
   shouldRefreshBuildStampForRestoredArtifacts,
   stopTimedWatchChild,
   updateWatchBuildDetection,
@@ -18,6 +19,13 @@ import {
 } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 describe("check-gateway-watch-regression", () => {
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--window-ms", "1500", "--skip-build"])).toMatchObject({
+      skipBuild: true,
+      windowMs: 1500,
+    });
+  });
+
   it("recognizes current and legacy gateway ready logs", () => {
     expect(hasGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)")).toBe(true);
     expect(hasGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(true);

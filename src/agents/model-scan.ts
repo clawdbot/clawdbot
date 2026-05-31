@@ -1,17 +1,23 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  asDateTimestampMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
 import { complete } from "../llm/stream.js";
-import { type Context, type Model, type Tool } from "../llm/types.js";
+import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -95,10 +101,8 @@ function normalizeCreatedAtMs(value: unknown): number | null {
   if (value <= 0) {
     return null;
   }
-  if (value > 1e12) {
-    return Math.round(value);
-  }
-  return Math.round(value * 1000);
+  const timestampMs = value > 1e12 ? Math.round(value) : Math.round(value * 1000);
+  return asDateTimestampMs(timestampMs) ?? null;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {

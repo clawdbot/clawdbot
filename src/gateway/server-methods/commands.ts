@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   CommandEntry,
   CommandsListResult,
@@ -31,7 +32,6 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
 import { listPluginCommands } from "../../plugins/commands.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 

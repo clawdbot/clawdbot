@@ -135,7 +135,7 @@ describe("CronService read ops while job is running", () => {
       });
 
       vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
+      await vi.advanceTimersByTimeAsync(1_000);
 
       await isolatedRun.runStarted;
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);

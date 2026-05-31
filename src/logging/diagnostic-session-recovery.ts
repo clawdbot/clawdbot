@@ -3,13 +3,6 @@ import type {
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 
-export type DiagnosticSessionRecoveryStatus =
-  | "aborted"
-  | "released"
-  | "skipped"
-  | "noop"
-  | "failed";
-
 export type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"

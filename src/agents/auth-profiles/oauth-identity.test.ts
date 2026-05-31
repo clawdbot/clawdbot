@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
   isSafeToCopyOAuthIdentity,
@@ -7,7 +8,7 @@ import {
   shouldMirrorRefreshedOAuthCredential,
 } from "./oauth-identity.js";
 import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
-import type { AuthProfileCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 // Direct unit + fuzz tests for the cross-agent credential-mirroring identity
 // gate introduced for #26322 (CWE-284). These helpers are on the hot-path of
@@ -311,13 +312,14 @@ describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adop
 describe("shouldMirrorRefreshedOAuthCredential", () => {
   type MirrorCase = {
     name: string;
+    refreshed?: OAuthCredential;
     existing: AuthProfileCredential | undefined;
     shouldMirror: boolean;
     reason: string;
   };
   const refreshed = {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access: "fresh-access",
     refresh: "fresh-refresh",
     expires: 2_000,
@@ -335,7 +337,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "matching older oauth credential",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -348,7 +350,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "non-finite existing expiry",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: Number.NaN,
@@ -358,10 +360,40 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       reason: "incoming-fresher",
     },
     {
+      name: "out-of-range existing expiry",
+      existing: {
+        type: "oauth",
+        provider: "openai",
+        access: "old",
+        refresh: "old-refresh",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+        accountId: "acct-1",
+      },
+      shouldMirror: true,
+      reason: "incoming-fresher",
+    },
+    {
+      name: "out-of-range refreshed expiry",
+      refreshed: {
+        ...refreshed,
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+      },
+      existing: {
+        type: "oauth",
+        provider: "openai",
+        access: "old",
+        refresh: "old-refresh",
+        expires: 1_000,
+        accountId: "acct-1",
+      },
+      shouldMirror: false,
+      reason: "incoming-not-fresher",
+    },
+    {
       name: "identity upgrade",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -373,7 +405,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "api key override",
       existing: {
         type: "api_key",
-        provider: "openai-codex",
+        provider: "openai",
         key: "operator-key",
       },
       shouldMirror: false,
@@ -396,7 +428,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "identity mismatch",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -409,7 +441,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "strictly fresher existing credential",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "main-fresh",
         refresh: "main-fresh-refresh",
         expires: 3_000,
@@ -420,21 +452,24 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
     },
   ];
 
-  it.each(cases)("returns $reason for $name", ({ existing, shouldMirror, reason }) => {
-    expect(
-      shouldMirrorRefreshedOAuthCredential({
-        existing,
-        refreshed,
-      }),
-    ).toEqual({ shouldMirror, reason });
-  });
+  it.each(cases)(
+    "returns $reason for $name",
+    ({ existing, refreshed: caseRefreshed, shouldMirror, reason }) => {
+      expect(
+        shouldMirrorRefreshedOAuthCredential({
+          existing,
+          refreshed: caseRefreshed ?? refreshed,
+        }),
+      ).toEqual({ shouldMirror, reason });
+    },
+  );
 
   it("refuses identity regression from a known-account main credential", () => {
     expect(
       shouldMirrorRefreshedOAuthCredential({
         existing: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "main-identity-access",
           refresh: "main-identity-refresh",
           expires: 1_000,
@@ -442,7 +477,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
         },
         refreshed: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "fresh-access",
           refresh: "fresh-refresh",
           expires: 2_000,

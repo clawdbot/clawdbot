@@ -129,13 +129,13 @@ describe("external cli oauth resolution", () => {
     it("keeps equivalent stored credentials", () => {
       const expires = Date.now() + 60_000;
       const stored = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "a",
         refresh: "r",
         expires,
       });
       const incoming = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "a",
         refresh: "r",
         expires,
@@ -146,11 +146,11 @@ describe("external cli oauth resolution", () => {
 
     it("keeps the newer stored credential", () => {
       const incoming = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         expires: Date.now() + 60_000,
       });
       const stored = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "fresh-access",
         refresh: "fresh-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -161,11 +161,11 @@ describe("external cli oauth resolution", () => {
 
     it("replaces when incoming credentials are fresher", () => {
       const stored = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         expires: Date.now() + 60_000,
       });
       const incoming = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "new-access",
         refresh: "new-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -181,7 +181,7 @@ describe("external cli oauth resolution", () => {
       expect(
         hasUsableOAuthCredential(
           makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "live-access",
             expires: Date.now() + 10 * 60_000,
           }),
@@ -190,7 +190,7 @@ describe("external cli oauth resolution", () => {
       expect(
         hasUsableOAuthCredential(
           makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "expired-access",
             expires: Date.now() - 60_000,
           }),
@@ -199,7 +199,7 @@ describe("external cli oauth resolution", () => {
       expect(
         hasUsableOAuthCredential(
           makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "near-expiry-access",
             expires: Date.now() + 60_000,
           }),
@@ -208,7 +208,7 @@ describe("external cli oauth resolution", () => {
       expect(
         hasUsableOAuthCredential(
           makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "",
             expires: Date.now() + 60_000,
           }),
@@ -218,7 +218,7 @@ describe("external cli oauth resolution", () => {
 
     it("only bootstraps from external cli when the stored oauth is not usable", () => {
       const imported = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "fresh-cli-access",
         refresh: "fresh-cli-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -228,7 +228,7 @@ describe("external cli oauth resolution", () => {
       expect(
         shouldBootstrapFromExternalCliCredential({
           existing: makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "healthy-local-access",
             refresh: "healthy-local-refresh",
             expires: Date.now() + 10 * 60_000,
@@ -239,7 +239,7 @@ describe("external cli oauth resolution", () => {
       expect(
         shouldBootstrapFromExternalCliCredential({
           existing: makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "expired-local-access",
             refresh: "expired-local-refresh",
             expires: Date.now() - 60_000,
@@ -251,7 +251,7 @@ describe("external cli oauth resolution", () => {
       expect(
         shouldBootstrapFromExternalCliCredential({
           existing: makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "near-expiry-local-access",
             refresh: "near-expiry-local-refresh",
             expires: Date.now() + 60_000,
@@ -263,7 +263,7 @@ describe("external cli oauth resolution", () => {
 
     it("refuses external oauth usage across different known identities", () => {
       const imported = makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "fresh-cli-access",
         refresh: "fresh-cli-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -273,7 +273,7 @@ describe("external cli oauth resolution", () => {
       expect(
         isSafeToUseExternalCliCredential(
           makeOAuthCredential({
-            provider: "openai-codex",
+            provider: "openai",
             access: "expired-local-access",
             refresh: "expired-local-refresh",
             expires: Date.now() - 60_000,
@@ -288,7 +288,7 @@ describe("external cli oauth resolution", () => {
   it("does not use codex as a runtime bootstrap source anymore", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "codex-access-token",
         refresh: "codex-refresh-token",
       }),
@@ -296,7 +296,7 @@ describe("external cli oauth resolution", () => {
 
     const credential = readManagedExternalCliCredential({
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-      credential: makeOAuthCredential({ provider: "openai-codex" }),
+      credential: makeOAuthCredential({ provider: "openai" }),
     });
 
     expect(credential).toBeNull();
@@ -305,7 +305,7 @@ describe("external cli oauth resolution", () => {
   it("bootstraps the default codex profile from Codex CLI credentials when in scope", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "codex-cli-access",
         refresh: "codex-cli-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -314,13 +314,13 @@ describe("external cli oauth resolution", () => {
     );
 
     const profiles = resolveExternalCliAuthProfiles(makeStore(), {
-      providerIds: ["openai-codex"],
+      providerIds: ["openai"],
     });
 
     expectCredentialFields(
       expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
       {
-        provider: "openai-codex",
+        provider: "openai",
         access: "codex-cli-access",
         refresh: "codex-cli-refresh",
         accountId: "acct-codex",
@@ -331,7 +331,7 @@ describe("external cli oauth resolution", () => {
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "codex-cli-fresh-access",
         refresh: "codex-cli-fresh-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -343,7 +343,7 @@ describe("external cli oauth resolution", () => {
       makeStore(
         OPENAI_CODEX_DEFAULT_PROFILE_ID,
         makeOAuthCredential({
-          provider: "openai-codex",
+          provider: "openai",
           access: "local-expired-access",
           refresh: "local-canonical-refresh",
           expires: Date.now() - 5_000,
@@ -357,7 +357,7 @@ describe("external cli oauth resolution", () => {
 
   it("returns null when the profile id/provider do not map to the same external source", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
-      makeOAuthCredential({ provider: "openai-codex" }),
+      makeOAuthCredential({ provider: "openai" }),
     );
 
     const credential = readManagedExternalCliCredential({
@@ -495,7 +495,7 @@ describe("external cli oauth resolution", () => {
   it("passes non-prompting keychain policy to scoped Codex CLI credential reads", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "openai",
         access: "codex-cli-access",
         refresh: "codex-cli-refresh",
       }),
@@ -510,7 +510,7 @@ describe("external cli oauth resolution", () => {
       expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
       {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
       },
     );
     expectReaderPolicyCall(mocks.readCodexCliCredentialsCached);

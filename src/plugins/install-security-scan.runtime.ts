@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList, uniqueStrings } from "../shared/string-normalization.js";
 import { scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import {
   findBlockedPackageDirectoryInPath,

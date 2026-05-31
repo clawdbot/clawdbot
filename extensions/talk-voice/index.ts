@@ -9,7 +9,7 @@ import {
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep: number = 6): string {
+function mask(s: string, keep = 6): string {
   const trimmed = s.trim();
   if (trimmed.length <= keep) {
     return "***";

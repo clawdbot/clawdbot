@@ -248,7 +248,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
           durationMs: 1,
           agentMeta: {
             sessionId: "session-1",
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.4",
           },
         },
@@ -256,7 +256,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "[openai-codex/gpt-5.4] Ready.");
+    expectTextPayload(normalized[0], "[openai/gpt-5.4] Ready.");
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {

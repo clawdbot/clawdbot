@@ -2,6 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -209,8 +214,12 @@ async function assertNotExpired(
   record: SkillUploadRecord,
   now: number,
 ): Promise<void> {
-  if (record.expiresAt <= now) {
+  const validNow = asDateTimestampMs(now);
+  if (validNow !== undefined && !isFutureDateTimestampMs(record.expiresAt, { nowMs: validNow })) {
     await removeRecordFiles(rootDir, record);
+    throw new SkillUploadRequestError("upload has expired");
+  }
+  if (validNow === undefined) {
     throw new SkillUploadRequestError("upload has expired");
   }
 }
@@ -286,7 +295,12 @@ async function cleanupExpiredUploads(
     }
     await withLock(`${rootDir}:upload:${uploadId}`, async () => {
       const record = await readRecordIfPresent(rootDir, uploadId).catch(() => null);
-      if (record && record.expiresAt <= nowMs) {
+      const validNow = asDateTimestampMs(nowMs);
+      if (
+        record &&
+        validNow !== undefined &&
+        !isFutureDateTimestampMs(record.expiresAt, { nowMs: validNow })
+      ) {
         await removeRecordFiles(rootDir, record);
       }
     });
@@ -297,7 +311,7 @@ async function countActiveUploads(rootDir: string, nowMs: number): Promise<numbe
   let count = 0;
   for (const uploadId of await listUploadIds(rootDir)) {
     const record = await readRecordIfPresent(rootDir, uploadId).catch(() => null);
-    if (record && record.expiresAt > nowMs) {
+    if (record && isFutureDateTimestampMs(record.expiresAt, { nowMs })) {
       count += 1;
     }
   }
@@ -395,7 +409,7 @@ export function createSkillUploadStore(options?: {
               `${rootDir}:upload:${existingUploadId}`,
               async () => {
                 const record = await readRecordIfPresent(rootDir, existingUploadId);
-                if (record && record.expiresAt > now()) {
+                if (record && isFutureDateTimestampMs(record.expiresAt, { nowMs: now() })) {
                   return {
                     uploadId: record.uploadId,
                     receivedBytes: record.receivedBytes,
@@ -424,6 +438,10 @@ export function createSkillUploadStore(options?: {
         const uploadDir = resolveUploadDir(rootDir, uploadId);
         const archivePath = resolveArchivePath(rootDir, uploadId);
         const createdAt = now();
+        const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: createdAt });
+        if (expiresAt === undefined) {
+          throw new SkillUploadRequestError("invalid upload expiry");
+        }
         const record: SkillUploadRecord = {
           version: 1,
           kind: params.kind,
@@ -435,7 +453,7 @@ export function createSkillUploadStore(options?: {
           receivedBytes: 0,
           archivePath,
           createdAt,
-          expiresAt: createdAt + ttlMs,
+          expiresAt,
           committed: false,
           ...(keyHash ? { idempotencyKeyHash: keyHash } : {}),
         };

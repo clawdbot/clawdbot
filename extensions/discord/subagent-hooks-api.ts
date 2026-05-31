@@ -12,10 +12,6 @@ function loadDiscordSubagentHooksModule() {
 // Subagent hooks live behind a dedicated barrel so the bundled entry can
 // register one stable hook wiring path while keeping the handler module lazy.
 export function registerDiscordSubagentHooks(api: OpenClawPluginApi): void {
-  api.on("subagent_spawning", async (event) => {
-    const { handleDiscordSubagentSpawning } = await loadDiscordSubagentHooksModule();
-    return await handleDiscordSubagentSpawning(api, event);
-  });
   api.on("subagent_ended", async (event) => {
     const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
     handleDiscordSubagentEnded(event);

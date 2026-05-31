@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveBoundAgentIdForSession } from "../session-agent-binding.js";
 
 export type ResolveContextEngineCapabilitiesParams = {

@@ -1,4 +1,4 @@
-import { uniqueStrings } from "../../shared/string-normalization.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   COMMAND_CARRIER_EXECUTABLES,

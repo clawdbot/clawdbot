@@ -67,6 +67,7 @@ export type TelegramApiOverride = Partial<TelegramApi>;
 type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 type TelegramSendPollParams = Parameters<TelegramApi["sendPoll"]>[3];
 type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>[3];
+type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCaption"]>[2];
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
 type TelegramThreadScopedParams = {
   message_thread_id?: number;
@@ -230,6 +231,7 @@ function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): vo
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
@@ -420,6 +422,10 @@ function normalizeMessageId(raw: string | number): number {
 
 function isTelegramMessageNotModifiedError(err: unknown): boolean {
   return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramMessageHasNoTextError(err: unknown): boolean {
+  return MESSAGE_HAS_NO_TEXT_RE.test(formatErrorMessage(err));
 }
 
 function isTelegramMessageDeleteNoopError(err: unknown): boolean {
@@ -1316,6 +1322,8 @@ type TelegramEditOpts = {
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
+  /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
+  editMode?: "text" | "caption" | "auto";
   /** Resolved runtime config from the command or gateway boundary. */
   cfg: OpenClawConfig;
 };
@@ -1429,43 +1437,90 @@ export async function editMessageTelegram(
   const builtKeyboard = shouldTouchButtons ? buildInlineKeyboard(opts.buttons) : undefined;
   const replyMarkup = shouldTouchButtons ? (builtKeyboard ?? { inline_keyboard: [] }) : undefined;
 
-  const editParams: TelegramEditMessageTextParams = {
+  const textEditParams: TelegramEditMessageTextParams = {
     parse_mode: "HTML",
   };
   if (opts.linkPreview === false) {
-    editParams.link_preview_options = { is_disabled: true };
+    textEditParams.link_preview_options = { is_disabled: true };
   }
   if (replyMarkup !== undefined) {
-    editParams.reply_markup = replyMarkup;
+    textEditParams.reply_markup = replyMarkup;
   }
-  const plainParams: TelegramEditMessageTextParams = {};
+  const plainTextParams: TelegramEditMessageTextParams = {};
   if (opts.linkPreview === false) {
-    plainParams.link_preview_options = { is_disabled: true };
+    plainTextParams.link_preview_options = { is_disabled: true };
   }
   if (replyMarkup !== undefined) {
-    plainParams.reply_markup = replyMarkup;
+    plainTextParams.reply_markup = replyMarkup;
+  }
+  const captionEditParams: TelegramEditMessageCaptionParams = {
+    caption: htmlText,
+    parse_mode: "HTML",
+  };
+  if (replyMarkup !== undefined) {
+    captionEditParams.reply_markup = replyMarkup;
+  }
+  const plainCaptionParams: TelegramEditMessageCaptionParams = {
+    caption: plainText,
+  };
+  if (replyMarkup !== undefined) {
+    plainCaptionParams.reply_markup = replyMarkup;
   }
 
-  try {
-    await withTelegramHtmlParseFallback({
+  const performTextEdit = () =>
+    withTelegramHtmlParseFallback({
       label: "editMessage",
       verbose: opts.verbose,
       requestHtml: (retryLabel) =>
         requestWithEditShouldLog(
-          () => api.editMessageText(chatId, messageId, htmlText, editParams),
+          () => api.editMessageText(chatId, messageId, htmlText, textEditParams),
           retryLabel,
           (err) => !isTelegramMessageNotModifiedError(err),
         ),
       requestPlain: (retryLabel) =>
         requestWithEditShouldLog(
           () =>
-            Object.keys(plainParams).length > 0
-              ? api.editMessageText(chatId, messageId, plainText, plainParams)
+            Object.keys(plainTextParams).length > 0
+              ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
               : api.editMessageText(chatId, messageId, plainText),
           retryLabel,
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         ),
     });
+
+  const performCaptionEdit = () =>
+    withTelegramHtmlParseFallback({
+      label: "editMessageCaption",
+      verbose: opts.verbose,
+      requestHtml: (retryLabel) =>
+        requestWithEditShouldLog(
+          () => api.editMessageCaption(chatId, messageId, captionEditParams),
+          retryLabel,
+          (err) => !isTelegramMessageNotModifiedError(err),
+        ),
+      requestPlain: (retryLabel) =>
+        requestWithEditShouldLog(
+          () => api.editMessageCaption(chatId, messageId, plainCaptionParams),
+          retryLabel,
+          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+        ),
+    });
+
+  try {
+    const editMode = opts.editMode ?? "text";
+    if (editMode === "caption") {
+      await performCaptionEdit();
+    } else {
+      try {
+        await performTextEdit();
+      } catch (err) {
+        if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
+          await performCaptionEdit();
+        } else {
+          throw err;
+        }
+      }
+    }
   } catch (err) {
     if (isTelegramMessageNotModifiedError(err)) {
       // no-op: Telegram reports message content unchanged, treat as success

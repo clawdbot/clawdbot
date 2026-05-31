@@ -1,4 +1,4 @@
-import { asFiniteNumber } from "../../../shared/number-coercion.js";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { HookHandler } from "../../hooks.js";
 
 function readOptionalNumber(context: Record<string, unknown>, key: string): number | undefined {

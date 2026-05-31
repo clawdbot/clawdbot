@@ -273,7 +273,7 @@ function buildMediaGenerationReplyInstruction(params: {
     return [
       `The ${params.completionLabel} is ready for the original chat.`,
       'Use the current visible-reply contract: if this session requires message-tool replies, call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
-      "Otherwise, write the normal final reply and include each generated media path with MEDIA: so automatic source delivery can attach it.",
+      "Otherwise, write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
     ].join(" ");
   }
   return [

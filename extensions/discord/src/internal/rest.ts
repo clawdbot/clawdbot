@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  clampTimerTimeoutMs,
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -310,7 +314,8 @@ function normalizeRequestClientOptions(
   return {
     ...merged,
     apiVersion: normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, { min: 1 }),
-    timeout: normalizeIntegerOption(merged.timeout, defaultOptions.timeout, { min: 1 }),
+    timeout:
+      clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
     maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {
       min: 1,
     }),

@@ -601,7 +601,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       trigger: "overflow",
       modelFallbacksOverride: ["openai/gpt-fallback"],
       config: {
@@ -620,14 +620,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result.result?.summary).toBe("oauth fallback summary");
     findMockCall(
       resolveModelMock,
-      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-primary",
+      ([provider, modelId]) => provider === "openai" && modelId === "gpt-primary",
     );
     findMockCall(
       resolveModelMock,
-      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-fallback",
+      ([provider, modelId]) => provider === "openai" && modelId === "gpt-fallback",
     );
     expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
     });
   });
 
@@ -651,13 +651,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         auth: {
           order: {
-            "openai-codex": ["openai-codex:work"],
+            openai: ["openai:work"],
           },
         },
         agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
@@ -665,10 +664,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5",
     });
   });
@@ -693,8 +692,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "fake-model", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "fake-model", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "fake-model", contextWindow: 350_000 }] },
           },
         },
       } as never,
@@ -704,9 +702,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(resolveAgentHarnessPolicyMock).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", modelId: "fake-model" }),
     );
-    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expect(mockCallArg(resolveModelMock)).toBe("openai");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "fake-model",
     });
   });
@@ -731,11 +729,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         models: {
           providers: {
-            openai: {
-              baseUrl: "https://openai-compatible.example/v1",
-              models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
-            },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
@@ -803,9 +797,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         models: {
           providers: {
             openai: {
-              models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }, { id: "gpt-5.4-mini" }],
-            },
-            "openai-codex": {
               models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini", contextWindow: 350_000 }],
             },
           },
@@ -820,10 +811,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.4-mini");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4-mini",
     });
   });
@@ -844,24 +835,23 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         auth: {
           order: {
-            "openai-codex": ["openai-codex:work"],
+            openai: ["openai:work"],
           },
         },
       } as never,
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expect(mockCallArg(resolveModelMock)).toBe("openai");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
       provider: "openai",
       modelId: "gpt-5.5",
@@ -1748,7 +1738,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             },
           },
         },
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         authProfileId: "openai:p1",
       }),
@@ -1800,7 +1790,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("passes resolved context-engine runtime context to harness compaction", async () => {
+  it("passes resolved OpenAI runtime context to context-engine compaction", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
@@ -1813,7 +1804,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         authProfileId: "openai:p1",
         currentTokenCount: 333,
@@ -1821,22 +1812,21 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
-    if (harnessArg.contextEngine === undefined) {
-      throw new Error("Expected compact harness context engine");
-    }
-    expect(harnessArg.contextTokenBudget).toBeTypeOf("number");
-    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
       sessionKey: TEST_SESSION_KEY,
       workspaceDir: TEST_WORKSPACE_DIR,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: "openai:p1",
       currentTokenCount: 333,
     });
   });
 
-  it("passes selected Codex runtime to queued context-engine runtime context", async () => {
+  it("keeps selected Codex harness queued compaction on canonical OpenAI context", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -1856,7 +1846,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1864,10 +1854,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
-    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
       provider: "openai",
-      runtimeProvider: "openai-codex",
+      runtimeProvider: undefined,
       model: "gpt-5.5",
     });
   });
@@ -1894,7 +1887,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1902,10 +1895,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
-    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
       provider: "openai",
-      runtimeProvider: "openai-codex",
+      runtimeProvider: undefined,
       model: "gpt-5.5",
     });
   });
@@ -1933,7 +1929,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1952,7 +1948,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("keeps concrete Codex pins when explicit policy is auto for queued compaction", async () => {
+  it("keeps concrete Codex pins on canonical OpenAI for queued compaction", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "auto",
       runtimeSource: "model",
@@ -1975,7 +1971,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1983,10 +1979,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
-    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
       provider: "openai",
-      runtimeProvider: "openai-codex",
+      runtimeProvider: undefined,
       model: "gpt-5.5",
     });
   });
@@ -2010,8 +2009,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -2050,11 +2048,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              openai: {
-                baseUrl: "https://openai-compatible.example/v1",
-                models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
-              },
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -2111,7 +2105,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to context-engine compaction for Codex native binding failures", async () => {
+  it("uses context-engine compaction when no Codex native binding is selected", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: false,
       compacted: false,
@@ -2121,7 +2116,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         agentHarnessId: "codex",
         currentTokenCount: 333,
@@ -2131,7 +2126,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("engine-summary");
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 

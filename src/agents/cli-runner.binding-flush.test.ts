@@ -9,10 +9,13 @@ describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
 
   beforeEach(() => {
+    vi.useRealTimers();
     restoreCliRunnerTestDeps();
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     restoreCliRunnerTestDeps();
   });
 
@@ -34,14 +37,21 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("retries up to three times before giving up", async () => {
+    vi.useFakeTimers();
     const probe = vi.fn(async () => false);
     setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
-    expect(await isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir)).toBe(false);
+    const resultPromise = isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(150);
+
+    await expect(resultPromise).resolves.toBe(false);
     expect(probe).toHaveBeenCalledTimes(3);
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
+    vi.useFakeTimers();
     let calls = 0;
     const probe = vi.fn(async () => {
       calls += 1;
@@ -49,7 +59,11 @@ describe("isCliBindingFlushed", () => {
     });
     setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
-    expect(await isCliBindingFlushed("sid-late", "claude-cli", workspaceDir)).toBe(true);
+    const resultPromise = isCliBindingFlushed("sid-late", "claude-cli", workspaceDir);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(resultPromise).resolves.toBe(true);
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
@@ -72,6 +86,7 @@ describe("isCliBindingFlushed", () => {
       expect(errored).not.toHaveBeenCalled();
       expect(probe).toHaveBeenCalledTimes(3);
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

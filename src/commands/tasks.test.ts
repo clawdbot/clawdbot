@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createManagedTaskFlow,
@@ -14,7 +15,7 @@ import {
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -28,6 +29,11 @@ function readFirstJsonLog(runtime: RuntimeEnv): unknown {
   const calls = vi.mocked(runtime.log).mock.calls;
   const [message] = calls[0] ?? [];
   return JSON.parse(String(message));
+}
+
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
 }
 
 const zeroTaskAuditCounts = {
@@ -136,7 +142,7 @@ describe("tasks commands", () => {
           ageMs: 45 * 60_000,
           status: "running",
           token: runningFlow.flowId,
-          flow: JSON.parse(JSON.stringify(runningFlow)),
+          flow: jsonRoundTrip(runningFlow),
         },
       ]);
     });
@@ -284,6 +290,30 @@ describe("tasks commands", () => {
     });
   });
 
+  it("shows tasks with Date-invalid optional timestamps without crashing", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-invalid-started-at",
+        status: "running",
+        task: "Inspect malformed task timestamp",
+        startedAt: 8_700_000_000_000_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ json: false, lookup: task.taskId }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(`taskId: ${task.taskId}`);
+      expect(joined).toContain("startedAt: n/a");
+    });
+  });
+
   it("explains retained lost task cleanup timing in maintenance text output", async () => {
     await withTaskCommandStateDir(async () => {
       const cleanupAfter = Date.now() + 60_000;
@@ -383,7 +413,7 @@ describe("tasks commands", () => {
         ),
         "utf-8",
       );
-      await state.writeJson("cron/jobs.json", {
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
         version: 1,
         jobs: [
           {
@@ -398,7 +428,7 @@ describe("tasks commands", () => {
             delivery: { mode: "none" },
             createdAtMs: now,
             updatedAtMs: now,
-            state: {},
+            state: { runningAtMs: now - 5_000 },
           },
           {
             id: "done-job",
@@ -416,20 +446,6 @@ describe("tasks commands", () => {
           },
         ],
       });
-      await state.writeJson("cron/jobs-state.json", {
-        version: 1,
-        jobs: {
-          "running-job": {
-            updatedAtMs: now,
-            state: { runningAtMs: now - 5_000 },
-          },
-          "done-job": {
-            updatedAtMs: now,
-            state: {},
-          },
-        },
-      });
-
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 

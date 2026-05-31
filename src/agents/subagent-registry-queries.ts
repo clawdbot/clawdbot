@@ -196,8 +196,7 @@ export function buildSubagentRunReadIndexFromRuns(params: {
     let count = 0;
     const pending = [root];
     const visited = new Set<string>([root]);
-    for (let index = 0; index < pending.length; index += 1) {
-      const requester = pending[index];
+    for (const requester of pending) {
       if (!requester) {
         continue;
       }
@@ -377,8 +376,7 @@ function forEachDescendantRun(
   }
   const pending = [root];
   const visited = new Set<string>([root]);
-  for (let index = 0; index < pending.length; index += 1) {
-    const requester = pending[index];
+  for (const requester of pending) {
     if (!requester) {
       continue;
     }

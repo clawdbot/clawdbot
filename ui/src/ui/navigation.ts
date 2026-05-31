@@ -32,6 +32,7 @@ export type Tab =
   | "communications"
   | "appearance"
   | "automation"
+  | "mcp"
   | "infrastructure"
   | "aiAgents"
   | "debug"
@@ -44,6 +45,7 @@ export const SETTINGS_TABS = [
   "communications",
   "appearance",
   "automation",
+  "mcp",
   "infrastructure",
   "aiAgents",
   "debug",
@@ -67,6 +69,7 @@ const TAB_PATHS: Record<Tab, string> = {
   communications: "/communications",
   appearance: "/appearance",
   automation: "/automation",
+  mcp: "/mcp",
   infrastructure: "/infrastructure",
   aiAgents: "/ai-agents",
   debug: "/debug",
@@ -207,6 +210,8 @@ export function iconForTab(tab: Tab): IconName {
       return "spark";
     case "automation":
       return "terminal";
+    case "mcp":
+      return "wrench";
     case "infrastructure":
       return "globe";
     case "aiAgents":

@@ -1,4 +1,3 @@
-import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
 type AgentPayloadLike = {
@@ -102,18 +101,6 @@ export function collectMessagingToolDeliveredMediaUrls(
     }
   }
   return Array.from(urls);
-}
-
-export function hasDeliveredExpectedMedia(
-  result: AgentDeliveryEvidence,
-  expectedMediaUrls: readonly string[],
-): boolean {
-  const expected = uniqueStrings(normalizeStringEntries(expectedMediaUrls));
-  if (expected.length === 0) {
-    return true;
-  }
-  const delivered = new Set(collectDeliveredMediaUrls(result));
-  return expected.every((url) => delivered.has(url));
 }
 
 function hasPositiveNumber(value: unknown): boolean {

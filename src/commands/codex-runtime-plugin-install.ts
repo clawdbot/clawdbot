@@ -1,4 +1,4 @@
-import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-codex-routing.js";
+import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createRuntimePluginModelSelectionHelpers,

@@ -1,6 +1,6 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
 import { resolveToolDisplay } from "../agents/tool-display.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 /**
  * Channel-agnostic status reaction controller.

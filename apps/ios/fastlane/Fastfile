@@ -29,6 +29,14 @@ def clear_empty_env_var(key)
   ENV.delete(key) unless env_present?(ENV[key])
 end
 
+def screenshot_upload_requested?
+  ENV["DELIVER_SCREENSHOTS"] == "1"
+end
+
+def screenshot_paths
+  Dir[File.join(__dir__, "screenshots", "**", "*.png")]
+end
+
 def maybe_decode_hex_keychain_secret(value)
   return value unless env_present?(value)
 
@@ -314,6 +322,7 @@ platform :ios do
   desc "Upload App Store metadata (and optionally screenshots)"
   lane :metadata do
     sync_ios_versioning!
+    version_metadata = read_ios_version_metadata
     api_key = asc_api_key
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
     app_identifier = ENV["ASC_APP_IDENTIFIER"]
@@ -321,11 +330,21 @@ platform :ios do
     app_identifier = nil unless env_present?(app_identifier)
     app_id = nil unless env_present?(app_id)
 
+    if screenshot_upload_requested? && screenshot_paths.empty?
+      UI.user_error!("DELIVER_SCREENSHOTS=1 but no PNG screenshots were found under apps/ios/fastlane/screenshots.")
+    end
+
     deliver_options = {
       api_key: api_key,
       force: true,
-      skip_screenshots: ENV["DELIVER_SCREENSHOTS"] != "1",
+      app_version: version_metadata[:short_version],
+      copyright: "2026 OpenClaw",
+      primary_category: "PRODUCTIVITY",
+      secondary_category: "UTILITIES",
+      skip_screenshots: !screenshot_upload_requested?,
       skip_metadata: ENV["DELIVER_METADATA"] != "1",
+      skip_binary_upload: true,
+      overwrite_screenshots: screenshot_upload_requested?,
       run_precheck_before_submit: false
     }
     deliver_options[:app_identifier] = app_identifier if app_identifier

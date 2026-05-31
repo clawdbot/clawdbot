@@ -481,6 +481,215 @@ export const SkillsSkillCardResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SkillProposalStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("applied"),
+  Type.Literal("rejected"),
+  Type.Literal("quarantined"),
+  Type.Literal("stale"),
+]);
+const SkillProposalKindSchema = Type.Union([Type.Literal("create"), Type.Literal("update")]);
+const SkillProposalScanStateSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("clean"),
+  Type.Literal("failed"),
+  Type.Literal("quarantined"),
+]);
+const SkillProposalSourceSchema = Type.Union([
+  Type.Literal("skill-workshop"),
+  Type.Literal("cli"),
+  Type.Literal("gateway"),
+]);
+const SkillProposalContentString = Type.String({ minLength: 1, maxLength: 1_048_576 });
+const SkillProposalSupportFileInputSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    content: Type.String({ maxLength: 262_144 }),
+  },
+  { additionalProperties: false },
+);
+const SkillProposalSupportFileSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 0, maximum: 262_144 }),
+    hash: Sha256String,
+    targetExisted: Type.Optional(Type.Boolean()),
+    targetContentHash: Type.Optional(Sha256String),
+  },
+  { additionalProperties: false },
+);
+
+const SkillProposalFindingSchema = Type.Object(
+  {
+    ruleId: NonEmptyString,
+    severity: Type.Union([Type.Literal("info"), Type.Literal("warn"), Type.Literal("critical")]),
+    file: NonEmptyString,
+    line: Type.Integer({ minimum: 1 }),
+    message: NonEmptyString,
+    evidence: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+const SkillProposalScanSchema = Type.Object(
+  {
+    state: SkillProposalScanStateSchema,
+    scannedAt: NonEmptyString,
+    critical: Type.Integer({ minimum: 0 }),
+    warn: Type.Integer({ minimum: 0 }),
+    info: Type.Integer({ minimum: 0 }),
+    findings: Type.Array(SkillProposalFindingSchema),
+  },
+  { additionalProperties: false },
+);
+
+const SkillProposalTargetSchema = Type.Object(
+  {
+    skillName: NonEmptyString,
+    skillKey: NonEmptyString,
+    skillDir: NonEmptyString,
+    skillFile: NonEmptyString,
+    source: Type.Optional(NonEmptyString),
+    currentContentHash: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+const SkillProposalRecordSchema = Type.Object(
+  {
+    schema: Type.Literal("openclaw.skill-workshop.proposal.v1"),
+    id: NonEmptyString,
+    kind: SkillProposalKindSchema,
+    status: SkillProposalStatusSchema,
+    title: NonEmptyString,
+    description: NonEmptyString,
+    createdAt: NonEmptyString,
+    updatedAt: NonEmptyString,
+    createdBy: SkillProposalSourceSchema,
+    proposedVersion: NonEmptyString,
+    draftFile: Type.Literal("PROPOSAL.md"),
+    draftHash: NonEmptyString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileSchema, { maxItems: 64 })),
+    target: SkillProposalTargetSchema,
+    scan: SkillProposalScanSchema,
+    goal: Type.Optional(Type.String()),
+    evidence: Type.Optional(Type.String()),
+    appliedAt: Type.Optional(NonEmptyString),
+    rejectedAt: Type.Optional(NonEmptyString),
+    quarantinedAt: Type.Optional(NonEmptyString),
+    staleAt: Type.Optional(NonEmptyString),
+    statusReason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const SkillProposalManifestEntrySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    kind: SkillProposalKindSchema,
+    status: SkillProposalStatusSchema,
+    title: NonEmptyString,
+    description: NonEmptyString,
+    skillName: NonEmptyString,
+    skillKey: NonEmptyString,
+    createdAt: NonEmptyString,
+    updatedAt: NonEmptyString,
+    scanState: SkillProposalScanStateSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalsListParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalsListResultSchema = Type.Object(
+  {
+    schema: Type.Literal("openclaw.skill-workshop.proposals-manifest.v1"),
+    updatedAt: NonEmptyString,
+    proposals: Type.Array(SkillProposalManifestEntrySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalInspectParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    proposalId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalInspectResultSchema = Type.Object(
+  {
+    record: SkillProposalRecordSchema,
+    content: Type.String(),
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalCreateParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    name: NonEmptyString,
+    description: NonEmptyString,
+    content: SkillProposalContentString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
+    goal: Type.Optional(Type.String()),
+    evidence: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalUpdateParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    skillName: NonEmptyString,
+    description: Type.Optional(NonEmptyString),
+    content: SkillProposalContentString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
+    goal: Type.Optional(Type.String()),
+    evidence: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalReviseParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    proposalId: NonEmptyString,
+    content: SkillProposalContentString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
+    description: Type.Optional(NonEmptyString),
+    goal: Type.Optional(Type.String()),
+    evidence: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalActionParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    proposalId: NonEmptyString,
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalApplyResultSchema = Type.Object(
+  {
+    record: SkillProposalRecordSchema,
+    targetSkillFile: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsProposalRecordResultSchema = SkillProposalRecordSchema;
+
 export const ToolsCatalogParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),

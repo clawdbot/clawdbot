@@ -17,7 +17,7 @@ describe("runCodexAppServerAttempt usage limits", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const authProfileId = "openai-codex:work";
+    const authProfileId = "openai:work";
     const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
@@ -40,7 +40,7 @@ describe("runCodexAppServerAttempt usage limits", () => {
       profiles: {
         [authProfileId]: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
@@ -58,7 +58,7 @@ describe("runCodexAppServerAttempt usage limits", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const authProfileId = "openai-codex:work";
+    const authProfileId = "openai:work";
     rememberCodexRateLimits({
       rateLimits: {
         limitId: "codex",
@@ -87,7 +87,7 @@ describe("runCodexAppServerAttempt usage limits", () => {
       profiles: {
         [authProfileId]: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,

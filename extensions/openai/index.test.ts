@@ -32,11 +32,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("./openai-codex-oauth-flow.runtime.js", () => ({
+vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
-import { createOpenAICodexProviderRuntime } from "./openai-codex-provider.runtime.js";
+import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider.runtime.js";
 
 const registerOpenAIPluginForTest = async () =>
   registerProviderPlugin({
@@ -329,10 +329,9 @@ describe("openai plugin", () => {
     ).toBeLessThan(runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0]);
   });
 
-  it("registers provider-owned OpenAI tool compat hooks for openai and codex", async () => {
+  it("registers provider-owned OpenAI tool compat hooks for API and Codex transports", async () => {
     const { providers } = await registerOpenAIPluginWithHook();
     const openaiProvider = requireRegisteredProvider(providers, "openai");
-    const codexProvider = requireRegisteredProvider(providers, "openai-codex");
     const noParamsTool = {
       name: "ping",
       description: "",
@@ -352,13 +351,13 @@ describe("openai plugin", () => {
       } as never,
       tools: [noParamsTool],
     } as never);
-    const normalizedCodex = codexProvider.normalizeToolSchemas?.({
-      provider: "openai-codex",
+    const normalizedCodex = openaiProvider.normalizeToolSchemas?.({
+      provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
       } as never,
@@ -392,13 +391,13 @@ describe("openai plugin", () => {
       } as never),
     ).toStrictEqual([]);
     expect(
-      codexProvider.inspectToolSchemas?.({
-        provider: "openai-codex",
+      openaiProvider.inspectToolSchemas?.({
+        provider: "openai",
         modelId: "gpt-5.4",
-        modelApi: "openai-codex-responses",
+        modelApi: "openai-chatgpt-responses",
         model: {
-          provider: "openai-codex",
-          api: "openai-codex-responses",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api",
           id: "gpt-5.4",
         } as never,
@@ -415,7 +414,6 @@ describe("openai plugin", () => {
     expectNoBeforePromptBuildHook(on);
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
-    const codexProvider = requireRegisteredProvider(providers, "openai-codex");
     const contributionContext: Parameters<
       NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>
     >[0] = {
@@ -444,12 +442,6 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
-    expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-      sectionOverrides: {
-        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      },
-    });
     expect(
       openaiProvider.resolveSystemPromptContribution?.({
         ...contributionContext,

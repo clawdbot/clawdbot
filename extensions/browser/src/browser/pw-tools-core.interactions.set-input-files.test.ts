@@ -21,8 +21,8 @@ const refLocator = vi.fn(() => {
 });
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 
-const resolveStrictExistingPathsWithinRoot =
-  vi.fn<typeof import("./paths.js").resolveStrictExistingPathsWithinRoot>();
+const resolveStrictExistingUploadPaths =
+  vi.fn<typeof import("./paths.js").resolveStrictExistingUploadPaths>();
 
 vi.mock("./pw-session.js", () => {
   return {
@@ -38,8 +38,7 @@ vi.mock("./pw-session.js", () => {
 
 vi.mock("./paths.js", () => {
   return {
-    DEFAULT_UPLOAD_DIR: "/tmp/openclaw/uploads",
-    resolveStrictExistingPathsWithinRoot,
+    resolveStrictExistingUploadPaths,
   };
 });
 
@@ -62,7 +61,7 @@ describe("setInputFilesViaPlaywright", () => {
     vi.clearAllMocks();
     page = null;
     locator = null;
-    resolveStrictExistingPathsWithinRoot.mockResolvedValue({
+    resolveStrictExistingUploadPaths.mockResolvedValue({
       ok: true,
       paths: ["/private/tmp/openclaw/uploads/ok.txt"],
     });
@@ -78,19 +77,17 @@ describe("setInputFilesViaPlaywright", () => {
       paths: ["/tmp/openclaw/uploads/ok.txt"],
     });
 
-    expect(resolveStrictExistingPathsWithinRoot).toHaveBeenCalledWith({
-      rootDir: "/tmp/openclaw/uploads",
+    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({
       requestedPaths: ["/tmp/openclaw/uploads/ok.txt"],
-      scopeLabel: "uploads directory (/tmp/openclaw/uploads)",
     });
     expect(refLocator).toHaveBeenCalledWith(page, "e7");
     expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
   });
 
   it("throws and skips setInputFiles when use-time validation fails", async () => {
-    resolveStrictExistingPathsWithinRoot.mockResolvedValueOnce({
+    resolveStrictExistingUploadPaths.mockResolvedValueOnce({
       ok: false,
-      error: "Invalid path: must stay within uploads directory",
+      error: "Invalid path: must stay within inbound media directory",
     });
 
     const { setInputFiles } = seedSingleLocatorPage();
@@ -102,7 +99,7 @@ describe("setInputFilesViaPlaywright", () => {
         element: "input[type=file]",
         paths: ["/tmp/openclaw/uploads/missing.txt"],
       }),
-    ).rejects.toThrow("Invalid path: must stay within uploads directory");
+    ).rejects.toThrow("Invalid path: must stay within inbound media directory");
 
     expect(setInputFiles).not.toHaveBeenCalled();
   });

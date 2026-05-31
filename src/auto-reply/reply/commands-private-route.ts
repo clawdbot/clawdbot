@@ -1,13 +1,14 @@
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   getLoadedChannelPlugin,
   listChannelPlugins,
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -19,6 +20,16 @@ export type PrivateCommandRouteTarget = {
   accountId?: string | null;
   threadId?: string | number | null;
 };
+
+const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
+const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
+
+export function resolvePrivateCommandApprovalRouteExpiresAtMs(nowMs = Date.now()): number {
+  return (
+    resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, { nowMs }) ??
+    EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS
+  );
+}
 
 export async function resolvePrivateCommandRouteTargets(params: {
   commandParams: HandleCommandsParams;

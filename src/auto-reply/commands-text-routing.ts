@@ -1,9 +1,9 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
   getActivePluginChannelRegistryVersion,
   requireActivePluginChannelRegistry,
 } from "../plugins/runtime.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { ShouldHandleTextCommandsParams } from "./commands-registry.types.js";
 
 let cachedNativeCommandSurfaces: Set<string> | null = null;

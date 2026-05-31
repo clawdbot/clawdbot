@@ -111,7 +111,7 @@ function acceptsIntent(coverage, id) {
 }
 
 function hasCoverage(coverage) {
-  return !!coverage;
+  return Boolean(coverage);
 }
 
 function seedState() {

@@ -1,13 +1,13 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   hasInternalRuntimeContext,
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 type TranscriptEntry = Record<string, unknown> & {

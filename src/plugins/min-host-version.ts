@@ -11,7 +11,7 @@ export type MinHostVersionRequirement = {
   minimumLabel: string;
 };
 
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type MinHostVersionCheckResult =
   | { ok: true; requirement: MinHostVersionRequirement | null }

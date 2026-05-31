@@ -21,3 +21,4 @@ providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwe
 ## Related docs
 
 - [qwen](/providers/qwen)
+- [qwen-oauth](/providers/qwen-oauth)

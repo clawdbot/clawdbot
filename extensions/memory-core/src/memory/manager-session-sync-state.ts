@@ -1,4 +1,4 @@
-import { type MemorySourceFileStateRow } from "./manager-source-state.js";
+import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = {
   absPath: string;

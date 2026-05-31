@@ -76,7 +76,7 @@ const {
           on: vi.fn(),
           off: vi.fn(),
           destroy: vi.fn(),
-          [Symbol.asyncIterator]: async function* () {},
+          async *[Symbol.asyncIterator]() {},
         })),
       },
       state: {
@@ -2088,12 +2088,11 @@ describe("DiscordVoiceManager", () => {
     const firstConnection = createConnectionMock();
     const secondConnection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
-    let manager!: InstanceType<typeof managerModule.DiscordVoiceManager>;
     entersStateMock.mockImplementationOnce(async () => {
       await manager.destroy();
       throw new Error("The operation was aborted");
     });
-    manager = createManager();
+    const manager: InstanceType<typeof managerModule.DiscordVoiceManager> = createManager();
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -2212,7 +2211,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -2297,7 +2296,7 @@ describe("DiscordVoiceManager", () => {
     );
 
     const commandArgs = lastAgentCommandArgs();
-    expect(commandArgs.model).toBe("openai-codex/gpt-5.5");
+    expect(commandArgs.model).toBe("openai/gpt-5.5");
     expect(commandArgs.messageProvider).toBe("discord-voice");
     expect(commandArgs.toolsAllow).toBeUndefined();
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
@@ -4465,7 +4464,7 @@ describe("DiscordVoiceManager", () => {
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",

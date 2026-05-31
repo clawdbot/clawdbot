@@ -1,10 +1,10 @@
-import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import {
   type CameraFacing,
@@ -108,7 +108,7 @@ export function registerNodesCameraCommands(nodes: Command) {
   nodesCallOpts(
     camera
       .command("snap")
-      .description("Capture a photo from a node camera (prints MEDIA:<path>)")
+      .description("Capture a photo from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back|both>", "Camera facing", "both")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
@@ -196,7 +196,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             defaultRuntime.writeJson({ files: results });
             return;
           }
-          defaultRuntime.log(results.map((r) => `MEDIA:${shortenHomePath(r.path)}`).join("\n"));
+          defaultRuntime.log(results.map((r) => shortenHomePath(r.path)).join("\n"));
         });
       }),
     { timeoutMs: 60_000 },
@@ -205,7 +205,7 @@ export function registerNodesCameraCommands(nodes: Command) {
   nodesCallOpts(
     camera
       .command("clip")
-      .description("Capture a short video clip from a node camera (prints MEDIA:<path>)")
+      .description("Capture a short video clip from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back>", "Camera facing", "front")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
@@ -261,7 +261,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
             return;
           }
-          defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
+          defaultRuntime.log(shortenHomePath(filePath));
         });
       }),
     { timeoutMs: 90_000 },

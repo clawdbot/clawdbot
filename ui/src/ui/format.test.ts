@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatDateTimeMs,
+  formatDateMs,
+  formatMs,
   formatRelativeTimestamp,
+  formatTimeMs,
   formatUnknownText,
   parseSessionKeyParts,
   stripThinkingTags,
@@ -34,6 +38,25 @@ describe("formatAgo", () => {
   it("returns 'n/a' for null/undefined", () => {
     expect(formatRelativeTimestamp(null)).toBe("n/a");
     expect(formatRelativeTimestamp(undefined)).toBe("n/a");
+  });
+});
+
+describe("formatMs", () => {
+  it("formats epoch timestamps", () => {
+    expect(formatMs(0)).not.toBe("n/a");
+  });
+
+  it("returns n/a for Date-invalid timestamps", () => {
+    expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
+    expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
+  });
+});
+
+describe("date/time millisecond formatters", () => {
+  it("return fallback text for Date-invalid timestamps", () => {
+    expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
+    expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
+    expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
   });
 });
 

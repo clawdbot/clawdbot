@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,

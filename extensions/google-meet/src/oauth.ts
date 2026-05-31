@@ -1,4 +1,8 @@
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
   generateOAuthState,
@@ -21,13 +25,17 @@ const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/drive.meet.readonly",
 ] as const;
 
-function resolveGoogleMeetTokenExpiresAt(value: unknown): number {
+function resolveGoogleMeetTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
+  const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
-    return Date.now();
+    return now;
   }
   return (
-    resolveExpiresAtMsFromDurationSeconds(value) ??
-    Date.now() + GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS * 1000
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now }) ??
+    resolveExpiresAtMsFromDurationSeconds(GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS, {
+      nowMs: now,
+    }) ??
+    now
   );
 }
 
@@ -158,6 +166,7 @@ function shouldUseCachedGoogleMeetAccessToken(params: {
     params.accessToken?.trim() &&
     typeof params.expiresAt === "number" &&
     Number.isFinite(params.expiresAt) &&
+    params.expiresAt <= MAX_DATE_TIMESTAMP_MS &&
     params.expiresAt > now + safetyWindowMs,
   );
 }

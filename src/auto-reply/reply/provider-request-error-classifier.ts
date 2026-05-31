@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 export type ProviderRequestErrorCode = "provider_conversation_state_error";
 

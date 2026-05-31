@@ -301,6 +301,42 @@ describe("session lifecycle timestamps", () => {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("ignores out-of-range lifecycle timestamps before header fallback", async () => {
+    const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, "legacy-session.jsonl");
+      const headerTimestamp = "2026-04-20T04:30:00.000Z";
+      await fsPromises.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "legacy-session",
+          timestamp: headerTimestamp,
+          cwd: dir,
+        })}\n`,
+        "utf8",
+      );
+
+      const timestamps = resolveSessionLifecycleTimestamps({
+        storePath,
+        entry: {
+          sessionId: "legacy-session",
+          sessionFile,
+          sessionStartedAt: Number.MAX_SAFE_INTEGER,
+          lastInteractionAt: Number.MAX_SAFE_INTEGER,
+          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+        },
+      });
+
+      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      expect(timestamps.lastInteractionAt).toBeUndefined();
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("session store writer queue", () => {
@@ -385,6 +421,11 @@ describe("session store writer queue", () => {
           threadId: {},
         },
         pendingFinalDeliveryIntentId: 123,
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: [],
+        },
+        restartRecoveryDeliveryRunId: 123,
       },
       "agent:main:good-pending": {
         sessionId: "s-good-pending",
@@ -402,6 +443,13 @@ describe("session store writer queue", () => {
           threadId: 42.5,
         },
         pendingFinalDeliveryIntentId: "intent-1",
+        restartRecoveryDeliveryContext: {
+          channel: "Discord",
+          to: " discord:dm:123 ",
+          accountId: "Main",
+          threadId: "reply-1",
+        },
+        restartRecoveryDeliveryRunId: "run-1",
       },
     } as unknown as Record<string, SessionEntry>);
 
@@ -421,6 +469,8 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
+    expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
 
     expect(good).toMatchObject({
       pendingFinalDelivery: true,
@@ -436,6 +486,13 @@ describe("session store writer queue", () => {
         threadId: 42,
       },
       pendingFinalDeliveryIntentId: "intent-1",
+      restartRecoveryDeliveryContext: {
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        threadId: "reply-1",
+      },
+      restartRecoveryDeliveryRunId: "run-1",
     });
   });
 
@@ -756,6 +813,49 @@ describe("session store writer queue", () => {
     writeSpy.mockRestore();
   });
 
+  it("can persist a known single entry without touching hydrated prompts from other sessions", async () => {
+    const key = "agent:main:single-entry";
+    const otherKey = "agent:main:other-entry";
+    const otherPrompt = `<available_skills>\n${"other prompt\n".repeat(200)}</available_skills>`;
+    const { dir, storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-single-entry", updatedAt: Date.now(), counter: 0 },
+      [otherKey]: {
+        sessionId: "s-other-entry",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: otherPrompt,
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    });
+    loadSessionStore(storePath);
+    await updateSessionStore(storePath, () => undefined, { skipMaintenance: true });
+    const before = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const beforeOtherEntry = before[otherKey];
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const next = { ...store[key], counter: 1 } as SessionEntry;
+        store[key] = next;
+        return next;
+      },
+      {
+        resolveSingleEntryPersistence: (entry) => ({ sessionKey: key, entry }),
+        skipMaintenance: true,
+      },
+    );
+
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect((persisted[key] as Record<string, unknown> | undefined)?.counter).toBe(1);
+    expect(persisted[otherKey]).toStrictEqual(beforeOtherEntry);
+    expect(fs.existsSync(path.join(dir, "skills-prompts"))).toBe(true);
+  });
+
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({
@@ -869,14 +969,14 @@ describe("session store writer queue", () => {
       store[key] = {
         sessionId: "sess-acp",
         updatedAt: Date.now(),
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.4",
       };
     });
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.acp).toEqual(acp);
-    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.modelProvider).toBe("openai");
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 

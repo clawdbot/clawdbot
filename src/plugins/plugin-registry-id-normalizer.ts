@@ -29,6 +29,7 @@ function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): read
     ...(plugin.setup?.cliBackends ?? []),
     ...collectObjectKeys(plugin.modelCatalog?.providers),
     ...collectObjectKeys(plugin.modelCatalog?.aliases),
+    ...collectObjectKeys(plugin.providerAuthAliases),
     ...(plugin.legacyPluginIds ?? []),
   ];
 }

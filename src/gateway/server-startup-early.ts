@@ -13,6 +13,8 @@ type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
 type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 
+const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
+
 async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,
@@ -111,7 +113,7 @@ export async function startGatewayEarlyRuntime(params: {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
-          import("../skills/runtime/remote.js"),
+          loadRemoteSkillsRuntimeModule(),
           import("../tasks/task-registry.maintenance.js"),
         ]),
       );
@@ -132,7 +134,7 @@ export async function startGatewayEarlyRuntime(params: {
         const [{ registerSkillsChangeListener }, { refreshRemoteBinsForConnectedNodes }] =
           await Promise.all([
             import("../skills/runtime/refresh.js"),
-            import("../skills/runtime/remote.js"),
+            loadRemoteSkillsRuntimeModule(),
           ]);
         return registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {

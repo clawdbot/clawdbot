@@ -293,6 +293,33 @@ describe("gateway lock", () => {
     }
   });
 
+  it("bounds oversized lock polling intervals by the acquire timeout", async () => {
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+    const sleepDelays: number[] = [];
+    let now = 0;
+
+    await expect(
+      acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 5,
+        pollIntervalMs: Number.MAX_SAFE_INTEGER,
+        staleMs: 10_000,
+        platform: "darwin",
+        now: () => now,
+        sleep: async (ms) => {
+          sleepDelays.push(ms);
+          now = 10;
+        },
+        lockDir: resolveTestLockDir(),
+        readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(sleepDelays).toEqual([5]);
+  });
+
   it("returns null when multi-gateway override is enabled", async () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
@@ -309,6 +336,32 @@ describe("gateway lock", () => {
       lockDir: resolveTestLockDir(),
     });
     expect(lock).toBeNull();
+  });
+
+  it("falls back instead of throwing when lock payload clock is outside Date range", async () => {
+    const env = await makeEnv();
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00Z"));
+    const lock = expectGatewayLock(
+      await acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 30,
+        pollIntervalMs: 2,
+        now: () => 8_640_000_000_000_001,
+        sleep: async () => {},
+        lockDir: resolveTestLockDir(),
+      }),
+    );
+
+    try {
+      const payload = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as {
+        createdAt?: string;
+      };
+      expect(payload.createdAt).toBe("2026-05-30T12:00:00.000Z");
+    } finally {
+      dateNowSpy.mockRestore();
+      await lock.release();
+    }
   });
 
   it("wraps unexpected fs errors as GatewayLockError", async () => {

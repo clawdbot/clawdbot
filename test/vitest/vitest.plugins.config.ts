@@ -5,6 +5,7 @@ export function createPluginsVitestConfig(env?: Record<string, string | undefine
     dir: "src/plugins",
     env,
     exclude: ["src/plugins/contracts/**", "src/plugins/loader.test.ts"],
+    fileParallelism: false,
     isolate: false,
     name: "plugins",
     passWithNoTests: true,

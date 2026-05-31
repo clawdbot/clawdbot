@@ -515,12 +515,12 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [
               {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
@@ -548,12 +548,12 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [
               {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
@@ -572,12 +572,12 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [
               {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },

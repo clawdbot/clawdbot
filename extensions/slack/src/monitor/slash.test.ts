@@ -312,7 +312,7 @@ function createArgMenusHarness() {
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
     },
-    options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+    options(this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
       optionsReceiverContexts.push(this);
       options.set(id, handler);
     },

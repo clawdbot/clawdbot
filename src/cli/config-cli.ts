@@ -1,6 +1,14 @@
 import fs from "node:fs";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueValues,
+} from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   type ConfigFileSnapshot,
@@ -56,11 +64,6 @@ import {
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
@@ -151,7 +154,7 @@ function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
     }
 
     let nextAgent = agent;
-    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+    if (Object.hasOwn(agent, "model")) {
       const model = normalizeAgentDefaultModelValueForConfigMutation(agent.model);
       if (model !== agent.model) {
         nextAgent = { ...nextAgent, model };
@@ -452,7 +455,7 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
 }
 
 function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 function formatDoctorHint(message: string): string {
@@ -1760,7 +1763,7 @@ function valueHasAutoManagedChild(value: unknown, childPath: ReadonlyArray<PathS
       return false;
     }
     const record = cursor as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(record, segment)) {
+    if (!Object.hasOwn(record, segment)) {
       return false;
     }
     cursor = record[segment];

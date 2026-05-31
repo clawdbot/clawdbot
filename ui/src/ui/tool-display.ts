@@ -109,7 +109,7 @@ export function resolveToolDisplay(params: {
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  let { verb, detail } = resolveToolVerbAndDetailForArgs({
+  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
@@ -119,6 +119,8 @@ export function resolveToolDisplay(params: {
     toolDetailMode: params.detailMode,
     detailCoerce: { includeFalse: true, includeZero: true },
   });
+  const { verb } = toolDisplayParts;
+  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);

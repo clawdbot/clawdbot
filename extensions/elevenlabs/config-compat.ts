@@ -62,7 +62,7 @@ function hasLegacyTalkFields(value: unknown): value is JsonRecord {
   if (!talk) {
     return false;
   }
-  return LEGACY_TALK_FIELD_KEYS.some((key) => Object.prototype.hasOwnProperty.call(talk, key));
+  return LEGACY_TALK_FIELD_KEYS.some((key) => Object.hasOwn(talk, key));
 }
 
 function resolveTalkMigrationTargetProviderId(talk: JsonRecord): string | null {
@@ -117,7 +117,7 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
   const movedKeys: string[] = [];
 
   for (const key of LEGACY_TALK_FIELD_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(nextTalk, key)) {
+    if (!Object.hasOwn(nextTalk, key)) {
       continue;
     }
     legacyFields[key] = nextTalk[key];

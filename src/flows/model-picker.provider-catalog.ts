@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -6,7 +7,6 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "../agents/models-config.providers.secrets.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveProviderCatalogPluginIdsForFilter } from "../commands/models/list.provider-catalog.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -48,7 +48,7 @@ const providerRuntimeDeps = {
 };
 
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
-const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat"]);
+const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat", "stop"]);
 
 export const testing = {
   setProviderRuntimeDepsForTest(
@@ -157,6 +157,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;
+  stop?: string[];
 };
 export type SupportedTransport = AgentRuntimeTransport;
 
@@ -295,6 +296,7 @@ export function resolvePreparedExtraParams(params: {
         workspaceDir: params.workspaceDir,
         provider: params.provider,
         modelId: params.modelId,
+        model: params.model,
         extraParams: merged,
         thinkingLevel: params.thinkingLevel,
       },
@@ -367,7 +369,7 @@ function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
   provider: string;
   modelId: string;
 }): boolean {
-  if (params.provider !== "openai" && params.provider !== "openai-codex") {
+  if (params.provider !== "openai") {
     return false;
   }
   return /^gpt-5(?:[.-]|$)/i.test(params.modelId);
@@ -416,6 +418,17 @@ export function resolveExplicitSettingsTransport(params: {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
+}
+
+function normalizeStopSequences(value: unknown): string[] | undefined {
+  const list = typeof value === "string" ? [value] : Array.isArray(value) ? value : undefined;
+  if (!list) {
+    return undefined;
+  }
+  const sequences = list.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+  return sequences.length > 0 ? sequences : undefined;
 }
 
 function createStreamFnWithExtraParams(
@@ -492,6 +505,10 @@ function createStreamFnWithExtraParams(
   }
   if (typeof resolvedSeed === "number") {
     streamParams.seed = resolvedSeed;
+  }
+  const resolvedStop = normalizeStopSequences(extraParams.stop);
+  if (resolvedStop) {
+    streamParams.stop = resolvedStop;
   }
 
   const readSupportsPromptCacheKey = (m: unknown): boolean => {

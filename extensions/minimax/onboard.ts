@@ -61,7 +61,7 @@ function applyMinimaxApiConfigWithBaseUrl(
 
 export function applyMinimaxApiProviderConfig(
   cfg: OpenClawConfig,
-  modelId: string = "MiniMax-M2.7",
+  modelId = "MiniMax-M2.7",
 ): OpenClawConfig {
   return applyMinimaxApiProviderConfigWithBaseUrl(cfg, {
     providerId: "minimax",
@@ -72,7 +72,7 @@ export function applyMinimaxApiProviderConfig(
 
 export function applyMinimaxApiConfig(
   cfg: OpenClawConfig,
-  modelId: string = "MiniMax-M2.7",
+  modelId = "MiniMax-M2.7",
 ): OpenClawConfig {
   return applyMinimaxApiConfigWithBaseUrl(cfg, {
     providerId: "minimax",
@@ -83,7 +83,7 @@ export function applyMinimaxApiConfig(
 
 export function applyMinimaxApiProviderConfigCn(
   cfg: OpenClawConfig,
-  modelId: string = "MiniMax-M2.7",
+  modelId = "MiniMax-M2.7",
 ): OpenClawConfig {
   return applyMinimaxApiProviderConfigWithBaseUrl(cfg, {
     providerId: "minimax",
@@ -94,7 +94,7 @@ export function applyMinimaxApiProviderConfigCn(
 
 export function applyMinimaxApiConfigCn(
   cfg: OpenClawConfig,
-  modelId: string = "MiniMax-M2.7",
+  modelId = "MiniMax-M2.7",
 ): OpenClawConfig {
   return applyMinimaxApiConfigWithBaseUrl(cfg, {
     providerId: "minimax",

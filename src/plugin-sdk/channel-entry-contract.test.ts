@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
@@ -296,7 +296,74 @@ async function expectBuiltArtifactNodeRequireFastPath(
   }
 }
 
+function runCompiledEsmSidecarFastPathProbe(): ReturnType<typeof spawnSync> {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+  tempDirs.push(tempRoot);
+  const probePath = path.join(tempRoot, "probe.mjs");
+  const channelEntryContractModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src", "plugin-sdk", "channel-entry-contract.ts"),
+  ).href;
+
+  writeJson(path.join(tempRoot, "package.json"), {
+    name: "openclaw",
+    type: "module",
+    bin: { openclaw: "./openclaw.mjs" },
+    exports: {
+      "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
+      "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
+    },
+  });
+  fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
+  fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
+  fs.writeFileSync(
+    path.join(tempRoot, "dist", "plugin-sdk", "root-alias.cjs"),
+    "module.exports = {};\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
+    'export const defineChannelMessageAdapter = () => "adapter";\n',
+    "utf8",
+  );
+
+  const pluginRoot = path.join(tempRoot, "dist", "extensions", "slack");
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  const importerPath = path.join(pluginRoot, "index.js");
+  fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "sidecar.js"),
+    'import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const sentinel = defineChannelMessageAdapter();\n',
+    "utf8",
+  );
+
+  fs.writeFileSync(
+    probePath,
+    [
+      `import { loadBundledEntryExportSync } from ${JSON.stringify(channelEntryContractModuleUrl)};`,
+      `const value = loadBundledEntryExportSync(${JSON.stringify(pathToFileURL(importerPath).href)}, {`,
+      '  specifier: "./sidecar.js",',
+      '  exportName: "sentinel",',
+      "});",
+      "console.log(value);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  return spawnSync(process.execPath, ["--import", "tsx", probePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
+  });
+}
+
 describe("loadBundledEntryExportSync", () => {
+  let compiledEsmSidecarFastPathResult: ReturnType<typeof spawnSync>;
+
+  beforeAll(() => {
+    compiledEsmSidecarFastPathResult = runCompiledEsmSidecarFastPathProbe();
+  });
+
   it("includes importer and resolved path context when a bundled sidecar is missing", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
@@ -503,69 +570,12 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("keeps compiled ESM sidecars with SDK imports on the nodeRequire fast-path", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
-    const probePath = path.join(tempRoot, "probe.mjs");
-    const channelEntryContractModuleUrl = pathToFileURL(
-      path.join(process.cwd(), "src", "plugin-sdk", "channel-entry-contract.ts"),
-    ).href;
-
-    writeJson(path.join(tempRoot, "package.json"), {
-      name: "openclaw",
-      type: "module",
-      bin: { openclaw: "./openclaw.mjs" },
-      exports: {
-        "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
-        "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
-      },
-    });
-    fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
-    fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tempRoot, "dist", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
-      'export const defineChannelMessageAdapter = () => "adapter";\n',
-      "utf8",
-    );
-
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "slack");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    const importerPath = path.join(pluginRoot, "index.js");
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginRoot, "sidecar.js"),
-      'import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const sentinel = defineChannelMessageAdapter();\n',
-      "utf8",
-    );
-
-    fs.writeFileSync(
-      probePath,
-      [
-        `import { loadBundledEntryExportSync } from ${JSON.stringify(channelEntryContractModuleUrl)};`,
-        `const value = loadBundledEntryExportSync(${JSON.stringify(pathToFileURL(importerPath).href)}, {`,
-        '  specifier: "./sidecar.js",',
-        '  exportName: "sentinel",',
-        "});",
-        "console.log(value);",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync(process.execPath, ["--import", "tsx", probePath], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
-    });
+    const result = compiledEsmSidecarFastPathResult;
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("adapter");
-    expect(result.stderr).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
-    expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
+    expect(String(result.stdout).trim()).toBe("adapter");
+    expect(String(result.stderr)).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
+    expect(String(result.stderr)).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {

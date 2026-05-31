@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
 
 function withStdinIsRaw<T>(isRaw: boolean, run: () => T): T {
@@ -129,5 +130,26 @@ describe("cli progress", () => {
     next.done();
 
     expect(firstWrites).toStrictEqual([]);
+  });
+
+  it("clamps oversized delayed progress timers", () => {
+    const stream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const progress = createCliProgress({
+        label: "Delayed",
+        stream,
+        fallback: "line",
+        delayMs: Number.MAX_SAFE_INTEGER,
+      });
+      progress.done();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });

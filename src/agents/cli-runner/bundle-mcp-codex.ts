@@ -85,6 +85,9 @@ export function buildCodexUserMcpServersThreadConfigPatch(
   }
   const mcp_servers: CodexThreadConfigObject = {};
   for (const [name, server] of entries) {
+    if (server.enabled === false) {
+      continue;
+    }
     if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)) {
       continue;
     }

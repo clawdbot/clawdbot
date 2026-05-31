@@ -4,6 +4,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +22,6 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -787,8 +787,8 @@ describe("sanitizeChatHistoryMessages", () => {
             openclawReasoningReplay: {
               v: 1,
               source: "openai-responses",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
+              provider: "openai",
+              api: "openai-chatgpt-responses",
               model: "gpt-5.5",
             },
           },
@@ -1726,7 +1726,8 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
-    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    const hasExplicitPlan =
+      params.params !== undefined && Object.hasOwn(params.params, "systemRunPlan");
     if (
       !hasExplicitPlan &&
       (requestParams as { host?: string }).host === "node" &&

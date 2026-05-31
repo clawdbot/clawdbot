@@ -1,4 +1,4 @@
-import { type AuthProfileStore, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import type { AuthProfileStore, OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   resolveProviderHttpRequestConfig,

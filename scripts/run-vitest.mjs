@@ -17,7 +17,10 @@ const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
-export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
+export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
+export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 60_000;
+const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
@@ -141,7 +144,11 @@ export function resolveVitestCliEntry({
 }
 
 export function resolveVitestNoOutputTimeoutMs(env = process.env) {
-  return parsePositiveInt(env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS);
+  return parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
+}
+
+export function resolveVitestNoOutputHeartbeatMs(env = process.env) {
+  return parsePositiveInt(env[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]);
 }
 
 function resolveBooleanModeFlag(argv, index, longName, shortName = null) {
@@ -216,9 +223,6 @@ function resolveExplicitVitestMode(argv) {
 }
 
 export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
-  if (Object.hasOwn(env, "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS")) {
-    return env;
-  }
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
     return env;
@@ -226,9 +230,19 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   if (explicitMode !== "run" && !isTruthyEnvValue(env.CI)) {
     return env;
   }
+  const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
+  const timeoutMs = hasTimeout
+    ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
+    : DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS;
+  const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...env,
-    OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: String(DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS),
+    ...(!hasTimeout
+      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS) }
+      : {}),
+    ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
+      ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
+      : {}),
   };
 }
 
@@ -377,8 +391,7 @@ function hasExplicitDisabledRunFlag(argv) {
 }
 
 function hasSeparateVitestOptionValueArg(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (const arg of argv) {
     if (arg === "--") {
       return false;
     }
@@ -508,6 +521,10 @@ export function installVitestNoOutputWatchdog(params) {
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const forceKillAfterMs = params.forceKillAfterMs ?? 5_000;
+  const heartbeatMs =
+    params.heartbeatMs && params.heartbeatMs > 0 && params.heartbeatMs < timeoutMs
+      ? params.heartbeatMs
+      : null;
   const streams = params.streams?.filter(Boolean) ?? [];
   const label = params.label?.trim();
   const suffix = label ? ` (${label})` : "";
@@ -515,6 +532,15 @@ export function installVitestNoOutputWatchdog(params) {
   let active = true;
   let silenceTimer = null;
   let forceKillTimer = null;
+  let heartbeatTimer = null;
+  let silentForMs = 0;
+
+  const clearHeartbeatTimer = () => {
+    if (heartbeatTimer !== null) {
+      clearTimeoutFn(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
 
   const clearForceKillTimer = () => {
     if (forceKillTimer !== null) {
@@ -530,15 +556,35 @@ export function installVitestNoOutputWatchdog(params) {
     }
   };
 
+  const scheduleHeartbeatTimer = () => {
+    if (!active || heartbeatMs === null) {
+      return;
+    }
+    clearHeartbeatTimer();
+    heartbeatTimer = setTimeoutFn(() => {
+      if (!active) {
+        return;
+      }
+      silentForMs += heartbeatMs;
+      params.log?.(`[vitest] still running with no output for ${silentForMs}ms${suffix}.`);
+      if (silentForMs + heartbeatMs < timeoutMs) {
+        scheduleHeartbeatTimer();
+      }
+    }, heartbeatMs);
+  };
+
   const resetSilenceTimer = () => {
     if (!active) {
       return;
     }
     clearSilenceTimer();
+    silentForMs = 0;
+    scheduleHeartbeatTimer();
     silenceTimer = setTimeoutFn(() => {
       if (!active) {
         return;
       }
+      clearHeartbeatTimer();
       params.log?.(
         `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group${suffix}.`,
       );
@@ -580,6 +626,7 @@ export function installVitestNoOutputWatchdog(params) {
     active = false;
     clearSilenceTimer();
     clearForceKillTimer();
+    clearHeartbeatTimer();
     for (const { stream, handler } of listeners) {
       stream.off("data", handler);
     }
@@ -629,6 +676,7 @@ export function spawnWatchedVitestProcess({
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
     timeoutMs: resolveVitestNoOutputTimeoutMs(env),
+    heartbeatMs: resolveVitestNoOutputHeartbeatMs(env),
     label,
     log: (message) => {
       console.error(message);

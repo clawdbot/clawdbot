@@ -308,6 +308,10 @@ ACP sessions run non-interactively — there is no TTY to approve or deny file-w
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 
+For the broader comparison between OpenClaw `tools.exec.mode`, Codex Guardian
+approvals, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
+
 ### `permissionMode`
 
 Controls which operations the harness agent can perform without prompting.

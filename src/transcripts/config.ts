@@ -1,4 +1,4 @@
-import { normalizeOptionalString as readString } from "../shared/string-coerce.js";
+import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
 export type TranscriptsAutoStartConfig = {
   providerId: string;

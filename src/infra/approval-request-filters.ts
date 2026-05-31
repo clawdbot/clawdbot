@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ApprovalRequestFilterInput = {
   agentId?: string | null;

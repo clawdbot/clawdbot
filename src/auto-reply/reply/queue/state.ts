@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import {
   completeFollowupRunLifecycle,

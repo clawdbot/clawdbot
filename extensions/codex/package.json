@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@openai/codex": "0.134.0",
-    "typebox": "1.1.38",
+    "@openai/codex": "0.135.0",
+    "typebox": "1.1.39",
     "ws": "8.21.0",
     "zod": "4.4.3"
   },

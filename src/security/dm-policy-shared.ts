@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
@@ -8,7 +9,6 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export function resolvePinnedMainDmOwnerFromAllowlist(params: {
   dmScope?: string | null;

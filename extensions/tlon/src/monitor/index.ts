@@ -371,7 +371,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             const parsed = parseChannelNest(groupChannel);
             if (parsed) {
               await sendGroupMessage({
-                api: api,
+                api,
                 fromShip: botShipName,
                 hostShip: parsed.hostShip,
                 channelName: parsed.channelName,
@@ -380,7 +380,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             }
           } else {
             await sendDm({
-              api: api,
+              api,
               fromShip: botShipName,
               toShip: senderShip,
               text: noHistoryMsg,
@@ -408,7 +408,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           const parsed = parseChannelNest(groupChannel);
           if (parsed) {
             await sendGroupMessage({
-              api: api,
+              api,
               fromShip: botShipName,
               hostShip: parsed.hostShip,
               channelName: parsed.channelName,
@@ -416,7 +416,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             });
           }
         } else {
-          await sendDm({ api: api, fromShip: botShipName, toShip: senderShip, text: errorMsg });
+          await sendDm({ api, fromShip: botShipName, toShip: senderShip, text: errorMsg });
         }
         return;
       }
@@ -627,7 +627,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               return { visibleReplySent: false };
             }
             await sendGroupMessage({
-              api: api,
+              api,
               fromShip: botShipName,
               hostShip: parsed.hostShip,
               channelName: parsed.channelName,
@@ -638,7 +638,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           await sendDm({
-            api: api,
+            api,
             fromShip: botShipName,
             toShip: senderShip,
             text: replyText,
@@ -889,9 +889,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           });
         },
       });
-      if (processed.kind === "duplicate") {
-        return;
-      }
+      void processed;
     } catch (error: unknown) {
       runtime.error?.(`[tlon] Error handling channel firehose event: ${formatErrorMessage(error)}`);
     }
@@ -1081,9 +1079,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           });
         },
       });
-      if (processed.kind === "duplicate") {
-        return;
-      }
+      void processed;
     } catch (error: unknown) {
       runtime.error?.(`[tlon] Error handling chat firehose event: ${formatErrorMessage(error)}`);
     }

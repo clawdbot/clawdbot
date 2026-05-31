@@ -1,6 +1,7 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
@@ -10,7 +11,6 @@ import {
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {

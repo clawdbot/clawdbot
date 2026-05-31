@@ -33,8 +33,7 @@ export function inspectDiscordAccount(params: {
   const enabled = params.cfg.channels?.discord?.enabled !== false && merged.enabled !== false;
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const hasAccountToken = Boolean(
-    accountConfig &&
-    Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
+    accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
   );
   const accountToken = inspectDiscordConfiguredToken(accountConfig?.token);
   if (accountToken) {

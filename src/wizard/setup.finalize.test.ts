@@ -150,7 +150,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 

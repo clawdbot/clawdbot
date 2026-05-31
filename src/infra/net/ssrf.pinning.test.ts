@@ -27,7 +27,7 @@ describe("ssrf pinning", () => {
         if (err) {
           reject(err);
         } else {
-          resolve({ address: address, family });
+          resolve({ address, family });
         }
       });
     });
@@ -60,7 +60,7 @@ describe("ssrf pinning", () => {
           if (err) {
             reject(err);
           } else {
-            resolve({ address: address, family });
+            resolve({ address, family });
           }
         });
       });
@@ -70,7 +70,7 @@ describe("ssrf pinning", () => {
           if (err) {
             reject(err);
           } else {
-            resolve({ address: address, family });
+            resolve({ address, family });
           }
         });
       });
@@ -136,7 +136,7 @@ describe("ssrf pinning", () => {
         if (err) {
           reject(err);
         } else {
-          resolve({ address: address });
+          resolve({ address });
         }
       });
     });

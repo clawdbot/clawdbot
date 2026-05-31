@@ -228,7 +228,7 @@ describe("sandbox fs bridge anchored ops", () => {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {
-          return dockerExecResult("regular file|9007199254740992|not-a-date\n");
+          return dockerExecResult("regular file|9007199254740992|8640000000001\n");
         }
         return dockerExecResult("");
       });

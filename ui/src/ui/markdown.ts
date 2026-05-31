@@ -349,13 +349,11 @@ md.linkify.add("www", {
           if (c === open) {
             balance[close] = balance[close] === 0 ? 1 : 0;
           }
-        } else {
+        } else if (c === open) {
           // Distinct open/close (e.g., ())
-          if (c === open) {
-            balance[close]++;
-          } else if (c === close) {
-            balance[close]--;
-          }
+          balance[close]++;
+        } else if (c === close) {
+          balance[close]--;
         }
       }
     }
@@ -394,13 +392,11 @@ md.linkify.add("www", {
             len--;
             continue;
           }
-        } else {
+        } else if (balance[ch] < 0) {
           // Distinct pair: strip if more closes than opens
-          if (balance[ch] < 0) {
-            balance[ch]++;
-            len--;
-            continue;
-          }
+          balance[ch]++;
+          len--;
+          continue;
         }
       }
       break;

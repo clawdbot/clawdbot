@@ -188,6 +188,57 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 }
 ```
 
+### Screenshot vision (text-only model support)
+
+When the main model is text-only (no vision/multimodal support), browser
+screenshots return image blocks that the model cannot read. Browser screenshots
+reuse the existing image-understanding configuration, so an image model
+configured for media understanding can describe screenshots as text without any
+browser-specific model settings.
+
+```json5
+{
+  tools: {
+    media: {
+      image: {
+        models: [
+          { provider: "bytedance", model: "doubao-seed-2.0-pro" },
+          // Add fallback candidates; first success wins
+          { provider: "openai", model: "gpt-4o" },
+        ],
+      },
+      // Shared media models also work when tagged for image support.
+      // models: [{ provider: "openai", model: "gpt-4o", capabilities: ["image"] }],
+    },
+  },
+  agents: {
+    defaults: {
+      // Existing image-model defaults are also honored.
+      // imageModel: { primary: "openai/gpt-4o" },
+    },
+  },
+}
+```
+
+**How it works:**
+
+1. Agent calls `browser screenshot` → image captured to disk as usual.
+2. The browser tool asks the existing image-understanding runtime whether it
+   can describe the screenshot using configured media image models, shared media
+   models, image-model defaults, or an auth-backed image provider.
+3. The vision model returns a text description, which is wrapped with
+   `wrapExternalContent` (prompt injection guard) and returned to the agent
+   as a text block instead of an image block.
+4. If image understanding is unavailable, skipped, or fails, the browser falls
+   back to returning the original image block.
+
+Use the existing `tools.media.image` / `tools.media.models` fields for model
+fallbacks, timeouts, byte limits, profiles, and provider request settings.
+
+If the active main model already supports vision and no explicit image
+understanding model is configured, OpenClaw keeps the normal image result so the
+main model can read the screenshot directly.
+
 <AccordionGroup>
 
 <Accordion title="Ports and reachability">

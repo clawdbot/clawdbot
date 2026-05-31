@@ -148,6 +148,32 @@ describe("Codex rate limit blocking resets", () => {
     expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBe(weeklyReset * 1000);
     expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedUntilMs).toBe(weeklyReset * 1000);
   });
+
+  it("ignores unsafe reset timestamps instead of formatting invalid dates", () => {
+    const nowMs = 1_700_000_000_000;
+    const payload = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 100,
+            windowDurationMins: 10_080,
+            resetsAt: 8_700_000_000_000,
+          },
+        },
+      },
+    };
+
+    expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBeUndefined();
+    expect(
+      formatCodexUsageLimitErrorMessage({
+        message: "You've reached your usage limit.",
+        codexErrorInfo: "usageLimitExceeded",
+        rateLimits: payload,
+        nowMs,
+      }),
+    ).toContain("OpenClaw could not determine a reset time from Codex.");
+  });
 });
 
 describe("summarizeCodexRateLimits", () => {

@@ -28,7 +28,7 @@ export function truncateToVisualLines(
   text: string,
   maxVisualLines: number,
   width: number,
-  paddingX: number = 0,
+  paddingX = 0,
 ): VisualTruncateResult {
   if (!text) {
     return { visualLines: [], skippedCount: 0 };

@@ -11,6 +11,7 @@ import {
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -33,7 +34,8 @@ const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     repoRoot: process.cwd(),
     outputDir: path.join(
@@ -68,10 +70,10 @@ function parseArgs(argv) {
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }
@@ -80,7 +82,7 @@ function parseArgs(argv) {
     };
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--repo-root":
         options.repoRoot = path.resolve(readValue());
         break;
@@ -227,7 +229,7 @@ function readOptionalNonNegativeIntEnv(name) {
 export function createGauntletPrebuildCommand(repoRoot) {
   return {
     command: process.execPath,
-    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "cliStartup"],
+    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "qaRuntime"],
   };
 }
 
@@ -731,19 +733,78 @@ function runQaChunks(params) {
       timeoutMs: params.qaTimeoutMs,
     });
     const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-    const qaSummary = fs.existsSync(summaryPath)
-      ? JSON.parse(fs.readFileSync(summaryPath, "utf8"))
-      : null;
+    const qaSummaryResult = readQaSuiteSummary(summaryPath);
+    const qaDiagnosticFailure =
+      row.status === 0 && !row.timedOut ? qaSummaryResult.diagnosticFailure : null;
     params.rows.push({
       ...row,
       pluginId: pluginIdLabel,
-      ...(qaSummary?.metrics ? { qaMetrics: qaSummary.metrics } : {}),
+      qaSummaryPath: summaryPath,
+      ...(qaDiagnosticFailure ? { diagnosticFailure: qaDiagnosticFailure } : {}),
+      ...(qaSummaryResult.diagnosticDetail
+        ? { diagnosticDetail: qaSummaryResult.diagnosticDetail }
+        : {}),
+      ...(qaSummaryResult.summary?.metrics ? { qaMetrics: qaSummaryResult.summary.metrics } : {}),
     });
-    if (fs.existsSync(summaryPath)) {
-      summaries.push(qaSummary);
+    if (qaSummaryResult.summary) {
+      summaries.push(qaSummaryResult.summary);
     }
   }
   return summaries;
+}
+
+function readQaSuiteSummary(summaryPath) {
+  if (!fs.existsSync(summaryPath)) {
+    return {
+      diagnosticFailure: "qa-summary-missing",
+      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
+      summary: null,
+    };
+  }
+  try {
+    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+    const invalidReason = validateQaSuiteSummary(summary);
+    if (invalidReason) {
+      return {
+        diagnosticFailure: "qa-summary-invalid",
+        diagnosticDetail: invalidReason,
+        summary: null,
+      };
+    }
+    return {
+      diagnosticFailure: null,
+      diagnosticDetail: null,
+      summary,
+    };
+  } catch (error) {
+    return {
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      summary: null,
+    };
+  }
+}
+
+function validateQaSuiteSummary(summary) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return "QA suite summary must be a JSON object";
+  }
+  if (!Array.isArray(summary.scenarios)) {
+    return "QA suite summary missing scenarios array";
+  }
+  if (
+    !summary.counts ||
+    typeof summary.counts !== "object" ||
+    !Number.isFinite(summary.counts.total) ||
+    !Number.isFinite(summary.counts.passed) ||
+    !Number.isFinite(summary.counts.failed)
+  ) {
+    return "QA suite summary missing numeric counts";
+  }
+  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
+    return "QA suite summary missing run metadata";
+  }
+  return null;
 }
 
 async function main() {

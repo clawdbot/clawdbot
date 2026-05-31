@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   parseTtsDirectives,
   type SpeechModelOverridePolicy,
@@ -60,8 +61,10 @@ export function createTelephonyTtsProvider(params: {
   );
   const providerConfigs = collectTelephonyProviderConfigs(ttsConfig);
   const activeProvider = normalizeProviderId(ttsConfig?.provider);
-  const synthesisTimeoutMs =
-    mergedConfig.messages?.tts?.timeoutMs ?? TELEPHONY_DEFAULT_TTS_TIMEOUT_MS;
+  const synthesisTimeoutMs = resolveTimerTimeoutMs(
+    mergedConfig.messages?.tts?.timeoutMs,
+    TELEPHONY_DEFAULT_TTS_TIMEOUT_MS,
+  );
 
   return {
     synthesisTimeoutMs,

@@ -1,5 +1,5 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { escapeRegExp } from "../utils.js";
 
 export function extractModelDirective(
@@ -50,6 +50,6 @@ export function extractModelDirective(
     rawModel,
     rawProfile,
     rawRuntime,
-    hasDirective: !!match,
+    hasDirective: Boolean(match),
   };
 }

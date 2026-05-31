@@ -508,7 +508,7 @@ describe("executeSlashCommand directives", () => {
       if (method === "sessions.list") {
         return {
           defaults: {
-            modelProvider: "openai-codex",
+            modelProvider: "openai",
             model: "gpt-5.5",
             thinkingLevels: [
               { id: "off", label: "off" },
@@ -537,7 +537,7 @@ describe("executeSlashCommand directives", () => {
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-5.5", provider: "openai-codex", reasoning: true }],
+          models: [{ id: "gpt-5.5", provider: "openai", reasoning: true }],
         };
       }
       if (method === "sessions.patch") {

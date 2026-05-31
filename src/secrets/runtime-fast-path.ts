@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -15,7 +16,6 @@ import { resolveOAuthPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { hasCredentialBearingObjectValue, hasSecretRefCandidate } from "./runtime-secret-scan.js";
 import type { SecretDefaults } from "./runtime-shared.js";
@@ -170,7 +170,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
     }
     const pluginConfig = (entry as { config?: unknown }).config;
     return (
-      !!pluginConfig &&
+      pluginConfig !== null &&
       typeof pluginConfig === "object" &&
       !Array.isArray(pluginConfig) &&
       ("webSearch" in pluginConfig || (!fetchExplicitlyDisabled && "webFetch" in pluginConfig))

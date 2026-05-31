@@ -636,7 +636,7 @@ read without importing the plugin runtime.
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
     "memoryEmbeddingProviders": ["local"],
-    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["qwen"],
     "webFetchProviders": ["firecrawl"],

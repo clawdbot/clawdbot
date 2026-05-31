@@ -3,7 +3,7 @@ export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 export type OutboundMediaAccess = {
   localRoots?: readonly string[];
   readFile?: OutboundMediaReadFile;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 
@@ -17,7 +17,7 @@ export type OutboundMediaLoadParams = {
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
   optimizeImages?: boolean;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 
@@ -31,7 +31,7 @@ export type OutboundMediaLoadOptions = {
   trustExplicitProxyDns?: boolean;
   hostReadCapability?: boolean;
   optimizeImages?: boolean;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 

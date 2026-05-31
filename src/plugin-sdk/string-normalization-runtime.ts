@@ -3,4 +3,4 @@ export {
   normalizeHyphenSlug,
   normalizeStringEntries,
   normalizeStringEntriesLower,
-} from "../shared/string-normalization.js";
+} from "../../packages/normalization-core/src/string-normalization.js";

@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import {
   GATEWAY_CLIENT_IDS,
@@ -34,8 +36,6 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { sortUniqueStrings, uniqueValues } from "../../shared/string-normalization.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -199,24 +199,16 @@ function buildSendSchema(options: {
     contentType: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     caption: Type.Optional(Type.String()),
-    path: Type.Optional(Type.String()),
-    filePath: Type.Optional(Type.String()),
     attachments: Type.Optional(
       Type.Array(
         Type.Object({
           type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
           media: Type.Optional(Type.String()),
-          mediaUrl: Type.Optional(Type.String()),
-          path: Type.Optional(Type.String()),
-          filePath: Type.Optional(Type.String()),
-          fileUrl: Type.Optional(Type.String()),
-          url: Type.Optional(Type.String()),
           name: Type.Optional(Type.String()),
           mimeType: Type.Optional(Type.String()),
         }),
         {
-          description:
-            "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          description: "Structured attachments; each entry uses media.",
         },
       ),
     ),

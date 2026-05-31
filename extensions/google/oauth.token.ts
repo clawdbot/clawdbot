@@ -1,4 +1,7 @@
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
@@ -34,10 +37,18 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   };
 }
 
+function resolveExpiredTokenTimestampMs(nowMs: number): number {
+  return asDateTimestampMs(nowMs - TOKEN_EXPIRY_BUFFER_MS) ?? nowMs;
+}
+
 function resolveTokenExpiresAt(value: unknown): number {
+  const nowMs = asDateTimestampMs(Date.now());
+  if (nowMs === undefined) {
+    return 0;
+  }
   return (
-    resolveExpiresAtMsFromDurationSeconds(value, { bufferMs: TOKEN_EXPIRY_BUFFER_MS }) ??
-    Date.now() - TOKEN_EXPIRY_BUFFER_MS
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs, bufferMs: TOKEN_EXPIRY_BUFFER_MS }) ??
+    resolveExpiredTokenTimestampMs(nowMs)
   );
 }
 

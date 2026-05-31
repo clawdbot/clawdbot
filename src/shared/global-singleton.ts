@@ -3,7 +3,7 @@
 // runtime chunks; keep those on a direct globalThis[Symbol.for(...)] lookup.
 export function resolveGlobalSingleton<T>(key: symbol, create: () => T): T {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
-  if (Object.prototype.hasOwnProperty.call(globalStore, key)) {
+  if (Object.hasOwn(globalStore, key)) {
     return globalStore[key] as T;
   }
   const created = create();

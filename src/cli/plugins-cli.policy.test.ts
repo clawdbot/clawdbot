@@ -15,7 +15,6 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli policy mutations", () => {
   const compatibilityPluginIds = [
-    { alias: "openai-codex", pluginId: "openai" },
     { alias: "google-gemini-cli", pluginId: "google" },
     { alias: "minimax-portal-auth", pluginId: "minimax" },
   ] as const;

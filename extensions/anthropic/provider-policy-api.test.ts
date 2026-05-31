@@ -69,7 +69,7 @@ describe("anthropic provider policy public artifact", () => {
 
     expect(
       normalizeConfig({
-        provider: "openai-codex",
+        provider: "openai",
         providerConfig,
       }),
     ).toBe(providerConfig);

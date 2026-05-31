@@ -212,7 +212,7 @@ describe("secrets runtime fast path", () => {
         writeFileSync(
           credentialsPath,
           `${JSON.stringify({
-            "openai-codex": {
+            openai: {
               access: "access-token",
               refresh: "refresh-token",
               expires: Date.now() + 60_000,

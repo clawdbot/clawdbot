@@ -211,6 +211,17 @@ describe("normalizeCronJobCreate", () => {
     expectNormalizedAtSchedule({ kind: "at", atMs: "2026-01-12T18:00:00" });
   });
 
+  it("keeps out-of-range numeric schedule.atMs invalid instead of throwing for create jobs", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "out-of-range-at-ms",
+      schedule: { kind: "at", atMs: 8_640_000_000_000_001 },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({ kind: "at" });
+    expect(validateCronAddParams(normalized)).toBe(false);
+  });
+
   it("migrates legacy schedule.cron into schedule.expr", () => {
     const normalized = normalizeMainSystemEventCreateJob({
       name: "legacy-cron-field",
@@ -1063,6 +1074,16 @@ describe("normalizeCronJobPatch", () => {
       at: new Date("2026-01-12T18:00:00Z").toISOString(),
     });
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("keeps out-of-range numeric schedule.atMs invalid instead of throwing for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      schedule: { kind: "at", atMs: 8_640_000_000_000_001 },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({ kind: "at" });
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(false);
   });
 
   it("prunes staggerMs from every schedules for patches", () => {

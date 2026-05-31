@@ -990,7 +990,7 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
-  it("matches shared model runtime openai-codex bare transport failures as timeout (#69368)", () => {
+  it("matches shared model runtime openai bare transport failures as timeout (#69368)", () => {
     expectTimeoutFailoverSamples([
       "Request failed",
       "request failed",
@@ -1428,7 +1428,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai-codex",
+        provider: "openai",
         message:
           '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
       }),
@@ -1438,27 +1438,27 @@ describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies raw missing scope payloads without an HTTP prefix", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai-codex",
+        provider: "openai",
         message:
           '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"},"code":401}',
       }),
     ).toBe("auth_scope");
   });
 
-  it("does not classify non-Codex permission errors as missing scope failures", () => {
+  it("does not classify other provider permission errors as OpenAI scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai",
+        provider: "anthropic",
         message:
           '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
       }),
     ).not.toBe("auth_scope");
   });
 
-  it("does not treat generic Codex permission failures as missing scope failures", () => {
+  it("does not treat generic OpenAI permission failures as missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai-codex",
+        provider: "openai",
         message:
           '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
       }),
@@ -1467,21 +1467,21 @@ describe("classifyProviderRuntimeFailureKind", () => {
 
   it("classifies OAuth refresh failures", () => {
     const refreshFailures = [
-      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
       "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
       "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
     ];
     for (const message of refreshFailures) {
       expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
-      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth_permanent");
+      expect(classifyFailoverReason(message, { provider: "openai" })).toBe("auth_permanent");
     }
   });
 
   it("does not make uncertain OAuth refresh wrappers terminal", () => {
     const message =
-      "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
+      "OAuth token refresh failed for openai: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
     expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
-    expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth");
+    expect(classifyFailoverReason(message, { provider: "openai" })).toBe("auth");
   });
 
   it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
@@ -1492,14 +1492,14 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ];
     for (const message of entitlementMessages) {
       expect(classifyProviderRuntimeFailureKind(message)).not.toBe("auth_refresh");
-      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("rate_limit");
+      expect(classifyFailoverReason(message, { provider: "openai" })).toBe("rate_limit");
     }
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
     expect(
       classifyProviderRuntimeFailureKind(
-        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
       ),
     ).toBe("refresh_timeout");
     expect(
@@ -1509,12 +1509,12 @@ describe("classifyProviderRuntimeFailureKind", () => {
       classifyProviderRuntimeFailureKind({
         code: "refresh_contention",
         message:
-          "OAuth token refresh failed for openai-codex: OAuth refresh failed (refresh_contention): another process is already refreshing openai-codex for openai-codex:default. Please wait for the in-flight refresh to finish and retry.",
+          "OAuth token refresh failed for openai: OAuth refresh failed (refresh_contention): another process is already refreshing openai for openai:default. Please wait for the in-flight refresh to finish and retry.",
       }),
     ).toBe("refresh_contention");
     expect(
       classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
+        "OAuth token refresh failed for openai: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
       ),
     ).toBe("auth_refresh");
   });

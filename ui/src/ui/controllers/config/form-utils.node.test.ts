@@ -87,7 +87,7 @@ function makeConfigWithProvider(): Record<string, unknown> {
               name: "Grok 4",
               contextWindow: 131072,
               maxTokens: 8192,
-              cost: { input: 0.5, output: 1.0, cacheRead: 0.1, cacheWrite: 0.2 },
+              cost: { input: 0.5, output: 1, cacheRead: 0.1, cacheWrite: 0.2 },
             },
           ],
         },

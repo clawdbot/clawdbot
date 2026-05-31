@@ -56,6 +56,31 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
+  it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: {} }] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      model: {
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
   it("collapses anyOf and oneOf unions for the deepseek family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const tools = [
@@ -410,12 +435,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
 
     const diagnostics = hooks.inspectToolSchemas({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
       } as never,

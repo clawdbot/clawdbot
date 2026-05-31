@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -54,9 +55,19 @@ export function createCodexAttemptTurnWatchController(params: {
   let completionLastActivityAt = Date.now();
   let completionLastActivityReason = "startup";
   let completionLastActivityDetails: Record<string, unknown> | undefined;
+  let attemptIdleTimeoutOverrideMs: number | undefined;
   let attemptLastProgressAt = Date.now();
   let attemptLastProgressReason = "startup";
   let attemptLastProgressDetails: Record<string, unknown> | undefined;
+  const turnCompletionIdleTimeoutMs = resolveTimerTimeoutMs(params.turnCompletionIdleTimeoutMs, 1);
+  const turnAssistantCompletionIdleTimeoutMs = resolveTimerTimeoutMs(
+    params.turnAssistantCompletionIdleTimeoutMs,
+    1,
+  );
+  const turnAttemptIdleTimeoutMs = resolveTimerTimeoutMs(params.turnAttemptIdleTimeoutMs, 1);
+  const turnTerminalIdleTimeoutMs = resolveTimerTimeoutMs(params.turnTerminalIdleTimeoutMs, 1);
+  const interruptTimeoutMs = resolveTimerTimeoutMs(params.interruptTimeoutMs, 1);
+  const resolveWatchTimeoutMs = (timeoutMs: number) => resolveTimerTimeoutMs(timeoutMs, 1);
 
   const clearCompletionIdleTimer = () => {
     if (completionIdleTimer) {
@@ -104,7 +115,7 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - completionLastActivityAt);
-    const timeoutMs = completionIdleTimeoutOverrideMs ?? params.turnCompletionIdleTimeoutMs;
+    const timeoutMs = completionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
     const delayMs = Math.max(1, timeoutMs - elapsedMs);
     completionIdleTimer = setTimeout(fireCompletionIdleTimeout, delayMs);
     completionIdleTimer.unref?.();
@@ -116,7 +127,7 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - assistantCompletionLastActivityAt);
-    const delayMs = Math.max(1, params.turnAssistantCompletionIdleTimeoutMs - elapsedMs);
+    const delayMs = Math.max(1, turnAssistantCompletionIdleTimeoutMs - elapsedMs);
     assistantCompletionIdleTimer = setTimeout(fireAssistantCompletionIdleRelease, delayMs);
     assistantCompletionIdleTimer.unref?.();
   }
@@ -127,7 +138,8 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - attemptLastProgressAt);
-    const delayMs = Math.max(1, params.turnAttemptIdleTimeoutMs - elapsedMs);
+    const timeoutMs = attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs;
+    const delayMs = Math.max(1, timeoutMs - elapsedMs);
     attemptIdleTimer = setTimeout(fireAttemptIdleTimeout, delayMs);
     attemptIdleTimer.unref?.();
   }
@@ -143,7 +155,7 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - completionLastActivityAt);
-    const delayMs = Math.max(1, params.turnTerminalIdleTimeoutMs - elapsedMs);
+    const delayMs = Math.max(1, turnTerminalIdleTimeoutMs - elapsedMs);
     terminalIdleTimer = setTimeout(fireTerminalIdleTimeout, delayMs);
     terminalIdleTimer.unref?.();
   }
@@ -152,6 +164,21 @@ export function createCodexAttemptTurnWatchController(params: {
     scheduleAttemptIdleWatch();
     scheduleCompletionIdleWatch();
     scheduleTerminalIdleWatch();
+  }
+
+  function recordAttemptProgress(
+    reason: string,
+    options?: { details?: Record<string, unknown>; attemptTimeoutMs?: number },
+  ) {
+    attemptIdleTimeoutOverrideMs =
+      options?.attemptTimeoutMs !== undefined
+        ? resolveWatchTimeoutMs(options.attemptTimeoutMs)
+        : undefined;
+    attemptLastProgressAt = completionLastActivityAt;
+    attemptLastProgressReason = reason;
+    attemptLastProgressDetails = options?.details;
+    params.onAttemptProgress(reason, options?.details);
+    scheduleAttemptIdleWatch();
   }
 
   function fireAssistantCompletionIdleRelease() {
@@ -163,7 +190,7 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const idleMs = Math.max(0, Date.now() - assistantCompletionLastActivityAt);
-    if (idleMs < params.turnAssistantCompletionIdleTimeoutMs) {
+    if (idleMs < turnAssistantCompletionIdleTimeoutMs) {
       scheduleAssistantCompletionIdleWatch();
       return;
     }
@@ -175,7 +202,7 @@ export function createCodexAttemptTurnWatchController(params: {
       threadId: params.threadId,
       turnId,
       idleMs,
-      timeoutMs: params.turnAssistantCompletionIdleTimeoutMs,
+      timeoutMs: turnAssistantCompletionIdleTimeoutMs,
       ...assistantCompletionLastActivityDetails,
     });
     embeddedAgentLog.warn(
@@ -184,7 +211,7 @@ export function createCodexAttemptTurnWatchController(params: {
         threadId: params.threadId,
         turnId,
         idleMs,
-        timeoutMs: params.turnAssistantCompletionIdleTimeoutMs,
+        timeoutMs: turnAssistantCompletionIdleTimeoutMs,
         ...assistantCompletionLastActivityDetails,
       },
     );
@@ -192,7 +219,7 @@ export function createCodexAttemptTurnWatchController(params: {
       params.onInterruptTurn({
         threadId: params.threadId,
         turnId,
-        timeoutMs: params.interruptTimeoutMs,
+        timeoutMs: interruptTimeoutMs,
       });
     }
     params.onCompleted();
@@ -204,14 +231,15 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const idleMs = Math.max(0, Date.now() - attemptLastProgressAt);
-    if (idleMs < params.turnAttemptIdleTimeoutMs) {
+    const timeoutMs = attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs;
+    if (idleMs < timeoutMs) {
       scheduleAttemptIdleWatch();
       return;
     }
     const timeout = {
       kind: "progress" as const,
       idleMs,
-      timeoutMs: params.turnAttemptIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: attemptLastProgressReason,
       details: attemptLastProgressDetails,
     };
@@ -246,7 +274,7 @@ export function createCodexAttemptTurnWatchController(params: {
     ) {
       return;
     }
-    const timeoutMs = completionIdleTimeoutOverrideMs ?? params.turnCompletionIdleTimeoutMs;
+    const timeoutMs = completionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
     const idleMs = Math.max(0, Date.now() - completionLastActivityAt);
     if (idleMs < timeoutMs) {
       scheduleCompletionIdleWatch();
@@ -291,14 +319,14 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const idleMs = Math.max(0, Date.now() - completionLastActivityAt);
-    if (idleMs < params.turnTerminalIdleTimeoutMs) {
+    if (idleMs < turnTerminalIdleTimeoutMs) {
       scheduleTerminalIdleWatch();
       return;
     }
     const timeout = {
       kind: "terminal" as const,
       idleMs,
-      timeoutMs: params.turnTerminalIdleTimeoutMs,
+      timeoutMs: turnTerminalIdleTimeoutMs,
       lastActivityReason: completionLastActivityReason,
       details: completionLastActivityDetails,
     };
@@ -339,7 +367,7 @@ export function createCodexAttemptTurnWatchController(params: {
       completionIdleWatchArmed = true;
       completionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
       completionIdleTimeoutOverrideMs =
-        options?.timeoutMs !== undefined ? Math.max(1, Math.floor(options.timeoutMs)) : undefined;
+        options?.timeoutMs !== undefined ? resolveWatchTimeoutMs(options.timeoutMs) : undefined;
       scheduleCompletionIdleWatch();
     },
     disarmCompletionIdleWatch: () => {
@@ -361,17 +389,19 @@ export function createCodexAttemptTurnWatchController(params: {
     },
     touchActivity: (
       reason: string,
-      options?: { arm?: boolean; details?: Record<string, unknown>; attemptProgress?: boolean },
+      options?: {
+        arm?: boolean;
+        details?: Record<string, unknown>;
+        attemptProgress?: boolean;
+        attemptTimeoutMs?: number;
+      },
     ) => {
       completionLastActivityAt = Date.now();
       completionLastActivityReason = reason;
       completionLastActivityDetails = options?.details;
       completionIdleTimeoutOverrideMs = undefined;
       if (options?.attemptProgress) {
-        attemptLastProgressAt = completionLastActivityAt;
-        attemptLastProgressReason = reason;
-        attemptLastProgressDetails = options.details;
-        params.onAttemptProgress(reason, options.details);
+        recordAttemptProgress(reason, options);
       }
       params.onProgressDiagnostic(reason);
       if (options?.arm) {
@@ -382,7 +412,11 @@ export function createCodexAttemptTurnWatchController(params: {
     },
     noteNotificationReceived: (
       method: string,
-      options?: { details?: Record<string, unknown>; attemptProgress?: boolean },
+      options?: {
+        details?: Record<string, unknown>;
+        attemptProgress?: boolean;
+        attemptTimeoutMs?: number;
+      },
     ) => {
       completionLastActivityAt = Date.now();
       completionLastActivityReason = `notification:${method}`;
@@ -390,11 +424,12 @@ export function createCodexAttemptTurnWatchController(params: {
         completionLastActivityDetails = options.details;
       }
       if (options?.attemptProgress) {
-        attemptLastProgressAt = completionLastActivityAt;
-        attemptLastProgressReason = completionLastActivityReason;
-        attemptLastProgressDetails = options.details;
-        params.onAttemptProgress(completionLastActivityReason, options.details);
+        recordAttemptProgress(completionLastActivityReason, options);
       }
+    },
+    extendAttemptIdleWatch: (timeoutMs: number) => {
+      attemptIdleTimeoutOverrideMs = resolveWatchTimeoutMs(timeoutMs);
+      scheduleAttemptIdleWatch();
     },
     scheduleProgressWatches,
     clearCompletionIdleTimer,

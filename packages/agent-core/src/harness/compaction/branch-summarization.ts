@@ -5,6 +5,7 @@ import {
 } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import {
+  asAgentMessage,
   convertToLlm,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
@@ -127,19 +128,25 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
       return entry.message;
 
     case "custom_message":
-      return createCustomMessage(
-        entry.customType,
-        entry.content,
-        entry.display,
-        entry.details,
-        entry.timestamp,
+      return asAgentMessage(
+        createCustomMessage(
+          entry.customType,
+          entry.content,
+          entry.display,
+          entry.details,
+          entry.timestamp,
+        ),
       );
 
     case "branch_summary":
-      return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+      return asAgentMessage(
+        createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp),
+      );
 
     case "compaction":
-      return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
+      return asAgentMessage(
+        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+      );
     case "thinking_level_change":
     case "model_change":
     case "custom":
@@ -154,7 +161,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 /** Prepare branch entries for summarization within an optional token budget. */
 export function prepareBranchEntries(
   entries: SessionTreeEntry[],
-  tokenBudget: number = 0,
+  tokenBudget = 0,
 ): BranchPreparation {
   const messages: AgentMessage[] = [];
   const fileOps = createFileOps();

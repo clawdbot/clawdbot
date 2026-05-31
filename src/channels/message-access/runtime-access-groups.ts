@@ -1,4 +1,7 @@
-import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
 import type { ChannelIngressAdapter, ResolveChannelMessageIngressParams } from "./runtime-types.js";
 import type { AccessGroupMembershipFact, ChannelIngressChannelId } from "./types.js";

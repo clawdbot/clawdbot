@@ -19,7 +19,6 @@ export * from "../agents/simple-completion-runtime.js";
 export * from "../agents/embedded-agent-block-chunker.js";
 export * from "../agents/embedded-agent-utils.js";
 export * from "../agents/provider-auth-aliases.js";
-export * from "../agents/provider-id.js";
 export * from "../agents/sandbox-paths.js";
 export * from "../agents/schema/typebox.js";
 export * from "../agents/tools/common.js";

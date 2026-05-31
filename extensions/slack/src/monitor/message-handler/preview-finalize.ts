@@ -105,7 +105,6 @@ export async function finalizeSlackPreviewEdit(params: {
       client: params.client,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     });
-    return;
   } catch (err) {
     try {
       const applied = await didSlackPreviewEditApplyAfterError({

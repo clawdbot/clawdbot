@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
@@ -99,7 +99,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    // "[openai-codex] Token refresh failed: 401 { ...json... }"
+    // "[openai] Token refresh failed: 401 { ...json... }"
     const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
@@ -126,7 +126,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       }
     }
 
-    // "Embedded agent failed before reply: OAuth token refresh failed for openai-codex: ..."
+    // "Embedded agent failed before reply: OAuth token refresh failed for openai: ..."
     const embedded = line.match(
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );

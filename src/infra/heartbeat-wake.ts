@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 
 export type HeartbeatRunResult =
@@ -184,7 +185,7 @@ function queuePendingWakeReason(params: {
 }
 
 function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
-  const delay = Number.isFinite(coalesceMs) ? Math.max(0, coalesceMs) : DEFAULT_COALESCE_MS;
+  const delay = resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0);
   const dueAt = Date.now() + delay;
   if (timer) {
     // Keep retry cooldown as a hard minimum delay. This prevents the

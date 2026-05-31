@@ -82,6 +82,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingFinalDeliveryText",
   "pendingFinalDeliveryContext",
   "pendingFinalDeliveryIntentId",
+  "restartRecoveryDeliveryContext",
+  "restartRecoveryDeliveryRunId",
   "totalTokensFresh",
   "estimatedCostUsd",
   "cacheRead",

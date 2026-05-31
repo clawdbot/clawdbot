@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
@@ -8,7 +9,6 @@ import {
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
 import { pathExists } from "../../infra/fs-safe.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -246,7 +246,9 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is AgentSessionEntry => entry.type !== "session");
+  const entries = fileEntries.filter(
+    (entry): entry is AgentSessionEntry => entry.type !== "session",
+  );
   const lastEntry = entries.at(-1);
   const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
   return { header, entries, leafId, warnings: summarizeSessionExportWarnings(warnings) };

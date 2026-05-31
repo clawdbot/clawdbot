@@ -14,7 +14,7 @@ objective: Verify a clean home that needs the Codex runtime reports a clear miss
 successCriteria:
   - Missing Codex plugin emits the exact remediation string asserted by the fixture test.
   - Doctor repair seeds the Codex plugin before retrying the agent turn.
-  - The retry uses the openai-codex OAuth profile and never routes through the openai API-key profile.
+  - The retry uses the openai OAuth profile and never routes through the openai API-key profile.
 docsRefs:
   - docs/cli/doctor.md
   - docs/cli/plugins.md

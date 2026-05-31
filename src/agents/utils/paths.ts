@@ -1,6 +1,5 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { spawnProcessSync } from "./child-process.js";
 
 /**
  * Resolve a path to its canonical (real) form, following symlinks.
@@ -55,24 +54,4 @@ export function getCwdRelativePath(filePath: string, cwd: string): string | unde
 export function formatPathRelativeToCwdOrAbsolute(filePath: string, cwd: string): string {
   const absolutePath = resolveAgainstCwd(filePath, cwd);
   return (getCwdRelativePath(absolutePath, cwd) ?? absolutePath).split(sep).join("/");
-}
-
-export function markPathIgnoredByCloudSync(path: string): void {
-  const attrs =
-    process.platform === "darwin"
-      ? ["com.dropbox.ignored", "com.apple.fileprovider.ignore#P"]
-      : process.platform === "linux"
-        ? ["user.com.dropbox.ignored"]
-        : [];
-
-  for (const attr of attrs) {
-    if (process.platform === "darwin") {
-      spawnProcessSync("xattr", ["-w", attr, "1", path], { encoding: "utf-8", stdio: "ignore" });
-    } else {
-      spawnProcessSync("setfattr", ["-n", attr, "-v", "1", path], {
-        encoding: "utf-8",
-        stdio: "ignore",
-      });
-    }
-  }
 }

@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
@@ -13,10 +17,6 @@ import { callGateway } from "../../../gateway/call.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";

@@ -21,6 +21,7 @@ export type ChangedTestTargetOptions = {
 };
 
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS: string;
 
 export function parseTestProjectsArgs(
   args: string[],

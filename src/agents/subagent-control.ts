@@ -1,11 +1,6 @@
 import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
-import {
-  resolveSubagentLabel,
-  resolveSubagentTargetFromRuns,
-  sortSubagentRuns,
-  type SubagentTargetResolution,
-} from "../auto-reply/reply/subagents-utils.js";
+import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -41,7 +36,6 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
-export const MAX_STEER_MESSAGE_CHARS = 4_000;
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
@@ -154,15 +148,8 @@ function ensureControllerOwnsRun(params: {
   return "Subagents can only control runs spawned from their own session.";
 }
 
-function isFinishedForSteerControl(
-  entry: SubagentRunRecord,
-  hasPendingDescendants: boolean,
-) {
-  return (
-    Boolean(entry.endedAt) &&
-    entry.pauseReason !== "sessions_yield" &&
-    !hasPendingDescendants
-  );
+function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
+  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
 }
 
 async function killSubagentRun(params: {
@@ -715,30 +702,6 @@ export async function sendControlledSubagentMessage(params: {
     const error = formatErrorMessage(err);
     return { status: "error" as const, runId, error };
   }
-}
-
-export function resolveControlledSubagentTarget(
-  runs: SubagentRunRecord[],
-  token: string | undefined,
-  options?: { recentMinutes?: number; isActive?: (entry: SubagentRunRecord) => boolean },
-): SubagentTargetResolution {
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
-    label: (entry) => resolveSubagentLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    isActive: options?.isActive,
-    errors: {
-      missingTarget: "Missing subagent target.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous subagent run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent target: ${value}`,
-    },
-  });
 }
 
 export const testing = {

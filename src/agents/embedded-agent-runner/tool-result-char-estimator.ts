@@ -8,7 +8,7 @@ export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
   return (
-    !!block &&
+    Boolean(block) &&
     typeof block === "object" &&
     (block as { type?: unknown }).type === "text" &&
     typeof (block as { text?: unknown }).text === "string"
@@ -16,7 +16,9 @@ function isTextBlock(block: unknown): block is { type: "text"; text: string } {
 }
 
 function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
+  return (
+    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
+  );
 }
 
 function estimateUnknownChars(value: unknown): number {

@@ -8,6 +8,11 @@ import {
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import { resolveIMessageReactionContext } from "./monitor/reaction-context.js";
 import type { IMessagePayload } from "./monitor/types.js";
@@ -111,10 +116,29 @@ function enumerateReactionTargetKeys(params: {
 
 function prunePendingReactionPollTargets(nowMs = Date.now()): void {
   for (const [key, target] of pendingReactionPollTargets.entries()) {
-    if (target.expiresAtMs <= nowMs) {
+    if (!isFutureDateTimestampMs(target.expiresAtMs, { nowMs })) {
       pendingReactionPollTargets.delete(key);
     }
   }
+}
+
+function resolvePendingReactionPollExpiry(
+  ttlMs: number | undefined,
+): { ttlMs: number; expiresAtMs: number } | undefined {
+  const nowMs = asDateTimestampMs(Date.now());
+  if (nowMs === undefined) {
+    return undefined;
+  }
+  const expiresAtMs =
+    resolveExpiresAtMsFromDurationMs(ttlMs ?? DEFAULT_REACTION_TARGET_TTL_MS, { nowMs }) ??
+    resolveExpiresAtMsFromDurationMs(DEFAULT_REACTION_TARGET_TTL_MS, { nowMs });
+  if (expiresAtMs === undefined) {
+    return undefined;
+  }
+  return {
+    ttlMs: expiresAtMs - nowMs,
+    expiresAtMs,
+  };
 }
 
 function normalizePollTargetMessageId(messageId: string): string {
@@ -320,7 +344,10 @@ export function registerIMessageApprovalReactionTarget(params: {
     return null;
   }
   const target = { approvalId, allowedDecisions };
-  const ttlMs = params.ttlMs == null ? DEFAULT_REACTION_TARGET_TTL_MS : Math.max(1, params.ttlMs);
+  const expiry = resolvePendingReactionPollExpiry(params.ttlMs);
+  if (!expiry) {
+    return null;
+  }
   // Register the binding under every key we can derive from the conversation
   // (chat_guid / chat_identifier / chat_id / handle). Inbound lookup precedence
   // can differ from outbound — e.g. send only sees `{handle: "+1..."}` for a
@@ -336,14 +363,14 @@ export function registerIMessageApprovalReactionTarget(params: {
     return null;
   }
   for (const key of keys) {
-    imessageApprovalReactionTargets.register(key, target, { ttlMs });
+    imessageApprovalReactionTargets.register(key, target, { ttlMs: expiry.ttlMs });
     pendingReactionPollTargets.set(key, {
       accountId: params.accountId,
       conversation: params.conversation,
       messageId: params.messageId,
       approvalId,
       allowedDecisions,
-      expiresAtMs: Date.now() + ttlMs,
+      expiresAtMs: expiry.expiresAtMs,
     });
   }
   prunePendingReactionPollTargets();

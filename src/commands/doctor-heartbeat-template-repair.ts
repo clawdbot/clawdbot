@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveWorkspaceTemplateDir } from "../agents/workspace-templates.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 const LEGACY_HEARTBEAT_PROSE_TEMPLATE = [

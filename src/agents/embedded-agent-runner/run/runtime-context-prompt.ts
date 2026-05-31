@@ -31,15 +31,23 @@ type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
 export function buildCurrentInboundPromptContextPrefix(
   context: CurrentInboundPromptContext | undefined,
+  options?: { preferResumableText?: boolean },
 ): string {
-  return context?.text.trim() ?? "";
+  const text =
+    options?.preferResumableText === true
+      ? (context?.resumableText ?? context?.text)
+      : context?.text;
+  return text?.trim() ?? "";
 }
 
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
+  preferResumableText?: boolean;
 }): string {
-  const prefix = buildCurrentInboundPromptContextPrefix(params.context);
+  const prefix = buildCurrentInboundPromptContextPrefix(params.context, {
+    preferResumableText: params.preferResumableText,
+  });
   if (!prefix) {
     return params.prompt;
   }

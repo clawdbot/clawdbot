@@ -52,7 +52,7 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
   model: Model<TApi>,
   cfg?: OpenClawConfig,
 ): Model | undefined {
-  if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+  if (model.provider !== "openai" || model.api !== "openai-chatgpt-responses") {
     return undefined;
   }
 

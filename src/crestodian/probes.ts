@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 export type LocalCommandProbe = {
   command: string;

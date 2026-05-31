@@ -1,8 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,

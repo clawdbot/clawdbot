@@ -1,0 +1,53 @@
+{
+  "name": "@openclaw/model-catalog-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./configured-model-refs": {
+      "types": "./dist/configured-model-refs.d.mts",
+      "import": "./dist/configured-model-refs.mjs",
+      "default": "./dist/configured-model-refs.mjs"
+    },
+    "./model-catalog-refs": {
+      "types": "./dist/model-catalog-refs.d.mts",
+      "import": "./dist/model-catalog-refs.mjs",
+      "default": "./dist/model-catalog-refs.mjs"
+    },
+    "./model-catalog-normalize": {
+      "types": "./dist/model-catalog-normalize.d.mts",
+      "import": "./dist/model-catalog-normalize.mjs",
+      "default": "./dist/model-catalog-normalize.mjs"
+    },
+    "./model-catalog-types": {
+      "types": "./dist/model-catalog-types.d.mts",
+      "import": "./dist/model-catalog-types.mjs",
+      "default": "./dist/model-catalog-types.mjs"
+    },
+    "./provider-id": {
+      "types": "./dist/provider-id.d.mts",
+      "import": "./dist/provider-id.mjs",
+      "default": "./dist/provider-id.mjs"
+    },
+    "./provider-model-id-normalization": {
+      "types": "./dist/provider-model-id-normalization.d.mts",
+      "import": "./dist/provider-model-id-normalization.mjs",
+      "default": "./dist/provider-model-id-normalization.mjs"
+    },
+    "./provider-model-id-normalize": {
+      "types": "./dist/provider-model-id-normalize.d.mts",
+      "import": "./dist/provider-model-id-normalize.mjs",
+      "default": "./dist/provider-model-id-normalize.mjs"
+    }
+  }
+}

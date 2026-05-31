@@ -37,7 +37,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 

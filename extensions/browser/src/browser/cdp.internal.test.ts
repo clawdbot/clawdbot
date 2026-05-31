@@ -223,9 +223,7 @@ describe("cdp internal", () => {
           );
           return;
         }
-        if (replyToViewportCommandOrScreenshot(msg, socket, "FULL")) {
-          return;
-        }
+        replyToViewportCommandOrScreenshot(msg, socket, "FULL");
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -1060,9 +1058,7 @@ describe("cdp internal", () => {
           socket.send(JSON.stringify({ id: msg.id, result: { result: { value: {} } } }));
           return;
         }
-        if (replyToViewportCommandOrScreenshot(msg, socket, "C")) {
-          return;
-        }
+        replyToViewportCommandOrScreenshot(msg, socket, "C");
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });

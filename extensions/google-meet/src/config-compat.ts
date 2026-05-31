@@ -11,7 +11,7 @@ type LegacyConfigRule = {
 };
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {

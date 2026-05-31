@@ -35,7 +35,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     options: unknown;
     gatewayInfo: unknown;
     emitter = new TestEmitter();
-    isConnecting: boolean = false;
+    isConnecting = false;
     heartbeatInterval?: NodeJS.Timeout;
     firstHeartbeatTimeout?: NodeJS.Timeout;
     ws?: unknown;
@@ -46,11 +46,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
 
     async registerClient(clientForTest: unknown): Promise<void> {}
 
-    connect(_resume = false): void {
-      if (this.isConnecting) {
-        return;
-      }
-    }
+    connect(_resume = false): void {}
   }
 
   return { GatewayIntents, GatewayPlugin };
@@ -98,7 +94,7 @@ describe("createDiscordGatewayPlugin", () => {
         error: vi.fn(),
         exit: vi.fn(),
       },
-      ...(testing ? { testing: testing } : {}),
+      ...(testing ? { testing } : {}),
     });
   }
 

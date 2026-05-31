@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -10,7 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import {
   canUseSecretsRuntimeFastPath,
@@ -77,7 +77,7 @@ async function resolveLoadablePluginOrigins(params: {
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
   return (
-    !!entries &&
+    Boolean(entries) &&
     typeof entries === "object" &&
     !Array.isArray(entries) &&
     Object.keys(entries).length > 0
@@ -87,7 +87,7 @@ function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
 function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
   const channels = config.channels;
   return (
-    !!channels &&
+    Boolean(channels) &&
     typeof channels === "object" &&
     !Array.isArray(channels) &&
     Object.keys(channels).some((channelId) => channelId !== "defaults")

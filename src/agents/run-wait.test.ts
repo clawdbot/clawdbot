@@ -1,5 +1,9 @@
+import {
+  addTimerTimeoutGraceMs,
+  MAX_DATE_TIMESTAMP_MS,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addTimerTimeoutGraceMs, MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -517,20 +521,64 @@ describe("waitForAgentRunsToDrain", () => {
   });
 
   it("defaults non-finite drain timeouts before computing the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
     callGatewayMock.mockResolvedValue({ status: "ok" });
     let activeRunIds = ["run-1"];
 
-    const result = await waitForAgentRunsToDrain({
-      timeoutMs: Number.NaN,
-      getPendingRunIds: () => {
-        const current = activeRunIds;
-        activeRunIds = [];
-        return current;
-      },
-    });
+    try {
+      const result = await waitForAgentRunsToDrain({
+        timeoutMs: Number.NaN,
+        getPendingRunIds: () => {
+          const current = activeRunIds;
+          activeRunIds = [];
+          return current;
+        },
+      });
 
-    expect(result.timedOut).toBe(false);
-    expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
-    expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
+      expect(result.timedOut).toBe(false);
+      expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
+      expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out immediately when the computed drain deadline exceeds the Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+    try {
+      const result = await waitForAgentRunsToDrain({
+        timeoutMs: 1,
+        getPendingRunIds: () => ["run-1"],
+      });
+
+      expect(result).toEqual({
+        timedOut: true,
+        pendingRunIds: ["run-1"],
+        deadlineAtMs: MAX_DATE_TIMESTAMP_MS,
+      });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores invalid caller-supplied drain deadlines", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
+    try {
+      const result = await waitForAgentRunsToDrain({
+        deadlineAtMs: Number.POSITIVE_INFINITY,
+        getPendingRunIds: () => ["run-1"],
+      });
+
+      expect(result.timedOut).toBe(true);
+      expect(result.pendingRunIds).toStrictEqual(["run-1"]);
+      expect(result.deadlineAtMs).toBe(Date.now());
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

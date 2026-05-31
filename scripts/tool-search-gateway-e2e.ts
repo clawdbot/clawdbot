@@ -10,6 +10,7 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
@@ -34,14 +35,10 @@ type LaneResult = {
 };
 
 const FAKE_PLUGIN_ID = "tool-search-e2e-fixture";
-const DEFAULT_FETCH_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS,
-  180_000,
-);
-const DEFAULT_FETCH_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES,
-  1024 * 1024,
-);
+export type ToolSearchGatewayFetchLimits = {
+  bodyMaxBytes: number;
+  timeoutMs: number;
+};
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -49,10 +46,24 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-function readPositiveInt(raw: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+export function readToolSearchGatewayFetchLimits(
+  env: NodeJS.ProcessEnv = process.env,
+): ToolSearchGatewayFetchLimits {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES",
+      1024 * 1024,
+      env,
+    ),
+    timeoutMs: readPositiveIntEnv(
+      "OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS",
+      180_000,
+      env,
+    ),
+  };
 }
+
+const DEFAULT_FETCH_LIMITS = readToolSearchGatewayFetchLimits();
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
@@ -145,8 +156,8 @@ export async function fetchJson(
   init: RequestInit = {},
   options: FetchJsonOptions = {},
 ): Promise<unknown> {
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
-  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_LIMITS.timeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_LIMITS.bodyMaxBytes);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
   let timeout: ReturnType<typeof setNodeTimeout> | undefined;

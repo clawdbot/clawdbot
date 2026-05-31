@@ -1,7 +1,7 @@
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";

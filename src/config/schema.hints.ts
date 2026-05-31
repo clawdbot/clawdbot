@@ -246,7 +246,7 @@ interface ZodDummy {
 }
 function isUnwrappable(object: unknown): object is ZodDummy {
   return (
-    !!object &&
+    object !== null &&
     typeof object === "object" &&
     "unwrap" in object &&
     typeof (object as Record<string, unknown>).unwrap === "function" &&

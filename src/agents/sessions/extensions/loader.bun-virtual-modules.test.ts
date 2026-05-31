@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const jitiCalls = vi.hoisted(() => ({
   options: [] as Array<Record<string, unknown>>,
@@ -29,6 +29,25 @@ vi.mock("../../config.js", async (importOriginal) => {
 });
 
 const tempDirs: string[] = [];
+let virtualModulesCase: {
+  errors: unknown[];
+  virtualModuleIds: string[];
+};
+
+beforeAll(async () => {
+  const { loadExtensions } = await import("./loader.js");
+  const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
+  tempDirs.push(dir);
+  const extensionPath = join(dir, "extension.ts");
+  await writeFile(extensionPath, "export default function extension() {}\n");
+
+  const result = await loadExtensions([extensionPath], dir);
+  const virtualModules = jitiCalls.options[0]?.virtualModules as Record<string, unknown>;
+  virtualModulesCase = {
+    errors: result.errors,
+    virtualModuleIds: Object.keys(virtualModules),
+  };
+});
 
 afterEach(async () => {
   jitiCalls.options.length = 0;
@@ -37,18 +56,8 @@ afterEach(async () => {
 
 describe("loadExtensions in Bun binary mode", () => {
   it("virtualizes scoped and unscoped SDK module ids", async () => {
-    const { loadExtensions } = await import("./loader.js");
-    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
-    tempDirs.push(dir);
-    const extensionPath = join(dir, "extension.ts");
-    await writeFile(extensionPath, "export default function extension() {}\n");
-
-    const result = await loadExtensions([extensionPath], dir);
-
-    expect(result.errors).toEqual([]);
-    expect(jitiCalls.options).toHaveLength(1);
-    const virtualModules = jitiCalls.options[0]?.virtualModules as Record<string, unknown>;
-    expect(Object.keys(virtualModules)).toEqual(
+    expect(virtualModulesCase.errors).toEqual([]);
+    expect(virtualModulesCase.virtualModuleIds).toEqual(
       expect.arrayContaining([
         "openclaw/plugin-sdk/agent-core",
         "@openclaw/plugin-sdk/agent-core",

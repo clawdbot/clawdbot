@@ -11,6 +11,7 @@ minimumReleaseAgeExclude:
   - "@openclaw/proxyline@0.3.3"
   - "acpx"
   - "tokenjuice"
+  - "@agentclientprotocol/claude-agent-acp@0.39.0"
   - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
@@ -65,7 +66,7 @@ nodeLinker: hoisted
 blockExoticSubdeps: true
 
 overrides:
-  "@anthropic-ai/sdk": 0.98.0
+  "@anthropic-ai/sdk": 0.100.1
   "@aws-sdk/core": 3.974.13
   "@aws-sdk/xml-builder": 3.972.25
   hono: 4.12.18
@@ -85,7 +86,7 @@ overrides:
   path-to-regexp: 8.4.0
   qs: 6.15.2
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.1.38
+  typebox: 1.1.39
   tar: 7.5.15
   tough-cookie: 4.1.3
   yauzl: 3.2.1
@@ -106,7 +107,6 @@ allowBuilds:
   koffi: false
   node-llama-cpp: true
   protobufjs: true
-  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
@@ -120,4 +120,4 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
-  "@agentclientprotocol/claude-agent-acp@0.37.0": patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch
+  "@agentclientprotocol/claude-agent-acp@0.39.0": patches/@agentclientprotocol__claude-agent-acp@0.39.0.patch

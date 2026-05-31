@@ -7,6 +7,7 @@ const {
   ensureTailscaledInstalled,
   getTailnetHostname,
   getTestTailscaleBinaryOverride,
+  readTailscaleWhoisIdentity,
   enableTailscaleServe,
   disableTailscaleServe,
   ensureFunnel,
@@ -55,6 +56,7 @@ describe("tailscale helpers", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     envSnapshot.restore();
     vi.restoreAllMocks();
   });
@@ -84,6 +86,28 @@ describe("tailscale helpers", () => {
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it("does not cache whois results when the cache expiry would exceed Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "first@example.com" } }),
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "second@example.com" } }),
+      });
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "first@example.com",
+    });
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "second@example.com",
+    });
+
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 
   it("allows the test binary override in explicit test environments", () => {

@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -284,6 +287,65 @@ describe("gateway/node-registry", () => {
           terminal: true,
         }),
       ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires system.run authorization when the process clock is invalid", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-invalid-clock", sessionKey: "agent:main:main", timeoutMs: 1_000 },
+      timeoutMs: 1_000,
+    });
+    void invoke.catch(() => {});
+
+    try {
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-invalid-clock",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(false);
+    } finally {
+      registry.unregister("conn-1");
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("expires system.run authorization when the expiry would exceed the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    try {
+      registry.register(makeClient("conn-1", "node-1", frames), {});
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "system.run",
+        params: { runId: "run-overflow", sessionKey: "agent:main:main", timeoutMs: 1_000 },
+        timeoutMs: 1_000,
+      });
+      void invoke.catch(() => {});
+
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-overflow",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(false);
+      registry.unregister("conn-1");
     } finally {
       vi.useRealTimers();
     }

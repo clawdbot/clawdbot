@@ -5,6 +5,14 @@ import type {
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
+type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
+
+let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
+
+const loadChannelMessageRuntimeModule = async () => {
+  channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
+  return await channelMessageRuntimeModulePromise;
+};
 
 export type {
   DurableInboundReplyDeliveryOptions,
@@ -187,7 +195,7 @@ export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModu
 export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
-  const mod = await import("../channels/message/runtime.js");
+  const mod = await loadChannelMessageRuntimeModule();
   return await mod.sendDurableMessageBatch(params);
 }
 
@@ -195,6 +203,6 @@ export async function withDurableMessageSendContext<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
-  const mod = await import("../channels/message/runtime.js");
+  const mod = await loadChannelMessageRuntimeModule();
   return await mod.withDurableMessageSendContext(params, run);
 }

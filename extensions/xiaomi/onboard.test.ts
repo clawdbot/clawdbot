@@ -3,8 +3,13 @@ import {
   expectProviderOnboardPrimaryModel,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { applyXiaomiConfig, applyXiaomiProviderConfig } from "./onboard.js";
-import { buildXiaomiProvider } from "./provider-catalog.js";
+import {
+  applyXiaomiConfig,
+  applyXiaomiProviderConfig,
+  applyXiaomiTokenPlanConfig,
+  applyXiaomiTokenPlanProviderConfig,
+} from "./onboard.js";
+import { buildXiaomiProvider, buildXiaomiTokenPlanProvider } from "./provider-catalog.js";
 
 describe("xiaomi onboard", () => {
   it("adds Xiaomi provider with correct settings", () => {
@@ -39,6 +44,41 @@ describe("xiaomi onboard", () => {
       "mimo-v2-flash",
       "mimo-v2-pro",
       "mimo-v2-omni",
+    ]);
+  });
+
+  it("adds Xiaomi Token Plan provider with a regional endpoint preset", () => {
+    const cfg = applyXiaomiTokenPlanConfig({}, "ams");
+    const provider = cfg.models?.providers?.["xiaomi-token-plan"];
+    expect(provider).toEqual({
+      ...buildXiaomiTokenPlanProvider(),
+      baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
+    });
+    expect(provider?.models.map((m) => m.id)).toEqual(["mimo-v2.5-pro", "mimo-v2.5"]);
+    expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.5-pro"]).toEqual({
+      alias: "Xiaomi MiMo V2.5 Pro",
+    });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi-token-plan/mimo-v2.5-pro" });
+    expectProviderOnboardPrimaryModel({
+      applyConfig: (config) => applyXiaomiTokenPlanConfig(config, "ams"),
+      modelRef: "xiaomi-token-plan/mimo-v2.5-pro",
+    });
+  });
+
+  it("merges Xiaomi Token Plan models and rewrites the selected regional base URL", () => {
+    const provider = expectProviderOnboardMergedLegacyConfig({
+      applyProviderConfig: (config) => applyXiaomiTokenPlanProviderConfig(config, "sgp"),
+      providerId: "xiaomi-token-plan",
+      providerApi: "openai-completions",
+      baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+      legacyApi: "openai-completions",
+      legacyModelId: "custom-token-plan-model",
+      legacyModelName: "Custom Token Plan",
+    });
+    expect(provider?.models.map((m) => m.id)).toEqual([
+      "custom-token-plan-model",
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
     ]);
   });
 });

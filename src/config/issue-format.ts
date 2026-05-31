@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ConfigValidationIssue } from "./types.js";
 
 export type ConfigIssueLineInput = {

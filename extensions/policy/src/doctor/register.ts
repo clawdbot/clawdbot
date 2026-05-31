@@ -22,6 +22,13 @@ import {
 } from "../policy-state.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 
+let fsPromisesModulePromise: Promise<typeof import("node:fs/promises")> | null = null;
+
+const loadFsPromisesModule = async () => {
+  fsPromisesModulePromise ??= import("node:fs/promises");
+  return await fsPromisesModulePromise;
+};
+
 const CHECK_IDS = {
   policyAttestationMismatch: "policy/attestation-hash-mismatch",
   policyDeniedChannelProvider: "policy/channels-denied-provider",
@@ -5268,7 +5275,7 @@ async function readPolicyFile(
   const displayName = policyDisplayName(ctx);
   const path = resolveWorkspacePath(ctx, policyPathSetting(ctx));
   try {
-    const fs = await import("node:fs/promises");
+    const fs = await loadFsPromisesModule();
     return {
       raw: await fs.readFile(path, "utf-8"),
       path,
@@ -5289,7 +5296,7 @@ async function readWorkspaceFile(
 ): Promise<{ raw: string; path: string } | null> {
   const path = resolveWorkspacePath(ctx, fileName);
   try {
-    const fs = await import("node:fs/promises");
+    const fs = await loadFsPromisesModule();
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFound(err)) {

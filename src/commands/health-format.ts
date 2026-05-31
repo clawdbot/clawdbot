@@ -1,6 +1,6 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
 
 const formatKv = (line: string, rich: boolean) => {

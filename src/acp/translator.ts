@@ -33,6 +33,8 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
@@ -42,7 +44,6 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import {
   createInMemoryAcpEventLedger,
@@ -502,10 +503,7 @@ function buildSessionMetadata(params: {
     normalizeOptionalString(params.row?.displayName) ||
     normalizeOptionalString(params.row?.label) ||
     params.sessionKey;
-  const updatedAt =
-    typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
-      ? new Date(params.row.updatedAt).toISOString()
-      : null;
+  const updatedAt = timestampMsToIsoString(params.row?.updatedAt) ?? null;
   return {
     title,
     updatedAt,
@@ -1914,7 +1912,7 @@ export class AcpGatewayAgent implements Agent {
       sessionId: session.key,
       cwd,
       title: session.derivedTitle ?? session.displayName ?? session.label ?? session.key,
-      updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+      updatedAt: timestampMsToIsoString(session.updatedAt),
       _meta: toAcpSessionLineageMeta(session),
     };
   }

@@ -1,10 +1,10 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   MessagePresentation,
   MessagePresentationBlock,
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;

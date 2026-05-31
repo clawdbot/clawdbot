@@ -1,8 +1,8 @@
 import path from "node:path";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { asOptionalRecord } from "../shared/record-coerce.js";
 import { redactSensitiveText } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
@@ -95,7 +95,7 @@ function createSupportRecord(): Record<string, unknown> {
 }
 
 function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function countOwnObjectEntries(record: Record<string, unknown>): number {

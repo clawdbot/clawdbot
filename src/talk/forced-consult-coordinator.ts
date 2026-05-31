@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   matchRealtimeVoiceConsultQuestions,
   readRealtimeVoiceConsultQuestion,
@@ -231,12 +232,15 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (!stored || !stored.pending || stored.timer) {
         return;
       }
-      stored.timer = setTimer(() => {
-        stored.timer = undefined;
-        if (state.get(handle.id) === stored && stored.pending && !stored.cancelled) {
-          run(handle);
-        }
-      }, delayMs);
+      stored.timer = setTimer(
+        () => {
+          stored.timer = undefined;
+          if (state.get(handle.id) === stored && stored.pending && !stored.cancelled) {
+            run(handle);
+          }
+        },
+        resolveTimerTimeoutMs(delayMs, 0, 0),
+      );
     },
     clearPending() {
       for (const stored of state.values()) {

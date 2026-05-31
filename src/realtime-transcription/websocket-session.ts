@@ -358,7 +358,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       if (!this.closed) {
         this.reconnecting = false;
         await this.attemptReconnect();
-        return;
       }
     } finally {
       this.reconnecting = false;

@@ -136,4 +136,13 @@ describe("session artifact helpers", () => {
     expect(parseSessionArchiveTimestamp(file, "reset")).toBeNull();
     expect(parseSessionArchiveTimestamp("keep.deleted.keep.jsonl", "deleted")).toBeNull();
   });
+
+  it("falls back instead of throwing for out-of-range archive timestamps", () => {
+    expect(formatSessionArchiveTimestamp(Number.POSITIVE_INFINITY)).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
+    );
+    expect(formatSessionArchiveTimestamp(9_000_000_000_000_000)).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
+    );
+  });
 });

@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,8 +10,6 @@ import {
   type ExecAutoReviewInput,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT } from "./exec-auto-reviewer.prompt.js";
 import {
   completeWithPreparedSimpleCompletionModel,

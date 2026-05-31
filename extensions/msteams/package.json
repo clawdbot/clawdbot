@@ -12,12 +12,12 @@
     "@microsoft/teams.api": "2.0.12",
     "@microsoft/teams.apps": "2.0.12",
     "express": "5.2.1",
-    "typebox": "1.1.38"
+    "typebox": "1.1.39"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "jose": "6.2.3",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.30"

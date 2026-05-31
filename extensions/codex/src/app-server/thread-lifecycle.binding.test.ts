@@ -1336,7 +1336,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      authProfileId: "openai-codex:bound",
+      authProfileId: "openai:bound",
     });
     const params = createParams(sessionFile, workspaceDir);
     delete params.authProfileId;
@@ -1370,6 +1370,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       },
     });
 
-    expect(binding.authProfileId).toBe("openai-codex:bound");
+    expect(binding.authProfileId).toBe("openai:bound");
   });
 });

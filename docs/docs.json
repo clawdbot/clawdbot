@@ -1235,7 +1235,6 @@
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
                   "plugins/oc-path",
-                  "plugins/skill-workshop",
                   "plugins/zalouser"
                 ]
               },
@@ -1256,6 +1255,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/skill-workshop",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1281,6 +1281,7 @@
                   "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
+                  "tools/permission-modes",
                   "tools/exec-approvals",
                   "tools/exec-approvals-advanced",
                   "tools/exec",

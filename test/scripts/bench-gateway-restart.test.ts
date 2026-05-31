@@ -4,13 +4,15 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 describe("gateway restart benchmark script", () => {
-  it("prints help without running benchmark cases", () => {
-    const result = spawnSync(
+  let helpResult: ReturnType<typeof spawnSync>;
+
+  beforeAll(() => {
+    helpResult = spawnSync(
       process.execPath,
       ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--help"],
       {
@@ -22,18 +24,20 @@ describe("gateway restart benchmark script", () => {
         },
       },
     );
+  });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("OpenClaw Gateway restart benchmark");
-    expect(result.stdout).toContain("--restarts <n>");
-    expect(result.stdout).toContain("Timeout for initial startup and each restart");
-    expect(result.stdout).toContain("--post-ready-delay-ms <ms>");
-    expect(result.stdout).toContain("skipChannels (gateway restart, skip channels)");
-    expect(result.stdout).toContain(
+  it("prints help without running benchmark cases", () => {
+    expect(helpResult.status).toBe(0);
+    expect(helpResult.stdout).toContain("OpenClaw Gateway restart benchmark");
+    expect(helpResult.stdout).toContain("--restarts <n>");
+    expect(helpResult.stdout).toContain("Timeout for initial startup and each restart");
+    expect(helpResult.stdout).toContain("--post-ready-delay-ms <ms>");
+    expect(helpResult.stdout).toContain("skipChannels (gateway restart, skip channels)");
+    expect(helpResult.stdout).toContain(
       "skipChannelsNoAcpxProbe (gateway restart, skip channels, ACPX startup probe off)",
     );
-    expect(result.stdout).not.toContain("[gateway-restart-bench]");
-    expect(result.stderr).toBe("");
+    expect(helpResult.stdout).not.toContain("[gateway-restart-bench]");
+    expect(helpResult.stderr).toBe("");
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {

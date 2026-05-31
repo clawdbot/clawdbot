@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 type SlashCommandsModule = typeof import("./slash-commands.js");
-const browserImportPath: string = "./slash-commands.ts?browser-import";
+const browserImportPath = "./slash-commands.ts?browser-import";
 
 function importDeclarations(source: string): string[] {
   return (source.match(/^import[\s\S]*?;$/gmu) ?? []).map((declaration) =>
@@ -67,8 +67,8 @@ describe("slash command browser import", () => {
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
     ]);
     expect(importDeclarations(sharedRegistry)).toEqual([
-      'import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";',
-      'import { normalizeStringEntries } from "../shared/string-normalization.js";',
+      'import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";',
+      'import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";',
       'import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";',
       'import type { ChatCommandDefinition, CommandArgChoiceContext, CommandCategory, CommandScope, CommandTier } from "./commands-registry.types.js";',
       'import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";',

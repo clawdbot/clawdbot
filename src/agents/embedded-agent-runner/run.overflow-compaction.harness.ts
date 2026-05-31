@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -8,7 +9,6 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -254,7 +254,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" || ctx.provider === "openai-codex" || ctx.provider === "openai"
+      ctx.provider === "codex" || ctx.provider === "openai" || ctx.provider === "openai"
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),

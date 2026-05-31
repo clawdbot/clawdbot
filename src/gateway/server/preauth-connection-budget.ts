@@ -1,4 +1,7 @@
-import { parseStrictPositiveInteger, resolveIntegerOption } from "../../shared/number-coercion.js";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 
 const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
 const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";

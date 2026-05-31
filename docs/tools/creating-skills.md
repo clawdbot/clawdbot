@@ -9,7 +9,9 @@ read_when:
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.
 
-For how skills are loaded and prioritized, see [Skills](/tools/skills).
+For how skills are loaded and prioritized, see [Skills](/tools/skills). For
+agent-generated or reviewed skill changes, see
+[Skill Workshop](/tools/skill-workshop).
 
 ## Create your first skill
 
@@ -94,6 +96,46 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 </Steps>
 
+## Use Skill Workshop for generated skills
+
+For agent-generated procedures, use Skill Workshop instead of writing `SKILL.md`
+directly. Skill Workshop creates a pending proposal first; it becomes an active
+skill only after review and apply:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal ./PROPOSAL.md
+```
+
+Use `--proposal-dir` when the proposal also has support files:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal-dir ./hello-world-proposal
+```
+
+The proposal stays inactive until an operator reviews and applies it.
+Proposal directories must contain `PROPOSAL.md`. Support files can be included
+under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`:
+
+```bash
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+```
+
+When applied, OpenClaw writes the final `SKILL.md` into the workspace `skills/`
+root, writes approved support files beside it, and removes proposal-only
+frontmatter such as `status: proposal`, proposal `version`, and proposal
+`date`.
+
+Full proposal storage, review, Gateway, and approval-policy details are in
+[Skill Workshop](/tools/skill-workshop).
+
 ## Skill metadata reference
 
 The YAML frontmatter supports these fields:
@@ -153,6 +195,7 @@ Each skills root can contain direct skill folders such as
 ## Related
 
 - [Skills reference](/tools/skills) — loading, precedence, and gating rules
+- [Skill Workshop](/tools/skill-workshop) — governed creation for generated or reviewed skill changes
 - [Skills config](/tools/skills-config) — `skills.*` config schema
 - [ClawHub](/clawhub) — public skill registry
 - [Building Plugins](/plugins/building-plugins) — plugins can ship skills

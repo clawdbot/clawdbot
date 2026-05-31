@@ -1,3 +1,4 @@
+#if Talk
 @_exported import ElevenLabsKit
 
 public typealias ElevenLabsVoice = ElevenLabsKit.ElevenLabsVoice
@@ -7,3 +8,4 @@ public typealias TalkTTSValidation = ElevenLabsKit.TalkTTSValidation
 public typealias StreamingAudioPlayer = ElevenLabsKit.StreamingAudioPlayer
 public typealias PCMStreamingAudioPlayer = ElevenLabsKit.PCMStreamingAudioPlayer
 public typealias StreamingPlaybackResult = ElevenLabsKit.StreamingPlaybackResult
+#endif

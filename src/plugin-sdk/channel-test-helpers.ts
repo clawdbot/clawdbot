@@ -51,4 +51,4 @@ export {
   formatLocalEnvelopeTimestamp,
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
-export { stripAnsi } from "../terminal/ansi.js";
+export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";

@@ -19,8 +19,13 @@ export async function persistSessionEntry(params: CommandParams): Promise<boolea
       params.storePath,
       (store) => {
         store[params.sessionKey] = params.sessionEntry as SessionEntry;
+        return params.sessionEntry as SessionEntry;
       },
-      { skipMaintenance: true },
+      {
+        resolveSingleEntryPersistence: (entry) =>
+          entry ? { sessionKey: params.sessionKey, entry } : null,
+        skipMaintenance: true,
+      },
     );
   }
   return true;
@@ -44,16 +49,24 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      const nextEntry = store[key] ?? entry;
-      if (!nextEntry) {
-        return;
-      }
-      nextEntry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-      nextEntry.updatedAt = Date.now();
-      store[key] = nextEntry;
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const nextEntry = store[key] ?? entry;
+        if (!nextEntry) {
+          return undefined;
+        }
+        nextEntry.abortedLastRun = true;
+        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
+        nextEntry.updatedAt = Date.now();
+        store[key] = nextEntry;
+        return nextEntry;
+      },
+      {
+        resolveSingleEntryPersistence: (updated) =>
+          updated ? { sessionKey: key, entry: updated } : null,
+      },
+    );
   }
 
   return true;

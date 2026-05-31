@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
@@ -5,7 +6,6 @@ import {
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../infra/outbound/channel-target-prefix.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,

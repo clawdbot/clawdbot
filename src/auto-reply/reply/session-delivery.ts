@@ -1,11 +1,11 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../config/sessions.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,

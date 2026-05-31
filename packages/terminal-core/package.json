@@ -1,0 +1,107 @@
+{
+  "name": "@openclaw/terminal-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./ansi": {
+      "types": "./dist/ansi.d.mts",
+      "import": "./dist/ansi.mjs",
+      "default": "./dist/ansi.mjs"
+    },
+    "./decorative-emoji": {
+      "types": "./dist/decorative-emoji.d.mts",
+      "import": "./dist/decorative-emoji.mjs",
+      "default": "./dist/decorative-emoji.mjs"
+    },
+    "./health-style": {
+      "types": "./dist/health-style.d.mts",
+      "import": "./dist/health-style.mjs",
+      "default": "./dist/health-style.mjs"
+    },
+    "./links": {
+      "types": "./dist/links.d.mts",
+      "import": "./dist/links.mjs",
+      "default": "./dist/links.mjs"
+    },
+    "./note": {
+      "types": "./dist/note.d.mts",
+      "import": "./dist/note.mjs",
+      "default": "./dist/note.mjs"
+    },
+    "./osc-progress": {
+      "types": "./dist/osc-progress.d.mts",
+      "import": "./dist/osc-progress.mjs",
+      "default": "./dist/osc-progress.mjs"
+    },
+    "./palette": {
+      "types": "./dist/palette.d.mts",
+      "import": "./dist/palette.mjs",
+      "default": "./dist/palette.mjs"
+    },
+    "./progress-line": {
+      "types": "./dist/progress-line.d.mts",
+      "import": "./dist/progress-line.mjs",
+      "default": "./dist/progress-line.mjs"
+    },
+    "./prompt-select-styled": {
+      "types": "./dist/prompt-select-styled.d.mts",
+      "import": "./dist/prompt-select-styled.mjs",
+      "default": "./dist/prompt-select-styled.mjs"
+    },
+    "./prompt-select-styled-params": {
+      "types": "./dist/prompt-select-styled-params.d.mts",
+      "import": "./dist/prompt-select-styled-params.mjs",
+      "default": "./dist/prompt-select-styled-params.mjs"
+    },
+    "./prompt-style": {
+      "types": "./dist/prompt-style.d.mts",
+      "import": "./dist/prompt-style.mjs",
+      "default": "./dist/prompt-style.mjs"
+    },
+    "./restore": {
+      "types": "./dist/restore.d.mts",
+      "import": "./dist/restore.mjs",
+      "default": "./dist/restore.mjs"
+    },
+    "./safe-text": {
+      "types": "./dist/safe-text.d.mts",
+      "import": "./dist/safe-text.mjs",
+      "default": "./dist/safe-text.mjs"
+    },
+    "./stream-writer": {
+      "types": "./dist/stream-writer.d.mts",
+      "import": "./dist/stream-writer.mjs",
+      "default": "./dist/stream-writer.mjs"
+    },
+    "./table": {
+      "types": "./dist/table.d.mts",
+      "import": "./dist/table.mjs",
+      "default": "./dist/table.mjs"
+    },
+    "./terminal-link": {
+      "types": "./dist/terminal-link.d.mts",
+      "import": "./dist/terminal-link.mjs",
+      "default": "./dist/terminal-link.mjs"
+    },
+    "./theme": {
+      "types": "./dist/theme.d.mts",
+      "import": "./dist/theme.mjs",
+      "default": "./dist/theme.mjs"
+    }
+  },
+  "dependencies": {
+    "@clack/prompts": "1.4.0",
+    "chalk": "5.6.2"
+  }
+}

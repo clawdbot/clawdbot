@@ -22,7 +22,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasOwnRecordValue(record: Record<string, unknown> | null, key: string): boolean {
-  return record != null && Object.prototype.hasOwnProperty.call(record, key);
+  return record != null && Object.hasOwn(record, key);
 }
 
 function sanitizeRedactedValue(params: {
@@ -70,7 +70,7 @@ function sanitizeRedactedValue(params: {
   const next: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(params.value)) {
     const originalFormValue =
-      originalFormRecord != null && Object.prototype.hasOwnProperty.call(originalFormRecord, key)
+      originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
         ? originalFormRecord[key]
         : undefined;
     const originalRawPathExists = hasOwnRecordValue(originalRawRecord, key);

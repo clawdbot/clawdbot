@@ -732,12 +732,12 @@ describe("gateway startup config validation", () => {
         {
           path: "models.providers.openrouter.api",
           message:
-            'Invalid option: expected one of "openai-completions"|"openai-responses"|"openai-codex-responses"|"anthropic-messages"|"google-generative-ai"|"github-copilot"|"bedrock-converse-stream"|"ollama"|"azure-openai-responses"',
+            'Invalid option: expected one of "openai-completions"|"openai-responses"|"openai-chatgpt-responses"|"anthropic-messages"|"google-generative-ai"|"github-copilot"|"bedrock-converse-stream"|"ollama"|"azure-openai-responses"',
         },
         {
           path: "models.providers.openrouter.models.0.api",
           message:
-            'Invalid option: expected one of "openai-completions"|"openai-responses"|"openai-codex-responses"|"anthropic-messages"|"google-generative-ai"|"github-copilot"|"bedrock-converse-stream"|"ollama"|"azure-openai-responses"',
+            'Invalid option: expected one of "openai-completions"|"openai-responses"|"openai-chatgpt-responses"|"anthropic-messages"|"google-generative-ai"|"github-copilot"|"bedrock-converse-stream"|"ollama"|"azure-openai-responses"',
         },
       ],
       legacyIssues: [],

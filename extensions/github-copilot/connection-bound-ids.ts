@@ -26,7 +26,7 @@ function deriveReplacementId(type: string | undefined, originalId: string): stri
 type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
 
 function isInputItem(value: unknown): value is InputItem {
-  return !!value && typeof value === "object";
+  return Boolean(value) && typeof value === "object";
 }
 
 function isValidReasoningReplayId(id: unknown): id is string {

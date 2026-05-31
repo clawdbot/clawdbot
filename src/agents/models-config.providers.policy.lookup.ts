@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MODEL_APIS } from "../config/types.models.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 const GENERIC_PROVIDER_APIS = new Set<string>([

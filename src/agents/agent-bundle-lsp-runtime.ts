@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -8,7 +9,6 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
 import {
   resolveStdioMcpServerLaunchConfig,

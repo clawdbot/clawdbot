@@ -34,7 +34,7 @@ function expectPersistedOpenAICodexProfile(
   metadata: Record<string, unknown> = {},
 ): void {
   expect(credential?.type).toBe("oauth");
-  expect(credential?.provider).toBe("openai-codex");
+  expect(credential?.provider).toBe("openai");
   for (const [key, value] of Object.entries(metadata)) {
     expect((credential as Record<string, unknown> | undefined)?.[key]).toEqual(value);
   }
@@ -47,7 +47,7 @@ function expectPersistedOpenAICodexProfile(
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
-  getOAuthProviders: () => [{ id: "openai-codex" }, { id: "anthropic" }],
+  getOAuthProviders: () => [{ id: "openai" }, { id: "anthropic" }],
 }));
 
 describe("OAuth credential adoption is identity-gated", () => {
@@ -88,8 +88,8 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Scenario: sub-agent starts with a still-valid OAuth cred (so no
     // refresh is triggered), but main holds an even fresher cred for a
     // different account. The pre-refresh adopt must refuse.
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const subExpiry = Date.now() + 10 * 60 * 1000;
     const mainFresher = Date.now() + 60 * 60 * 1000;
 
@@ -149,8 +149,8 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Inside the lock, main holds FRESH creds for a DIFFERENT account. The
     // inside-lock adopt branch must refuse and fall through to the HTTP
     // refresh path using the sub-agent's own refresh token.
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
 
     const subAgentDir = path.join(tempRoot, "agents", "sub-insidelock", "agent");
@@ -223,8 +223,8 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Main has fresh creds for a DIFFERENT account. The catch-block
     // main-inherit fallback must refuse to adopt and let the original
     // error propagate (wrapped).
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
 
     const subAgentDir = path.join(tempRoot, "agents", "sub-catch-refuse", "agent");
@@ -282,7 +282,7 @@ describe("OAuth credential adoption is identity-gated", () => {
         profileId,
         agentDir: subAgentDir,
       }),
-    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+    ).rejects.toThrow(/OAuth token refresh failed for openai/);
 
     // Sub-agent store must still have its own stale cred \u2014 no leak.
     const subRaw = JSON.parse(

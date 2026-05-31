@@ -1,7 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -50,9 +50,8 @@ import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -111,8 +110,18 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
+type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
+
+let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
+  null;
+
+const loadGatewayModelCatalogModule = async () => {
+  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
+  return await gatewayModelCatalogModulePromise;
+};
+
 export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest } = await import("./server-model-catalog.js");
+  const { resetModelCatalogCacheForTest } = await loadGatewayModelCatalogModule();
   await resetModelCatalogCacheForTest();
 }
 
@@ -167,23 +176,12 @@ const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
 let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
-let cachedStartupChannelRuntimePromise: Promise<ChannelRuntimeSurface> | null = null;
 
 function getChannelRuntime() {
   cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
     ({ createRuntimeChannel }) => createRuntimeChannel(),
   );
   return cachedChannelRuntimePromise;
-}
-
-function getStartupChannelRuntime() {
-  cachedStartupChannelRuntimePromise ??=
-    import("../plugins/runtime/channel-runtime-contexts.js").then(
-      ({ createChannelRuntimeContextRegistry }) => ({
-        runtimeContexts: createChannelRuntimeContextRegistry(),
-      }),
-    );
-  return cachedStartupChannelRuntimePromise;
 }
 
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
@@ -198,15 +196,18 @@ function loadGatewayCloseModule(): Promise<typeof import("./server-close.runtime
   return gatewayCloseModulePromise;
 }
 
-type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
-
-let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
-  null;
-
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
-  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
-  const mod = await gatewayModelCatalogModulePromise;
+  const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalog(...args);
+};
+
+let gatewayPluginBootstrapModulePromise: Promise<
+  typeof import("./server-plugin-bootstrap.js")
+> | null = null;
+
+const loadGatewayPluginBootstrapModule = async () => {
+  gatewayPluginBootstrapModulePromise ??= import("./server-plugin-bootstrap.js");
+  return await gatewayPluginBootstrapModulePromise;
 };
 
 const logHealth = log.child("health");
@@ -766,7 +767,8 @@ export async function startGatewayServer(
   const getResolvedAuth = () =>
     resolveGatewayAuth({
       authConfig:
-        getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth ?? getRuntimeConfig().gateway?.auth,
+        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
+        getRuntimeConfig().gateway?.auth,
       authOverride: opts.auth,
       env: process.env,
       tailscaleMode,
@@ -850,7 +852,6 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
-    resolveStartupChannelRuntime: getStartupChannelRuntime,
     getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
@@ -1274,7 +1275,7 @@ export async function startGatewayServer(
       const [{ loadPluginLookUpTable }, { prepareGatewayPluginLoad }, { startPluginServices }] =
         await Promise.all([
           import("../plugins/plugin-lookup-table.js"),
-          import("./server-plugin-bootstrap.js"),
+          loadGatewayPluginBootstrapModule(),
           import("../plugins/services.js"),
         ]);
       const nextPluginLookUpTable = loadPluginLookUpTable({
@@ -1453,7 +1454,7 @@ export async function startGatewayServer(
 
     if (!minimalTestGateway) {
       if (runtimePluginsLoaded && deferredConfiguredChannelPluginIds.length > 0) {
-        const { reloadDeferredGatewayPlugins } = await import("./server-plugin-bootstrap.js");
+        const { reloadDeferredGatewayPlugins } = await loadGatewayPluginBootstrapModule();
         const loaded = await startupTrace.measure("gateway.deferred-plugins", () =>
           reloadDeferredGatewayPlugins({
             cfg: gatewayPluginConfigAtStart,

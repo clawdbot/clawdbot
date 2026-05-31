@@ -816,7 +816,8 @@ async function deliverZalouserReply(params: {
 export async function monitorZalouserProvider(
   options: ZalouserMonitorOptions,
 ): Promise<ZalouserMonitorResult> {
-  let { account, config } = options;
+  const { config } = options;
+  let { account } = options;
   const { abortSignal, statusSink, runtime } = options;
 
   const core = getZalouserRuntime();

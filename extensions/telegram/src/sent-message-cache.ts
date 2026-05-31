@@ -1,22 +1,49 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getTelegramRuntime } from "./runtime.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
+export const TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE = "telegram.sent-messages";
+export const TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES = 10_000;
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
+const TELEGRAM_SENT_MESSAGES_STORE_FOR_TEST_KEY = Symbol.for(
+  "openclaw.telegramSentMessagesStoreForTest",
+);
+
+type PersistedSentMessage = {
+  scopeKey: string;
+  chatId: string;
+  messageId: string;
+  timestamp: number;
+};
 
 type SentMessageStore = Map<string, Map<string, number>>;
+type SentMessagePersistentStore = PluginStateSyncKeyedStore<PersistedSentMessage>;
 
 type SentMessageBucket = {
-  persistedPath: string;
+  scopeKey: string;
   store: SentMessageStore;
 };
 
 type SentMessageState = {
-  bucketsByPath: Map<string, SentMessageBucket>;
+  bucketsByScope: Map<string, SentMessageBucket>;
 };
+
+let sentMessageStoreForTest: SentMessagePersistentStore | undefined;
+
+function getSentMessageStoreForTest(): SentMessagePersistentStore | undefined {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  return (
+    sentMessageStoreForTest ??
+    (globalStore[TELEGRAM_SENT_MESSAGES_STORE_FOR_TEST_KEY] as
+      | SentMessagePersistentStore
+      | undefined)
+  );
+}
 
 function getSentMessageState(): SentMessageState {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
@@ -25,7 +52,7 @@ function getSentMessageState(): SentMessageState {
     return existing;
   }
   const state: SentMessageState = {
-    bucketsByPath: new Map(),
+    bucketsByScope: new Map(),
   };
   globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] = state;
   return state;
@@ -39,6 +66,28 @@ function resolveSentMessageStorePath(cfg?: Pick<OpenClawConfig, "session">): str
   return `${resolveStorePath(cfg?.session?.store)}.telegram-sent-messages.json`;
 }
 
+function resolveSentMessageScopeKey(cfg?: Pick<OpenClawConfig, "session">): string {
+  const storePath = resolveStorePath(cfg?.session?.store);
+  return createHash("sha256").update(storePath, "utf8").digest("hex").slice(0, 24);
+}
+
+function sentMessageEntryKey(scopeKey: string, chatId: string, messageId: string): string {
+  return createHash("sha256")
+    .update(`${scopeKey}\0${chatId}\0${messageId}`, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function openSentMessageStore(): SentMessagePersistentStore {
+  return (
+    getSentMessageStoreForTest() ??
+    getTelegramRuntime().state.openSyncKeyedStore<PersistedSentMessage>({
+      namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
+      maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+    })
+  );
+}
+
 function cleanupExpired(
   store: SentMessageStore,
   scopeKey: string,
@@ -46,7 +95,7 @@ function cleanupExpired(
   now: number,
 ): void {
   for (const [id, timestamp] of entry) {
-    if (now - timestamp > TTL_MS) {
+    if (now - timestamp >= TTL_MS) {
       entry.delete(id);
     }
   }
@@ -55,10 +104,7 @@ function cleanupExpired(
   }
 }
 
-function readPersistedSentMessages(filePath: string): SentMessageStore {
-  if (!fs.existsSync(filePath)) {
-    return createSentMessageStore();
-  }
+function readLegacySentMessages(filePath: string): SentMessageStore {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
@@ -86,18 +132,39 @@ function readPersistedSentMessages(filePath: string): SentMessageStore {
   }
 }
 
+function readPersistedSentMessages(scopeKey: string): SentMessageStore {
+  const now = Date.now();
+  const store = createSentMessageStore();
+  try {
+    for (const entry of openSentMessageStore().entries()) {
+      if (entry.value.scopeKey !== scopeKey || now - entry.value.timestamp > TTL_MS) {
+        continue;
+      }
+      let messages = store.get(entry.value.chatId);
+      if (!messages) {
+        messages = new Map<string, number>();
+        store.set(entry.value.chatId, messages);
+      }
+      messages.set(entry.value.messageId, entry.value.timestamp);
+    }
+  } catch (error) {
+    logVerbose(`telegram: failed to read sent-message cache: ${String(error)}`);
+  }
+  return store;
+}
+
 function getSentMessageBucket(cfg?: Pick<OpenClawConfig, "session">): SentMessageBucket {
   const state = getSentMessageState();
-  const persistedPath = resolveSentMessageStorePath(cfg);
-  const existing = state.bucketsByPath.get(persistedPath);
+  const scopeKey = resolveSentMessageScopeKey(cfg);
+  const existing = state.bucketsByScope.get(scopeKey);
   if (existing) {
     return existing;
   }
   const bucket = {
-    persistedPath,
-    store: readPersistedSentMessages(persistedPath),
+    scopeKey,
+    store: readPersistedSentMessages(scopeKey),
   };
-  state.bucketsByPath.set(persistedPath, bucket);
+  state.bucketsByScope.set(scopeKey, bucket);
   return bucket;
 }
 
@@ -106,24 +173,22 @@ function getSentMessages(cfg?: Pick<OpenClawConfig, "session">): SentMessageStor
 }
 
 function persistSentMessages(bucket: SentMessageBucket): void {
-  const { store, persistedPath } = bucket;
+  const { store, scopeKey } = bucket;
   const now = Date.now();
-  const serialized: Record<string, Record<string, number>> = {};
   for (const [chatId, entry] of store) {
     cleanupExpired(store, chatId, entry, now);
-    if (entry.size > 0) {
-      serialized[chatId] = Object.fromEntries(entry);
+    for (const [messageId, timestamp] of entry) {
+      const ttlMs = TTL_MS - Math.max(0, now - timestamp);
+      if (ttlMs <= 0) {
+        continue;
+      }
+      openSentMessageStore().register(
+        sentMessageEntryKey(scopeKey, chatId, messageId),
+        { scopeKey, chatId, messageId, timestamp },
+        { ttlMs },
+      );
     }
   }
-  if (Object.keys(serialized).length === 0) {
-    fs.rmSync(persistedPath, { force: true });
-    return;
-  }
-  replaceFileAtomicSync({
-    filePath: persistedPath,
-    content: JSON.stringify(serialized),
-    tempPrefix: ".telegram-sent-message-cache",
-  });
 }
 
 export function recordSentMessage(
@@ -170,13 +235,43 @@ export function wasSentByBot(
 
 export function clearSentMessageCache(): void {
   const state = getSentMessageState();
-  for (const bucket of state.bucketsByPath.values()) {
+  for (const bucket of state.bucketsByScope.values()) {
     bucket.store.clear();
-    fs.rmSync(bucket.persistedPath, { force: true });
   }
-  state.bucketsByPath.clear();
+  state.bucketsByScope.clear();
+  openSentMessageStore().clear();
 }
 
 export function resetSentMessageCacheForTest(): void {
-  getSentMessageState().bucketsByPath.clear();
+  getSentMessageState().bucketsByScope.clear();
+}
+
+export function setTelegramSentMessageStoreForTest(
+  store: SentMessagePersistentStore | undefined,
+): void {
+  sentMessageStoreForTest = store;
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  if (store) {
+    globalStore[TELEGRAM_SENT_MESSAGES_STORE_FOR_TEST_KEY] = store;
+  } else {
+    delete globalStore[TELEGRAM_SENT_MESSAGES_STORE_FOR_TEST_KEY];
+  }
+}
+
+export function listTelegramLegacySentMessageCacheEntries(params: {
+  cfg?: Pick<OpenClawConfig, "session">;
+  persistedPath?: string;
+}): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number }> {
+  const scopeKey = resolveSentMessageScopeKey(params.cfg);
+  const filePath = params.persistedPath ?? resolveSentMessageStorePath(params.cfg);
+  const legacy = fs.existsSync(filePath)
+    ? readLegacySentMessages(filePath)
+    : createSentMessageStore();
+  return [...legacy.entries()].flatMap(([chatId, messages]) =>
+    [...messages.entries()].map(([messageId, timestamp]) => ({
+      key: sentMessageEntryKey(scopeKey, chatId, messageId),
+      value: { scopeKey, chatId, messageId, timestamp },
+      ttlMs: Math.max(1, TTL_MS - Math.max(0, Date.now() - timestamp)),
+    })),
+  );
 }

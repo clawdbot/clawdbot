@@ -96,7 +96,7 @@ vi.mock("../daemon/systemd.js", () => ({
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 

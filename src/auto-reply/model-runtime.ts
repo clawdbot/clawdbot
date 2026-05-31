@@ -1,8 +1,8 @@
-import type { SessionEntry } from "../config/sessions.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions.js";
 
 export function formatProviderModelRef(providerRaw: string, modelRaw: string): string {
   const provider = normalizeOptionalString(providerRaw) ?? "";

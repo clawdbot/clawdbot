@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -25,7 +26,6 @@ import {
   formatExecCommand,
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
-import { normalizeNullableString } from "../shared/string-coerce.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";

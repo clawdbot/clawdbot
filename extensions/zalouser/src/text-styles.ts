@@ -133,7 +133,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
       continue;
     }
 
-    let line = unquotedLine;
+    const line = unquotedLine;
     const openingFence = resolveOpeningFence(rawLine);
     if (openingFence) {
       const fenceLine = openingFence.quoteIndent > 0 ? unquotedLine : rawLine;

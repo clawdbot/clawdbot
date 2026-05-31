@@ -1,9 +1,9 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { OPENCLAW_AGENT_RUNTIME_ID, isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 function normalizeConfiguredRuntimeId(value: unknown): string | undefined {
   return normalizeOptionalAgentRuntimeId(value);
@@ -11,7 +11,7 @@ function normalizeConfiguredRuntimeId(value: unknown): string | undefined {
 
 function isSelectablePluginRuntime(runtime: string | undefined): runtime is string {
   return (
-    !!runtime &&
+    Boolean(runtime) &&
     !isDefaultAgentRuntimeId(runtime) &&
     normalizeOptionalAgentRuntimeId(runtime) !== OPENCLAW_AGENT_RUNTIME_ID
   );

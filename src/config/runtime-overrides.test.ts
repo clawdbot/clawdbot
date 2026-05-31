@@ -55,7 +55,7 @@ describe("runtime overrides", () => {
 
     const next = applyConfigOverrides(cfg);
     expect(next.commands?.bash).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
   });
 
   it("blocks constructor/prototype keys inside override object values", () => {
@@ -64,7 +64,7 @@ describe("runtime overrides", () => {
 
     const next = applyConfigOverrides(cfg);
     expect(next.commands?.bash).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
   });
 
   it("sanitizes blocked object keys when writing overrides", () => {

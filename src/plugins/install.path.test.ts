@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
@@ -17,6 +17,11 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-path");
+let dualFormatArchiveCase: {
+  nodeModulesExists: boolean;
+  result: Awaited<ReturnType<typeof installPluginFromPath>>;
+  runCalls: unknown[][];
+};
 
 function setupBundleInstallFixture(params: {
   bundleFormat: "codex" | "claude" | "cursor";
@@ -150,6 +155,40 @@ async function installFromFileWithWarnings(params: {
 
 afterAll(() => {
   suiteTempRootTracker.cleanup();
+});
+
+beforeAll(async () => {
+  const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
+    bundleFormat: "claude",
+  });
+  const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "dual-format.tgz");
+
+  await packToArchive({
+    pkgDir: pluginDir,
+    outDir: path.dirname(archivePath),
+    outName: path.basename(archivePath),
+  });
+
+  const run = vi.mocked(runCommandWithTimeout);
+  run.mockReset();
+  run.mockResolvedValue({
+    code: 0,
+    stdout: "",
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit",
+  });
+
+  const result = await installPluginFromPath({
+    path: archivePath,
+    extensionsDir,
+  });
+  dualFormatArchiveCase = {
+    nodeModulesExists: result.ok && fs.existsSync(path.join(result.targetDir, "node_modules")),
+    result,
+    runCalls: [...run.mock.calls],
+  };
 });
 
 beforeEach(() => {
@@ -348,38 +387,15 @@ describe("installPluginFromPath", () => {
   });
 
   it("prefers native package metadata without installing dependencies for dual-format archives", async () => {
-    const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
-      bundleFormat: "claude",
-    });
-    const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "dual-format.tgz");
+    const { nodeModulesExists, result, runCalls } = dualFormatArchiveCase;
 
-    await packToArchive({
-      pkgDir: pluginDir,
-      outDir: path.dirname(archivePath),
-      outName: path.basename(archivePath),
-    });
-
-    const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const result = await installPluginFromPath({
-      path: archivePath,
-      extensionsDir,
-    });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
     expect(result.pluginId).toBe("native-dual");
-    expect(result.targetDir).toBe(path.join(extensionsDir, "native-dual"));
-    expect(run).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(result.targetDir, "node_modules"))).toBe(false);
+    expect(path.basename(result.targetDir)).toBe("native-dual");
+    expect(runCalls).toHaveLength(0);
+    expect(nodeModulesExists).toBe(false);
   });
 });

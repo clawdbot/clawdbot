@@ -13,7 +13,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function hasLegacyBridgeArtifactToggle(value: unknown): boolean {
-  return Object.prototype.hasOwnProperty.call(asRecord(value) ?? {}, "readMemoryCore");
+  return Object.hasOwn(asRecord(value) ?? {}, "readMemoryCore");
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [
@@ -49,7 +49,7 @@ export function migrateMemoryWikiLegacyConfig(config: OpenClawConfig): {
   nextPluginConfig.bridge = nextBridge;
 
   const legacyValue = nextBridge.readMemoryCore;
-  const hasCanonical = Object.prototype.hasOwnProperty.call(nextBridge, "readMemoryArtifacts");
+  const hasCanonical = Object.hasOwn(nextBridge, "readMemoryArtifacts");
   if (!hasCanonical) {
     nextBridge.readMemoryArtifacts = legacyValue;
   }

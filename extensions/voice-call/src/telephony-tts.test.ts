@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
@@ -177,6 +178,23 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     });
 
     expect(provider.synthesisTimeoutMs).toBe(15000);
+  });
+
+  it("clamps oversized configured timeoutMs", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: {
+        messages: { tts: { provider: "openai", timeoutMs: Number.MAX_SAFE_INTEGER } },
+      },
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+
+    expect(provider.synthesisTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("keeps the telephony timeout default when timeoutMs is not configured", () => {

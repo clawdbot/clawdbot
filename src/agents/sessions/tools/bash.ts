@@ -1,20 +1,14 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
-import { resolveTimerTimeoutMs } from "../../../shared/number-coercion.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
-import {
-  getShellConfig,
-  getShellEnv,
-  killProcessTree,
-  trackDetachedChildPid,
-  untrackDetachedChildPid,
-} from "../../utils/shell.js";
+import { getShellConfig, getShellEnv, killProcessTree } from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -68,9 +62,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         });
-        if (child.pid) {
-          trackDetachedChildPid(child.pid);
-        }
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
@@ -102,9 +93,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         // on inherited stdio handles held by detached descendants.
         waitForChildProcess(child)
           .then((code) => {
-            if (child.pid) {
-              untrackDetachedChildPid(child.pid);
-            }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -122,9 +110,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             resolve({ exitCode: code });
           })
           .catch((err) => {
-            if (child.pid) {
-              untrackDetachedChildPid(child.pid);
-            }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }

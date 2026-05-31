@@ -511,8 +511,8 @@ describe("Codex app-server dynamic tool build", () => {
     const transportAuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:work": {
-          provider: "openai-codex",
+        "openai:work": {
+          provider: "openai",
           type: "oauth",
           access: "transport-token",
           refresh: "transport-refresh",
@@ -523,8 +523,8 @@ describe("Codex app-server dynamic tool build", () => {
     const toolAuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:work": {
-          provider: "openai-codex",
+        "openai:work": {
+          provider: "openai",
           type: "oauth",
           access: "transport-token",
           refresh: "transport-refresh",

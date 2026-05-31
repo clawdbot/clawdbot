@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -27,6 +28,7 @@ import {
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+let maxPluginStateEntriesPerPluginForTests: number | undefined;
 
 type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
@@ -73,6 +75,27 @@ function createPluginStateError(params: {
     ...(params.path ? { path: params.path } : {}),
     cause: params.cause,
   });
+}
+
+function resolvePluginStateExpiresAtMs(params: {
+  ttlMs: number | undefined;
+  now: number;
+  operation: PluginStateStoreOperation;
+  path?: string;
+}): number | null {
+  if (params.ttlMs == null) {
+    return null;
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(params.ttlMs, { nowMs: params.now });
+  if (expiresAt === undefined) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: params.operation,
+      message: "Plugin state ttlMs cannot produce a valid expiry timestamp.",
+      ...(params.path ? { path: params.path } : {}),
+    });
+  }
+  return expiresAt;
 }
 
 function wrapPluginStateError(
@@ -380,7 +403,8 @@ function enforcePostRegisterLimits(params: {
     pluginId: params.pluginId,
     now: params.now,
   });
-  if (pluginCount <= MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+  const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
+  if (pluginCount <= maxPluginEntries) {
     return;
   }
 
@@ -390,20 +414,24 @@ function enforcePostRegisterLimits(params: {
     namespace: params.namespace,
     protectedKey: params.protectedKey,
     now: params.now,
-    limit: pluginCount - MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+    limit: pluginCount - maxPluginEntries,
   });
   const remainingPluginCount = countLivePluginStateEntries(params.store.db, {
     pluginId: params.pluginId,
     now: params.now,
   });
-  if (remainingPluginCount > MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+  if (remainingPluginCount > maxPluginEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",
-      message: `Plugin state for ${params.pluginId} exceeds the ${MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN} live row limit.`,
+      message: `Plugin state for ${params.pluginId} exceeds the ${maxPluginEntries} live row limit.`,
       path: params.store.path,
     });
   }
+}
+
+function resolveMaxPluginStateEntriesPerPlugin(): number {
+  return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
 export function pluginStateRegister(params: {
@@ -420,7 +448,12 @@ export function pluginStateRegister(params: {
       "register",
       (store) => {
         const now = Date.now();
-        const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
+        const expiresAt = resolvePluginStateExpiresAtMs({
+          ttlMs: params.ttlMs,
+          now,
+          operation: "register",
+          path: store.path,
+        });
         deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
@@ -472,7 +505,12 @@ export function pluginStateRegisterIfAbsent(params: {
       "register",
       (store) => {
         const now = Date.now();
-        const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
+        const expiresAt = resolvePluginStateExpiresAtMs({
+          ttlMs: params.ttlMs,
+          now,
+          operation: "register",
+          path: store.path,
+        });
         deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
@@ -676,6 +714,10 @@ export function clearPluginStateDatabaseForTests(): void {
   );
 }
 
+export function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
+  maxPluginStateEntriesPerPluginForTests = value;
+}
+
 export function countPluginStateLiveEntries(pluginId: string): number {
   try {
     const { db } = openPluginStateDatabase("entries");
@@ -760,6 +802,12 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
     pushOk("schema");
     runWriteTransaction("probe", ({ db }) => {
       const now = Date.now();
+      const expiresAt = resolvePluginStateExpiresAtMs({
+        ttlMs: 60_000,
+        now,
+        operation: "probe",
+        path: databasePath,
+      });
       upsertPluginStateEntry(
         db,
         bindPluginStateEntry({
@@ -768,7 +816,7 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
           key: "probe",
           valueJson: JSON.stringify({ ok: true }),
           createdAt: now,
-          expiresAt: now + 60_000,
+          expiresAt,
         }),
       );
       selectPluginStateEntry(db, {

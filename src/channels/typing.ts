@@ -1,4 +1,7 @@
-import { parseFiniteNumber } from "../shared/number-coercion.js";
+import {
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 
@@ -27,13 +30,11 @@ function resolvePositiveIntegerOption(value: number | undefined, fallback: numbe
 }
 
 function resolveKeepaliveIntervalMs(value: number | undefined): number {
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? 3_000 : Math.floor(parsed);
+  return resolveTimerTimeoutMs(value, 3_000, 0);
 }
 
 function resolveDurationMsOption(value: number | undefined, fallback: number): number {
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? fallback : Math.floor(parsed);
+  return resolveTimerTimeoutMs(value, fallback, 0);
 }
 
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
@@ -75,6 +76,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
         fireStop();
       }
     }, maxDurationMs);
+    ttlTimer.unref?.();
   };
 
   const clearTtlTimer = () => {

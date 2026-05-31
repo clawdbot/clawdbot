@@ -1,3 +1,7 @@
+import {
+  clampPositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
@@ -29,9 +33,7 @@ function resolveBrowserClientTimeoutMs(
   opts: BrowserClientTimeoutOptions | undefined,
   fallbackMs: number,
 ): number {
-  return typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-    ? Math.max(1, Math.floor(opts.timeoutMs))
-    : fallbackMs;
+  return resolveTimerTimeoutMs(opts?.timeoutMs, fallbackMs);
 }
 
 function withProfilePath(baseUrl: string | undefined, path: string, profile?: string): string {
@@ -373,9 +375,7 @@ export async function browserSnapshot(
     q.set("profile", opts.profile);
   }
   const resolvedTimeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-      ? Math.floor(opts.timeoutMs)
-      : DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
+    clampPositiveTimerTimeoutMs(opts.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   q.set("timeoutMs", String(resolvedTimeoutMs));
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
     timeoutMs: resolvedTimeoutMs,

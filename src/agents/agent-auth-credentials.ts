@@ -1,7 +1,8 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type AgentApiKeyCredential = { type: "api_key"; key: string };
 type AgentOAuthCredential = {
@@ -46,12 +47,11 @@ function convertAuthProfileCredentialToAgent(
   }
 
   if (cred.type === "token") {
-    if (
-      typeof cred.expires === "number" &&
-      Number.isFinite(cred.expires) &&
-      Date.now() >= cred.expires
-    ) {
-      return null;
+    if (cred.expires !== undefined) {
+      const expires = asDateTimestampMs(cred.expires);
+      if (expires === undefined || Date.now() >= expires) {
+        return null;
+      }
     }
     const token = normalizeOptionalString(cred.token) ?? "";
     if (!token) {
@@ -63,14 +63,15 @@ function convertAuthProfileCredentialToAgent(
   if (cred.type === "oauth") {
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
-    if (!access || !refresh || !Number.isFinite(cred.expires) || cred.expires <= 0) {
+    const expires = asDateTimestampMs(cred.expires);
+    if (!access || !refresh || expires === undefined || expires <= 0) {
       return null;
     }
     return {
       type: "oauth",
       access,
       refresh,
-      expires: cred.expires,
+      expires,
     };
   }
 

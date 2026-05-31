@@ -115,6 +115,37 @@ function formatFindResult(
   return text;
 }
 
+function buildFindResult(params: {
+  relativized: string[];
+  effectiveLimit: number;
+  limitNotice: string;
+}): {
+  content: Array<{ type: "text"; text: string }>;
+  details: FindToolDetails | undefined;
+} {
+  const resultLimitReached = params.relativized.length >= params.effectiveLimit;
+  const rawOutput = params.relativized.join("\n");
+  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  let resultOutput = truncation.content;
+  const details: FindToolDetails = {};
+  const notices: string[] = [];
+  if (resultLimitReached) {
+    notices.push(params.limitNotice);
+    details.resultLimitReached = params.effectiveLimit;
+  }
+  if (truncation.truncated) {
+    notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+    details.truncation = truncation;
+  }
+  if (notices.length > 0) {
+    resultOutput += `\n\n[${notices.join(". ")}]`;
+  }
+  return {
+    content: [{ type: "text", text: resultOutput }],
+    details: Object.keys(details).length > 0 ? details : undefined,
+  };
+}
+
 export function createFindToolDefinition(
   cwd: string,
   options?: FindToolOptions,
@@ -200,28 +231,14 @@ export function createFindToolDefinition(
                 }
                 return toPosixPath(path.relative(searchPath, p));
               });
-              const resultLimitReached = relativized.length >= effectiveLimit;
-              const rawOutput = relativized.join("\n");
-              const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-              let resultOutput = truncation.content;
-              const details: FindToolDetails = {};
-              const notices: string[] = [];
-              if (resultLimitReached) {
-                notices.push(`${effectiveLimit} results limit reached`);
-                details.resultLimitReached = effectiveLimit;
-              }
-              if (truncation.truncated) {
-                notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-                details.truncation = truncation;
-              }
-              if (notices.length > 0) {
-                resultOutput += `\n\n[${notices.join(". ")}]`;
-              }
               settle(() =>
-                resolve({
-                  content: [{ type: "text", text: resultOutput }],
-                  details: Object.keys(details).length > 0 ? details : undefined,
-                }),
+                resolve(
+                  buildFindResult({
+                    relativized,
+                    effectiveLimit,
+                    limitNotice: `${effectiveLimit} results limit reached`,
+                  }),
+                ),
               );
               return;
             }
@@ -332,30 +349,14 @@ export function createFindToolDefinition(
                 relativized.push(toPosixPath(relativePath));
               }
 
-              const resultLimitReached = relativized.length >= effectiveLimit;
-              const rawOutput = relativized.join("\n");
-              const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-              let resultOutput = truncation.content;
-              const details: FindToolDetails = {};
-              const notices: string[] = [];
-              if (resultLimitReached) {
-                notices.push(
-                  `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
-                );
-                details.resultLimitReached = effectiveLimit;
-              }
-              if (truncation.truncated) {
-                notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-                details.truncation = truncation;
-              }
-              if (notices.length > 0) {
-                resultOutput += `\n\n[${notices.join(". ")}]`;
-              }
               settle(() =>
-                resolve({
-                  content: [{ type: "text", text: resultOutput }],
-                  details: Object.keys(details).length > 0 ? details : undefined,
-                }),
+                resolve(
+                  buildFindResult({
+                    relativized,
+                    effectiveLimit,
+                    limitNotice: `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
+                  }),
+                ),
               );
             });
           } catch (e) {

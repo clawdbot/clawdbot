@@ -16,6 +16,7 @@ import {
   resolveControlUiLinks,
   summarizeExistingConfig,
   validateGatewayPasswordInput,
+  waitForGatewayReachable,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -304,6 +305,31 @@ describe("probeGatewayReachable", () => {
       ok: false,
       detail: "connect failed: timeout",
     });
+  });
+});
+
+describe("waitForGatewayReachable", () => {
+  it("keeps oversized poll intervals within the overall deadline", async () => {
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await waitForGatewayReachable({
+      url: "ws://127.0.0.1:18789",
+      deadlineMs: 5,
+      pollMs: Number.MAX_SAFE_INTEGER,
+      probeTimeoutMs: 1,
+    });
+
+    expect(result).toEqual({ ok: false, detail: "connect failed: timeout" });
   });
 });
 

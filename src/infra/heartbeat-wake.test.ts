@@ -217,6 +217,17 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("clamps oversized coalesce delays instead of firing immediately", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(wake("slow", { coalesceMs: Number.MAX_SAFE_INTEGER }));
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("does not downgrade a higher-priority pending reason", async () => {
     vi.useFakeTimers();
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

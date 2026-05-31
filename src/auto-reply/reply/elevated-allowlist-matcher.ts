@@ -1,9 +1,9 @@
-import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeAtHashSlug } from "@openclaw/normalization-core/string-normalization";
+import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 
 export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
 const INTERNAL_ALLOWLIST_CHANNEL = "webchat";

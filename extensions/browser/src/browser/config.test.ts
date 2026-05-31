@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -149,6 +150,19 @@ describe("browser config", () => {
       maxTabsPerSession: 0,
       sweepMinutes: 15,
     });
+  });
+
+  it("caps browser tab cleanup timer minutes before converting to milliseconds", () => {
+    const maxTimerMinutes = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        idleMinutes: Number.MAX_SAFE_INTEGER,
+        sweepMinutes: Number.MAX_SAFE_INTEGER,
+      },
+    });
+
+    expect(resolved.tabCleanup.idleMinutes).toBe(maxTimerMinutes);
+    expect(resolved.tabCleanup.sweepMinutes).toBe(maxTimerMinutes);
   });
 
   it("expands tilde-prefixed executablePath with the OS home directory", () => {

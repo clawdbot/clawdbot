@@ -5,17 +5,6 @@ import { resolveDefaultModelForAgent } from "./model-selection.js";
 
 export type { AgentRuntimeMetadata };
 
-export function resolveAgentRuntimeMetadata(
-  _cfg: OpenClawConfig,
-  _agentId: string,
-  _env: NodeJS.ProcessEnv = process.env,
-): AgentRuntimeMetadata {
-  return {
-    id: "auto",
-    source: "implicit",
-  };
-}
-
 export function resolveModelAgentRuntimeMetadata(params: {
   cfg: OpenClawConfig;
   agentId: string;

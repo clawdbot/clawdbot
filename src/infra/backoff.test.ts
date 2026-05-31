@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.js";
 
 async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
@@ -64,6 +65,22 @@ describe("backoff helpers", () => {
       await vi.advanceTimersByTimeAsync(1);
       await expect(sleeper).resolves.toBeUndefined();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized sleep durations before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await expect(sleeper).resolves.toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });

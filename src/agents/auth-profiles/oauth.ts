@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
@@ -13,7 +14,6 @@ import {
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -223,7 +223,7 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai-codex"
+    credential.provider === "openai"
       ? readExternalCliFallbackCredential({
           profileId,
           credential,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -8,7 +9,6 @@ import {
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { defaultRuntime } from "../../runtime.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 import { WizardSession } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";

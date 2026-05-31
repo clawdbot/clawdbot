@@ -15,26 +15,26 @@ describe("engine/utils/attachment-tags", () => {
       expect(formatAttachmentTags([])).toBe("");
     });
 
-    it("collapses to MEDIA:{source} when a path/url is present", () => {
+    it("renders bracketed source tags when a path/url is present", () => {
       expect(formatAttachmentTags([{ type: "image", localPath: "/tmp/a.png" }])).toBe(
-        "MEDIA:/tmp/a.png",
+        "[image: /tmp/a.png]",
       );
       expect(formatAttachmentTags([{ type: "file", url: "https://x/y.pdf" }])).toBe(
-        "MEDIA:https://x/y.pdf",
+        "[file: https://x/y.pdf]",
       );
     });
 
     it("inlines voice transcript only for voice attachments", () => {
       expect(
         formatAttachmentTags([{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi" }]),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi")');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi")');
       // Non-voice attachments never get the transcript suffix even if one
       // is present on the summary.
       expect(
         formatAttachmentTags([
           { type: "image", localPath: "/tmp/i.png", transcript: "unused" } as AttachmentSummary,
         ]),
-      ).toBe("MEDIA:/tmp/i.png");
+      ).toBe("[image: /tmp/i.png]");
     });
 
     it("falls back to bracketed tags when no source is available", () => {
@@ -55,7 +55,7 @@ describe("engine/utils/attachment-tags", () => {
           { type: "image", localPath: "/tmp/a.png" },
           { type: "voice", transcript: "hi" },
         ]),
-      ).toBe('MEDIA:/tmp/a.png\n[voice (transcript: "hi")]');
+      ).toBe('[image: /tmp/a.png]\n[voice (transcript: "hi")]');
     });
   });
 
@@ -95,7 +95,7 @@ describe("engine/utils/attachment-tags", () => {
           [{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi", transcriptSource: "stt" }],
           { mode: "ref" },
         ),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi") [source: local STT]');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi") [source: local STT]');
 
       // inline mode: suffix NEVER appears, even with transcriptSource set.
       expect(
@@ -103,7 +103,7 @@ describe("engine/utils/attachment-tags", () => {
           [{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi", transcriptSource: "stt" }],
           { mode: "inline" },
         ),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi")');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi")');
     });
 
     it("omits the source suffix when transcriptSource is missing (both modes identical)", () => {

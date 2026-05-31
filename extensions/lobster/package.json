@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@clawdbot/lobster": "2026.5.22",
-    "typebox": "1.1.38"
+    "typebox": "1.1.39"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

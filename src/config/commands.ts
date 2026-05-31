@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { NativeCommandsSetting } from "./types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 export { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";

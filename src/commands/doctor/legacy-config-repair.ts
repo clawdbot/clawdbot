@@ -10,7 +10,7 @@ function containsAuthoredInclude(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  if (Object.prototype.hasOwnProperty.call(value, INCLUDE_KEY)) {
+  if (Object.hasOwn(value, INCLUDE_KEY)) {
     return true;
   }
   return Object.values(value).some((entry) => containsAuthoredInclude(entry));

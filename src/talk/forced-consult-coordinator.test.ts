@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createRealtimeVoiceForcedConsultCoordinator } from "./forced-consult-coordinator.js";
 
 describe("realtime voice forced consult coordinator", () => {
@@ -155,6 +156,21 @@ describe("realtime voice forced consult coordinator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("caps oversized forced consult schedule delays", () => {
+    const scheduledDelays: number[] = [];
+    const coordinator = createRealtimeVoiceForcedConsultCoordinator({
+      setTimer: (_fn, ms) => {
+        scheduledDelays.push(ms);
+        return { clear: vi.fn() };
+      },
+    });
+    const pending = coordinator.prepare("check status", { id: "forced-1" });
+
+    coordinator.schedule(pending!, Number.MAX_SAFE_INTEGER, vi.fn());
+
+    expect(scheduledDelays).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 
   it("reports cancelled handles until the dedupe window expires", () => {

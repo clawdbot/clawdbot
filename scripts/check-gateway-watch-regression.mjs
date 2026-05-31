@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   BUILD_STAMP_FILE,
   writeBuildStamp,
@@ -71,11 +72,12 @@ export function updateWatchBuildDetection(state, chunk) {
   };
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const next = argv[i + 1];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = args[i + 1];
     const readValue = () => {
       if (!next) {
         throw new Error(`Missing value for ${arg}`);
@@ -410,16 +412,21 @@ async function allocateLoopbackPort() {
 }
 
 function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port) {
+  const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
+  const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
-    'mkdir -p "$OPENCLAW_HOME/.openclaw"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    'mkdir -p "$OPENCLAW_STATE_DIR"',
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_CONFIG_PATH"`,
     `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
     HOME: isolatedHomeDir,
     OPENCLAW_HOME: isolatedHomeDir,
+    OPENCLAW_CONFIG_PATH: isolatedConfigPath,
+    OPENCLAW_STATE_DIR: isolatedStateDir,
+    XDG_CONFIG_HOME: path.join(isolatedHomeDir, ".config"),
     ...WATCH_GATEWAY_SKIP_ENV,
   };
 
@@ -427,6 +434,14 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
     return {
       command: "/usr/bin/time",
       args: ["-lp", "-o", timeFilePath, "/bin/sh", "-lc", shellSource],
+      env,
+    };
+  }
+
+  if (!fs.existsSync("/usr/bin/time")) {
+    return {
+      command: "/bin/sh",
+      args: ["-lc", shellSource],
       env,
     };
   }
@@ -509,6 +524,14 @@ async function runTimedWatch(options, outputDir) {
     buildDetection = updateWatchBuildDetection(buildDetection, chunk);
   });
 
+  let spawnError = null;
+  const spawnErrorExit = new Promise((resolve) => {
+    child.once("error", (error) => {
+      spawnError = error;
+      resolve({ code: null, signal: null, error: error.message });
+    });
+  });
+
   let watchPid = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (fs.existsSync(pidFilePath)) {
@@ -529,15 +552,18 @@ async function runTimedWatch(options, outputDir) {
   await sleep(options.windowMs);
   const idleCpuEndMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
 
-  const exit = await stopTimedWatchChild(child, watchPid, options);
+  const exit = await Promise.race([stopTimedWatchChild(child, watchPid, options), spawnErrorExit]);
   fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
   fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
-  const timing = fs.existsSync(timeFilePath)
-    ? parseTimingFile(timeFilePath)
-    : { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN };
+  const timingFileMissing = !fs.existsSync(timeFilePath);
+  const timing = timingFileMissing
+    ? { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN }
+    : parseTimingFile(timeFilePath);
 
   return {
     exit,
+    spawnError: spawnError ? spawnError.message : null,
+    timingFileMissing,
     timing,
     readyBeforeWindow,
     idleCpuMs:
@@ -766,6 +792,8 @@ async function main() {
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
+    spawnError: watchResult.spawnError,
+    timingFileMissing: watchResult.timingFileMissing,
     timing: watchResult.timing,
   };
   fs.writeFileSync(
@@ -777,6 +805,18 @@ async function main() {
 
   const failures = [];
   const warnings = [];
+  if (watchResult.spawnError) {
+    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
+  }
+  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
+    failures.push(
+      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
+    );
+  } else if (watchResult.timingFileMissing) {
+    warnings.push(
+      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
+    );
+  }
   if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
     failures.push(
       "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",

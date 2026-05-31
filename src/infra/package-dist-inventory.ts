@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { readJsonIfExists, writeJson } from "./json-files.js";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";

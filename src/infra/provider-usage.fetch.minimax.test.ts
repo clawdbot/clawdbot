@@ -194,6 +194,21 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
+      name: "drops Date-invalid reset timestamps",
+      payload: {
+        data: {
+          plan_name: "Overflow Plan",
+          reset_at: 8_640_000_000_000_001,
+          current_interval_total_count: 100,
+          current_interval_usage_count: 25,
+        },
+      },
+      expected: {
+        plan: "Overflow Plan",
+        windows: [{ label: "5h", usedPercent: 75, resetAt: undefined }],
+      },
+    },
+    {
       name: "prefers chat model entries from model_remains and derives window labels from timestamps",
       payload: {
         data: {

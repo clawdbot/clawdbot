@@ -268,9 +268,9 @@ describe("tui command handlers", () => {
     });
   });
 
-  it("runs goal commands locally instead of sending them to the model", async () => {
+  it("starts local goals and sends the objective to the model", async () => {
     const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started: ship" });
-    const { handleCommand, sendChat, addSystem, refreshSessionInfo } = createHarness({
+    const { handleCommand, sendChat, addSystem, refreshSessionInfo, addUser } = createHarness({
       opts: { local: true },
       runGoalCommand,
     });
@@ -282,9 +282,73 @@ describe("tui command handlers", () => {
       agentId: "main",
       command: "/goal start ship",
     });
-    expect(sendChat).not.toHaveBeenCalled();
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "ship",
+    });
+    expect(addUser).toHaveBeenCalledWith("ship");
     expect(addSystem).toHaveBeenCalledWith("Goal started: ship");
     expect(refreshSessionInfo).toHaveBeenCalled();
+  });
+
+  it("wraps command-prefixed local goal objectives before sending", async () => {
+    const slashRunGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started" });
+    const slashHarness = createHarness({
+      opts: { local: true },
+      runGoalCommand: slashRunGoalCommand,
+    });
+
+    await slashHarness.handleCommand("/goal start /status");
+    const slashPrompt = `Pursue this goal exactly as written from this JSON string: "\\/status"`;
+    expectSendChatFields(slashHarness.sendChat, {
+      sessionKey: "agent:main:main",
+      message: slashPrompt,
+    });
+    expect(slashHarness.addUser).toHaveBeenCalledWith(slashPrompt);
+
+    const bangRunGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started" });
+    const bangHarness = createHarness({
+      opts: { local: true },
+      runGoalCommand: bangRunGoalCommand,
+    });
+
+    await bangHarness.handleCommand("/goal start !npm test");
+    const bangPrompt = `Pursue this goal exactly as written from this JSON string: "!npm test"`;
+    expectSendChatFields(bangHarness.sendChat, {
+      sessionKey: "agent:main:main",
+      message: bangPrompt,
+    });
+    expect(bangHarness.addUser).toHaveBeenCalledWith(bangPrompt);
+  });
+
+  it("keeps local goal status as a control command", async () => {
+    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal: ship" });
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      runGoalCommand,
+    });
+
+    await handleCommand("/goal status");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("Goal: ship");
+  });
+
+  it("wraps command-prefixed local goal resume notes before sending", async () => {
+    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal resumed: ship" });
+    const { handleCommand, sendChat, addUser } = createHarness({
+      opts: { local: true },
+      runGoalCommand,
+    });
+
+    await handleCommand("/goal resume /fast off");
+
+    const prompt = `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`;
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: prompt,
+    });
+    expect(addUser).toHaveBeenCalledWith(prompt);
   });
 
   it("passes the selected agent for local global goal commands", async () => {
@@ -755,14 +819,14 @@ describe("tui command handlers", () => {
       runAuthFlow,
     });
 
-    await handleCommand("/auth openai-codex");
+    await handleCommand("/auth openai");
 
-    expect(runAuthFlow).toHaveBeenCalledWith({ provider: "openai-codex" });
+    expect(runAuthFlow).toHaveBeenCalledWith({ provider: "openai" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(addSystem).toHaveBeenCalledWith(
-      "opening auth flow for openai-codex; TUI will resume when it exits",
+      "opening auth flow for openai; TUI will resume when it exits",
     );
-    expect(addSystem).toHaveBeenCalledWith("auth flow finished for openai-codex");
+    expect(addSystem).toHaveBeenCalledWith("auth flow finished for openai");
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
@@ -782,7 +846,7 @@ describe("tui command handlers", () => {
       runAuthFlow,
     });
 
-    await handleCommand("/auth openai-codex");
+    await handleCommand("/auth openai");
 
     expect(runAuthFlow).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("abort the current run before /auth");

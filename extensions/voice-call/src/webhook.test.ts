@@ -739,6 +739,40 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 
+  it("does not cache replay responses when the TTL would exceed the Date range", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let parseCount = 0;
+    const parseWebhookEvent = vi.fn(() => ({
+      events: [],
+      statusCode: 200,
+      providerResponseBody: `OK-${++parseCount}`,
+    }));
+    const replayProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "mock:req:overflow-cache" }),
+      parseWebhookEvent,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, replayProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const first = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+      expect(first.status).toBe(200);
+      expect(await first.text()).toBe("OK-1");
+
+      dateNow.mockReturnValue(Date.parse("2026-05-29T12:00:00.000Z"));
+      const second = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+      expect(second.status).toBe(200);
+      expect(await second.text()).toBe("OK-2");
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      dateNow.mockRestore();
+      await server.stop();
+    }
+  });
+
   it("returns Plivo XML for replayed answer callbacks while skipping event side effects", async () => {
     const plivoProvider = new PlivoProvider(
       {

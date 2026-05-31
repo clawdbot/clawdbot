@@ -41,7 +41,7 @@ export function registerBrowserInspectCommands(
 ) {
   browser
     .command("screenshot")
-    .description("Capture a screenshot (MEDIA:<path>)")
+    .description("Capture a screenshot (prints the saved path)")
     .argument("[targetId]", "CDP target id (or unique prefix)")
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
@@ -73,7 +73,7 @@ export function registerBrowserInspectCommands(
           defaultRuntime.writeJson(result);
           return;
         }
-        defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
+        defaultRuntime.log(shortenHomePath(result.path));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -161,7 +161,7 @@ export function registerBrowserInspectCommands(
           } else {
             defaultRuntime.log(shortenHomePath(opts.out));
             if (result.format === "ai" && result.imagePath) {
-              defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+              defaultRuntime.log(shortenHomePath(result.imagePath));
             }
           }
           return;
@@ -175,7 +175,7 @@ export function registerBrowserInspectCommands(
         if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
           if (result.imagePath) {
-            defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+            defaultRuntime.log(shortenHomePath(result.imagePath));
           }
           return;
         }

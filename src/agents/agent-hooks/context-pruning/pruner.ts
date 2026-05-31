@@ -34,7 +34,9 @@ function coerceTextBlock(block: unknown): string | null {
 }
 
 function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
+  return (
+    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
+  );
 }
 
 function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {

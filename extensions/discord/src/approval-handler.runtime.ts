@@ -452,13 +452,13 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       const container =
         view.approvalKind === "plugin"
           ? createPluginApprovalRequestContainer({
-              view: view,
+              view,
               cfg,
               accountId: resolved.accountId,
               actionRow,
             })
           : createExecApprovalRequestContainer({
-              view: view,
+              view,
               cfg,
               accountId: resolved.accountId,
               actionRow,
@@ -475,12 +475,12 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       const container =
         view.approvalKind === "plugin"
           ? createPluginResolvedContainer({
-              view: view,
+              view,
               cfg,
               accountId: resolvedContext.accountId,
             })
           : createExecResolvedContainer({
-              view: view,
+              view,
               cfg,
               accountId: resolvedContext.accountId,
             });
@@ -494,12 +494,12 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       const container =
         view.approvalKind === "plugin"
           ? createPluginExpiredContainer({
-              view: view,
+              view,
               cfg,
               accountId: resolvedContext.accountId,
             })
           : createExecExpiredContainer({
-              view: view,
+              view,
               cfg,
               accountId: resolvedContext.accountId,
             });

@@ -1,5 +1,5 @@
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 
 export function normalizeVoiceWakeTriggers(input: unknown): string[] {
   const cleaned = normalizeTrimmedStringList(input)

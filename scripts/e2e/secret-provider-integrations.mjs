@@ -113,7 +113,7 @@ function resolveOpenClawRunner() {
       }
     }
   }
-  return { command: "pnpm", baseArgs: ["openclaw"], label: "pnpm openclaw" };
+  return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };
 }
 
 function makeEnv(name) {
@@ -177,9 +177,11 @@ function runCommand(command, args, options = {}) {
   const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(command, args, {
-      cwd: process.cwd(),
+      cwd: options.cwd ?? process.cwd(),
       env: options.env ?? process.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      shell: options.shell,
+      stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: options.windowsVerbatimArguments,
     });
     let stdout = "";
     let stderr = "";
@@ -222,11 +224,42 @@ function runCommand(command, args, options = {}) {
 }
 
 async function runOpenClaw(args, env, options = {}) {
-  const runner = options.runner ?? resolveOpenClawRunner();
-  return await runCommand(runner.command, [...runner.baseArgs, ...args], {
+  const command = await resolveOpenClawCommand(args, env, options);
+  return await runCommand(command.command, command.args, {
     ...options,
-    env,
+    ...command.options,
   });
+}
+
+export async function resolveOpenClawCommand(args, env, options = {}) {
+  const runner = options.runner ?? resolveOpenClawRunner();
+  const stdio = options.stdio ?? ["pipe", "pipe", "pipe"];
+  if (runner.pnpm) {
+    const { createPnpmRunnerSpawnSpec } = await import("../pnpm-runner.mjs");
+    return createPnpmRunnerSpawnSpec({
+      comSpec: options.comSpec,
+      cwd: options.cwd ?? process.cwd(),
+      detached: options.detached,
+      env,
+      nodeExecPath: options.nodeExecPath,
+      npmExecPath: options.npmExecPath,
+      platform: options.platform,
+      pnpmArgs: [...runner.baseArgs, ...args],
+      stdio,
+    });
+  }
+  return {
+    command: runner.command,
+    args: [...runner.baseArgs, ...args],
+    options: {
+      cwd: options.cwd ?? process.cwd(),
+      detached: options.detached,
+      env,
+      shell: options.shell,
+      stdio,
+      windowsVerbatimArguments: options.windowsVerbatimArguments,
+    },
+  };
 }
 
 async function allocatePort() {
@@ -522,11 +555,8 @@ function serviceManagerEnv(source) {
 }
 
 async function startGateway(envCtx, port, token = TOKEN_V1) {
-  const runner = resolveOpenClawRunner();
-  const child = childProcess.spawn(
-    runner.command,
+  const command = await resolveOpenClawCommand(
     [
-      ...runner.baseArgs,
       "gateway",
       "run",
       "--port",
@@ -535,13 +565,17 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
       "loopback",
       "--allow-unconfigured",
     ],
+    envCtx.env,
     {
-      cwd: process.cwd(),
-      env: envCtx.env,
-      stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  const child = childProcess.spawn(command.command, command.args, {
+    ...command.options,
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => {
@@ -690,11 +724,8 @@ async function expectReloadMayCloseForAuthChange(env, port, token) {
 }
 
 async function expectGatewayStartupFails(envCtx, port, reason) {
-  const runner = resolveOpenClawRunner();
-  const child = childProcess.spawn(
-    runner.command,
+  const command = await resolveOpenClawCommand(
     [
-      ...runner.baseArgs,
       "gateway",
       "run",
       "--port",
@@ -703,13 +734,17 @@ async function expectGatewayStartupFails(envCtx, port, reason) {
       "loopback",
       "--allow-unconfigured",
     ],
+    envCtx.env,
     {
-      cwd: process.cwd(),
-      env: envCtx.env,
-      stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  const child = childProcess.spawn(command.command, command.args, {
+    ...command.options,
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => {
@@ -1308,11 +1343,8 @@ async function p12OpenAiLiveProof() {
 
 async function runPtySecretsConfigurePreset(envCtx) {
   const { spawn } = await import("@lydell/node-pty");
-  const runner = resolveOpenClawRunner();
-  const child = spawn(
-    runner.command,
+  const command = await resolveOpenClawCommand(
     [
-      ...runner.baseArgs,
       "secrets",
       "configure",
       "--providers-only",
@@ -1321,12 +1353,17 @@ async function runPtySecretsConfigurePreset(envCtx) {
       "--allow-exec",
       "--json",
     ],
+    envCtx.env,
+  );
+  const child = spawn(
+    command.command,
+    command.args,
     {
       name: "xterm-256color",
       cols: 100,
       rows: 30,
-      cwd: process.cwd(),
-      env: envCtx.env,
+      cwd: command.options.cwd ?? process.cwd(),
+      env: command.options.env ?? envCtx.env,
     },
   );
   let output = "";

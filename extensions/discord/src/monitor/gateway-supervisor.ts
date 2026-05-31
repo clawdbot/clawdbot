@@ -166,7 +166,6 @@ export function createDiscordGatewaySupervisor(params: {
         return;
       case "buffering":
         pending.push(event);
-        return;
     }
   };
   emitter.on("error", onGatewayError);

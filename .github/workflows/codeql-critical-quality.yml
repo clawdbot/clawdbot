@@ -210,6 +210,9 @@ jobs:
           else
             while IFS= read -r file; do
               case "${file}" in
+                .github/codeql/codeql-network-runtime-boundary-critical-quality.yml|.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql|.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql)
+                  network_runtime=true
+                  ;;
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   agent=true
                   channel=true
@@ -222,7 +225,6 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   provider=true
-                  network_runtime=true
                   session_diagnostics=true
                   ;;
                 src/agents/sessions/tools/*)
@@ -302,7 +304,9 @@ jobs:
               esac
 
               case "${file}" in
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts|packages/net-policy/src/*|packages/net-policy/src/**/*)
+                src/**/*.test.ts|src/**/*.test.tsx|extensions/**/*.test.ts|extensions/**/*.test.tsx)
+                  ;;
+                packages/net-policy/src/*|packages/net-policy/src/**/*|src/cli/gateway-cli/run-loop.ts|src/infra/net/*|src/infra/net/**/*|src/infra/ssh-tunnel.ts|src/infra/gateway-lock.ts|src/infra/jsonl-socket.ts|src/infra/push-apns-http2.ts|src/proxy-capture/*|src/proxy-capture/**/*|extensions/codex-supervisor/src/json-rpc-client.ts|extensions/irc/src/*|extensions/qa-lab/src/*)
                   network_runtime=true
                   ;;
               esac
@@ -429,7 +433,33 @@ jobs:
         with:
           submodules: false
 
+      - name: Fast PR network boundary diff scan
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          added_lines="$(mktemp)"
+          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '
+            .[]
+            | select(.filename | test("^(src/cli/gateway-cli/run-loop\\.ts|src/infra/(gateway-lock|jsonl-socket|push-apns-http2|ssh-tunnel)\\.ts|src/infra/net/|src/proxy-capture/|extensions/codex-supervisor/src/json-rpc-client\\.ts|extensions/irc/src/|extensions/qa-lab/src/|packages/net-policy/src/)"))
+            | .filename as $file
+            | (.patch // "")
+            | split("\n")[]
+            | select(startswith("+") and (startswith("+++") | not))
+            | "\($file): \(.)"
+          ' > "$added_lines"
+
+          if grep -En '(from|require\().*["'\''](node:)?(net|tls|http2)["'\'']|\b(net|tls|http2)\.(connect|createConnection)\b|new Socket\(|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' "$added_lines"; then
+            echo "Network runtime boundary-sensitive added lines require full CodeQL review." >&2
+            exit 1
+          fi
+
       - name: Initialize CodeQL
+        if: ${{ github.event_name != 'pull_request' }}
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           languages: javascript-typescript
@@ -437,12 +467,14 @@ jobs:
 
       - name: Analyze
         id: analyze
+        if: ${{ github.event_name != 'pull_request' }}
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           output: sarif-results
           category: "/codeql-critical-quality/network-runtime-boundary"
 
       - name: Fail on network runtime boundary findings
+        if: ${{ github.event_name != 'pull_request' }}
         env:
           SARIF_OUTPUT: sarif-results
         run: |

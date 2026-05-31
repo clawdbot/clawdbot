@@ -117,6 +117,7 @@ type FirstAgentCommandOptions = {
     presencePenalty?: number;
     responseFormat?: Record<string, unknown>;
     seed?: number;
+    stop?: string[];
     temperature?: number;
     topP?: number;
   };
@@ -1447,6 +1448,64 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("forwards inbound stop into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        stop: "\n\n",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({ stop: ["\n\n"] });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        stop: ["User:", "Assistant:"],
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({ stop: ["User:", "Assistant:"] });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toBeUndefined();
+      await res.text();
+    }
+
+    for (const stop of [["a", "b", "c", "d", "e"], [""], [123], {}]) {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        stop,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toMatch(/stop/);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    }
+  });
+
   it("maps provider format failures to OpenAI-compatible 400 errors", async () => {
     const port = enabledPort;
 
@@ -1822,14 +1881,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           messages: [{ role: "user", content: "hi" }],
         });
         expect(lateToolCallRes.status).toBe(200);
-        const lateToolCallTextPromise = lateToolCallRes.text();
-        const earlyCompletion = await Promise.race([
-          lateToolCallTextPromise.then(() => "completed" as const),
-          new Promise<"pending">((resolve) => {
-            setTimeout(() => resolve("pending"), 1200);
-          }),
-        ]);
-        expect(earlyCompletion).toBe("pending");
+        if (!lateToolCallRes.body) {
+          throw new Error("expected streaming response body");
+        }
+        const reader = lateToolCallRes.body.getReader();
+        const decoder = new TextDecoder();
+        let lateToolCallText = "";
+        while (!lateToolCallText.includes("Let me check that.")) {
+          const { done, value } = await reader.read();
+          if (done) {
+            throw new Error("stream ended before early assistant delta");
+          }
+          lateToolCallText += decoder.decode(value, { stream: true });
+        }
+        expect(lateToolCallText).not.toContain("[DONE]");
 
         resolveLateToolCall?.({
           payloads: [{ text: "Let me check that." }],
@@ -1844,7 +1909,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             ],
           },
         });
-        const lateToolCallText = await lateToolCallTextPromise;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            lateToolCallText += decoder.decode();
+            break;
+          }
+          lateToolCallText += decoder.decode(value, { stream: true });
+        }
         const lateToolCallData = parseSseDataLines(lateToolCallText);
         const lateToolCallChunks = lateToolCallData
           .filter((d) => d !== "[DONE]")

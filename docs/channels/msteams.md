@@ -915,9 +915,10 @@ Uploaded files are stored in a `/OpenClawShared/` folder in the configured Share
 OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API).
 
 - CLI: `openclaw message poll --channel msteams --target conversation:<id> ...`
-- Votes are recorded by the gateway in `~/.openclaw/msteams-polls.json`.
+- Votes are recorded by the gateway in OpenClaw plugin-state SQLite under `state/openclaw.sqlite`.
+- Existing `msteams-polls.json` files are imported once when the MSTeams plugin starts.
 - The gateway must stay online to record votes.
-- Polls do not auto-post result summaries yet (inspect the store file if needed).
+- Polls do not auto-post result summaries yet, and there is no supported poll-results CLI yet.
 
 ## Presentation cards
 

@@ -1,4 +1,4 @@
-import { type AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { afterEach } from "vitest";
 import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import type { NextcloudTalkWebhookServerOptions } from "./types.js";

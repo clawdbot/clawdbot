@@ -15,8 +15,8 @@ function createLockTimeoutError(lockPath: string): FileLockTimeoutError {
 
 describe("OAuth refresh lock timeout classification", () => {
   it("matches only the global refresh lock path", () => {
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const refreshLockPath = resolveOAuthRefreshLockPath(provider, profileId);
     const authStoreLockPath = resolveAuthStorePath("/tmp/openclaw-oauth-lock-timeout/agent");
 
@@ -35,8 +35,8 @@ describe("OAuth refresh lock timeout classification", () => {
   });
 
   it("builds refresh_contention errors that preserve the file-lock cause", () => {
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const refreshLockPath = resolveOAuthRefreshLockPath(provider, profileId);
     const cause = createLockTimeoutError(`${refreshLockPath}.lock`);
 

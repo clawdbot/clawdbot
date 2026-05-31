@@ -102,10 +102,10 @@ describe("auth profile store cache", () => {
 
   function createRuntimeOnlyOverlay(access: string): RuntimeOnlyOverlay {
     return {
-      profileId: "openai-codex:default",
+      profileId: "openai:default",
       credential: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access,
         refresh: `refresh-${access}`,
         expires: Date.now() + 60_000,
@@ -134,10 +134,10 @@ describe("auth profile store cache", () => {
       const first = ensureAuthProfileStore(agentDir);
       const second = ensureAuthProfileStore(agentDir);
 
-      expect((first.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
+      expect((first.profiles["openai:default"] as OAuthCredential | undefined)?.access).toBe(
         "access-1",
       );
-      expect((second.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
+      expect((second.profiles["openai:default"] as OAuthCredential | undefined)?.access).toBe(
         "access-2",
       );
       expect(mocks.resolveExternalCliAuthProfiles).toHaveBeenCalledTimes(2);
@@ -194,7 +194,7 @@ describe("auth profile store cache", () => {
     await withAgentDirEnv("openclaw-auth-store-missing-", (agentDir) => {
       const store = ensureAuthProfileStore(agentDir);
 
-      expect((store.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
+      expect((store.profiles["openai:default"] as OAuthCredential | undefined)?.access).toBe(
         "access-1",
       );
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);

@@ -14,7 +14,6 @@ const hoisted = vi.hoisted(() => ({
   emitSessionLifecycleEventMock: vi.fn(),
   hookRunner: {
     hasHooks: vi.fn(),
-    runSubagentSpawning: vi.fn(),
   },
 }));
 
@@ -44,6 +43,10 @@ function firstRegisteredSubagentRun(): {
 
 describe("spawnSubagentDirect thread binding delivery", () => {
   type SpawnModule = Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
+  type SetActivePluginRegistry = typeof import("../plugins/runtime.js").setActivePluginRegistry;
+  type CreateChannelTestPluginBase =
+    typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
+  type CreateTestRegistry = typeof import("../test-utils/channel-plugins.js").createTestRegistry;
   type SessionBindingService = NonNullable<
     Parameters<typeof loadSubagentSpawnModuleForTest>[0]["getSessionBindingService"]
   >;
@@ -52,6 +55,9 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   >;
 
   let spawnSubagentDirect: SpawnModule["spawnSubagentDirect"];
+  let setActivePluginRegistryForTest: SetActivePluginRegistry;
+  let createChannelTestPluginBaseForTest: CreateChannelTestPluginBase;
+  let createTestRegistryForTest: CreateTestRegistry;
   let currentConfig: Record<string, unknown>;
   let currentSessionBindingService: ReturnType<SessionBindingService>;
   let currentDeliveryTargetResolver: DeliveryTargetResolver;
@@ -64,14 +70,52 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       hookRunner: hoisted.hookRunner,
-      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
+      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       getSessionBindingService: () => currentSessionBindingService,
       resolveConversationDeliveryTarget: (params) => currentDeliveryTargetResolver(params),
     }));
+    ({ setActivePluginRegistry: setActivePluginRegistryForTest } =
+      await import("../plugins/runtime.js"));
+    ({
+      createChannelTestPluginBase: createChannelTestPluginBaseForTest,
+      createTestRegistry: createTestRegistryForTest,
+    } = await import("../test-utils/channel-plugins.js"));
   });
 
+  function installChannelRouteProjectionPluginsForTest() {
+    const matrixBase = createChannelTestPluginBaseForTest({ id: "matrix", label: "Matrix" });
+    setActivePluginRegistryForTest(
+      createTestRegistryForTest([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            ...matrixBase,
+            messaging: {
+              resolveDeliveryTarget: ({
+                conversationId,
+                parentConversationId,
+              }: {
+                conversationId: string;
+                parentConversationId?: string;
+              }) => {
+                const parent = parentConversationId?.trim();
+                const child = conversationId.trim();
+                if (parent && parent !== child) {
+                  return { to: `room:${parent}`, threadId: child };
+                }
+                return { to: `room:${child}` };
+              },
+            },
+          },
+        },
+      ]),
+    );
+  }
+
   beforeEach(() => {
+    installChannelRouteProjectionPluginsForTest();
     currentConfig = createSubagentSpawnTestConfig(os.tmpdir(), {
       agents: {
         defaults: {
@@ -85,7 +129,24 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         },
       },
     });
-    currentSessionBindingService = { listBySession: () => [] };
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => ({
+        targetSessionKey: request.targetSessionKey,
+        targetKind: request.targetKind,
+        status: "active",
+        conversation: {
+          channel: request.conversation.channel,
+          accountId: request.conversation.accountId,
+          conversationId: request.conversation.conversationId,
+        },
+      }),
+      listBySession: () => [],
+    };
     currentDeliveryTargetResolver = (params) => ({
       to: params.conversationId ? `channel:${String(params.conversationId)}` : undefined,
     });
@@ -94,40 +155,35 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.hookRunner.hasHooks.mockReset();
-    hoisted.hookRunner.runSubagentSpawning.mockReset();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
   });
 
-  it("passes the target agent's bound account to thread binding hooks", async () => {
+  it("passes the target agent's bound account to core thread binding", async () => {
     const boundRoom = "!room:example.org";
-    let hookRequester:
-      | { channel?: string; accountId?: string; to?: string; threadId?: string | number }
-      | undefined;
-    hoisted.hookRunner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "subagent_spawning",
-    );
-    hoisted.hookRunner.runSubagentSpawning.mockImplementation(async (event: unknown) => {
-      hookRequester = (
-        event as {
-          requester?: {
-            channel?: string;
-            accountId?: string;
-            to?: string;
-            threadId?: string | number;
-          };
-        }
-      ).requester;
-      return {
-        status: "ok",
-        threadBindingReady: true,
-        deliveryOrigin: {
-          channel: "matrix",
-          to: `room:${boundRoom}`,
-          threadId: "$thread-root",
-        },
-      };
-    });
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        return {
+          targetSessionKey: request.targetSessionKey,
+          targetKind: request.targetKind,
+          status: "active",
+          conversation: {
+            channel: request.conversation.channel,
+            accountId: request.conversation.accountId,
+            conversationId: "$thread-root",
+            parentConversationId: request.conversation.conversationId,
+          },
+        };
+      },
+      listBySession: () => [],
+    };
     currentConfig = createSubagentSpawnTestConfig(os.tmpdir(), {
       agents: {
         defaults: {
@@ -174,9 +230,13 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(hookRequester?.channel).toBe("matrix");
-    expect(hookRequester?.accountId).toBe("bot-alpha");
-    expect(hookRequester?.to).toBe(`room:${boundRoom}`);
+    expect(bindCalls).toHaveLength(1);
+    const bindingConversation = bindCalls[0]?.conversation as
+      | { channel?: string; accountId?: string; conversationId?: string }
+      | undefined;
+    expect(bindingConversation?.channel).toBe("matrix");
+    expect(bindingConversation?.accountId).toBe("bot-alpha");
+    expect(bindingConversation?.conversationId).toBe(boundRoom);
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([call]) => (call as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
@@ -194,20 +254,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   });
 
   it("uses controller ownership for thread binding while completion routes to owner", async () => {
-    let hookRequesterSessionKey: string | undefined;
-    hoisted.hookRunner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "subagent_spawning",
-    );
-    hoisted.hookRunner.runSubagentSpawning.mockImplementation(
-      async (eventValue: unknown, ctx?: { requesterSessionKey?: string }) => {
-        hookRequesterSessionKey = ctx?.requesterSessionKey;
-        return {
-          status: "ok",
-          threadBindingReady: true,
-        };
-      },
-    );
-
     const result = await spawnSubagentDirect(
       {
         task: "reply with a marker",
@@ -216,31 +262,38 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         context: "isolated",
       },
       {
-        agentSessionKey: "agent:main:telegram:default:direct:456",
+        agentSessionKey: "agent:main:matrix:default:room:456",
         completionOwnerKey: "agent:main:main",
-        agentChannel: "telegram",
+        agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "telegram:direct:456",
+        agentTo: "room:456",
       },
     );
 
     expect(result.status).toBe("accepted");
-    expect(hookRequesterSessionKey).toBe("agent:main:telegram:default:direct:456");
     const registeredRun = firstRegisteredSubagentRun();
-    expect(registeredRun.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registeredRun.controllerSessionKey).toBe("agent:main:matrix:default:room:456");
     expect(registeredRun.requesterSessionKey).toBe("agent:main:main");
     expect(registeredRun.requesterDisplayKey).toBe("agent:main:main");
   });
 
-  it("keeps completion announcements when only a generic binding is available", async () => {
-    hoisted.hookRunner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "subagent_spawning",
-    );
-    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
-      status: "ok",
-      threadBindingReady: true,
-    });
+  it("uses core binding delivery when only a generic route projection is available", async () => {
     currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => ({
+        targetSessionKey: request.targetSessionKey,
+        targetKind: request.targetKind,
+        status: "active",
+        conversation: {
+          channel: "collabchat",
+          accountId: "work",
+          conversationId: "collab_dm_1",
+        },
+      }),
       listBySession: () => [
         {
           status: "active",
@@ -275,12 +328,12 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([call]) => (call as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
-    expect(agentCall?.params?.channel).toBe("matrix");
-    expect(agentCall?.params?.accountId).toBe("sut");
-    expect(agentCall?.params?.to).toBe("room:!parent:example");
-    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.channel).toBe("collabchat");
+    expect(agentCall?.params?.accountId).toBe("work");
+    expect(agentCall?.params?.to).toBe("channel:collab_dm_1");
+    expect(agentCall?.params?.deliver).toBe(true);
     const registeredRun = firstRegisteredSubagentRun();
-    expect(registeredRun?.expectsCompletionMessage).toBe(true);
+    expect(registeredRun?.expectsCompletionMessage).toBe(false);
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");
     expect(registeredRun?.requesterOrigin?.to).toBe("room:!parent:example");

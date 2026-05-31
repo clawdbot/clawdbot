@@ -218,11 +218,7 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
     return relay;
   }
 
-  function emit(
-    name: MetricName,
-    value: number = 1,
-    labels?: Record<string, string | number>,
-  ): void {
+  function emit(name: MetricName, value = 1, labels?: Record<string, string | number>): void {
     // Fire callback if provided
     if (onMetric) {
       onMetric({

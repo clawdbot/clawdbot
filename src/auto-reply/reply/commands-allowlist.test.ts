@@ -18,7 +18,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { type ConfigSnapshotMock } from "./commands.test-harness.js";
+import type { ConfigSnapshotMock } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());

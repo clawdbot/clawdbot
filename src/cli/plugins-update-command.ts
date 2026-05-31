@@ -1,3 +1,4 @@
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
@@ -12,7 +13,6 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";

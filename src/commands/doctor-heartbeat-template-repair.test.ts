@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 

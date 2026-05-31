@@ -17,6 +17,7 @@ const ssrfRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
 
 afterEach(() => {
+  vi.useRealTimers();
   clearNvidiaFeaturedModelCacheForTests();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
   ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
@@ -194,5 +195,36 @@ describe("nvidia provider catalog", () => {
     await buildLiveNvidiaProvider();
 
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+  });
+
+  it("skips featured catalog cache when ttl expiry overflows", async () => {
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "minimaxai/minimax-m2.7",
+          "model-name": "Minimax M2.7",
+          context: 196608,
+          "max-output": 8192,
+        },
+      ],
+    });
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "z-ai/glm-5.1",
+          "model-name": "GLM 5.1",
+          context: 202752,
+          "max-output": 8192,
+        },
+      ],
+    });
+
+    const first = await buildLiveNvidiaProvider();
+    const second = await buildLiveNvidiaProvider();
+
+    expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
+    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 });

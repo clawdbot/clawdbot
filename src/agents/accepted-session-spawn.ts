@@ -1,5 +1,5 @@
-import { asOptionalRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type AcceptedSessionSpawn = {
   runId: string;

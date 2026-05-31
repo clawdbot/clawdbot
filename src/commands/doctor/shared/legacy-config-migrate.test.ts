@@ -1506,7 +1506,7 @@ describe("legacy migrate heartbeat config", () => {
       | undefined;
     expect(heartbeat?.every).toBe("30m");
     expect((heartbeat as { polluted?: unknown } | undefined)?.polluted).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(heartbeat ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(heartbeat ?? {}, "__proto__")).toBe(false);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({ showOk: true });
   });
 

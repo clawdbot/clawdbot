@@ -1036,6 +1036,25 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("accepts legacy MEDIA prefixes around inbound media store URIs", async () => {
+    const id = `signal-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await loadWebMedia(`  media :  media://inbound/${id}`, {
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(result.fileName).toBe(id);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
   it("allows managed inbound absolute paths before allowed-root checks", async () => {
     const id = `signal-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
     const filePath = path.join(stateDir, "media", "inbound", id);

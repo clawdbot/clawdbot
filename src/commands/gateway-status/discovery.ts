@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../../infra/gateway-discovery-targets.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
   if (typeof rawUrl !== "string") {

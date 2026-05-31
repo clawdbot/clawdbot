@@ -736,7 +736,7 @@ OpenAI/ElevenLabs output formats are fixed per channel (see above).
 
 When `messages.tts.auto` is enabled, OpenClaw:
 
-- Skips TTS if the reply already contains media or a `MEDIA:` directive.
+- Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
 - Summarizes long replies when summaries are enabled, using
   `summaryModel` (or `agents.defaults.model.primary`).
@@ -751,7 +751,7 @@ summary model), audio is skipped and the normal text reply is sent.
 ```text
 Reply -> TTS enabled?
   no  -> send text
-  yes -> has media / MEDIA: / short?
+  yes -> has media / short?
           yes -> send text
           no  -> length > limit?
                    no  -> TTS -> attach audio

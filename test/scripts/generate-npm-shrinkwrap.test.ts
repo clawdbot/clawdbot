@@ -339,6 +339,16 @@ describe("generate-npm-shrinkwrap", () => {
     ).toBe(false);
   });
 
+  it("uses legacy peer resolution when the package has optional peers", () => {
+    expect(
+      shouldUseLegacyPeerDepsForShrinkwrap({
+        dependencies: { zod: "4.4.3" },
+        peerDependencies: { openclaw: ">=2026.5.30" },
+        peerDependenciesMeta: { openclaw: { optional: true } },
+      }),
+    ).toBe(true);
+  });
+
   it("applies package extension peer metadata to generated shrinkwrap packages", () => {
     expect(
       applyPackageExtensionPeerMetadata(

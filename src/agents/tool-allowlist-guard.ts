@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {

@@ -458,6 +458,119 @@ describe("slash-http", () => {
     expect(client.requests).toEqual(["/commands/cmd-1"]);
   });
 
+  it("does not cache failed command validation when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      const registeredCommand = createRegisteredCommand({ token: "old-token" });
+      const client = createCommandLookupClient({
+        command: {
+          id: "cmd-1",
+          token: "new-token",
+          team_id: "t1",
+          trigger: "oc_status",
+          method: MATTERMOST_SLASH_POST_METHOD,
+          url: "https://gateway.example.com/slash",
+          auto_complete: true,
+          delete_at: 0,
+        },
+      });
+      const payload = {
+        token: "old-token",
+        team_id: "t1",
+        channel_id: "c1",
+        user_id: "u1",
+        command: "/oc_status",
+        text: "",
+      };
+
+      await expect(
+        validateMattermostSlashCommandToken({
+          accountId: "default",
+          client,
+          registeredCommand,
+          payload,
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        validateMattermostSlashCommandToken({
+          accountId: "default",
+          client,
+          registeredCommand,
+          payload,
+        }),
+      ).resolves.toBe(false);
+
+      expect(client.requests).toEqual(["/commands/cmd-1", "/commands/cmd-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops exhausted validation lookup buckets when the current clock is invalid", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
+    try {
+      const registeredCommand = createRegisteredCommand({ token: "valid-token" });
+      const command = {
+        id: "cmd-1",
+        token: "valid-token",
+        team_id: "t1",
+        trigger: "oc_status",
+        method: MATTERMOST_SLASH_POST_METHOD,
+        url: "https://gateway.example.com/slash",
+        auto_complete: true,
+        delete_at: 0,
+      };
+      const client = createCommandLookupClient({ command });
+      const payload = {
+        token: "valid-token",
+        team_id: "t1",
+        channel_id: "c1",
+        user_id: "u1",
+        command: "/oc_status",
+        text: "",
+      };
+
+      for (let i = 0; i < 20; i += 1) {
+        await expect(
+          validateMattermostSlashCommandToken({
+            accountId: "default",
+            client,
+            registeredCommand,
+            payload,
+          }),
+        ).resolves.toBe(true);
+      }
+      await expect(
+        validateMattermostSlashCommandToken({
+          accountId: "default",
+          client,
+          registeredCommand,
+          payload,
+        }),
+      ).resolves.toBe(false);
+
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+      try {
+        await expect(
+          validateMattermostSlashCommandToken({
+            accountId: "default",
+            client,
+            registeredCommand,
+            payload,
+          }),
+        ).resolves.toBe(true);
+      } finally {
+        dateNow.mockRestore();
+      }
+
+      expect(client.requests).toHaveLength(21);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("scopes validation cache entries by account", async () => {
     const registeredCommand = createRegisteredCommand();
     const clientA = createCommandLookupClient({

@@ -1,17 +1,17 @@
 import type { IncomingMessage } from "node:http";
-import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
+import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
-import { type ResolvedGatewayAuth } from "./auth-resolve.js";
+import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,

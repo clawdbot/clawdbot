@@ -292,6 +292,7 @@ describe("google transport stream", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -764,6 +765,29 @@ describe("google transport stream", () => {
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
     });
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
+    expect(tokenFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-expiry-"));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    googleAuthGetAccessTokenMock
+      .mockResolvedValueOnce("ya29.first-token")
+      .mockResolvedValueOnce("ya29.second-token");
+    const tokenFetchMock = vi.fn();
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.first-token",
+    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.second-token",
+    });
+
+    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 

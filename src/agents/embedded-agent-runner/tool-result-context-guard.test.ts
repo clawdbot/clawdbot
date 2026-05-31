@@ -628,7 +628,7 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine();
     installHook(agent, engine, 1, () => ({
       provider: "anthropic",
-      modelId: modelId,
+      modelId,
       promptCache: {
         retention: "short",
         lastCacheTouchAt: 123,

@@ -15,12 +15,14 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
   it("returns null and resolves provider by id/alias", () => {
     const providers = [
       makeProvider({ id: "google-gemini-cli", aliases: ["gemini-cli"] }),
+      makeProvider({ id: "openai", aliases: ["openai"] }),
       makeProvider({ id: "minimax-portal" }),
     ];
     const scenarios = [
       { requested: undefined, expectedId: null },
       { requested: "google-gemini-cli", expectedId: "google-gemini-cli" },
       { requested: "gemini-cli", expectedId: "google-gemini-cli" },
+      { requested: "openai", expectedId: "openai" },
     ] as const;
 
     for (const scenario of scenarios) {

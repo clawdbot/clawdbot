@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 import {
   getPluginCompatRecord,
@@ -164,6 +164,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "@deprecated Use gateway_stop",
   },
   {
+    code: "legacy-subagent-spawning-hook",
+    file: "src/plugins/hook-types.ts",
+    marker: "@deprecated Core prepares thread-bound subagent bindings",
+  },
+  {
     code: "deprecated-memory-embedding-provider-api",
     file: "src/plugins/types.ts",
     marker: "registerMemoryEmbeddingProvider",
@@ -234,6 +239,14 @@ function listTrackedSourceFiles(): string[] {
 }
 
 describe("plugin compatibility registry", () => {
+  let deprecatedTargetParserOffenders: string[] = [];
+
+  beforeAll(() => {
+    deprecatedTargetParserOffenders = listTrackedSourceFiles()
+      .filter((file) => !deprecatedTargetParserCompatFiles.has(file))
+      .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
+  });
+
   it("keeps compatibility codes unique and lookup-safe", () => {
     const records = listPluginCompatRecords();
     const codes = records.map((record) => record.code);
@@ -281,10 +294,6 @@ describe("plugin compatibility registry", () => {
   });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
-    const offenders = listTrackedSourceFiles()
-      .filter((file) => !deprecatedTargetParserCompatFiles.has(file))
-      .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
-
-    expect(offenders).toEqual([]);
+    expect(deprecatedTargetParserOffenders).toEqual([]);
   });
 });

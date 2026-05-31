@@ -24,6 +24,7 @@ type AgentsListCommandModule = typeof import("../../commands/agents.commands.lis
 type ConfigCliModule = typeof import("../config-cli.js");
 type ModelsListCommandModule = typeof import("../../commands/models/list.list-command.js");
 type ModelsStatusCommandModule = typeof import("../../commands/models/list.status-command.js");
+type TasksJsonCommandModule = typeof import("../../commands/tasks-json.js");
 
 export type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
   parseArgs: TParse;
@@ -51,6 +52,9 @@ const modelsListCommandLoader = createLazyImportLoader<ModelsListCommandModule>(
 const modelsStatusCommandLoader = createLazyImportLoader<ModelsStatusCommandModule>(
   () => import("../../commands/models/list.status-command.js"),
 );
+const tasksJsonCommandLoader = createLazyImportLoader<TasksJsonCommandModule>(
+  () => import("../../commands/tasks-json.js"),
+);
 
 function loadConfigCli(): Promise<ConfigCliModule> {
   return configCliLoader.load();
@@ -66,6 +70,10 @@ function loadModelsListCommand(): Promise<ModelsListCommandModule> {
 
 function loadModelsStatusCommand(): Promise<ModelsStatusCommandModule> {
   return modelsStatusCommandLoader.load();
+}
+
+function loadTasksJsonCommand(): Promise<TasksJsonCommandModule> {
+  return tasksJsonCommandLoader.load();
 }
 
 export const routedCommandDefinitions = {
@@ -148,14 +156,14 @@ export const routedCommandDefinitions = {
   "tasks-list": defineRoutedCommand({
     parseArgs: parseTasksListRouteArgs,
     runParsedArgs: async (args) => {
-      const { tasksListJsonCommand } = await import("../../commands/tasks-json.js");
+      const { tasksListJsonCommand } = await loadTasksJsonCommand();
       await tasksListJsonCommand(args, defaultRuntime);
     },
   }),
   "tasks-audit": defineRoutedCommand({
     parseArgs: parseTasksAuditRouteArgs,
     runParsedArgs: async (args) => {
-      const { tasksAuditJsonCommand } = await import("../../commands/tasks-json.js");
+      const { tasksAuditJsonCommand } = await loadTasksJsonCommand();
       await tasksAuditJsonCommand(args, defaultRuntime);
     },
   }),

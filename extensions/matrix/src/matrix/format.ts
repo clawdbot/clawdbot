@@ -128,7 +128,12 @@ function isMentionStartBoundary(charBefore: string | undefined): boolean {
   return !charBefore || !/[A-Za-z0-9_]/.test(charBefore);
 }
 
-function trimMentionSuffix(raw: string, end: number): { raw: string; end: number } | null {
+function trimMentionSuffix(
+  rawInput: string,
+  endInput: number,
+): { raw: string; end: number } | null {
+  let raw = rawInput;
+  let end = endInput;
   while (raw.length > 1 && TRIMMABLE_MENTION_SUFFIX.test(raw.at(-1) ?? "")) {
     if (raw.at(-1) === "]" && /\[[0-9A-Fa-f:.]+\](?::\d+)?$/i.test(raw)) {
       break;

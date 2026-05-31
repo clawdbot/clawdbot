@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,
@@ -8,8 +10,6 @@ import {
 } from "../config/config.js";
 import { resolveExecutable } from "../infra/executable-path.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
 export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";

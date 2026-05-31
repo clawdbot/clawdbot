@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   listCliRuntimeModelBackendBindings,
@@ -18,7 +19,6 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
@@ -360,7 +360,6 @@ async function connectClientOnce(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
-    let client: GatewayClient | undefined;
     const abortStart = new AbortController();
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
@@ -405,7 +404,7 @@ async function connectClientOnce(params: {
       clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
     }
 
-    client = new GatewayClient(clientOptions);
+    const client: GatewayClient | undefined = new GatewayClient(clientOptions);
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),

@@ -1,5 +1,5 @@
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { type WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { buildTavilyWebSearchProviderBase } from "../web-search-shared.js";
 
 type TavilyClientModule = typeof import("./tavily-client.js");

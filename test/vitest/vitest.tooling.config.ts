@@ -14,6 +14,7 @@ export function createToolingVitestConfig(env?: Record<string, string | undefine
     {
       env,
       exclude: [...boundaryTestFiles, "test/scripts/openclaw-e2e-instance.test.ts"],
+      fileParallelism: false,
       name: "tooling",
       passWithNoTests: true,
     },

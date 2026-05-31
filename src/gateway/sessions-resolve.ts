@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -8,7 +9,6 @@ import { loadSessionStore, updateSessionStore, type SessionEntry } from "../conf
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   filterAndSortSessionEntries,
   listSessionsFromStore,

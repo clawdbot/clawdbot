@@ -71,5 +71,11 @@ export function createDiscordPreflightContext(channelId = "ch-1") {
     },
     baseSessionKey: `agent:main:discord:channel:${channelId}`,
     messageChannelId: channelId,
+    messageText: "hello",
+    isDirectMessage: true,
+    isGroupDm: false,
+    isGuildMessage: false,
+    inboundEventKind: "message",
+    effectiveWasMentioned: false,
   };
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -40,6 +40,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin: mocks.normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel: mocks.prepareProviderDynamicModel,
+  resolveExternalAuthProfilesWithPlugins: () => [],
   runProviderDynamicModel: mocks.runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel: mocks.shouldPreferProviderRuntimeResolvedModel,
 }));
@@ -61,9 +62,12 @@ function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
   expect(context.workspaceDir).toBe("/tmp/workspace");
 }
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+beforeAll(async () => {
   ({ resolveModelAsync } = await import("./model.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("resolveModelAsync skipAgentDiscovery runtime hooks", () => {

@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, resolveRegularFileAppendFlags } from "../infra/fs-safe.js";
 
-export type QueuedFileWriteResult = "queued" | "dropped";
-
 export type QueuedFileWriterDiagnostics = {
   pendingWrites: number;
   queuedBytes: number;

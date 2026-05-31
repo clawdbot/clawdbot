@@ -951,9 +951,7 @@ export class DefaultPackageManager implements PackageManager {
           this.addResource(accumulator.extensions, resolved, metadata, true);
         }
       }
-    } catch {
-      return;
-    }
+    } catch {}
   }
 
   private parseSource(source: string): ParsedSource {

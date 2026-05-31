@@ -242,7 +242,7 @@ export const buildTelegramMessageContext = async ({
   const freshCfg =
     loadFreshConfig?.() ??
     (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
-  let { route, bindingMode } = resolveTelegramConversationRoute({
+  const conversationRoute = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
     chatId,
@@ -252,6 +252,8 @@ export const buildTelegramMessageContext = async ({
     senderId,
     topicAgentId: topicConfig?.agentId,
   });
+  const { bindingMode } = conversationRoute;
+  let { route } = conversationRoute;
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean =>
@@ -426,7 +428,7 @@ export const buildTelegramMessageContext = async ({
   const activationOverride = resolveGroupActivation({
     chatId,
     messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
+    sessionKey,
     agentId: route.agentId,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);

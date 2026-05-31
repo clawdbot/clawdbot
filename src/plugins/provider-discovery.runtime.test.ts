@@ -64,7 +64,10 @@ function createManifestPlugin(id: string): PluginManifestRecord {
   };
 }
 
-function createManifestPluginWithModelCatalog(id: string): PluginManifestRecord {
+function createManifestPluginWithModelCatalog(
+  id: string,
+  discovery: "static" | "runtime" = "static",
+): PluginManifestRecord {
   return {
     ...createManifestPluginWithoutDiscovery({ id }),
     modelCatalog: {
@@ -85,7 +88,69 @@ function createManifestPluginWithModelCatalog(id: string): PluginManifestRecord 
           ],
         },
       },
-      discovery: { [id]: "static" },
+      discovery: { [id]: discovery },
+    },
+  };
+}
+
+function createManifestPluginWithMixedCatalogDiscovery(): PluginManifestRecord {
+  return {
+    ...createManifestPluginWithoutDiscovery({ id: "xiaomi" }),
+    providers: ["xiaomi", "xiaomi-token-plan"],
+    modelCatalog: {
+      providers: {
+        xiaomi: {
+          baseUrl: "https://api.xiaomimimo.com/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "mimo-v2-flash",
+              name: "MiMo V2 Flash",
+              input: ["text"],
+              contextWindow: 262144,
+              maxTokens: 8192,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+        "xiaomi-token-plan": {
+          baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "mimo-v2.5-pro",
+              name: "MiMo V2.5 Pro",
+              input: ["text"],
+              contextWindow: 1048576,
+              maxTokens: 32000,
+              cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+      discovery: {
+        xiaomi: "static",
+        "xiaomi-token-plan": "runtime",
+      },
+    },
+  };
+}
+
+function createManifestPluginWithRuntimeDiscoveryOnly(id: string): PluginManifestRecord {
+  return {
+    ...createManifestPluginWithoutDiscovery({ id }),
+    modelCatalog: {
+      discovery: { [id]: "runtime" },
+    },
+  };
+}
+
+function createManifestPluginWithEntryAndRuntimeDiscovery(): PluginManifestRecord {
+  return {
+    ...createManifestPlugin("mixed-entry"),
+    providers: ["mixed-entry", "runtime-owned"],
+    modelCatalog: {
+      discovery: { "runtime-owned": "runtime" },
     },
   };
 }
@@ -179,6 +244,158 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       { ...staticProvider, pluginId: "deepseek" },
     ]);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize manifest entry providers for runtime-discovered catalogs", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "runtime")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toStrictEqual(
+      [],
+    );
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("loads the full plugin when one manifest catalog provider is runtime-owned", () => {
+    const runtimeProvider = createProvider({ id: "xiaomi-token-plan", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["xiaomi"]);
+    mocks.resolvePluginProviders.mockReturnValue([runtimeProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithMixedCatalogDiscovery()],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toStrictEqual([runtimeProvider]);
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledOnce();
+  });
+
+  it("keeps static manifest entries available for mixed runtime-catalog plugins", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["xiaomi"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithMixedCatalogDiscovery()],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["xiaomi"]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("counts mixed static manifest entries for entries-only complete coverage", () => {
+    const entryProvider = createProvider({ id: "deepseek", mode: "static" });
+    mocks.loadSource.mockReturnValue(entryProvider);
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek", "xiaomi"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPlugin("deepseek"),
+          createManifestPluginWithMixedCatalogDiscovery(),
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      requireCompleteDiscoveryEntryCoverage: true,
+    });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["xiaomi", "deepseek"]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("loads mixed runtime-catalog plugins even when other static entries exist", () => {
+    const runtimeProvider = createProvider({ id: "xiaomi-token-plan", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek", "xiaomi"]);
+    mocks.resolvePluginProviders.mockReturnValue([runtimeProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPluginWithModelCatalog("deepseek"),
+          createManifestPluginWithMixedCatalogDiscovery(),
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({});
+
+    expect(providers.map((provider) => provider.id)).toEqual(["deepseek", "xiaomi-token-plan"]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["xiaomi"]);
+  });
+
+  it("loads runtime-only catalog plugins declared without manifest rows", () => {
+    const runtimeProvider = createProvider({ id: "runtime-only", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek", "runtime-only"]);
+    mocks.resolvePluginProviders.mockReturnValue([runtimeProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPluginWithModelCatalog("deepseek"),
+          createManifestPluginWithRuntimeDiscoveryOnly("runtime-only"),
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({});
+
+    expect(providers.map((provider) => provider.id)).toEqual(["deepseek", "runtime-only"]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["runtime-only"]);
+  });
+
+  it("scopes full loading for a single runtime-only catalog plugin without manifest rows", () => {
+    const runtimeProvider = createProvider({ id: "runtime-only", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["runtime-only"]);
+    mocks.resolvePluginProviders.mockReturnValue([runtimeProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithRuntimeDiscoveryOnly("runtime-only")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({});
+
+    expect(providers.map((provider) => provider.id)).toEqual(["runtime-only"]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["runtime-only"]);
+  });
+
+  it("full-loads runtime-owned catalog plugins even when they have discovery entries", () => {
+    const entryProvider = createProvider({ id: "mixed-entry", mode: "static" });
+    const runtimeProvider = createProvider({ id: "runtime-owned", mode: "catalog" });
+    mocks.loadSource.mockReturnValue(entryProvider);
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["mixed-entry"]);
+    mocks.resolvePluginProviders.mockReturnValue([runtimeProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithEntryAndRuntimeDiscovery()],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({});
+
+    expect(providers.map((provider) => provider.id)).toEqual(["runtime-owned"]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["mixed-entry"]);
   });
 
   it("loads discovery entries through the native-capable module loader", () => {
@@ -455,6 +672,22 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         },
       },
     });
+  });
+
+  it("does not expose runtime-only manifest model catalogs as static discovery entries", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["xiaomi-token-plan"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("xiaomi-token-plan", "runtime")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers).toStrictEqual([]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("defaults missing manifest model costs for static discovery entries", async () => {

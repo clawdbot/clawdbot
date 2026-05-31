@@ -1,4 +1,7 @@
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolPolicy,
@@ -280,6 +283,10 @@ function resolveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function resolveTimerConfigMs(value: unknown, fallback: number): number {
+  return resolvePositiveTimerTimeoutMs(resolveNumber(value, fallback), fallback);
+}
+
 function resolveOptionalNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -481,11 +488,11 @@ export function resolveGoogleMeetConfigWithEnv(
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.reuseExistingTab,
       ),
       autoJoin: resolveBoolean(chrome.autoJoin, DEFAULT_GOOGLE_MEET_CONFIG.chrome.autoJoin),
-      joinTimeoutMs: resolveNumber(
+      joinTimeoutMs: resolveTimerConfigMs(
         chrome.joinTimeoutMs,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.joinTimeoutMs,
       ),
-      waitForInCallMs: resolveNumber(
+      waitForInCallMs: resolveTimerConfigMs(
         chrome.waitForInCallMs,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.waitForInCallMs,
       ),
@@ -502,7 +509,7 @@ export function resolveGoogleMeetConfigWithEnv(
         chrome.bargeInPeakThreshold,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.bargeInPeakThreshold,
       ),
-      bargeInCooldownMs: resolveNumber(
+      bargeInCooldownMs: resolveTimerConfigMs(
         chrome.bargeInCooldownMs,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.bargeInCooldownMs,
       ),
@@ -521,15 +528,15 @@ export function resolveGoogleMeetConfigWithEnv(
       enabled: resolveBoolean(voiceCall.enabled, DEFAULT_GOOGLE_MEET_CONFIG.voiceCall.enabled),
       gatewayUrl: normalizeOptionalString(voiceCall.gatewayUrl),
       token: normalizeOptionalString(voiceCall.token),
-      requestTimeoutMs: resolveNumber(
+      requestTimeoutMs: resolveTimerConfigMs(
         voiceCall.requestTimeoutMs,
         DEFAULT_GOOGLE_MEET_CONFIG.voiceCall.requestTimeoutMs,
       ),
-      dtmfDelayMs: resolveNumber(
+      dtmfDelayMs: resolveTimerConfigMs(
         voiceCall.dtmfDelayMs,
         DEFAULT_GOOGLE_MEET_CONFIG.voiceCall.dtmfDelayMs,
       ),
-      postDtmfSpeechDelayMs: resolveNumber(
+      postDtmfSpeechDelayMs: resolveTimerConfigMs(
         voiceCall.postDtmfSpeechDelayMs,
         DEFAULT_GOOGLE_MEET_CONFIG.voiceCall.postDtmfSpeechDelayMs,
       ),

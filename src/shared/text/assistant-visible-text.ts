@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripPlainTextToolCallBlocks } from "./plain-text-tool-call-blocks.js";

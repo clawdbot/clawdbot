@@ -36,7 +36,7 @@ async function loadCreatePdfTool() {
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
-const CODEX_PDF_MODEL = "openai-codex/gpt-5.4";
+const CODEX_PDF_MODEL = "openai/gpt-5.4";
 const FAKE_PDF_MEDIA = {
   kind: "document",
   buffer: Buffer.from("%PDF-1.4 fake"),
@@ -132,8 +132,8 @@ async function stubPdfToolInfra(
             provider: params?.provider ?? "anthropic",
             api:
               params?.api ??
-              (params?.provider === "openai-codex"
-                ? "openai-codex-responses"
+              (params?.provider === "openai"
+                ? "openai-chatgpt-responses"
                 : params?.provider === "openai"
                   ? "openai-responses"
                   : "anthropic-messages"),
@@ -557,7 +557,11 @@ describe("createPdfTool", () => {
 
   it("uses extraction fallback for non-native models", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-responses",
+        input: ["text"],
+      });
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
@@ -641,8 +645,8 @@ describe("createPdfTool", () => {
   it("adds Codex instructions for PDF extraction fallback requests", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         input: ["text", "image"],
       });
 
@@ -678,8 +682,8 @@ describe("createPdfTool", () => {
   it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         input: ["text"],
       });
 

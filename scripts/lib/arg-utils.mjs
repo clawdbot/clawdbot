@@ -20,6 +20,10 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
+export function stripLeadingPackageManagerSeparator(argv) {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function isMissingStringFlagValue(value, options = {}) {
   if (!value) {
     return true;

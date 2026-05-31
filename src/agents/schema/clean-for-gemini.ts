@@ -418,7 +418,7 @@ function flattenUnionFallback(
   variants: unknown[],
 ): Record<string, unknown> | undefined {
   const objects = variants.filter(
-    (v): v is Record<string, unknown> => !!v && typeof v === "object",
+    (v): v is Record<string, unknown> => Boolean(v) && typeof v === "object",
   );
   if (objects.length === 0) {
     return undefined;

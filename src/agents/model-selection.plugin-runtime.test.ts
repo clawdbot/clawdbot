@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
@@ -27,9 +27,15 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+let createModelSelectionStateForTest: typeof import("../auto-reply/reply/model-selection.js").createModelSelectionState;
+
 describe("model-selection plugin runtime normalization", () => {
+  beforeAll(async () => {
+    ({ createModelSelectionState: createModelSelectionStateForTest } =
+      await import("../auto-reply/reply/model-selection.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     normalizeProviderModelIdWithPluginMock.mockReset();
   });
 
@@ -184,7 +190,6 @@ describe("model-selection plugin runtime normalization", () => {
       return undefined;
     });
 
-    const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
     const cfg = {
       agents: {
         defaults: {
@@ -203,7 +208,7 @@ describe("model-selection plugin runtime normalization", () => {
     };
     const sessionStore = { [sessionKey]: sessionEntry };
 
-    const state = await createModelSelectionState({
+    const state = await createModelSelectionStateForTest({
       cfg,
       agentCfg: cfg.agents.defaults,
       sessionEntry,

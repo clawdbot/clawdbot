@@ -125,7 +125,7 @@ openclaw sessions cleanup --enforce
 Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
 
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
-- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+- `cron.runLog.keepLines` prunes retained SQLite run-history rows per cron job (default: `2000`). `cron.runLog.maxBytes` remains accepted for older file-backed run logs.
 
 When cron force-creates a new isolated run session, it sanitizes the previous
 `cron:<jobId>` session entry before writing the new row. It carries safe

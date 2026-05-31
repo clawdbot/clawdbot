@@ -671,15 +671,64 @@
 .sidebar-recent-sessions {
   display: grid;
   gap: 6px;
+  margin: 0 -8px;
 }
 
 .sidebar-recent-sessions__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
   padding: 0 10px;
-  font-size: 11px;
+  min-height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__label:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.sidebar-recent-sessions__label-text {
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 78%, var(--text) 22%);
+}
+
+.sidebar-recent-sessions__chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: transform var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__chevron {
+  transform: rotate(-90deg);
+}
+
+.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__list {
+  display: none;
 }
 
 .sidebar-recent-sessions__list {

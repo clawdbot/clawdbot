@@ -1,4 +1,4 @@
-import { isRich as isRichTerminal, theme } from "../../terminal/theme.js";
+import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
 export { maskApiKey } from "../../utils/mask-api-key.js";
 
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>

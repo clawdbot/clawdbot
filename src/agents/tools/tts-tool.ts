@@ -25,18 +25,13 @@ function readTtsTimeoutMs(args: Record<string, unknown>): number | undefined {
 
 /**
  * Defuse reply-directive tokens inside spoken transcripts before they flow
- * through tool-result content. When verbose tool output is enabled,
- * `emitToolOutput` passes the content through `parseReplyDirectives`
- * (`src/media/parse.ts` / `src/utils/directive-tags.ts`), and unfiltered
- * `MEDIA:` or `[[audio_as_voice]]`-shaped tokens in the transcript would be
- * rewritten into actual media URLs and audio-as-voice flags. Insert a
- * zero-width word joiner so the regex patterns stop matching without
- * changing the visible text.
+ * through tool-result content. Insert a zero-width word joiner so transcript
+ * text cannot be mistaken for assistant control tags if it is reused later.
  */
 function sanitizeTranscriptForToolContent(text: string): string {
   return text
-    .replace(/^([^\S\r\n]*)MEDIA:/gim, "$1\u2060MEDIA:")
     .replace(/\[\[/g, "[\u2060[")
+    .replace(/^(\s*)(MEDIA:)/gim, "$1\u2060$2")
     .replace(/^([ \t]*)(`{3,})/gm, (_match, indent: string, fence: string) => {
       const [first = "", ...rest] = fence;
       return `${indent}${first}\u2060${rest.join("")}`;

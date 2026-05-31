@@ -1,1 +1,1 @@
-export * from "../plugins/provider-openai-codex-oauth-tls.js";
+export * from "../plugins/provider-openai-chatgpt-oauth-tls.js";

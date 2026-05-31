@@ -244,6 +244,20 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("rejects relay registrations when expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    expect(() =>
+      registerNativeHookRelay({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      }),
+    ).toThrow("Native hook relay expiry is outside the supported Date range");
+  });
+
   it("stores relay registrations, bridges, and invocations in process-global state", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -333,6 +347,58 @@ describe("native hook relay registry", () => {
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
     expect(approvalRequester).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not remember allow-always approvals when expiry would exceed Date range", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-permission-overflow-session",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow-always" as const);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const state = getNativeHookRelaySharedStateForTests();
+    const registration = state.relays.get(relay.relayId) as { expiresAtMs?: number } | undefined;
+    if (!registration) {
+      throw new Error("Expected native hook relay registration");
+    }
+    registration.expiresAtMs = 8_640_000_000_000_000;
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          cwd: "/repo",
+          tool_name: "Bash",
+          tool_use_id: "native-call-1",
+          tool_input: { command: "browserforce tabs" },
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    expect(state.permissionAllowAlwaysApprovals.size).toBe(0);
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          cwd: "/repo",
+          tool_name: "Bash",
+          tool_use_id: "native-call-2",
+          tool_input: { command: "browserforce tabs" },
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
   });
 
   it("shares relay state across duplicate module instances", async () => {

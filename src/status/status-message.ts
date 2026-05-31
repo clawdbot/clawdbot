@@ -1,4 +1,9 @@
 import fs from "node:fs";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
@@ -46,11 +51,6 @@ import {
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -147,7 +147,7 @@ function resolveConfiguredTextVerbosity(params: {
 }): "low" | "medium" | "high" | undefined {
   const provider = params.provider?.trim();
   const model = params.model?.trim();
-  if (!provider || !model || (provider !== "openai" && provider !== "openai-codex")) {
+  if (!provider || !model || provider !== "openai") {
     return undefined;
   }
   return resolveOpenAITextVerbosity(

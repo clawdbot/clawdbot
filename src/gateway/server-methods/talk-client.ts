@@ -1,4 +1,8 @@
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -6,10 +10,6 @@ import {
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,

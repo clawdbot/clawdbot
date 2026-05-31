@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../runtime-api.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import {
   type GraphResponse,
   deleteGraphRequest,
@@ -75,7 +75,7 @@ export async function resolveGraphConversationId(to: string): Promise<string> {
   }
 
   // user:<aadId> — look up the conversation store for the real chat ID
-  const store = createMSTeamsConversationStoreFs();
+  const store = createMSTeamsConversationStoreState();
   const found = await store.findPreferredDmByUserId(cleaned);
   if (!found) {
     throw new Error(

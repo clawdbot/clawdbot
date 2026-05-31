@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   CronRunDiagnostic,
   CronRunDiagnostics,

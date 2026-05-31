@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
@@ -225,8 +224,8 @@ describe("openrouter music generation provider", () => {
         }),
       ).rejects.toThrow("OpenRouter music generation response missing audio data");
 
-      expect(postRequest().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(postRequest().timeoutMs).toBe(180_000);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 180_000);
     } finally {
       timeoutSpy.mockRestore();
     }

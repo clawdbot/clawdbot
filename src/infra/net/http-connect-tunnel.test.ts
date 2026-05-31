@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 
 class FakeSocket extends EventEmitter {
   public readonly writes: string[] = [];

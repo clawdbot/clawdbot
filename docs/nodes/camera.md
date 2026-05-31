@@ -59,9 +59,9 @@ All camera access is gated behind **user-controlled settings**.
 
 Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
-### CLI helper (temp files + MEDIA)
+### CLI helper
 
-The easiest way to get attachments is via the CLI helper, which writes decoded media to a temp file and prints `MEDIA:<path>`.
+The easiest way to get media files is via the CLI helper, which writes decoded media to a temp file and prints the saved path.
 
 Examples:
 
@@ -126,12 +126,12 @@ Examples:
 
 ```bash
 openclaw nodes camera list --node <id>            # list camera ids
-openclaw nodes camera snap --node <id>            # prints MEDIA:<path>
+openclaw nodes camera snap --node <id>            # prints saved path
 openclaw nodes camera snap --node <id> --max-width 1280
 openclaw nodes camera snap --node <id> --delay-ms 2000
 openclaw nodes camera snap --node <id> --device-id <id>
-openclaw nodes camera clip --node <id> --duration 10s          # prints MEDIA:<path>
-openclaw nodes camera clip --node <id> --duration-ms 3000      # prints MEDIA:<path> (legacy flag)
+openclaw nodes camera clip --node <id> --duration 10s          # prints saved path
+openclaw nodes camera clip --node <id> --duration-ms 3000      # prints saved path (legacy flag)
 openclaw nodes camera clip --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --no-audio
 ```
@@ -152,7 +152,7 @@ Notes:
 For _screen_ video (not camera), use the macOS companion:
 
 ```bash
-openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints MEDIA:<path>
+openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints saved path
 ```
 
 Notes:

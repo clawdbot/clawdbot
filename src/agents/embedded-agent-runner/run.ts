@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -18,9 +20,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -87,11 +87,11 @@ import {
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
   resolveContextConfigProviderForRuntime,
   resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-codex-routing.js";
+} from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -360,7 +360,7 @@ function createScopedAuthProfileStore(
   const profiles = store.profiles ?? {};
   const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
     .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => !!profileId);
+    .filter((profileId): profileId is string => Boolean(profileId));
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];
@@ -456,8 +456,9 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 }
 
 export async function runEmbeddedAgent(
-  params: RunEmbeddedAgentParams,
+  paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  let params = paramsInput;
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -705,6 +706,7 @@ export async function runEmbeddedAgent(
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
             workspaceDir: resolvedWorkspace,
+            authProfileId: params.authProfileId,
           },
         );
         firstModelResolution ??= candidateResolution;
@@ -729,6 +731,7 @@ export async function runEmbeddedAgent(
             params.config,
             {
               workspaceDir: resolvedWorkspace,
+              authProfileId: params.authProfileId,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -780,17 +783,17 @@ export async function runEmbeddedAgent(
 
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        provider === OPENAI_PROVIDER_ID &&
+        effectiveModel.api === "openai-chatgpt-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        provider === OPENAI_PROVIDER_ID &&
+        effectiveModel.api === "openai-chatgpt-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
         : openClawNativeCodexResponsesNeedsAuthBootstrap
           ? {
-              providerIds: [OPENAI_CODEX_PROVIDER_ID],
+              providerIds: [OPENAI_PROVIDER_ID],
               ignoreAutoPreferredProfile: false,
             }
           : resolveExternalCliAuthOverlayScopeFromSelection({
@@ -827,7 +830,7 @@ export async function runEmbeddedAgent(
           ? createEmptyAuthProfileStore()
           : pluginHarnessNeedsOpenClawAuthBootstrap
             ? ensureAuthProfileStore(agentDir, {
-                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
+                externalCliProviderIds: [OPENAI_PROVIDER_ID],
                 allowKeychainPrompt: false,
               })
             : piExternalCliAuthScope.providerIds

@@ -208,7 +208,7 @@ export function findEnvKeys(provider: string): string[] | undefined {
     return undefined;
   }
 
-  const found = envVars.filter((envVar) => !!getEnvValue(envVar));
+  const found = envVars.filter((envVar) => Boolean(getEnvValue(envVar)));
   return found.length > 0 ? found : undefined;
 }
 
@@ -227,8 +227,10 @@ export function getEnvApiKey(provider: string): string | undefined {
   // Auth is configured via `gcloud auth application-default login`.
   if (provider === "google-vertex") {
     const hasCredentials = hasVertexAdcCredentials();
-    const hasProject = !!(getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"));
-    const hasLocation = !!getEnvValue("GOOGLE_CLOUD_LOCATION");
+    const hasProject = Boolean(
+      getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
+    );
+    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
 
     if (hasCredentials && hasProject && hasLocation) {
       return "<authenticated>";

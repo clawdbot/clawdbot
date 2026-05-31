@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -43,7 +47,7 @@ function createSkippedVerificationReplayKey(provider: string, ctx: WebhookContex
 
 function pruneReplayCache(cache: ReplayCache, now: number): void {
   for (const [key, expiresAt] of cache.seenUntil) {
-    if (expiresAt <= now) {
+    if (!isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
       cache.seenUntil.delete(key);
     }
   }
@@ -64,11 +68,14 @@ function markReplay(cache: ReplayCache, replayKey: string): boolean {
   }
 
   const existing = cache.seenUntil.get(replayKey);
-  if (existing && existing > now) {
+  if (existing !== undefined && isFutureDateTimestampMs(existing, { nowMs: now })) {
     return true;
   }
 
-  cache.seenUntil.set(replayKey, now + REPLAY_WINDOW_MS);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(REPLAY_WINDOW_MS, { nowMs: now });
+  if (expiresAt !== undefined) {
+    cache.seenUntil.set(replayKey, expiresAt);
+  }
   if (cache.seenUntil.size > REPLAY_CACHE_MAX_ENTRIES) {
     pruneReplayCache(cache, now);
   }

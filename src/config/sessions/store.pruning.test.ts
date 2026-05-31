@@ -43,7 +43,7 @@ describe("pruneStaleEntries", () => {
     const now = Date.now();
     const store = makeStore([
       ["old", makeEntry(now - 31 * DAY_MS)],
-      ["fresh", makeEntry(now - 1 * DAY_MS)],
+      ["fresh", makeEntry(now - DAY_MS)],
     ]);
 
     const pruned = pruneStaleEntries(store, 30 * DAY_MS);
@@ -83,7 +83,7 @@ describe("capEntryCount", () => {
       ["oldest", makeEntry(now - 4 * DAY_MS)],
       ["old", makeEntry(now - 3 * DAY_MS)],
       ["mid", makeEntry(now - 2 * DAY_MS)],
-      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["recent", makeEntry(now - DAY_MS)],
       ["newest", makeEntry(now)],
     ]);
 
@@ -105,7 +105,7 @@ describe("capEntryCount", () => {
       [threadKey, makeEntry(now - 5 * DAY_MS)],
       ["oldest", makeEntry(now - 4 * DAY_MS)],
       ["old", makeEntry(now - 3 * DAY_MS)],
-      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["recent", makeEntry(now - DAY_MS)],
       ["newest", makeEntry(now)],
     ]);
 

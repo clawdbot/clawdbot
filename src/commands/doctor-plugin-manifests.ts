@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";

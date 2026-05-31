@@ -6,7 +6,7 @@ export type KnownApi =
   | "mistral-conversations"
   | "openai-responses"
   | "azure-openai-responses"
-  | "openai-codex-responses"
+  | "openai-chatgpt-responses"
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
@@ -52,6 +52,12 @@ export interface ProviderResponse {
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Stop sequences forwarded to providers that support them. Providers map this
+   * to their native request field, such as OpenAI `stop` or Anthropic
+   * `stop_sequences`.
+   */
+  stop?: string[];
   signal?: AbortSignal;
   apiKey?: string;
   /**
@@ -546,7 +552,15 @@ export interface Model<TApi extends Api = Api> {
     cacheWrite: number; // $/million tokens
   };
   contextWindow: number;
+  /**
+   * Optional effective runtime cap used for compaction/session budgeting.
+   * Keeps provider/native contextWindow metadata intact while allowing a
+   * smaller practical window.
+   */
+  contextTokens?: number;
   maxTokens: number;
+  /** Provider-specific request/runtime parameters passed through to provider plugins. */
+  params?: Record<string, unknown>;
   headers?: Record<string, string>;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
@@ -556,6 +570,16 @@ export interface Model<TApi extends Api = Api> {
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat
         : never;
+  /** Provider-documented media input limits used by attachment preprocessing. */
+  mediaInput?: {
+    image?: {
+      maxBytes?: number;
+      maxPixels?: number;
+      maxSidePx?: number;
+      preferredSidePx?: number;
+      tokenMode?: "tile" | "detail" | "provider";
+    };
+  };
 }
 
 export interface ImagesModel<TApi extends ImagesApi = ImagesApi> extends Omit<

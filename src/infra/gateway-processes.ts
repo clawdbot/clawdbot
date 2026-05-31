@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
-import { uniqueValues } from "../shared/string-normalization.js";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import {

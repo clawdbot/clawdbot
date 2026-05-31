@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 
 type ConfigValidationIssueLike = {
   path: string;

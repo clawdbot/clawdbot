@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -15,6 +15,8 @@ import {
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
+  requestTimeoutMs: number;
+  supportsParallelToolCalls: boolean;
 };
 
 type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
@@ -31,22 +33,82 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
+  auth?: "oauth";
+  oauth?: Record<string, unknown>;
+  sslVerify?: boolean;
+  clientCert?: string;
+  clientKey?: string;
 };
 
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
+  if (!rawServer || typeof rawServer !== "object") {
+    return undefined;
+  }
+  const record = rawServer as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
 
 function getConnectionTimeoutMs(rawServer: unknown): number {
-  if (
-    rawServer &&
-    typeof rawServer === "object" &&
-    typeof (rawServer as { connectionTimeoutMs?: unknown }).connectionTimeoutMs === "number" &&
-    (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs > 0
-  ) {
-    return (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs;
+  const milliseconds = getPositiveNumber(rawServer, ["connectionTimeoutMs"]);
+  if (milliseconds) {
+    return Math.floor(milliseconds);
+  }
+  const seconds = getPositiveNumber(rawServer, ["connectTimeout", "connect_timeout"]);
+  if (seconds) {
+    return Math.floor(seconds * 1_000);
   }
   return DEFAULT_CONNECTION_TIMEOUT_MS;
+}
+
+function getRequestTimeoutMs(rawServer: unknown): number {
+  const milliseconds = getPositiveNumber(rawServer, ["requestTimeoutMs"]);
+  if (milliseconds) {
+    return Math.floor(milliseconds);
+  }
+  const seconds = getPositiveNumber(rawServer, ["timeout"]);
+  if (seconds) {
+    return Math.floor(seconds * 1_000);
+  }
+  return DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+function getBooleanField(rawServer: unknown, keys: readonly string[]): boolean | undefined {
+  if (!rawServer || typeof rawServer !== "object") {
+    return undefined;
+  }
+  const record = rawServer as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function getStringField(rawServer: unknown, keys: readonly string[]): string | undefined {
+  if (!rawServer || typeof rawServer !== "object") {
+    return undefined;
+  }
+  const record = rawServer as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }
 
 function getRequestedTransport(rawServer: unknown): string {
@@ -97,8 +159,33 @@ function resolveHttpTransportConfig(
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
+    ...(rawServer &&
+    typeof rawServer === "object" &&
+    (rawServer as { auth?: unknown }).auth === "oauth"
+      ? { auth: "oauth" as const }
+      : {}),
+    ...(rawServer &&
+    typeof rawServer === "object" &&
+    (rawServer as { oauth?: unknown }).oauth &&
+    typeof (rawServer as { oauth?: unknown }).oauth === "object" &&
+    !Array.isArray((rawServer as { oauth?: unknown }).oauth)
+      ? { oauth: (rawServer as { oauth: Record<string, unknown> }).oauth }
+      : {}),
+    ...(getBooleanField(rawServer, ["sslVerify", "ssl_verify"]) !== undefined
+      ? { sslVerify: getBooleanField(rawServer, ["sslVerify", "ssl_verify"]) }
+      : {}),
+    ...(getStringField(rawServer, ["clientCert", "client_cert"])
+      ? { clientCert: getStringField(rawServer, ["clientCert", "client_cert"]) }
+      : {}),
+    ...(getStringField(rawServer, ["clientKey", "client_key"])
+      ? { clientKey: getStringField(rawServer, ["clientKey", "client_key"]) }
+      : {}),
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+    requestTimeoutMs: getRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls:
+      getBooleanField(rawServer, ["supportsParallelToolCalls", "supports_parallel_tool_calls"]) ??
+      false,
   };
 }
 
@@ -127,6 +214,10 @@ export function resolveMcpTransportConfig(
       cwd: stdioLaunch.config.cwd,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+      requestTimeoutMs: getRequestTimeoutMs(rawServer),
+      supportsParallelToolCalls:
+        getBooleanField(rawServer, ["supportsParallelToolCalls", "supports_parallel_tool_calls"]) ??
+        false,
     };
   }
 

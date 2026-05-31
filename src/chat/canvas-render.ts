@@ -1,6 +1,6 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { asOptionalRecord } from "../shared/record-coerce.js";
 
 type CanvasSurface = "assistant_message";
 

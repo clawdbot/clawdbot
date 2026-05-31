@@ -362,7 +362,7 @@ async function resolveOpenAIRealtimeDefaultAuth(params: {
 
   if (prefersCodexOAuthForRealtimeModel(params.model)) {
     const codexToken = await resolveProviderAuthProfileApiKey({
-      provider: "openai-codex",
+      provider: "openai",
       cfg: params.cfg,
       includeExternalCliAuth: true,
     });
@@ -401,7 +401,7 @@ function hasOpenAIRealtimeBrowserAuthInput(params: {
   if (prefersCodexOAuthForRealtimeModel(params.model)) {
     return (
       isProviderAuthProfileConfigured({
-        provider: "openai-codex",
+        provider: "openai",
         cfg: params.cfg,
         includeExternalCliAuth: true,
       }) || hasOpenAIRealtimeApiKeyInput(undefined)
@@ -538,7 +538,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private async doConnect(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      let connectTimeout: ReturnType<typeof setTimeout>;
       let settled = false;
       const settleResolve = () => {
         if (settled) {
@@ -556,7 +555,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         clearTimeout(connectTimeout);
         reject(error);
       };
-      connectTimeout = setTimeout(() => {
+      const connectTimeout: ReturnType<typeof setTimeout> = setTimeout(() => {
         if (!this.sessionConfigured && !this.intentionallyClosed) {
           this.ws?.terminate();
           settleReject(new Error("OpenAI realtime connection timeout"));
@@ -744,7 +743,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     if (
       !isProviderAuthProfileConfigured({
-        provider: "openai-codex",
+        provider: "openai",
         cfg: cfg.cfg,
         includeExternalCliAuth: true,
       })
@@ -1161,11 +1160,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           return;
         }
         this.config.onError?.(new Error(detail));
-        return;
       }
 
       default:
-        return;
     }
   }
 

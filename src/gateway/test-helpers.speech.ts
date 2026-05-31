@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   TALK_TEST_PROVIDER_ID,
   TALK_TEST_PROVIDER_LABEL,

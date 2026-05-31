@@ -1,5 +1,8 @@
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -12,9 +15,6 @@ import {
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
-import { buildModelCatalogMergeKey } from "../model-catalog/refs.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
@@ -59,7 +59,7 @@ const CORE_BUILT_IN_MODEL_APIS = new Set([
   "google-generative-ai",
   "google-vertex",
   "mistral-conversations",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "openai-completions",
   "openai-responses",
 ]);

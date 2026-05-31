@@ -136,7 +136,7 @@ describe("music generate background helpers", () => {
     });
 
     expectReplyInstructionContains("visible-reply contract");
-    expectReplyInstructionContains("MEDIA:");
+    expectReplyInstructionContains("final-reply MEDIA lines");
   });
 
   it("delivers failure completion notices directly", async () => {
@@ -190,7 +190,7 @@ describe("music generate background helpers", () => {
       });
 
       expectReplyInstructionContains("visible-reply contract");
-      expectReplyInstructionContains("MEDIA:");
+      expectReplyInstructionContains("final-reply MEDIA lines");
     },
   );
 

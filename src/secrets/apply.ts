@@ -169,7 +169,7 @@ function applyProviderPlanMutations(params: {
   let changed = false;
 
   for (const providerAlias of params.deletes ?? []) {
-    if (!Object.prototype.hasOwnProperty.call(currentProviders, providerAlias)) {
+    if (!Object.hasOwn(currentProviders, providerAlias)) {
       continue;
     }
     delete currentProviders[providerAlias];

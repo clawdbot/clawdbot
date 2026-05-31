@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
@@ -83,7 +83,6 @@ const AcpBindingSchema = z
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
       });
-      return;
     }
   });
 

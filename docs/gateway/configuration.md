@@ -431,7 +431,7 @@ candidate contains redacted secret placeholders such as `***`.
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
-    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - `runLog`: prune retained cron run-history rows per job. `maxBytes` remains accepted for older file-backed run logs.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>

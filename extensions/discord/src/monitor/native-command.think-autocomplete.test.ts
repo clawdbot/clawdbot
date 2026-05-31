@@ -137,7 +137,7 @@ function installProviderThinkingRegistryForTest(): void {
     provider: {
       id: "discord-test-thinking",
       label: "Discord Test Thinking",
-      aliases: ["anthropic", "openai-codex"],
+      aliases: ["anthropic", "openai"],
       auth: [],
       isBinaryThinking: (context) =>
         providerThinkingMocks.resolveProviderBinaryThinking({
@@ -181,7 +181,7 @@ describe("discord native /think autocomplete", () => {
     providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+      provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
         ? true
         : undefined,
     );
@@ -212,7 +212,7 @@ describe("discord native /think autocomplete", () => {
     providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
     providerThinkingMocks.resolveProviderXHighThinking.mockReset();
     providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+      provider === "openai" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
         ? true
         : undefined,
     );
@@ -223,7 +223,7 @@ describe("discord native /think autocomplete", () => {
       JSON.stringify({
         [SESSION_KEY]: {
           updatedAt: Date.now(),
-          providerOverride: "openai-codex",
+          providerOverride: "openai",
           modelOverride: "gpt-5.4",
         },
       }),
@@ -292,7 +292,7 @@ describe("discord native /think autocomplete", () => {
       threadBindings: createNoopThreadBindingManager("default"),
     });
     expect(context).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
     });
 

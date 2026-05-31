@@ -2871,7 +2871,7 @@ fun providerDisplayName(provider: String): String =
   when (provider.trim().lowercase()) {
     "openai" -> "OpenAI"
     "openrouter" -> "OpenRouter"
-    "openai-codex", "codex" -> "Codex"
+    "codex" -> "Codex"
     "ollama", "ollama-local" -> "Ollama Local"
     else ->
       provider

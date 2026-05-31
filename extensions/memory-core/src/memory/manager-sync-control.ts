@@ -91,7 +91,6 @@ export async function runMemorySyncWithReadonlyRecovery(
 ): Promise<void> {
   try {
     await state.runSync(params);
-    return;
   } catch (err) {
     if (!isMemoryReadonlyDbError(err) || state.closed) {
       throw err;

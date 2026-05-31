@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadCronStore, resolveCronStorePath } from "../../cron/store.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
 const UNSCHEDULED_REMINDER_NOTE =

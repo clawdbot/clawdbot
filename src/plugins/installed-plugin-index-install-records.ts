@@ -112,7 +112,7 @@ function restoreInstallRecordMap(
 export function extractPluginInstallRecordsFromInstalledPluginIndex(
   index: InstalledPluginIndex | null | undefined,
 ): Record<string, PluginInstallRecord> {
-  if (index && Object.prototype.hasOwnProperty.call(index, "installRecords")) {
+  if (index && Object.hasOwn(index, "installRecords")) {
     return restoreInstallRecordMap(index.installRecords);
   }
   const records: Record<string, PluginInstallRecord> = {};

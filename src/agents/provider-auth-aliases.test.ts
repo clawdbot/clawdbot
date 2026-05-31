@@ -61,10 +61,10 @@ describe("provider auth aliases", () => {
           origin: "bundled",
           providerAuthChoices: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               method: "oauth",
-              choiceId: "openai-codex",
-              deprecatedChoiceIds: ["codex-cli", "openai-codex-import"],
+              choiceId: "openai",
+              deprecatedChoiceIds: ["codex-cli", "openai-chatgpt-import"],
             },
           ],
         },
@@ -72,9 +72,13 @@ describe("provider auth aliases", () => {
       diagnostics: [],
     });
 
-    expect(resolveProviderIdForAuth("codex-cli")).toBe("openai-codex");
-    expect(resolveProviderIdForAuth("openai-codex-import")).toBe("openai-codex");
-    expect(resolveProviderIdForAuth("openai-codex")).toBe("openai-codex");
+    expect(resolveProviderIdForAuth("codex-cli")).toBe("openai");
+    expect(resolveProviderIdForAuth("openai-chatgpt-import")).toBe("openai");
+    expect(resolveProviderIdForAuth("openai")).toBe("openai");
+  });
+
+  it("maps retired persisted OpenAI auth provider ids to canonical OpenAI", () => {
+    expect(resolveProviderIdForAuth(["openai", "codex"].join("-"))).toBe("openai");
   });
 
   it("does not reuse aliases across env-resolved plugin roots", () => {

@@ -13,13 +13,20 @@ export type CodexAppServerClientFactory = (
   config?: AuthProfileOrderConfig,
 ) => Promise<CodexAppServerClient>;
 
+let sharedClientModulePromise: Promise<typeof import("./shared-client.js")> | null = null;
+
+const loadSharedClientModule = async () => {
+  sharedClientModulePromise ??= import("./shared-client.js");
+  return await sharedClientModulePromise;
+};
+
 export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
   startOptions,
   authProfileId,
   agentDir,
   config,
 ) =>
-  import("./shared-client.js").then(({ getSharedCodexAppServerClient }) =>
+  loadSharedClientModule().then(({ getSharedCodexAppServerClient }) =>
     getSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
   );
 
@@ -29,6 +36,6 @@ export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFacto
   agentDir,
   config,
 ) =>
-  import("./shared-client.js").then(({ getLeasedSharedCodexAppServerClient }) =>
+  loadSharedClientModule().then(({ getLeasedSharedCodexAppServerClient }) =>
     getLeasedSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
   );

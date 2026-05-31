@@ -192,7 +192,7 @@ describe("overview view rendering", () => {
         ts: Date.now(),
         providers: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             displayName: "Codex",
             status: "ok",
             profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],

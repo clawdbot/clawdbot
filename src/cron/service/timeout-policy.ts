@@ -1,4 +1,4 @@
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { CronJob } from "../types.js";
 
 /**

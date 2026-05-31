@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig } from "./catchup.js";
+import { resolveCatchupConfig, saveIMessageCatchupCursor } from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
 type RpcCall = {
@@ -155,6 +155,32 @@ describe("runIMessageCatchup", () => {
     expect(summary.querySucceeded).toBe(true);
     expect(historyCalls).toBe(1);
     expect(summary.replayed).toBe(1);
+  });
+
+  it("does not crash on Date-invalid persisted cursor timestamps", async () => {
+    const log = vi.fn();
+    await saveIMessageCatchupCursor("default", {
+      lastSeenMs: 8_700_000_000_000_000,
+      lastSeenRowid: 10,
+    });
+    const { client, calls } = makeFakeClient(() => {
+      throw new Error("unexpected rpc");
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+      runtime: { log },
+    });
+
+    expect(summary.querySucceeded).toBe(false);
+    expect(calls).toEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("imessage catchup: invalid since timestamp"),
+    );
   });
 
   it("returns querySucceeded=false when chats.list throws", async () => {

@@ -1,52 +1,68 @@
 ---
-summary: "Use Xiaomi MiMo models with OpenClaw"
+summary: "Use Xiaomi MiMo pay-as-you-go and Token Plan models with OpenClaw"
 read_when:
   - You want Xiaomi MiMo models in OpenClaw
-  - You need XIAOMI_API_KEY setup
+  - You need Xiaomi MiMo auth or Token Plan setup
 title: "Xiaomi MiMo"
 ---
 
-Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled `xiaomi` plugin that registers both an OpenAI-compatible chat provider and a speech (TTS) provider against the same `XIAOMI_API_KEY`.
+Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled Xiaomi plugin with two text-provider presets:
 
-| Property        | Value                                    |
-| --------------- | ---------------------------------------- |
-| Provider id     | `xiaomi`                                 |
-| Plugin          | bundled, `enabledByDefault: true`        |
-| Auth env var    | `XIAOMI_API_KEY`                         |
-| Onboarding flag | `--auth-choice xiaomi-api-key`           |
-| Direct CLI flag | `--xiaomi-api-key <key>`                 |
-| Contracts       | chat completions + `speechProviders`     |
-| API             | OpenAI-compatible (`openai-completions`) |
-| Base URL        | `https://api.xiaomimimo.com/v1`          |
-| Default model   | `xiaomi/mimo-v2-flash`                   |
-| TTS default     | `mimo-v2.5-tts`, voice `mimo_default`    |
+- `xiaomi` for pay-as-you-go keys (`sk-...`)
+- `xiaomi-token-plan` for Token Plan keys (`tp-...`) with regional endpoint presets
+
+The same plugin also registers the `xiaomi` speech (TTS) provider.
+
+| Property         | Value                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider ids     | `xiaomi` (pay-as-you-go), `xiaomi-token-plan` (Token Plan)                                                                                         |
+| Plugin           | bundled, `enabledByDefault: true`                                                                                                                  |
+| Auth env vars    | `XIAOMI_API_KEY`, `XIAOMI_TOKEN_PLAN_API_KEY`                                                                                                      |
+| Onboarding flags | `--auth-choice xiaomi-api-key`, `--auth-choice xiaomi-token-plan-cn`, `--auth-choice xiaomi-token-plan-sgp`, `--auth-choice xiaomi-token-plan-ams` |
+| Direct CLI flags | `--xiaomi-api-key <key>`, `--xiaomi-token-plan-api-key <key>`                                                                                      |
+| Contracts        | chat completions + `speechProviders`                                                                                                               |
+| API              | OpenAI-compatible (`openai-completions`)                                                                                                           |
+| Base URLs        | Pay-as-you-go: `https://api.xiaomimimo.com/v1`; Token Plan presets: `token-plan-{cn,sgp,ams}...`                                                   |
+| Default models   | `xiaomi/mimo-v2-flash`, `xiaomi-token-plan/mimo-v2.5-pro`                                                                                          |
+| TTS default      | `mimo-v2.5-tts`, voice `mimo_default`                                                                                                              |
 
 ## Getting started
 
 <Steps>
-  <Step title="Get an API key">
-    Create an API key in the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys).
+  <Step title="Get the right key">
+    Create a pay-as-you-go key in the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys), or open your Token Plan subscription page and copy the regional OpenAI-compatible base URL plus the matching `tp-...` key.
   </Step>
+
   <Step title="Run onboarding">
+    Pay-as-you-go:
+
     ```bash
     openclaw onboard --auth-choice xiaomi-api-key
     ```
 
-    Or pass the key directly:
+    Token Plan:
+
+    ```bash
+    openclaw onboard --auth-choice xiaomi-token-plan-sgp
+    ```
+
+    Or pass the keys directly:
 
     ```bash
     openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
+    openclaw onboard --auth-choice xiaomi-token-plan-sgp --xiaomi-token-plan-api-key "$XIAOMI_TOKEN_PLAN_API_KEY"
     ```
 
   </Step>
   <Step title="Verify the model is available">
     ```bash
     openclaw models list --provider xiaomi
+    openclaw models list --provider xiaomi-token-plan
     ```
   </Step>
 </Steps>
 
-## Built-in catalog
+## Pay-as-you-go catalog
 
 | Model ref              | Input       | Context   | Max output | Reasoning | Notes         |
 | ---------------------- | ----------- | --------- | ---------- | --------- | ------------- |
@@ -56,6 +72,23 @@ Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled
 
 <Tip>
 The default model ref is `xiaomi/mimo-v2-flash`. The provider is injected automatically when `XIAOMI_API_KEY` is set or an auth profile exists.
+</Tip>
+
+## Token Plan catalog
+
+Choose the Token Plan auth choice that matches the regional base URL shown in Xiaomi's subscription UI:
+
+- `xiaomi-token-plan-cn` -> `https://token-plan-cn.xiaomimimo.com/v1`
+- `xiaomi-token-plan-sgp` -> `https://token-plan-sgp.xiaomimimo.com/v1`
+- `xiaomi-token-plan-ams` -> `https://token-plan-ams.xiaomimimo.com/v1`
+
+| Model ref                         | Input       | Context   | Max output | Reasoning | Notes         |
+| --------------------------------- | ----------- | --------- | ---------- | --------- | ------------- |
+| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 32,000     | Yes       | Default model |
+| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 32,000     | Yes       | Multimodal    |
+
+<Tip>
+Token Plan onboarding validates the key shape and warns when a `tp-...` key is entered into the pay-as-you-go path, or an `sk-...` key is entered into the Token Plan path.
 </Tip>
 
 ## Text-to-speech
@@ -117,7 +150,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Flash",
             reasoning: false,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 8192,
           },
@@ -126,7 +158,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Pro",
             reasoning: true,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1048576,
             maxTokens: 32000,
           },
@@ -135,7 +166,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Omni",
             reasoning: true,
             input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 32000,
           },
@@ -146,24 +176,68 @@ Opus with `ffmpeg` before delivery.
 }
 ```
 
+Pricing and compat flags come from the bundled plugin manifest, so the config example omits `cost` and `compat` to avoid diverging from runtime behavior.
+
+Token Plan:
+
+```json5
+{
+  env: { XIAOMI_TOKEN_PLAN_API_KEY: "tp-your-key" },
+  agents: { defaults: { model: { primary: "xiaomi-token-plan/mimo-v2.5-pro" } } },
+  models: {
+    mode: "merge",
+    providers: {
+      "xiaomi-token-plan": {
+        baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+        api: "openai-completions",
+        apiKey: "XIAOMI_TOKEN_PLAN_API_KEY",
+        models: [
+          {
+            id: "mimo-v2.5-pro",
+            name: "Xiaomi MiMo V2.5 Pro",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+          {
+            id: "mimo-v2.5",
+            name: "Xiaomi MiMo V2.5",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Pricing comes from the bundled manifest (Token Plan models include tiered cache-read pricing), so the config example omits `cost`.
+
 <AccordionGroup>
   <Accordion title="Auto-injection behavior">
-    The `xiaomi` provider is injected automatically when `XIAOMI_API_KEY` is set in your environment or an auth profile exists. You do not need to manually configure the provider unless you want to override model metadata or the base URL.
+    The `xiaomi` provider is injected automatically when `XIAOMI_API_KEY` is set in your environment or an auth profile exists. `xiaomi-token-plan` needs a regional base URL, so the supported path is the bundled Token Plan onboarding choice or an explicit `models.providers.xiaomi-token-plan` config block.
   </Accordion>
 
   <Accordion title="Model details">
     - **mimo-v2-flash** — lightweight and fast, ideal for general-purpose text tasks. No reasoning support.
     - **mimo-v2-pro** — supports reasoning with a 1M token context window for long-document workloads.
     - **mimo-v2-omni** — reasoning-enabled multimodal model that accepts both text and image inputs.
+    - **mimo-v2.5-pro** — Token Plan default with Xiaomi's current V2.5 reasoning stack.
+    - **mimo-v2.5** — Token Plan multimodal V2.5 route.
 
     <Note>
-    All models use the `xiaomi/` prefix (for example `xiaomi/mimo-v2-pro`).
+    Pay-as-you-go models use the `xiaomi/` prefix. Token Plan models use the `xiaomi-token-plan/` prefix.
     </Note>
 
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If models do not appear, confirm `XIAOMI_API_KEY` is set and valid.
+    - If models do not appear, confirm the relevant key env var or auth profile is present and valid.
+    - For Token Plan, confirm the chosen onboarding region matches the subscription page base URL and that the key starts with `tp-`.
     - When the Gateway runs as a daemon, ensure the key is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 
     <Warning>

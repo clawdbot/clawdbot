@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -6,7 +7,6 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../../auto-reply/heartbeat-tool-response.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";

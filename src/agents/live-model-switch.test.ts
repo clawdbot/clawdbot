@@ -286,8 +286,8 @@ describe("live model switch", () => {
   it("strips duplicated provider prefixes from persisted overrides", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
-        providerOverride: "openai-codex",
-        modelOverride: "openai-codex/gpt-5.4",
+        providerOverride: "openai",
+        modelOverride: "openai/gpt-5.4",
       },
     });
 
@@ -302,7 +302,7 @@ describe("live model switch", () => {
         defaultModel: "claude-opus-4-6",
       }),
     ).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: undefined,
       authProfileIdSource: undefined,
@@ -361,13 +361,13 @@ describe("live model switch", () => {
     expect(state.embeddedAgentModuleImported).toBe(false);
   });
 
-  it("treats active openai-codex as an already-applied openai runtime promotion", async () => {
+  it("treats active openai as an already-applied openai runtime promotion", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
     expect(
       hasDifferentLiveSessionModelSelection(
         {
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
         },
         {
@@ -380,19 +380,6 @@ describe("live model switch", () => {
 
   it("does not suppress explicit runtime provider switches with the same model", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
-
-    expect(
-      hasDifferentLiveSessionModelSelection(
-        {
-          provider: "openai",
-          model: "gpt-5.5",
-        },
-        {
-          provider: "openai-codex",
-          model: "gpt-5.5",
-        },
-      ),
-    ).toBe(true);
 
     expect(
       hasDifferentLiveSessionModelSelection(
@@ -414,7 +401,7 @@ describe("live model switch", () => {
     expect(
       hasDifferentLiveSessionModelSelection(
         {
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
         },
         {
@@ -497,6 +484,7 @@ describe("live model switch", () => {
 
       expect(result).toBeUndefined();
       expect(state.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/session-store.json", {
+        hydrateSkillPromptRefs: false,
         skipCache: true,
         clone: false,
       });
@@ -550,7 +538,7 @@ describe("live model switch", () => {
       expect(result).toBeUndefined();
     });
 
-    it("does not trigger switch when runtime promotes openai to openai-codex", async () => {
+    it("does not trigger switch when runtime promotes openai to openai", async () => {
       const sessionEntry = {
         liveModelSwitchPending: true,
         providerOverride: "openai",
@@ -562,7 +550,7 @@ describe("live model switch", () => {
 
       const result = shouldSwitchToLiveModel(
         makeShouldSwitchParams({
-          currentProvider: "openai-codex",
+          currentProvider: "openai",
           currentModel: "gpt-5.5",
           defaultProvider: "openai",
           defaultModel: "gpt-5.5",

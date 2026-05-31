@@ -69,7 +69,7 @@ function makeCrossProviderFallbackConfig() {
     agents: {
       defaults: {
         model: {
-          primary: "openai-codex/gpt-5.4",
+          primary: "openai/gpt-5.4",
           fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
         },
       },
@@ -108,7 +108,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You have hit your ChatGPT usage limit (plus plan).",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           content: [],
         }),
@@ -181,7 +181,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           content: [],
         }),
@@ -213,7 +213,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           content: [],
         }),

@@ -11,7 +11,59 @@ import {
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 function extractMediaPathFromText(text: string | undefined): string | undefined {
-  return /MEDIA:([^\n]+)/.exec(text ?? "")?.[1]?.trim();
+  if (!text) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const details = (parsed as Record<string, unknown>).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return undefined;
+  }
+  const media = (details as Record<string, unknown>).media;
+  if (!media || typeof media !== "object" || Array.isArray(media)) {
+    return undefined;
+  }
+  return readFirstMediaPath(media);
+}
+
+function readFirstMediaPath(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const media = value as Record<string, unknown>;
+  for (const key of ["mediaUrl", "path", "filePath"] as const) {
+    const candidate = media[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  const mediaUrls = media.mediaUrls;
+  if (Array.isArray(mediaUrls)) {
+    const mediaUrl = mediaUrls.find(
+      (candidate) => typeof candidate === "string" && candidate.trim(),
+    );
+    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+      return mediaUrl.trim();
+    }
+  }
+  const attachments = media.attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      const mediaPath = readFirstMediaPath(attachment);
+      if (mediaPath) {
+        return mediaPath;
+      }
+    }
+  }
+  return undefined;
 }
 
 function readPluginAllow(config: Record<string, unknown>) {

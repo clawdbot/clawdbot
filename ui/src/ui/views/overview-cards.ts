@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
@@ -224,14 +225,12 @@ export function renderOverviewCards(props: OverviewCardsProps) {
     // Hidden for windows with plenty of headroom to keep the hint readable;
     // shown when a window is below 25% to signal urgency.
     const formatReset = (resetAt: number | undefined, pctLeft: number): string | null => {
-      if (!resetAt || !Number.isFinite(resetAt) || pctLeft >= 25) {
+      const timestampMs = asDateTimestampMs(resetAt);
+      if (timestampMs === undefined || pctLeft >= 25) {
         return null;
       }
-      const d = new Date(resetAt);
-      if (Number.isNaN(d.getTime())) {
-        return null;
-      }
-      const withinADay = resetAt - Date.now() < 24 * 60 * 60 * 1000;
+      const d = new Date(timestampMs);
+      const withinADay = timestampMs - Date.now() < 24 * 60 * 60 * 1000;
       return withinADay
         ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
         : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });

@@ -5,7 +5,7 @@
   "description": "OpenClaw Google plugin",
   "type": "module",
   "dependencies": {
-    "@google/genai": "2.6.0",
+    "@google/genai": "2.7.0",
     "google-auth-library": "10.6.2"
   },
   "devDependencies": {

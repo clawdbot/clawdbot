@@ -429,6 +429,14 @@ export const streamOpenAICompletions: StreamFunction<
         throw new Error("Stream ended without finish_reason");
       }
 
+      const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+      if (output.stopReason === "toolUse" && !hasToolCalls) {
+        output.stopReason = "stop";
+      }
+      if (hasToolCalls && output.stopReason !== "toolUse") {
+        output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
@@ -579,15 +587,20 @@ function buildParams(
   }
 
   if (options?.maxTokens) {
+    const maxTokens = clampOpenAICompletionsMaxTokens(model, options.maxTokens);
     if (compat.maxTokensField === "max_tokens") {
-      params.max_tokens = options.maxTokens;
+      params.max_tokens = maxTokens;
     } else {
-      params.max_completion_tokens = options.maxTokens;
+      params.max_completion_tokens = maxTokens;
     }
   }
 
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
+  }
+
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
   }
 
   if (context.tools && context.tools.length > 0) {
@@ -609,12 +622,12 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = !!options?.reasoningEffort;
+    params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-    params.enable_thinking = !!options?.reasoningEffort;
+    params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
     params.chat_template_kwargs = {
-      enable_thinking: !!options?.reasoningEffort,
+      enable_thinking: Boolean(options?.reasoningEffort),
       preserve_thinking: true,
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
@@ -638,7 +651,7 @@ function buildParams(
       reasoning?: { enabled: boolean };
       reasoning_effort?: string;
     };
-    togetherParams.reasoning = { enabled: !!options?.reasoningEffort };
+    togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
       togetherParams.reasoning_effort =
         model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
@@ -675,6 +688,19 @@ function buildParams(
   }
 
   return params;
+}
+
+function clampOpenAICompletionsMaxTokens(
+  model: Model<"openai-completions">,
+  requestedMaxTokens: number,
+): number {
+  const modelMaxTokens =
+    typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens) && model.maxTokens > 0
+      ? Math.floor(model.maxTokens)
+      : undefined;
+  return modelMaxTokens === undefined || requestedMaxTokens <= modelMaxTokens
+    ? requestedMaxTokens
+    : modelMaxTokens;
 }
 
 function getCompatCacheControl(
@@ -802,7 +828,7 @@ export function convertMessages(
   const normalizeToolCallId = (id: string): string => {
     // Handle pipe-separated IDs from OpenAI Responses API
     // Format: {call_id}|{id} where {id} can be 400+ chars with special chars (+, /, =)
-    // These come from providers like github-copilot, openai-codex, opencode
+    // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
       const [callId] = id.split("|");
@@ -823,7 +849,7 @@ export function convertMessages(
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    params.push({ role: role, content: sanitizeSurrogates(context.systemPrompt) });
+    params.push({ role, content: sanitizeSurrogates(context.systemPrompt) });
   }
 
   let lastRole: string | null = null;

@@ -3704,7 +3704,7 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     });
     const handler = createFeishuMessageReceiveHandler({
       cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
-      core,
+      channelRuntime: core.channel,
       accountId: "receive-media-dedupe",
       chatHistories: new Map(),
       handleMessage,

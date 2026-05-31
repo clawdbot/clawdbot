@@ -1,10 +1,10 @@
-import { normalizeChatType } from "../channels/chat-type.js";
-import type { SessionChatType, SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../channels/chat-type.js";
+import type { SessionChatType, SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";

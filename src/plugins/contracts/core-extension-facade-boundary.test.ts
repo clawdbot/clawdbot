@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
@@ -69,6 +69,21 @@ function toRepoRelative(filePath: string): string {
 }
 
 describe("core extension facade boundary", () => {
+  let ollamaCoreImportViolations: string[];
+
+  beforeAll(() => {
+    ollamaCoreImportViolations = [];
+    for (const filePath of collectSourceFiles(srcRoot)) {
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const match of source.matchAll(importSpecifierPattern)) {
+        const specifier = match[1] ?? match[2];
+        if (specifier?.includes("plugin-sdk/ollama")) {
+          ollamaCoreImportViolations.push(`${toRepoRelative(filePath)} -> ${specifier}`);
+        }
+      }
+    }
+  });
+
   it("lists core facade boundary sources from git without walking src", () => {
     expectNoReaddirSyncDuring(() => {
       const files = collectSourceFiles(srcRoot);
@@ -85,18 +100,7 @@ describe("core extension facade boundary", () => {
   });
 
   it("does not import Ollama plugin facades from core code", () => {
-    const violations: string[] = [];
-    for (const filePath of collectSourceFiles(srcRoot)) {
-      const source = fs.readFileSync(filePath, "utf8");
-      for (const match of source.matchAll(importSpecifierPattern)) {
-        const specifier = match[1] ?? match[2];
-        if (specifier?.includes("plugin-sdk/ollama")) {
-          violations.push(`${toRepoRelative(filePath)} -> ${specifier}`);
-        }
-      }
-    }
-
-    expect(violations).toStrictEqual([]);
+    expect(ollamaCoreImportViolations).toStrictEqual([]);
   });
 
   it("keeps generic core fixtures free of bundled provider names", () => {

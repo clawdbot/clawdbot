@@ -135,9 +135,9 @@ describe("generateConversationLabel", () => {
   });
 
   it("omits temperature for Codex Responses simple completions", async () => {
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai-codex", model: "gpt-5.5" });
+    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     resolveModelAsync.mockResolvedValue({
-      model: { provider: "openai-codex", api: "openai-codex-responses" },
+      model: { provider: "openai", api: "openai-chatgpt-responses" },
       authStorage: {},
       modelRegistry: {},
     });

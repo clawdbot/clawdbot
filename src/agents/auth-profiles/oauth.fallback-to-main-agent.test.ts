@@ -15,7 +15,7 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
-  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
+  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai" }],
 }));
 
 vi.mock("../cli-credentials.js", () => ({

@@ -112,20 +112,25 @@ describe("probeGateway auth integration", () => {
     expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
   });
 
-  it("keeps detail RPCs available for local authenticated probes with cached device auth", async () => {
-    const token = requireGatewayToken();
-    await seedCachedOperatorToken(["operator.read"]);
+  describe("with cached device auth", () => {
+    let cachedProbeResult: Awaited<ReturnType<typeof probeGateway>>;
 
-    const result = await probeGateway({
-      url: `ws://127.0.0.1:${gatewayHarness.port}`,
-      auth: { token },
-      timeoutMs: 5_000,
+    beforeAll(async () => {
+      const token = requireGatewayToken();
+      await seedCachedOperatorToken(["operator.read"]);
+      cachedProbeResult = await probeGateway({
+        url: `ws://127.0.0.1:${gatewayHarness.port}`,
+        auth: { token },
+        timeoutMs: 5_000,
+      });
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.error).toBeNull();
-    expectRecord(result.health, "probe health");
-    expectRecord(result.status, "probe status");
-    expectRecord(result.configSnapshot, "probe config snapshot");
+    it("keeps detail RPCs available for local authenticated probes with cached device auth", async () => {
+      expect(cachedProbeResult.ok).toBe(true);
+      expect(cachedProbeResult.error).toBeNull();
+      expectRecord(cachedProbeResult.health, "probe health");
+      expectRecord(cachedProbeResult.status, "probe status");
+      expectRecord(cachedProbeResult.configSnapshot, "probe config snapshot");
+    });
   });
 });

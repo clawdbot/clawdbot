@@ -38,7 +38,6 @@ function createAutoAbortController() {
   const abortController = new AbortController();
   streamMock.mockImplementation(async () => {
     abortController.abort();
-    return;
   });
   return abortController;
 }

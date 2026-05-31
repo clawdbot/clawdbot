@@ -10,9 +10,9 @@ coverage:
     - runtime.codex-plugin.auth
   secondary:
     - auth-profiles.provider-selection
-objective: Verify mixed openai-codex OAuth and openai API-key profile stores select the Codex OAuth profile for Codex app-server turns.
+objective: Verify mixed openai OAuth and openai API-key profile stores select the Codex OAuth profile for Codex app-server turns.
 successCriteria:
-  - The selected auth profile id is openai-codex:qa-oauth.
+  - The selected auth profile id is openai:qa-oauth.
   - The openai:media-api API-key profile is present but not selected.
   - The fixture rejects the residual provider mismatch covered by issue #78499.
 docsRefs:
@@ -24,7 +24,7 @@ execution:
   kind: flow
   summary: Exercise the auth-profile fixture for mixed OpenAI API-key and Codex OAuth stores.
   config:
-    selectedProfileId: openai-codex:qa-oauth
+    selectedProfileId: openai:qa-oauth
     rejectedProfileId: openai:media-api
 ```
 
@@ -53,7 +53,7 @@ steps:
                   expr: "`expected ready Codex auth selection, got ${JSON.stringify(selection)}`"
             - assert:
                 expr: "selection.profileId === config.selectedProfileId"
-                message: mixed profiles must select openai-codex OAuth
+                message: mixed profiles must select openai OAuth
             - assert:
                 expr: "selection.profileId !== config.rejectedProfileId"
                 message: codex profile must not equal openai api-key profile

@@ -1,4 +1,4 @@
-import { stripAnsi } from "../../../../src/terminal/ansi.js";
+import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";

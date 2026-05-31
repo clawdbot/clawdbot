@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron } from "croner";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
@@ -93,11 +93,11 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   if (!cron) {
     return undefined;
   }
-  let next = cron.nextRun(new Date(nowMs));
+  const next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
-  let nextMs = next.getTime();
+  const nextMs = next.getTime();
   if (!Number.isFinite(nextMs)) {
     return undefined;
   }

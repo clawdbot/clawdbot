@@ -125,17 +125,15 @@ describe("Hermes migration provider secret write failures", () => {
         chatgpt_plan_type: "plus",
       },
     });
+    await writeFile(path.join(source, "auth.json"), "{}");
+    const opencodeAuthPath = path.join(root, ".local", "share", "opencode", "auth.json");
     await writeFile(
-      path.join(source, "auth.json"),
+      opencodeAuthPath,
       JSON.stringify({
-        providers: {
-          "openai-codex": {
-            last_refresh: new Date().toISOString(),
-            tokens: {
-              access_token: accessToken,
-              refresh_token: "refresh-fail-token",
-            },
-          },
+        openai: {
+          type: "oauth",
+          access: accessToken,
+          refresh: "refresh-fail-token",
         },
       }),
     );
@@ -152,18 +150,18 @@ describe("Hermes migration provider secret write failures", () => {
 
     expect(result.items).toEqual([
       expect.objectContaining({
-        id: "auth:openai-codex",
+        id: "auth:openai",
         kind: "auth",
         action: "create",
-        source: path.join(source, "auth.json"),
-        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai-codex:account-acct_fail`,
+        source: opencodeAuthPath,
+        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai:account-acct_fail`,
         status: "error",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
         details: expect.objectContaining({
-          provider: "openai-codex",
-          profileId: "openai-codex:account-acct_fail",
-          sourceProfileId: "openai-codex:account-acct_fail",
+          provider: "openai",
+          profileId: "openai:account-acct_fail",
+          sourceProfileId: "openai:account-acct_fail",
         }),
       }),
     ]);

@@ -1,5 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeUniqueTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";

@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChannelId } from "../channels/registry.js";
 import {
   resolveLegacyOutboundSendDepKeys,
   type OutboundSendDeps,
 } from "../infra/outbound/send-deps.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * CLI-internal send function sources, keyed by channel ID.

@@ -532,9 +532,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         content: [
           { type: "text", text: "Process List" },
           {
@@ -583,6 +583,37 @@ describe("repairSessionFileIfNeeded", () => {
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
   });
 
+  it("repairs missing tool results in legacy OpenAI ChatGPT transcripts", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const legacyProvider = ["openai", "codex"].join("-");
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-legacy-process",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: legacyProvider,
+        model: "gpt-5.5",
+        api: `${legacyProvider}-responses`,
+        content: [{ type: "toolCall", id: "call_process|fc_1", name: "process", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.insertedToolResults).toBe(1);
+    const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
+    const inserted = JSON.parse(lines[3]);
+    expect(inserted.message.role).toBe("toolResult");
+    expect(inserted.message.toolCallId).toBe("call_process|fc_1");
+  });
+
   it("does not duplicate code-mode tool results that are already persisted", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
@@ -593,9 +624,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         content: [{ type: "toolCall", id: "call_exec|fc_1", name: "exec", arguments: {} }],
         stopReason: "toolUse",
       },
@@ -636,9 +667,9 @@ describe("repairSessionFileIfNeeded", () => {
         timestamp: new Date().toISOString(),
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           content: [
             { type: "toolCall", id: `call_${stopReason}|fc_1`, name: "exec", arguments: {} },
           ],

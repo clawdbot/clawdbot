@@ -218,7 +218,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",
       cwd: tmpDir,
-      authProfileId: "openai-codex:stale",
+      authProfileId: "openai:stale",
       dynamicToolsFingerprint: "[]",
     });
     const params = createParams(sessionFile, tmpDir);

@@ -944,7 +944,7 @@ describe("runSetupWizard", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
             },
           },
         },
@@ -958,7 +958,7 @@ describe("runSetupWizard", () => {
       {
         acceptRisk: true,
         flow: "quickstart",
-        authChoice: "openai-codex-api-key",
+        authChoice: "openai-chatgpt-api-key",
         openaiApiKey: "sk-flag-value",
         installDaemon: false,
         skipChannels: true,
@@ -973,7 +973,7 @@ describe("runSetupWizard", () => {
     );
 
     expect(applyAuthChoice).toHaveBeenCalledTimes(1);
-    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai-codex auth choice");
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai auth choice");
     const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
     expect(opts.openaiApiKey).toBe("sk-flag-value");
   });
@@ -1238,13 +1238,13 @@ describe("runSetupWizard", () => {
     resolvePluginProvidersRuntime.mockClear();
     resolveManifestProviderAuthChoice.mockReturnValue({
       pluginId: "openai",
-      providerId: "openai-codex",
+      providerId: "openai",
       methodId: "oauth",
-      choiceId: "openai-codex",
+      choiceId: "openai",
       choiceLabel: "ChatGPT/Codex Browser Login",
     });
     resolvePluginSetupProvider.mockReturnValue({
-      id: "openai-codex",
+      id: "openai",
       label: "OpenAI Codex",
       auth: [
         {
@@ -1260,7 +1260,7 @@ describe("runSetupWizard", () => {
         },
       ],
     });
-    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai");
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
@@ -1281,7 +1281,7 @@ describe("runSetupWizard", () => {
     expectRecordFields(
       getMockCallArg(resolvePluginSetupProvider, 0, 0, "plugin setup provider"),
       {
-        provider: "openai-codex",
+        provider: "openai",
         pluginIds: ["openai"],
       },
       "plugin setup provider params",

@@ -126,7 +126,7 @@ export const llmTaskToolDefinition = {
       Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
     ),
     provider: Type.Optional(
-      Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
+      Type.String({ description: "Provider override (e.g. openai, anthropic)." }),
     ),
     model: Type.Optional(Type.String({ description: "Model id override." })),
     thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
@@ -147,7 +147,7 @@ function supportsThinkingPolicyLevel(
   policy: ThinkingPolicy,
   level: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]>,
 ): boolean {
-  return !!level && policy.levels.some((entry) => entry.id === level);
+  return Boolean(level) && policy.levels.some((entry) => entry.id === level);
 }
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {

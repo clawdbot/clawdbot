@@ -189,7 +189,7 @@ function resolveEffectiveExecHost(params: {
 
 function readRuntimeSessionEntryBestEffort(sessionKey: string): SessionEntry | undefined {
   try {
-    return getSessionEntry({ sessionKey });
+    return getSessionEntry({ sessionKey, hydrateSkillPromptRefs: false });
   } catch {
     return undefined;
   }

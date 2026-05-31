@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
 let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;

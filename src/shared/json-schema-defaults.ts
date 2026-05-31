@@ -571,7 +571,7 @@ function findJsonSchemaNodeError(
   if (!isRecord(schema)) {
     return `${path}: schema must be an object or boolean`;
   }
-  if (Object.prototype.hasOwnProperty.call(schema, "type")) {
+  if (Object.hasOwn(schema, "type")) {
     const typeError = validateTypeKeyword(schema.type, path);
     if (typeError) {
       return typeError;
@@ -581,7 +581,7 @@ function findJsonSchemaNodeError(
     if (typeof schema.nullable !== "boolean") {
       return `${path}.nullable: expected boolean`;
     }
-    if (!Object.prototype.hasOwnProperty.call(schema, "type")) {
+    if (!Object.hasOwn(schema, "type")) {
       return `${path}.nullable: expected type`;
     }
   }
@@ -712,7 +712,7 @@ function cloneDefault<T>(value: T): T {
 }
 
 function getDefault(schema: JsonSchemaValue): unknown {
-  if (!isRecord(schema) || !Object.prototype.hasOwnProperty.call(schema, "default")) {
+  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
     return undefined;
   }
   return cloneDefault(schema.default);
@@ -917,7 +917,7 @@ function applyObjectPropertyDefaults(
   if (isRecord(schema.additionalProperties)) {
     const additionalSchema = schema.additionalProperties as JsonSchemaValue;
     for (const key of Object.keys(value)) {
-      if (Object.prototype.hasOwnProperty.call(properties, key) || patternMatchedKeys.has(key)) {
+      if (Object.hasOwn(properties, key) || patternMatchedKeys.has(key)) {
         continue;
       }
       value[key] = applySchemaDefaults(
@@ -944,10 +944,7 @@ function applyObjectDependencyDefaults(
   let nextValue = value;
   if (isRecord(schema.dependencies)) {
     for (const [key, dependencySchema] of Object.entries(schema.dependencies)) {
-      if (
-        !Object.prototype.hasOwnProperty.call(nextValue, key) ||
-        isStringArray(dependencySchema)
-      ) {
+      if (!Object.hasOwn(nextValue, key) || isStringArray(dependencySchema)) {
         continue;
       }
       nextValue = applySchemaDefaults(
@@ -962,7 +959,7 @@ function applyObjectDependencyDefaults(
   }
   if (isRecord(schema.dependentSchemas)) {
     for (const [key, dependentSchema] of Object.entries(schema.dependentSchemas)) {
-      if (!Object.prototype.hasOwnProperty.call(nextValue, key)) {
+      if (!Object.hasOwn(nextValue, key)) {
         continue;
       }
       nextValue = applySchemaDefaults(
@@ -1128,12 +1125,13 @@ function applyObjectPropertyAndDependencyDefaults(
 
 function applySchemaDefaults(
   schema: JsonSchemaValue,
-  value: unknown,
+  valueInput: unknown,
   root = schema,
   resolvingRefs = new Set<string>(),
   resourceRoot = root,
   resourceBaseId?: string,
 ): unknown {
+  let value = valueInput;
   if (value === undefined) {
     const defaultValue = getDefault(schema);
     if (defaultValue !== undefined) {

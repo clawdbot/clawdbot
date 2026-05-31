@@ -1,5 +1,7 @@
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -35,14 +37,12 @@ import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
   isUnsafeGatewayTailscaleNoAuth,
 } from "../shared/gateway-tailscale-auth-policy.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
@@ -50,6 +50,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+const LEGACY_CHATGPT_PROVIDER_ID = ["openai", "codex"].join("-");
+const LEGACY_CHATGPT_RESPONSES_API = `${LEGACY_CHATGPT_PROVIDER_ID}-responses`;
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -66,14 +70,79 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+function normalizeLegacyOpenAIProviderForValidation(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.models) || !isRecord(raw.models.providers)) {
     return raw;
   }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
+  let providersChanged = false;
+  const providers = { ...raw.models.providers };
+  const normalizeProviderConfig = (providerConfig: unknown): unknown => {
+    if (!isRecord(providerConfig)) {
+      return providerConfig;
+    }
+    let providerChanged = false;
+    const nextProvider = { ...providerConfig };
+    if (nextProvider.api === LEGACY_CHATGPT_RESPONSES_API) {
+      nextProvider.api = OPENAI_CHATGPT_RESPONSES_API;
+      providerChanged = true;
+    }
+    if (Array.isArray(nextProvider.models)) {
+      const nextModels = nextProvider.models.map((model) => {
+        if (!isRecord(model) || model.api !== LEGACY_CHATGPT_RESPONSES_API) {
+          return model;
+        }
+        providerChanged = true;
+        return { ...model, api: OPENAI_CHATGPT_RESPONSES_API };
+      });
+      if (providerChanged) {
+        nextProvider.models = nextModels;
+      }
+    }
+    return providerChanged ? nextProvider : providerConfig;
+  };
+
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const normalizedProvider = normalizeLowercaseStringOrEmpty(providerId);
+    const normalizedConfig = normalizeProviderConfig(providerConfig);
+    if (normalizedProvider !== LEGACY_CHATGPT_PROVIDER_ID) {
+      if (normalizedConfig !== providerConfig) {
+        providers[providerId] = normalizedConfig;
+        providersChanged = true;
+      }
+      continue;
+    }
+    if (!Object.hasOwn(providers, OPENAI_PROVIDER_ID)) {
+      providers[OPENAI_PROVIDER_ID] = normalizedConfig;
+    }
+    delete providers[providerId];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return raw;
+  }
   return {
     ...raw,
+    models: {
+      ...raw.models,
+      providers,
+    },
+  };
+}
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  const normalizedRaw = normalizeLegacyOpenAIProviderForValidation(raw);
+  if (
+    !isRecord(normalizedRaw) ||
+    !isRecord(normalizedRaw.commands) ||
+    !Object.hasOwn(normalizedRaw.commands, "modelsWrite")
+  ) {
+    return normalizedRaw;
+  }
+  const commands = { ...normalizedRaw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...normalizedRaw,
     commands,
   };
 }
@@ -240,7 +309,7 @@ function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesC
     return { values: [], incomplete: false, hasValues: false };
   }
 
-  if (Object.prototype.hasOwnProperty.call(node, "const")) {
+  if (Object.hasOwn(node, "const")) {
     return { values: [node.const], incomplete: false, hasValues: true };
   }
 
@@ -303,7 +372,7 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
   }
   const issues: ConfigValidationIssue[] = [];
   for (const [channelId, schema] of bundledChannelSchemaById) {
-    if (!Object.prototype.hasOwnProperty.call(config.channels, channelId)) {
+    if (!Object.hasOwn(config.channels, channelId)) {
       continue;
     }
     const result = validateJsonSchemaValue({
@@ -1048,8 +1117,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  const hasExplicitPluginsConfig =
-    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
@@ -1804,8 +1872,7 @@ function validateConfigObjectWithPluginsBase(
 
   // The default memory slot is inferred; only a user-configured slot should block startup.
   const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot =
-    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
+  const hasExplicitMemorySlot = pluginSlots !== undefined && Object.hasOwn(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
   if (
     hasExplicitMemorySlot &&

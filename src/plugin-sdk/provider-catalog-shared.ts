@@ -4,17 +4,21 @@
 // without recursing through provider-specific facades.
 
 import { createHash } from "node:crypto";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
-import { findNormalizedProviderKey } from "../agents/provider-id.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeModelCatalog } from "../model-catalog/normalize.js";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type {
   ModelCatalogCost,
   ModelCatalogModel,
   ModelCatalogTieredCost,
-} from "../model-catalog/types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../packages/normalization-core/src/number-coercion.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -51,18 +55,24 @@ export async function getCachedLiveCatalogValue<T>(params: {
   ttlMs?: number;
   now?: () => number;
 }): Promise<T> {
-  const now = params.now?.() ?? Date.now();
+  const rawNow = params.now?.() ?? Date.now();
   const ttlMs = params.ttlMs ?? 30_000;
   const key = buildLiveCatalogCacheKey(params.keyParts);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
-  if (existing && existing.expiresAt > now) {
-    return await existing.value;
+  if (existing) {
+    if (isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })) {
+      return await existing.value;
+    }
+    liveCatalogCache.delete(key);
   }
   const value = params.load();
-  liveCatalogCache.set(key, {
-    expiresAt: now + ttlMs,
-    value,
-  });
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (expiresAt !== undefined) {
+    liveCatalogCache.set(key, {
+      expiresAt,
+      value,
+    });
+  }
   try {
     return await value;
   } catch (err) {

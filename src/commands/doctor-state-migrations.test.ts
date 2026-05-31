@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
@@ -236,6 +236,7 @@ async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenCl
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
+  setMaxPluginStateEntriesPerPluginForTests();
   resetPluginStateStoreForTests();
   mockedChannelMigrationPlans.plans = [];
   await Promise.all(
@@ -531,7 +532,14 @@ function ensureCredentialsDir(root: string) {
 }
 
 describe("doctor legacy state migrations", () => {
-  it("migrates legacy sessions into agents/<id>/sessions", async () => {
+  let migratedLegacySessionsCase: {
+    result: Awaited<ReturnType<typeof runLegacyStateMigrations>>;
+    targetDir: string;
+    legacySessionsDir: string;
+    store: Record<string, { sessionId: string }>;
+  };
+
+  beforeAll(async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};
     const legacySessionsDir = writeLegacySessionsFixture({
@@ -557,16 +565,21 @@ describe("doctor legacy state migrations", () => {
       detected,
       now: () => 123,
     });
-
-    expect(result.warnings).toStrictEqual([]);
     const targetDir = path.join(root, "agents", "main", "sessions");
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string }>;
+
+    migratedLegacySessionsCase = { result, targetDir, legacySessionsDir, store };
+  });
+
+  it("migrates legacy sessions into agents/<id>/sessions", () => {
+    expect(migratedLegacySessionsCase.result.warnings).toStrictEqual([]);
+    const { targetDir, legacySessionsDir, store } = migratedLegacySessionsCase;
     expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(targetDir, "b.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(false);
 
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:main"]?.sessionId).toBe("b");
     expect(store["agent:main:+1555"]?.sessionId).toBe("a");
     expect(store["agent:main:+1666"]?.sessionId).toBe("b");
@@ -867,8 +880,62 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("replaces existing plugin-state entries when a channel import plan asks for it", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test replace cache",
+        sourcePath,
+        targetPath: "plugin state:test.replace-cache",
+        pluginId: "telegram",
+        namespace: "test.replace-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "existing", value: { offset: 20 } }],
+        shouldReplaceExistingEntry: (params: { existingValue: unknown; incomingValue: unknown }) =>
+          (params.incomingValue as { offset: number }).offset >
+          (params.existingValue as { offset: number }).offset,
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ offset: number }>("telegram", {
+        namespace: "test.replace-cache",
+        maxEntries: 4,
+      });
+      await store.register("existing", { offset: 10 });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 Test replace cache entry → plugin state");
+    expect(result.changes).toContain(
+      `Archived Test replace cache legacy source → ${sourcePath}.migrated`,
+    );
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ offset: number }>("telegram", {
+        namespace: "test.replace-cache",
+        maxEntries: 4,
+      });
+      expect(await store.lookup("existing")).toStrictEqual({ offset: 20 });
+    });
+  });
+
   it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
     const root = await makeTempRoot();
+    const maxPluginStateEntries = 40;
+    setMaxPluginStateEntriesPerPluginForTests(maxPluginStateEntries);
     const sourcePath = path.join(root, "legacy-cache.json");
     fs.writeFileSync(sourcePath, "legacy", "utf-8");
     mockedChannelMigrationPlans.plans = [
@@ -879,7 +946,7 @@ describe("doctor legacy state migrations", () => {
         targetPath: "plugin state:test.capped-cache",
         pluginId: "telegram",
         namespace: "test.capped-cache",
-        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+        maxEntries: maxPluginStateEntries,
         scopeKey: "scope",
         cleanupSource: "rename",
         readEntries: () => [
@@ -891,7 +958,7 @@ describe("doctor legacy state migrations", () => {
 
     await withStateDir(root, async () => {
       seedPluginStateEntriesForTests(
-        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 1 }, (_, index) => ({
+        Array.from({ length: maxPluginStateEntries - 1 }, (_, index) => ({
           pluginId: "telegram",
           namespace: "test.sibling-cache",
           key: `sibling-${index}`,
@@ -908,7 +975,7 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrations({ detected });
 
     expect(result.warnings).toStrictEqual([
-      "Skipped migrating Test capped cache because plugin state has room for 1 of 2 missing entries; left legacy source in place",
+      "Stopped migrating Test capped cache because plugin state cap evicted scope:first; left legacy source in place",
     ]);
     expect(result.changes).not.toContain("Migrated 2 Test capped cache entries → plugin state");
     expect(result.changes).not.toContain(
@@ -920,7 +987,7 @@ describe("doctor legacy state migrations", () => {
     await withStateDir(root, async () => {
       const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
         namespace: "test.capped-cache",
-        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+        maxEntries: maxPluginStateEntries,
       });
       const valuesByKey = new Map(
         (await store.entries()).map(({ key, value }) => [key, value.body]),

@@ -1,4 +1,4 @@
-import type { RenderTableOptions } from "../../terminal/table.js";
+import type { RenderTableOptions } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "./format.js";
 import type { StatusReportSection } from "./text-report.js";
 

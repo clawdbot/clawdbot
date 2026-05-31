@@ -77,6 +77,31 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
+  it("reuses the session record cache while sessions.json is unchanged", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    await writeSessionRecord(sessionFile, { totalTokens: 12_000 });
+    const sessionsJson = path.join(path.dirname(sessionFile), "sessions.json");
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    for (let i = 0; i < 2; i += 1) {
+      const binding = await rotateOversizedCodexAppServerStartupBinding({
+        binding: await readCodexAppServerBinding(sessionFile),
+        sessionFile,
+        agentDir,
+        config: undefined,
+      });
+      expect(binding?.threadId).toBe("thread-existing");
+    }
+
+    const sessionStoreReads = readFileSpy.mock.calls.filter(
+      ([file]) => typeof file === "string" && file === sessionsJson,
+    );
+    expect(sessionStoreReads).toHaveLength(1);
+  });
+
   it("checks native rollout token pressure under default compaction config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

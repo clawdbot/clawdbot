@@ -27,7 +27,7 @@ export async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
     respond: (ok, payload, error) => {
       response = { ok, payload, error };
     },
-    context: { getRuntimeConfig: getRuntimeConfig } as never,
+    context: { getRuntimeConfig } as never,
   });
   return response;
 }

@@ -1,8 +1,8 @@
-import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 

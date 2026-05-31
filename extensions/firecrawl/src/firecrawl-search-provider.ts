@@ -1,5 +1,5 @@
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { type WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { buildFirecrawlWebSearchProviderBase } from "../web-search-shared.js";
 
 type FirecrawlClientModule = typeof import("./firecrawl-client.js");

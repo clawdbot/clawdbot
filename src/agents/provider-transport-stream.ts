@@ -13,7 +13,7 @@ import type { StreamFn } from "./runtime/index.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "openai-completions",
   "azure-openai-responses",
   "anthropic-messages",
@@ -22,7 +22,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
-  "openai-codex-responses": "openclaw-openai-responses-transport",
+  "openai-chatgpt-responses": "openclaw-openai-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
@@ -79,7 +79,7 @@ function createSupportedTransportStreamFn(
 ): StreamFn | undefined {
   switch (model.api) {
     case "openai-responses":
-    case "openai-codex-responses":
+    case "openai-chatgpt-responses":
       return createOpenAIResponsesTransportStreamFn();
     case "openai-completions":
       return createOpenAICompletionsTransportStreamFn();

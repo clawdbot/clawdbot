@@ -54,11 +54,8 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
-let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
-let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
-let clearSlackSendQueuesForTest: typeof import("./send.js").clearSlackSendQueuesForTest;
-({ sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
-  await import("./send.js"));
+const { sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
+  await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {

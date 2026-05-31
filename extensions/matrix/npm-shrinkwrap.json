@@ -8,13 +8,13 @@
       "name": "@openclaw/matrix",
       "version": "2026.5.30",
       "dependencies": {
-        "@matrix-org/matrix-sdk-crypto-nodejs": "0.4.0",
+        "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.0",
         "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
         "fake-indexeddb": "6.2.5",
         "markdown-it": "14.2.0",
         "matrix-js-sdk": "41.6.0",
         "music-metadata": "11.12.3",
-        "typebox": "1.1.38",
+        "typebox": "1.1.39",
         "zod": "4.4.3"
       },
       "peerDependencies": {
@@ -27,9 +27,9 @@
       }
     },
     "node_modules/@babel/runtime": {
-      "version": "7.29.2",
-      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.2.tgz",
-      "integrity": "sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==",
+      "version": "7.29.7",
+      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz",
+      "integrity": "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==",
       "license": "MIT",
       "engines": {
         "node": ">=6.9.0"
@@ -46,9 +46,9 @@
       }
     },
     "node_modules/@matrix-org/matrix-sdk-crypto-nodejs": {
-      "version": "0.4.0",
-      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-nodejs/-/matrix-sdk-crypto-nodejs-0.4.0.tgz",
-      "integrity": "sha512-+qqgpn39XFSbsD0dFjssGO9vHEP7sTyfs8yTpt8vuqWpUpF20QMwpCZi0jpYw7GxjErNTsMshopuo8677DfGEA==",
+      "version": "0.6.0",
+      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-nodejs/-/matrix-sdk-crypto-nodejs-0.6.0.tgz",
+      "integrity": "sha512-AndGryzkDtFbaDyPBAQ2B4pUhaA/q4HJf3wgiGpPa/70DsdY1Z3R5Wn9yp+56CeHOpk61mNHz/8WDPlzrZDSJw==",
       "hasInstallScript": true,
       "license": "Apache-2.0",
       "dependencies": {
@@ -56,7 +56,7 @@
         "node-downloader-helper": "^2.1.9"
       },
       "engines": {
-        "node": ">= 22"
+        "node": ">= 24"
       }
     },
     "node_modules/@matrix-org/matrix-sdk-crypto-wasm": {
@@ -504,9 +504,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     },
     "node_modules/uc.micro": {

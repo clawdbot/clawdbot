@@ -33,7 +33,7 @@ describe("external CLI auth scope", () => {
     expect(scope?.providerIds).toContain("opencode-go");
     expect(scope?.profileIds).toEqual(["opencode-go:default"]);
     expect(scope?.providerIds).not.toContain("claude-cli");
-    expect(scope?.providerIds).not.toContain("openai-codex");
+    expect(scope?.providerIds).not.toContain("openai");
     expect(scope?.providerIds).not.toContain("minimax-portal");
   });
 
@@ -41,7 +41,7 @@ describe("external CLI auth scope", () => {
     const cfg = {
       auth: {
         order: {
-          "openai-codex": ["openai-codex:default"],
+          openai: ["openai:default"],
         },
       },
       agents: {
@@ -80,12 +80,11 @@ describe("external CLI auth scope", () => {
       "elevenlabs",
       "minimax-portal",
       "openai",
-      "openai-codex",
       "opencode-go",
       "z.ai",
     ]);
     expect(scope?.providerIds).not.toContain("claude-cli");
-    expect(scope?.profileIds).toContain("openai-codex:default");
+    expect(scope?.profileIds).toContain("openai:default");
   });
 
   it("includes a CLI provider only when it is the active runtime", () => {

@@ -244,7 +244,7 @@ describe("config view", () => {
     let busyButton = findButtonContainingText(container, "Saving…");
     let actionButtons = findActionButtons(container);
     let clearButton = requireActionButton(actionButtons.clearButton, "Clear");
-    let applyButton = requireActionButton(actionButtons.applyButton, "Apply");
+    const applyButton = requireActionButton(actionButtons.applyButton, "Apply");
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.getAttribute("aria-busy")).toBe("true");
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);

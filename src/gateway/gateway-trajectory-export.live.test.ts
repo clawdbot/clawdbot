@@ -165,7 +165,7 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
 }
 
 describeLive("gateway live trajectory export", () => {
-  let cleanup: Array<() => Promise<void>> = [];
+  const cleanup: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
     for (const step of cleanup.splice(0).toReversed()) {

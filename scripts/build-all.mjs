@@ -48,14 +48,24 @@ export const BUILD_ALL_STEPS = [
         "packages/plugin-sdk/package.json",
         "packages/llm-core/package.json",
         "packages/markdown-core/package.json",
+        "packages/media-understanding-common/package.json",
+        "packages/terminal-core/package.json",
+        "packages/model-catalog-core/package.json",
+        "packages/normalization-core/package.json",
+        "packages/web-content-core/package.json",
         "packages/memory-host-sdk/package.json",
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",
         "packages/llm-core/src",
         "packages/markdown-core/src",
+        "packages/model-catalog-core/src",
         "packages/memory-host-sdk/src",
         "packages/media-generation-core/src",
+        "packages/normalization-core/src",
+        "packages/media-understanding-common/src",
+        "packages/terminal-core/src",
+        "packages/web-content-core/src",
         "src/types",
         "src/video-generation/dashscope-compatible.ts",
         "src/video-generation/types.ts",
@@ -150,6 +160,14 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
   ],
+  qaRuntime: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+  ],
   cliStartup: [
     "tsdown",
     "check-cli-bootstrap-imports",
@@ -162,12 +180,78 @@ export const BUILD_ALL_PROFILES = {
 };
 
 export const BUILD_ALL_PROFILE_STEP_ENV = {
+  full: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+  },
   ciArtifacts: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+  },
+  gatewayWatch: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+    "runtime-postbuild": {
+      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+    },
+  },
+  qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
     },
   },
+  cliStartup: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+    "runtime-postbuild": {
+      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+    },
+  },
 };
+
+export function buildAllUsage() {
+  return [
+    "Usage: node scripts/build-all.mjs [profile]",
+    "",
+    "Builds OpenClaw artifacts for the selected profile.",
+    "",
+    "Profiles:",
+    ...Object.keys(BUILD_ALL_PROFILES).map((profile) => `  ${profile}`),
+    "",
+    "Options:",
+    "  -h, --help  Show this help.",
+  ].join("\n");
+}
+
+export function parseBuildAllArgs(argv) {
+  const args = {
+    help: false,
+    profile: "full",
+  };
+  let sawProfile = false;
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`unknown argument: ${arg}\n\n${buildAllUsage()}`);
+    } else if (sawProfile) {
+      throw new Error(`unexpected argument: ${arg}\n\n${buildAllUsage()}`);
+    } else {
+      args.profile = arg;
+      sawProfile = true;
+    }
+  }
+  if (!args.help && !BUILD_ALL_PROFILES[args.profile]) {
+    throw new Error(`Unknown build profile: ${args.profile}\n\n${buildAllUsage()}`);
+  }
+  return args;
+}
 
 export function resolveBuildAllSteps(profile = "full") {
   const labels = BUILD_ALL_PROFILES[profile];
@@ -461,44 +545,54 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  const profile = process.argv[2] ?? "full";
-  const timings = [];
-  let exitCode = 0;
-  for (const step of resolveBuildAllSteps(profile)) {
-    const startedAt = performance.now();
-    const cacheState = resolveBuildAllStepCacheState(step);
-    if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
-      restoreBuildAllStepCacheOutputs(cacheState);
-      const durationMs = performance.now() - startedAt;
-      timings.push({ label: step.label, status: "cached", durationMs });
-      console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
-      continue;
-    }
-    console.error(`[build-all] ${step.label}`);
-    const invocation = resolveBuildAllStep(step);
-    const result = spawnSync(invocation.command, invocation.args, invocation.options);
-    const durationMs = performance.now() - startedAt;
-    if (typeof result.status === "number") {
-      if (result.status !== 0) {
-        timings.push({ label: step.label, status: "failed", durationMs });
-        console.error(
-          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
-        );
-        exitCode = result.status;
-        break;
-      }
-      writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheState(step));
-      timings.push({ label: step.label, status: "ran", durationMs });
-      console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
-      continue;
-    }
-    timings.push({ label: step.label, status: "failed", durationMs });
-    console.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
-    exitCode = 1;
-    break;
+  let args;
+  try {
+    args = parseBuildAllArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
   }
-  console.error(formatBuildAllTimingSummary(timings));
-  if (exitCode !== 0) {
-    process.exit(exitCode);
+  if (args?.help) {
+    console.log(buildAllUsage());
+  } else {
+    const timings = [];
+    let exitCode = 0;
+    for (const step of resolveBuildAllSteps(args.profile)) {
+      const startedAt = performance.now();
+      const cacheState = resolveBuildAllStepCacheState(step);
+      if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
+        restoreBuildAllStepCacheOutputs(cacheState);
+        const durationMs = performance.now() - startedAt;
+        timings.push({ label: step.label, status: "cached", durationMs });
+        console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
+        continue;
+      }
+      console.error(`[build-all] ${step.label}`);
+      const invocation = resolveBuildAllStep(step);
+      const result = spawnSync(invocation.command, invocation.args, invocation.options);
+      const durationMs = performance.now() - startedAt;
+      if (typeof result.status === "number") {
+        if (result.status !== 0) {
+          timings.push({ label: step.label, status: "failed", durationMs });
+          console.error(
+            `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
+          );
+          exitCode = result.status;
+          break;
+        }
+        writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheState(step));
+        timings.push({ label: step.label, status: "ran", durationMs });
+        console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
+        continue;
+      }
+      timings.push({ label: step.label, status: "failed", durationMs });
+      console.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+      exitCode = 1;
+      break;
+    }
+    console.error(formatBuildAllTimingSummary(timings));
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
   }
 }

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -23,7 +24,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -436,7 +436,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (!health.healthy) {
         snapshot.healthState = health.reason;
       }
-      return { accountId: accountId, account, snapshot };
+      return { accountId, account, snapshot };
     };
 
     const buildChannelAccounts = async (channelId: ChannelId) => {

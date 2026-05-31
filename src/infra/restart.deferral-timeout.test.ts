@@ -66,6 +66,23 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
   });
 
+  it("clamps oversized poll intervals instead of polling immediately", () => {
+    const hooks: RestartDeferralHooks = {
+      onReady: vi.fn(),
+    };
+    let pending = 1;
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => pending,
+      pollMs: Number.MAX_SAFE_INTEGER,
+      hooks,
+    });
+
+    pending = 0;
+    vi.advanceTimersByTime(1);
+    expect(hooks.onReady).not.toHaveBeenCalled();
+  });
+
   it("carries timeout restart intent when the deferral budget is exhausted", () => {
     const hooks: RestartDeferralHooks = {
       onTimeout: vi.fn(),

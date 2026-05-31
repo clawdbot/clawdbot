@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   SystemRunApprovalFileOperand,
   SystemRunApprovalPlan,
@@ -22,10 +26,6 @@ import {
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeNullableString,
-} from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ApprovedCwdSnapshot = {

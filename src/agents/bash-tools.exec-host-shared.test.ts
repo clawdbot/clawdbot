@@ -1,10 +1,13 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeExecApprovalFollowupRuntimeHandoff,
+  registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
+  createExecApprovalPendingState,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
   resolveExecApprovalUnavailableState,
@@ -37,6 +40,60 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
     ...mod,
     resolveExecApprovals: mocks.resolveExecApprovals,
   };
+});
+
+describe("createExecApprovalPendingState", () => {
+  it("sets a valid pending approval expiry from the current clock", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_800_000_000_000);
+
+      expect(
+        createExecApprovalPendingState({
+          warnings: ["careful"],
+          timeoutMs: 60_000,
+        }),
+      ).toMatchObject({
+        warningText: "careful\n\n",
+        expiresAtMs: 1_800_000_060_000,
+        preResolvedDecision: undefined,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("expires pending approvals immediately while the process clock is invalid", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(Number.NaN);
+
+      expect(
+        createExecApprovalPendingState({
+          warnings: [],
+          timeoutMs: 60_000,
+        }).expiresAtMs,
+      ).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("expires pending approvals immediately when expiry would exceed Date bounds", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+
+      expect(
+        createExecApprovalPendingState({
+          warnings: [],
+          timeoutMs: 60_000,
+        }).expiresAtMs,
+      ).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });
 
 describe("sendExecApprovalFollowupResult", () => {
@@ -182,6 +239,21 @@ describe("sendExecApprovalFollowupResult", () => {
       idempotencyKey: call.idempotencyKey,
       bashElevated,
     });
+  });
+
+  it("does not register elevated runtime handoffs when the process clock is invalid", () => {
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "approval-elevated-invalid-clock",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "on",
+      },
+      nowMs: Number.NaN,
+    });
+
+    expect(registration).toBeUndefined();
   });
 
   it("does not register elevated runtime handoffs for denied followups", async () => {

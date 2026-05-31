@@ -25,6 +25,11 @@ export type ChatQueueItem = {
   agentId?: string;
 };
 
+export type ChatSessionRefreshTarget = {
+  sessionKey: string;
+  agentId?: string;
+};
+
 export const CRON_CHANNEL_LAST = "last";
 
 export type CronFormState = {

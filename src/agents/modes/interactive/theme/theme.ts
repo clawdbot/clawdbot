@@ -806,7 +806,7 @@ export function setRegisteredThemes(themes: Theme[]): void {
   }
 }
 
-export function initTheme(themeName?: string, enableWatcher: boolean = false): void {
+export function initTheme(themeName?: string, enableWatcher = false): void {
   const name = themeName ?? getDefaultTheme();
   currentThemeName = name;
   try {
@@ -824,7 +824,7 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 
 export function setTheme(
   name: string,
-  enableWatcher: boolean = false,
+  enableWatcher = false,
 ): { success: boolean; error?: string } {
   currentThemeName = name;
   try {

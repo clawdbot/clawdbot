@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   runProxyValidation,
@@ -19,7 +20,6 @@ import {
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
   const settings = resolveDebugProxySettings();

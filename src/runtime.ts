@@ -1,5 +1,5 @@
-import { clearActiveProgressLine } from "./terminal/progress-line.js";
-import { restoreTerminalState } from "./terminal/restore.js";
+import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
+import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;

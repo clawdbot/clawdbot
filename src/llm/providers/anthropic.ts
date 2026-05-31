@@ -973,6 +973,10 @@ function buildParams(
     params.temperature = options.temperature;
   }
 
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop_sequences = options.stop;
+  }
+
   if (context.tools && context.tools.length > 0) {
     const compat = getAnthropicCompat(model);
     params.tools = convertTools(
@@ -1220,7 +1224,9 @@ function shouldUseFineGrainedToolStreamingBeta(
   model: Model<"anthropic-messages">,
   context: Context,
 ): boolean {
-  return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
+  return (
+    Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
+  );
 }
 
 function convertTools(

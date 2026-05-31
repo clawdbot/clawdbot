@@ -61,7 +61,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mergedMediaUrls: string[] = [];
-    let text = payload.text;
+    const text = payload.text;
     for (const mediaUrl of mediaUrls) {
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);

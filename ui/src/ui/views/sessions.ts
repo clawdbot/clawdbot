@@ -93,9 +93,7 @@ function getAgentIdentity(
   agentIdentityById: Record<string, AgentIdentityResult>,
   agentId: string,
 ): AgentIdentityResult | null {
-  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
-    ? (agentIdentityById[agentId] ?? null)
-    : null;
+  return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
 function rowMatchesSessionDefaults(

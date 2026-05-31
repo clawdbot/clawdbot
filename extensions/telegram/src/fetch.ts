@@ -12,6 +12,10 @@ import {
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   captureHttpExchange,
   resolveEffectiveDebugProxyUrl,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -212,8 +216,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
   const targetPort = 443;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
-  for (let i = 0; i < noProxyEntries.length; i++) {
-    const entry = noProxyEntries[i];
+  for (const entry of noProxyEntries) {
     if (!entry) {
       continue;
     }
@@ -667,7 +670,7 @@ export function resolveTelegramTransport(
 
   const getAttemptCooldownError = (attemptIndex: number): Error | null => {
     const health = attemptHealth[attemptIndex];
-    if (health.unhealthyUntilMs <= Date.now()) {
+    if (!isFutureDateTimestampMs(health.unhealthyUntilMs)) {
       return null;
     }
     return new TelegramTransportAttemptUnhealthyError(health.unhealthyUntilMs);
@@ -688,7 +691,12 @@ export function resolveTelegramTransport(
     );
     health.consecutiveFailures = 0;
     health.cooldownMs = Math.min(TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS, cooldownMs * 2);
-    health.unhealthyUntilMs = Date.now() + cooldownMs;
+    const unhealthyUntilMs = resolveExpiresAtMsFromDurationMs(cooldownMs);
+    if (unhealthyUntilMs === undefined) {
+      health.unhealthyUntilMs = 0;
+      return;
+    }
+    health.unhealthyUntilMs = unhealthyUntilMs;
     log.warn(
       `telegram transport attempt marked temporarily unhealthy for ${cooldownMs}ms (codes=${formatErrorCodes(err)})`,
     );

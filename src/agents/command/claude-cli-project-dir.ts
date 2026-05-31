@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const CLAUDE_PROJECTS_DIRNAME = path.join(".claude", "projects");
 const MAX_SANITIZED_PROJECT_LENGTH = 200;

@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([

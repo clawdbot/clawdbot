@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   matchRootFileOpenFailure,
   openRootFile,
   openRootFileSync,
 } from "../infra/boundary-file-read.js";
 import { resolveRootPath, resolveRootPathSync } from "../infra/boundary-path.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import {

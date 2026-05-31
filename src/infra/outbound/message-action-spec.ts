@@ -1,9 +1,9 @@
-import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";

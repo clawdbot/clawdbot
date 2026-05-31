@@ -1,5 +1,5 @@
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logWarn } from "../logger.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];

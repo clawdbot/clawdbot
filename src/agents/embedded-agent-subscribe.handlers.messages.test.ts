@@ -81,10 +81,12 @@ function createMessageEndContext(
     onBlockReply?: ReturnType<typeof vi.fn>;
     emitBlockReply?: ReturnType<typeof vi.fn>;
     finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
+    flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    blockChunker?: { hasBuffered: () => boolean; reset: () => void };
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -137,8 +139,8 @@ function createMessageEndContext(
     emitBlockReply: params.emitBlockReply ?? vi.fn(),
     consumeReplyDirectives: params.consumeReplyDirectives ?? vi.fn(() => ({ text: "Need send." })),
     emitReasoningStream: vi.fn(),
-    flushBlockReplyBuffer: vi.fn(),
-    blockChunker: null,
+    flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    blockChunker: params.blockChunker ?? null,
   } as unknown as EmbeddedAgentSubscribeContext;
 }
 
@@ -415,7 +417,7 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.lastAssistantStreamItemId).toBe("item-2");
   });
 
-  it("preserves phase-aware media, voice, and reply directives for block delivery", () => {
+  it("preserves phase-aware voice and reply directives while deferring final media delivery", () => {
     const accumulator = createStreamingDirectiveAccumulator();
     const ctx = createMessageUpdateContext({
       consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
@@ -455,7 +457,6 @@ describe("handleMessageUpdate text signatures", () => {
       }),
     ).toEqual({
       text: "Done.",
-      mediaUrls: ["/tmp/reply.ogg"],
       audioAsVoice: true,
       replyToId: undefined,
       replyToTag: true,
@@ -937,6 +938,47 @@ describe("handleMessageEnd", () => {
     // send should NOT fire for text_end channels. The only consumeReplyDirectives
     // call is the final empty flush which returns null.
     expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("emits final media after flushing buffered message_end text", () => {
+    const emitBlockReply = vi.fn();
+    const flushBlockReplyBuffer = vi.fn();
+    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      flushBlockReplyBuffer,
+      consumeReplyDirectives,
+      blockChunker: {
+        hasBuffered: () => true,
+        reset: vi.fn(),
+      },
+      state: {
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Caption",
+        blockReplyBreak: "message_end",
+        deltaBuffer: "Caption",
+        blockBuffer: "Caption",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Caption\nMEDIA:/tmp/final.png" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledWith({
+      assistantMessageIndex: undefined,
+      final: true,
+    });
+    expect(consumeReplyDirectives).not.toHaveBeenCalled();
+    expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({
+      text: "",
+      mediaUrls: ["/tmp/final.png"],
+    });
   });
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {

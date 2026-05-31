@@ -150,7 +150,7 @@ export function isAcpTagVisible(
   if (typeof override === "boolean") {
     return override;
   }
-  if (Object.prototype.hasOwnProperty.call(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
+  if (Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
     return ACP_TAG_VISIBILITY_DEFAULTS[tag];
   }
   return true;

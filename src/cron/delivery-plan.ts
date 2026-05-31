@@ -1,11 +1,11 @@
-import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {

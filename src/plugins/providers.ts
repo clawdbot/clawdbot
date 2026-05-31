@@ -1,7 +1,7 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -86,6 +86,17 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
     plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider)
   ) {
     return true;
+  }
+  for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    const alias = normalizeProviderId(rawAlias);
+    const targetProvider = normalizeProviderId(target);
+    if (
+      alias === normalizedProvider &&
+      targetProvider &&
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+    ) {
+      return true;
+    }
   }
   for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
     const alias = normalizeProviderId(rawAlias);

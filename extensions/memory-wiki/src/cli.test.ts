@@ -605,4 +605,30 @@ cli note
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
   });
+
+  it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    conversations[0].update_time = 9_000_000_000_000;
+    await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
+
+    const result = await runWikiChatGptImport({
+      config,
+      exportPath: exportDir,
+      json: true,
+    });
+
+    expect(result.createdCount).toBe(1);
+    const sourceFile = (await fs.readdir(path.join(rootDir, "sources"))).find(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFile).toBeDefined();
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
+    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
+  });
 });

@@ -55,7 +55,7 @@ function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown
     return false;
   }
   const payload = entry.payload as Record<string, unknown>;
-  return Object.prototype.hasOwnProperty.call(payload, field) && payload[field] === value;
+  return Object.hasOwn(payload, field) && payload[field] === value;
 }
 
 async function writeTuiPtyFixtureScript(dir: string) {

@@ -2,8 +2,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getSessionBindingService, testing } from "openclaw/plugin-sdk/session-binding-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import {
@@ -25,9 +30,6 @@ const sendMessageMatrixMock = vi.hoisted(() =>
     roomId: "!room:example",
   })),
 );
-const actualRename = fs.rename.bind(fs);
-const renameMock = vi.spyOn(fs, "rename");
-
 vi.mock("./send.js", () => {
   return {
     sendMessageMatrix: sendMessageMatrixMock,
@@ -128,22 +130,34 @@ describe("matrix thread bindings", () => {
   }
 
   async function readPersistedLastActivityAt(bindingsPath: string) {
-    const raw = await fs.readFile(bindingsPath, "utf-8");
-    const parsed = JSON.parse(raw) as {
-      bindings?: Array<{ lastActivityAt?: number }>;
-    };
+    const parsed = await readPersistedBindings(bindingsPath);
     return parsed.bindings?.[0]?.lastActivityAt;
   }
 
   async function readPersistedBindings(bindingsPath: string) {
-    const raw = await fs.readFile(bindingsPath, "utf-8");
-    return JSON.parse(raw) as {
-      version?: number;
-      bindings?: Array<{
+    const store = createPluginStateKeyedStoreForTests<{
+      accountId?: string;
+      conversationId?: string;
+      parentConversationId?: string;
+      targetSessionKey?: string;
+      lastActivityAt?: number;
+      boundAt?: number;
+    }>("matrix", {
+      namespace: "thread-bindings",
+      maxEntries: 10_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.dirname(bindingsPath) },
+    });
+    return {
+      version: 1,
+      bindings: (await store.entries())
+        .map((entry) => entry.value)
+        .filter((entry) => entry.accountId === accountId)
+        .toSorted((a, b) => (a.boundAt ?? 0) - (b.boundAt ?? 0)) as Array<{
         conversationId?: string;
         parentConversationId?: string;
         targetSessionKey?: string;
-      }>;
+        lastActivityAt?: number;
+      }>,
     };
   }
 
@@ -176,14 +190,22 @@ describe("matrix thread bindings", () => {
   beforeEach(() => {
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
     resetThreadBindingAdapters();
+    resetPluginStateStoreForTests();
     sendMessageMatrixMock.mockClear();
-    renameMock.mockReset();
-    renameMock.mockImplementation(actualRename);
     setMatrixRuntime({
       state: {
+        openKeyedStore: (options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests("matrix", options),
         resolveStateDir: () => stateDir,
       },
     } as PluginRuntime);
+  });
+
+  afterEach(() => {
+    resetThreadBindingAdapters();
+    resetPluginStateStoreForTests();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("creates child Matrix thread bindings from a top-level room context", async () => {
@@ -350,69 +372,6 @@ describe("matrix thread bindings", () => {
         },
         { interval: 10, timeout: 1_000 },
       );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("logs and survives sweeper persistence failures", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
-    const logVerboseMessage = vi.fn();
-    try {
-      await createMatrixThreadBindingManager({
-        cfg: {},
-        accountId: "ops",
-        auth,
-        client: {} as never,
-        idleTimeoutMs: 1_000,
-        maxAgeMs: 0,
-        logVerboseMessage,
-      });
-
-      await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        },
-        placement: "current",
-      });
-
-      renameMock.mockRejectedValueOnce(new Error("disk full"));
-      await vi.advanceTimersByTimeAsync(61_000);
-
-      await vi.waitFor(
-        () => {
-          expect(
-            logVerboseMessage.mock.calls.some(
-              ([message]) =>
-                typeof message === "string" &&
-                message.includes("failed auto-unbinding expired bindings"),
-            ),
-          ).toBe(true);
-          expect(
-            logVerboseMessage.mock.calls.some(
-              ([message]) =>
-                typeof message === "string" &&
-                message.includes("matrix: auto-unbinding $thread due to idle-expired"),
-            ),
-          );
-        },
-        { interval: 1, timeout: 100 },
-      );
-
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        }),
-      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }

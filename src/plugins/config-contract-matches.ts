@@ -1,5 +1,5 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 export type PluginConfigContractMatch = {
@@ -71,7 +71,7 @@ export function collectPluginConfigContractMatches(params: {
         }
         continue;
       }
-      if (!isRecord(state.value) || !Object.prototype.hasOwnProperty.call(state.value, segment)) {
+      if (!isRecord(state.value) || !Object.hasOwn(state.value, segment)) {
         continue;
       }
       nextStates.push({

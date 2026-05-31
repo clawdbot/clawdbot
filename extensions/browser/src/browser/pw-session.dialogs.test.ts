@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { Dialog, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -119,6 +120,46 @@ describe("observed browser dialogs", () => {
       { id: "d1", type: "alert", closedBy: "armed" },
     ]);
     observed.cleanup();
+  });
+
+  it("does not arm next-dialog responses while the process clock is invalid", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(Number.NaN);
+      const { page, emit } = createPageHarness();
+      ensurePageState(page);
+      const dialog = createDialog({ type: "alert", message: "Still pending" });
+
+      armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: 1000 });
+      emit("dialog", dialog);
+
+      expect(dialog.dismiss).not.toHaveBeenCalled();
+      expect(getObservedBrowserStateForPage(page).dialogs.pending).toMatchObject([
+        { id: "d1", type: "alert", message: "Still pending" },
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("does not arm next-dialog responses when the expiry would overflow Date bounds", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+      const { page, emit } = createPageHarness();
+      ensurePageState(page);
+      const dialog = createDialog({ type: "alert", message: "Still pending" });
+
+      armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: 1000 });
+      emit("dialog", dialog);
+
+      expect(dialog.dismiss).not.toHaveBeenCalled();
+      expect(getObservedBrowserStateForPage(page).dialogs.pending).toMatchObject([
+        { id: "d1", type: "alert", message: "Still pending" },
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("aborts in-flight actions while keeping unarmed dialogs pending", async () => {

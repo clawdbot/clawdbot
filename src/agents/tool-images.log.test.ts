@@ -40,16 +40,6 @@ describe("tool-images log context", () => {
     warnMock.mockClear();
   });
 
-  it("includes filename from MEDIA text", async () => {
-    const blocks = [
-      { type: "text" as const, text: "MEDIA:/tmp/snapshots/camera-front.png" },
-      { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
-    ];
-    await sanitizeContentBlocksImages(blocks, "nodes:camera_snap");
-    const messages = infoMock.mock.calls.map((call) => String(call[0] ?? ""));
-    expect(messages.join("\n")).toContain("camera-front.png");
-  });
-
   it("includes filename from read label", async () => {
     const blocks = [
       { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },

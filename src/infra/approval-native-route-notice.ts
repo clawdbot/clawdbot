@@ -1,5 +1,5 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatHumanList } from "../shared/human-list.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 
 export function describeApprovalDeliveryDestination(params: {

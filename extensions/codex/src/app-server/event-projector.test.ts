@@ -42,8 +42,8 @@ function assistantMessage(text: string, timestamp: number) {
   return {
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     model: "gpt-5.4-codex",
     usage: {
       input: 0,
@@ -69,7 +69,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     sessionFile,
     workspaceDir: tempDir,
     runId: "run-1",
-    provider: "openai-codex",
+    provider: "openai",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
@@ -368,8 +368,8 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.lastAssistant?.provider).toBe("openai-codex");
-    expect(result.lastAssistant?.api).toBe("openai-codex-responses");
+    expect(result.lastAssistant?.provider).toBe("openai");
+    expect(result.lastAssistant?.api).toBe("openai-chatgpt-responses");
     expect(result.lastAssistant?.model).toBe("gpt-5.5");
   });
 
@@ -390,7 +390,7 @@ describe("CodexAppServerEventProjector", () => {
         auth: {
           providerForAuth: "openai",
           authProfileProviderForAuth: "openai",
-          harnessAuthProvider: "openai-codex",
+          harnessAuthProvider: "openai",
           forwardedAuthProfileId: "openai:work",
         },
         observability: {
@@ -1158,7 +1158,7 @@ describe("CodexAppServerEventProjector", () => {
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
         runId: "run-1",
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4-codex",
         model: createCodexTestModel(),
         thinkLevel: "medium",
@@ -2122,6 +2122,44 @@ describe("CodexAppServerEventProjector", () => {
     expect(context.runId).toBe("run-1");
     expect(context.toolName).toBe("bash");
     expect(context.toolCallId).toBe("cmd-observed");
+  });
+
+  it("omits after_tool_call startedAt when native duration is out of range", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-huge-duration",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.result).toEqual({
+      status: "completed",
+      exitCode: 0,
+      durationMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(event).not.toHaveProperty("durationMs");
   });
 
   it("does not duplicate native items already covered by PostToolUse relay", async () => {

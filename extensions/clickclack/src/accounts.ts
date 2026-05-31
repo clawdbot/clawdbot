@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import {
   normalizeSecretInputString,
@@ -14,6 +15,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const DEFAULT_RECONNECT_MS = 1_500;
+const MIN_RECONNECT_MS = 100;
+const MAX_RECONNECT_MS = 60_000;
 
 const {
   listAccountIds: listClickClackAccountIds,
@@ -128,7 +131,10 @@ export function resolveClickClackAccount(params: {
     toolsAllow: merged.toolsAllow,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],
-    reconnectMs: merged.reconnectMs ?? DEFAULT_RECONNECT_MS,
+    reconnectMs: resolveIntegerOption(merged.reconnectMs, DEFAULT_RECONNECT_MS, {
+      min: MIN_RECONNECT_MS,
+      max: MAX_RECONNECT_MS,
+    }),
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],

@@ -1,5 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../../shared/number-coercion.js";
 import { refreshGitHubCopilotToken, testing } from "./github-copilot.js";
 
 function stubHangingFetch(timeoutMs: number): void {

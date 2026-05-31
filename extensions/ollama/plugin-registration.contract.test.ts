@@ -2,6 +2,6 @@ import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-t
 
 describePluginRegistrationContract({
   pluginId: "ollama",
-  providerIds: ["ollama"],
+  providerIds: ["ollama", "ollama-cloud"],
   webSearchProviderIds: ["ollama"],
 });

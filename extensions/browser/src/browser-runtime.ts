@@ -53,7 +53,11 @@ export {
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 export { redactCdpUrl } from "./browser/cdp.helpers.js";
-export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
+export {
+  DEFAULT_UPLOAD_DIR,
+  resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
+} from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {

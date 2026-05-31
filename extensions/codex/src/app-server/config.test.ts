@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
@@ -117,6 +118,40 @@ describe("Codex app-server config", () => {
       transport: "websocket",
       url: "ws://127.0.0.1:39175",
       headers: { "X-Test": "yes" },
+    });
+  });
+
+  it("clamps oversized app-server timer config", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          requestTimeoutMs: Number.MAX_SAFE_INTEGER,
+          turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          postToolRawAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", {
+      requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      turnCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      postToolRawAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
+
+  it("falls back for non-positive app-server timer config", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          requestTimeoutMs: 0,
+          turnCompletionIdleTimeoutMs: -1,
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", {
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
     });
   });
 

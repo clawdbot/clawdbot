@@ -120,11 +120,17 @@ function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): 
   const baseUrl = (ctx.model?.baseUrl ?? "").trim().toLowerCase();
 
   if (provider === "openai") {
-    return api === "openai-responses" && (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl));
-  }
-  if (provider === "openai-codex") {
+    if (api === "openai-responses") {
+      return !baseUrl || isOpenAIResponsesBaseUrl(baseUrl);
+    }
     return (
-      api === "openai-codex-responses" &&
+      api === "openai-chatgpt-responses" &&
+      (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl))
+    );
+  }
+  if (provider === "openai") {
+    return (
+      api === "openai-chatgpt-responses" &&
       (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl))
     );
   }

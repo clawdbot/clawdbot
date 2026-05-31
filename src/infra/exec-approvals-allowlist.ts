@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
 import {
@@ -590,7 +590,7 @@ function evaluateShellWrapperInlineCommand(params: {
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
-  inlineDepth: number = 0,
+  inlineDepth = 0,
 ): {
   satisfied: boolean;
   matches: ExecAllowlistEntry[];

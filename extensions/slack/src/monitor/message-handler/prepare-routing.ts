@@ -179,7 +179,7 @@ export function resolveSlackRoutingContext(params: {
 
   const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
   const replyToMode = resolveSlackReplyToMode(account, chatType);
-  const threadContext = resolveSlackThreadContext({ message, replyToMode });
+  const threadContext = resolveSlackThreadContext({ message, replyToMode, isDirectMessage });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   // Keep true thread replies thread-scoped, while top-level DMs keep their

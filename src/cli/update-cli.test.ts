@@ -467,7 +467,7 @@ describe("update-cli", () => {
     const target = stripOpenClawPackageAlias(spec);
     const [repo] = target.split("#", 1);
     const isGitHubShorthand =
-      !!repo &&
+      Boolean(repo) &&
       !repo.startsWith(".") &&
       !repo.startsWith("/") &&
       !repo.startsWith("@") &&

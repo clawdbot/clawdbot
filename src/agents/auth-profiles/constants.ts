@@ -9,9 +9,9 @@ export const AUTH_STORE_VERSION = 1;
 
 /** @deprecated Anthropic provider-owned CLI profile id; do not use from third-party plugins. */
 export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
-/** @deprecated OpenAI Codex provider-owned CLI profile id; do not use from third-party plugins. */
-export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
-export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+/** @deprecated OpenAI provider-owned CLI profile id; do not use from third-party plugins. */
+export const CODEX_CLI_PROFILE_ID = "openai:codex-cli";
+export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 /** @deprecated MiniMax provider-owned CLI profile id; do not use from third-party plugins. */
 export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
 

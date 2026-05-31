@@ -15,7 +15,7 @@ import type { AzureOpenAIResponsesOptions } from "./azure-openai-responses.js";
 import type { GoogleVertexOptions } from "./google-vertex.js";
 import type { GoogleOptions } from "./google.js";
 import type { MistralOptions } from "./mistral.js";
-import type { OpenAICodexResponsesOptions } from "./openai-codex-responses.js";
+import type { OpenAICodexResponsesOptions } from "./openai-chatgpt-responses.js";
 import type { OpenAICompletionsOptions } from "./openai-completions.js";
 import type { OpenAIResponsesOptions } from "./openai-responses.js";
 
@@ -62,8 +62,11 @@ interface MistralProviderModule {
 }
 
 interface OpenAICodexResponsesProviderModule {
-  streamOpenAICodexResponses: StreamFunction<"openai-codex-responses", OpenAICodexResponsesOptions>;
-  streamSimpleOpenAICodexResponses: StreamFunction<"openai-codex-responses", SimpleStreamOptions>;
+  streamOpenAICodexResponses: StreamFunction<
+    "openai-chatgpt-responses",
+    OpenAICodexResponsesOptions
+  >;
+  streamSimpleOpenAICodexResponses: StreamFunction<"openai-chatgpt-responses", SimpleStreamOptions>;
 }
 
 interface OpenAICompletionsProviderModule {
@@ -97,7 +100,11 @@ let mistralProviderModulePromise:
   | undefined;
 let openAICodexResponsesProviderModulePromise:
   | Promise<
-      LazyProviderModule<"openai-codex-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
+      LazyProviderModule<
+        "openai-chatgpt-responses",
+        OpenAICodexResponsesOptions,
+        SimpleStreamOptions
+      >
     >
   | undefined;
 let openAICompletionsProviderModulePromise:
@@ -261,9 +268,9 @@ function loadMistralProviderModule(): Promise<
 }
 
 function loadOpenAICodexResponsesProviderModule(): Promise<
-  LazyProviderModule<"openai-codex-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
+  LazyProviderModule<"openai-chatgpt-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
 > {
-  openAICodexResponsesProviderModulePromise ||= import("./openai-codex-responses.js").then(
+  openAICodexResponsesProviderModulePromise ||= import("./openai-chatgpt-responses.js").then(
     (module) => {
       const provider = module as OpenAICodexResponsesProviderModule;
       return {
@@ -374,7 +381,7 @@ export function registerBuiltInApiProviders(): void {
 
   registerApiProvider(
     {
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       stream: streamOpenAICodexResponses,
       streamSimple: streamSimpleOpenAICodexResponses,
     },

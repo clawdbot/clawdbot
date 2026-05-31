@@ -1,6 +1,6 @@
+import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import { localeLowercasePreservingWhitespace } from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 

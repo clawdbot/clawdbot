@@ -27,8 +27,8 @@ vi.mock("./graph.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => ({
     findPreferredDmByUserId: mockState.findPreferredDmByUserId,
   }),
 }));

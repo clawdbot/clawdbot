@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
@@ -28,6 +28,7 @@ import {
   createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 import {
@@ -41,6 +42,10 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+
+beforeAll(async () => {
+  await preloadRunEmbeddedAttemptForTests();
+});
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
 type ToolResultGuardInstallParams = {
@@ -224,6 +229,43 @@ async function finalizeTurn(
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
+  let toolSearchControlsCase: Record<string, unknown>;
+
+  beforeAll(async () => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+    hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+    hoisted.detectAndLoadPromptImagesMock.mockClear();
+    const setupTempPaths: string[] = [];
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: {
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+        },
+        sessionKey,
+        tempPaths: setupTempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          config: {
+            tools: {
+              toolSearch: true,
+            },
+          } as OpenClawConfig,
+        },
+      });
+
+      toolSearchControlsCase = mockParams(
+        hoisted.createOpenClawCodingToolsMock,
+        0,
+        "createOpenClawCodingTools options",
+      );
+    } finally {
+      await cleanupTempPaths(setupTempPaths);
+      clearMemoryPluginState();
+      vi.restoreAllMocks();
+    }
+  });
+
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -238,30 +280,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-      },
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        disableTools: false,
-        config: {
-          tools: {
-            toolSearch: true,
-          },
-        } as OpenClawConfig,
-      },
-    });
-
-    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
-    const options = mockParams(
-      hoisted.createOpenClawCodingToolsMock,
-      0,
-      "createOpenClawCodingTools options",
-    );
-    expect(options.includeToolSearchControls).toBe(true);
-    expect(options.toolSearchCatalogRef).toEqual({});
+    expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
+    expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
   it("quarantines unsupported tool schemas before creating the model session", async () => {
@@ -356,7 +376,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
         model: {
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           provider: "gateway",
           id: "gpt-5.5",
           contextWindow: 8192,

@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,

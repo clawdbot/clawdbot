@@ -295,4 +295,22 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry.lineMap).toStrictEqual([2, 3]);
   });
+
+  it("drops Date-invalid numeric message timestamps", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Hello",
+          timestamp: 8_640_000_000_000_001,
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "invalid-timestamp-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.messageTimestampsMs).toStrictEqual([0]);
+  });
 });

@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "typebox": "1.1.38",
+    "typebox": "1.1.39",
     "ws": "8.21.0",
     "zod": "4.4.3"
   },

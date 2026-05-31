@@ -1135,6 +1135,126 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("records routed Slack thread id on dispatch-owned reply operations", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U1",
+      ChatType: "direct",
+      SessionKey: "agent:main:slack:direct:U1",
+      MessageThreadId: "501.000",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const operation = (
+        opts as { replyOperation?: { routeThreadId?: string | number } } | undefined
+      )?.replyOperation;
+      expect(operation?.routeThreadId).toBe("501.000");
+      return { text: "hi" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a different Slack DM routed thread reach reply resolution while another thread is active", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:slack:direct:U1";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "thread B reply" }) satisfies ReplyPayload);
+
+    try {
+      const resultPromise = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          MessageThreadId: "501.000",
+          BodyForAgent: "second top-level DM",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
+
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 1_000)),
+      ]);
+      if (result === "timed-out") {
+        activeOperation.complete();
+        await resultPromise;
+        throw new Error("Slack routed thread was blocked by the active reply operation");
+      }
+
+      expect(result).toMatchObject({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 0 },
+      });
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    } finally {
+      activeOperation.complete();
+    }
+  });
+
+  it("keeps non-Slack routed direct turns behind the active reply operation", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:direct:1";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "second telegram direct turn",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    try {
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 1_000)),
+      ]);
+
+      expect(result).toBe("blocked");
+      expect(replyResolver).not.toHaveBeenCalled();
+    } finally {
+      activeOperation.complete();
+      await resultPromise;
+    }
+  });
+
   it("routes when OriginatingChannel differs from Provider", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

@@ -1,3 +1,7 @@
+import type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogSource,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   synthesizeMediaGenerationCatalogEntries,
   type MediaGenerationCatalogKind,
@@ -8,12 +12,8 @@ import {
   type VoiceModelCapabilities,
   type VoiceModelProvider,
 } from "../../packages/speech-core/voice-models.js";
-import type {
-  UnifiedModelCatalogEntry,
-  UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "./provider-catalog-unified-text.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";

@@ -842,7 +842,8 @@ function resolveGoogleGemini3RetryThinkingLevel(modelId: string): GoogleThinking
 function cloneGoogleGenerateContentRequest(
   params: GoogleGenerateContentRequest,
 ): GoogleGenerateContentRequest {
-  return JSON.parse(JSON.stringify(params)) as GoogleGenerateContentRequest;
+  const serialized = JSON.stringify(params);
+  return JSON.parse(serialized) as GoogleGenerateContentRequest;
 }
 
 export function buildGoogleGemini3FirstResponseRetryParams(params: {

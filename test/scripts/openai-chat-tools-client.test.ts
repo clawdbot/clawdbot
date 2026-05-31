@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
+const dockerRunnerPath = path.resolve("scripts/e2e/openai-chat-tools-docker.sh");
 const writeConfigPath = path.resolve("scripts/e2e/lib/openai-chat-tools/write-config.mjs");
 
 interface ClientResult {
@@ -96,6 +97,20 @@ function runWriteConfig(root: string, env: Record<string, string> = {}) {
   });
 }
 
+function runDockerRunnerAuthPreflight(root: string, env: Record<string, string> = {}) {
+  return spawnSync("bash", [dockerRunnerPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: root,
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "",
+      OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: path.join(root, "missing.profile"),
+      ...env,
+    },
+  });
+}
+
 function toolCallResponse() {
   return {
     choices: [
@@ -118,6 +133,74 @@ function toolCallResponse() {
 }
 
 describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
+  let bodyReadTimeoutProbe: {
+    elapsedMs: number;
+    result: ClientResult;
+  };
+
+  beforeAll(async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"choices":');
+    });
+    const port = await listen(server);
+    const startedAt = Date.now();
+    try {
+      bodyReadTimeoutProbe = {
+        result: await runClient(port, {}, 4_000),
+        elapsedMs: Date.now() - startedAt,
+      };
+    } finally {
+      server.close();
+    }
+  });
+
+  it("keeps full profile exports out of the Docker build phase", () => {
+    const runner = readFileSync(dockerRunnerPath, "utf8");
+    const preflightSourceIndex = runner.indexOf('source "$profile_file"');
+    const buildIndex = runner.indexOf("docker_e2e_build_or_reuse");
+    const fullProfileSourceIndex = runner.indexOf('source "$PROFILE_FILE"', buildIndex);
+
+    expect(preflightSourceIndex).toBeGreaterThanOrEqual(0);
+    expect(buildIndex).toBeGreaterThan(preflightSourceIndex);
+    expect(fullProfileSourceIndex).toBeGreaterThan(buildIndex);
+  });
+
+  it("fails auth preflight before Docker build work starts", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
+    try {
+      const result = runDockerRunnerAuthPreflight(root);
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(result.status).toBe(1);
+      expect(output).toContain("OPENAI_API_KEY was not available");
+      expect(output).not.toContain("Building Docker image:");
+      expect(output).not.toContain("Reusing Docker image:");
+      expect(output).not.toContain("Running OpenAI Chat Completions tools Docker E2E");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("treats placeholder profile auth as missing before Docker build work starts", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
+    try {
+      const profile = path.join(root, "profile");
+      writeFileSync(profile, "OPENAI_API_KEY=undefined\n");
+      const result = runDockerRunnerAuthPreflight(root, {
+        OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: profile,
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(result.status).toBe(1);
+      expect(output).toContain("OPENAI_API_KEY was not available");
+      expect(output).not.toContain("Building Docker image:");
+      expect(output).not.toContain("Reusing Docker image:");
+      expect(output).not.toContain("Running OpenAI Chat Completions tools Docker E2E");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
   it("rejects loose timeout env values instead of parsing numeric prefixes", async () => {
     const result = await runClient(1, {
       OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1e3",
@@ -194,23 +277,10 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
   });
 
   it("keeps the request timeout active while reading the response body", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.write('{"choices":');
-    });
-    const port = await listen(server);
-    const startedAt = Date.now();
-    try {
-      const result = await runClient(port, {}, 4_000);
-      const elapsedMs = Date.now() - startedAt;
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/aborted|AbortError/iu);
-      expect(elapsedMs).toBeLessThan(3_500);
-    } finally {
-      server.close();
-    }
+    expect(bodyReadTimeoutProbe.result.error).toBeUndefined();
+    expect(bodyReadTimeoutProbe.result.status).not.toBe(0);
+    expect(bodyReadTimeoutProbe.result.stderr).toMatch(/aborted|AbortError/iu);
+    expect(bodyReadTimeoutProbe.elapsedMs).toBeLessThan(3_500);
   });
 
   it("caps chat completion response bodies before JSON parsing", async () => {

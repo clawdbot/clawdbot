@@ -39,7 +39,7 @@ type QaSecretRef = {
 
 type QaLegacyOAuthRef = {
   source: "openclaw-credentials";
-  provider: "openai-codex";
+  provider: "openai";
   id: string;
 };
 
@@ -166,7 +166,7 @@ function isQaLegacyOAuthRef(value: unknown): value is QaLegacyOAuthRef {
   return (
     isRecord(value) &&
     value.source === "openclaw-credentials" &&
-    value.provider === "openai-codex" &&
+    value.provider === "openai" &&
     typeof value.id === "string" &&
     /^[a-f0-9]{32}$/.test(value.id)
   );

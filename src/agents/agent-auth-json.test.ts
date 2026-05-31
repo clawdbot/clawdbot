@@ -65,13 +65,13 @@ function expectOAuthAuth(
 }
 
 describe("ensureAgentAuthJsonFromAuthProfiles", () => {
-  it("writes openai-codex oauth credentials into auth.json for session runtime discovery", async () => {
+  it("writes openai oauth credentials into auth.json for session runtime discovery", async () => {
     const agentDir = await createAgentDir();
 
     writeProfiles(agentDir, {
-      "openai-codex:default": {
+      "openai:default": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -82,7 +82,7 @@ describe("ensureAgentAuthJsonFromAuthProfiles", () => {
     expect(first.wrote).toBe(true);
 
     const auth = await readAuthJson(agentDir);
-    expectOAuthAuth(auth, "openai-codex", "access-token", "refresh-token");
+    expectOAuthAuth(auth, "openai", "access-token", "refresh-token");
 
     const second = await ensureAgentAuthJsonFromAuthProfiles(agentDir);
     expect(second.wrote).toBe(false);
@@ -138,9 +138,9 @@ describe("ensureAgentAuthJsonFromAuthProfiles", () => {
         provider: "anthropic",
         token: "sk-ant-token",
       },
-      "openai-codex:default": {
+      "openai:default": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access",
         refresh: "refresh",
         expires: Date.now() + 60_000,
@@ -154,7 +154,7 @@ describe("ensureAgentAuthJsonFromAuthProfiles", () => {
 
     expectApiKeyAuth(auth, "openrouter", "sk-or-key");
     expectApiKeyAuth(auth, "anthropic", "sk-ant-token");
-    expectOAuthAuth(auth, "openai-codex", "access");
+    expectOAuthAuth(auth, "openai", "access");
   });
 
   it("skips profiles with empty keys", async () => {

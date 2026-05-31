@@ -18,7 +18,7 @@ describe("elevenlabs tts diagnostics", () => {
         similarityBoost: 0.75,
         style: 0,
         useSpeakerBoost: true,
-        speed: 1.0,
+        speed: 1,
       },
       timeoutMs: 5_000,
     };

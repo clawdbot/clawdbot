@@ -1,6 +1,7 @@
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -152,17 +153,26 @@ function resolveCandidateDuplicateRank(params: {
   if (params.candidate.origin === "config") {
     return 0;
   }
-  if (params.candidate.origin === "global" && isExplicitInstall) {
+  if (
+    params.candidate.origin === "bundled" &&
+    isBundledPluginInsideDevSourceRoot({
+      rootDir: params.candidate.rootDir,
+      env: params.env,
+    })
+  ) {
     return 1;
+  }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 2;
   }
   if (params.candidate.origin === "bundled") {
     // Bundled plugin ids stay reserved unless the operator configured an override.
-    return 2;
-  }
-  if (params.candidate.origin === "workspace") {
     return 3;
   }
-  return 4;
+  if (params.candidate.origin === "workspace") {
+    return 4;
+  }
+  return 5;
 }
 
 export function compareDuplicateCandidateOrder(params: {

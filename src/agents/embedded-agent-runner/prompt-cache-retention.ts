@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 type CacheRetention = "none" | "short" | "long";
 

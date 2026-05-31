@@ -11,7 +11,7 @@
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.48",
         "libopus-wasm": "0.1.0",
-        "typebox": "1.1.38",
+        "typebox": "1.1.39",
         "undici": "8.3.0",
         "ws": "8.21.0"
       },
@@ -42,37 +42,6 @@
       },
       "funding": {
         "url": "https://github.com/discordjs/discord.js?sponsor"
-      }
-    },
-    "node_modules/@emnapi/core": {
-      "version": "1.10.0",
-      "resolved": "https://registry.npmjs.org/@emnapi/core/-/core-1.10.0.tgz",
-      "integrity": "sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==",
-      "license": "MIT",
-      "optional": true,
-      "dependencies": {
-        "@emnapi/wasi-threads": "1.2.1",
-        "tslib": "^2.4.0"
-      }
-    },
-    "node_modules/@emnapi/runtime": {
-      "version": "1.10.0",
-      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.10.0.tgz",
-      "integrity": "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==",
-      "license": "MIT",
-      "optional": true,
-      "dependencies": {
-        "tslib": "^2.4.0"
-      }
-    },
-    "node_modules/@emnapi/wasi-threads": {
-      "version": "1.2.1",
-      "resolved": "https://registry.npmjs.org/@emnapi/wasi-threads/-/wasi-threads-1.2.1.tgz",
-      "integrity": "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==",
-      "license": "MIT",
-      "optional": true,
-      "dependencies": {
-        "tslib": "^2.4.0"
       }
     },
     "node_modules/@napi-rs/wasm-runtime": {
@@ -424,9 +393,9 @@
       "license": "0BSD"
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     },
     "node_modules/undici": {

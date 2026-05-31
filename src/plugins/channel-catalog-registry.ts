@@ -1,5 +1,5 @@
+import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeOptionalString as resolveOptionalString } from "../shared/string-coerce.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";

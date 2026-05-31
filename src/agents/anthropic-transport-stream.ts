@@ -1,10 +1,10 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
 import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -55,7 +55,7 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">;
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 type AnthropicMessagesClient = {
   messages: {
@@ -841,6 +841,9 @@ function buildAnthropicParams(
   if (options?.temperature !== undefined && !options.thinkingEnabled) {
     params.temperature = options.temperature;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop_sequences = options.stop;
+  }
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }
@@ -890,6 +893,7 @@ function resolveAnthropicTransportOptions(
     resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
   const resolved: AnthropicTransportOptions = {
     temperature: options?.temperature,
+    stop: options?.stop,
     maxTokens: baseMaxTokens,
     signal: options?.signal,
     apiKey,

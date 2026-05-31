@@ -22,11 +22,11 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
   if (isLegacyEdgeProviderId(tts.provider)) {
     return true;
   }
-  if (LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key))) {
+  if (LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.hasOwn(tts, key))) {
     return true;
   }
   const providers = getRecord(tts.providers);
-  return Boolean(providers && Object.prototype.hasOwnProperty.call(providers, "edge"));
+  return Boolean(providers && Object.hasOwn(providers, "edge"));
 }
 
 function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {
@@ -54,9 +54,9 @@ function hasLegacySpeakerSelectionKeys(value: unknown): boolean {
     return false;
   }
   return (
-    Object.prototype.hasOwnProperty.call(config, "voice") ||
-    Object.prototype.hasOwnProperty.call(config, "voiceName") ||
-    Object.prototype.hasOwnProperty.call(config, "voiceId")
+    Object.hasOwn(config, "voice") ||
+    Object.hasOwn(config, "voiceName") ||
+    Object.hasOwn(config, "voiceId")
   );
 }
 
@@ -317,7 +317,7 @@ function migrateLegacySpeakerSelectionConfig(
   pathLabel: string,
   changes: string[],
 ): void {
-  if (Object.prototype.hasOwnProperty.call(providerConfig, "voice")) {
+  if (Object.hasOwn(providerConfig, "voice")) {
     if (providerConfig.speakerVoice === undefined) {
       providerConfig.speakerVoice = providerConfig.voice;
       changes.push(`Moved ${pathLabel}.voice → ${pathLabel}.speakerVoice.`);
@@ -326,7 +326,7 @@ function migrateLegacySpeakerSelectionConfig(
     }
     delete providerConfig.voice;
   }
-  if (Object.prototype.hasOwnProperty.call(providerConfig, "voiceName")) {
+  if (Object.hasOwn(providerConfig, "voiceName")) {
     if (providerConfig.speakerVoice === undefined) {
       providerConfig.speakerVoice = providerConfig.voiceName;
       changes.push(`Moved ${pathLabel}.voiceName → ${pathLabel}.speakerVoice.`);
@@ -337,7 +337,7 @@ function migrateLegacySpeakerSelectionConfig(
     }
     delete providerConfig.voiceName;
   }
-  if (Object.prototype.hasOwnProperty.call(providerConfig, "voiceId")) {
+  if (Object.hasOwn(providerConfig, "voiceId")) {
     if (providerConfig.speakerVoiceId === undefined) {
       providerConfig.speakerVoiceId = providerConfig.voiceId;
       changes.push(`Moved ${pathLabel}.voiceId → ${pathLabel}.speakerVoiceId.`);

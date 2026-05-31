@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
@@ -123,6 +125,70 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
       );
     }
     return undefined;
+  }
+}
+
+function resolveLocalMessagesHomeDir(): string | undefined {
+  const home = process.env.HOME?.trim();
+  if (home) {
+    return home;
+  }
+  try {
+    return os.homedir().trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveLocalMessagesDbPath(dbPath: string): string {
+  if (!dbPath.startsWith("~")) {
+    return dbPath;
+  }
+  const home = resolveLocalMessagesHomeDir();
+  return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
+}
+
+function resolveIMessageWatchSourceDbPath(params: {
+  catchupEnabled: boolean;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+}): string | undefined {
+  if (params.catchupEnabled || params.remoteHost) {
+    return undefined;
+  }
+  const configured = params.dbPath?.trim();
+  if (configured) {
+    return configured;
+  }
+  const cliPath = params.cliPath.trim();
+  if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
+    return undefined;
+  }
+  const home = resolveLocalMessagesHomeDir();
+  return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
+}
+
+async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
+  const resolvedDbPath = resolveLocalMessagesDbPath(dbPath);
+  let database:
+    | {
+        close: () => void;
+        prepare: (sql: string) => { get: () => unknown };
+      }
+    | undefined;
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    database = new DatabaseSync(resolvedDbPath, { readOnly: true });
+    const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
+      | { maxRowid?: unknown }
+      | undefined;
+    return typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid) ? row.maxRowid : null;
+  } catch (err) {
+    logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
+    return null;
+  } finally {
+    database?.close();
   }
 }
 
@@ -257,6 +323,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
     }
   }
+  const watchSourceDbPath = resolveIMessageWatchSourceDbPath({
+    catchupEnabled: catchupCfg.enabled,
+    cliPath,
+    dbPath,
+    remoteHost,
+  });
+  const watchStartupRowidWatermark = watchSourceDbPath
+    ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
+    : null;
 
   // When `coalesceSameSenderDms` is enabled and the user has not set an
   // explicit inbound debounce for this channel, widen the window to 2500 ms.
@@ -912,6 +987,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
+    if (
+      watchStartupRowidWatermark !== null &&
+      typeof message.id === "number" &&
+      Number.isFinite(message.id) &&
+      message.id <= watchStartupRowidWatermark
+    ) {
+      logVerbose(
+        `imessage: dropping stale watch notification at or before startup rowid account=${accountInfo.accountId}`,
+      );
+      return;
+    }
     const repairedMessage = await repairMessageConversationAnchor(message);
     if (!repairedMessage) {
       return;
@@ -990,6 +1076,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         {
           attachments: includeAttachments,
           include_reactions: true,
+          ...(watchStartupRowidWatermark !== null
+            ? { since_rowid: watchStartupRowidWatermark }
+            : {}),
         },
         { timeoutMs: probeTimeoutMs },
       );

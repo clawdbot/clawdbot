@@ -22,7 +22,7 @@
         "items": {
           "type": "string"
         },
-        "description": "Allowlist of provider/model keys like openai-codex/gpt-5.2."
+        "description": "Allowlist of provider/model keys like openai/gpt-5.2."
       },
       "maxTokens": {
         "type": "integer",

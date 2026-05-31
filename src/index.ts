@@ -84,7 +84,7 @@ if (!isMain) {
 }
 
 if (isMain) {
-  const { restoreTerminalState } = await import("./terminal/restore.js");
+  const { restoreTerminalState } = await import("../packages/terminal-core/src/restore.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.

@@ -12,6 +12,7 @@ const authProfilesStoreMock = vi.hoisted(() => ({
     string,
     | { type: "api_key"; provider: string; key: string }
     | { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
+    | { type: "token"; provider: string; token: string }
   >,
 }));
 const modelsCommandMock = vi.hoisted(() => ({
@@ -104,16 +105,26 @@ vi.mock("./directive-handling.auth.js", () => ({
     _agentDir?: string,
     _mode?: unknown,
     workspaceDir?: string,
+    options?: { acceptedProfileTypes?: readonly string[] },
   ) => {
     const providerKey = normalizeProviderForAuthTest(provider);
+    const acceptedProfileTypes = options?.acceptedProfileTypes
+      ? new Set(options.acceptedProfileTypes)
+      : undefined;
     const matchingProfiles = Object.entries(authProfilesStoreMock.profiles).filter(
-      ([, profile]) => normalizeProviderForAuthTest(profile.provider) === providerKey,
+      ([, profile]) =>
+        normalizeProviderForAuthTest(profile.provider) === providerKey &&
+        (!acceptedProfileTypes || acceptedProfileTypes.has(profile.type)),
     );
     if (matchingProfiles.length > 0) {
       return {
         label: matchingProfiles
           .map(([profileId, profile]) =>
-            profile.type === "oauth" ? `${profileId}=OAuth` : `${profileId}=${profile.key}`,
+            profile.type === "oauth"
+              ? `${profileId}=OAuth`
+              : profile.type === "token"
+                ? `${profileId}=token`
+                : `${profileId}=${profile.key}`,
           )
           .join(", "),
         source: `auth-profiles.json: /tmp/auth-profiles.json`,
@@ -238,7 +249,7 @@ vi.mock("../../agents/harness/selection.js", () => ({
         ? undefined
         : (modelRuntime ??
           (providerRuntime === "default" ? undefined : providerRuntime) ??
-          (provider === "openai" || provider === "openai-codex" ? "codex" : "auto"));
+          (provider === "openai" ? "codex" : "auto"));
     return {
       runtime,
       runtimeSource: modelRuntime ? "model" : providerRuntime ? "provider" : "implicit",
@@ -256,7 +267,7 @@ vi.mock("../../agents/runtime-plan/auth.js", () => ({
   }) => ({
     providerForAuth: provider,
     authProfileProviderForAuth: provider,
-    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai-codex" } : {}),
+    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai" } : {}),
   }),
 }));
 
@@ -355,7 +366,8 @@ type OAuthProfileForTest = {
   refresh: string;
   expires: number;
 };
-type AuthProfileForTest = ApiKeyProfile | OAuthProfileForTest;
+type TokenProfileForTest = { type: "token"; provider: string; token: string };
+type AuthProfileForTest = ApiKeyProfile | OAuthProfileForTest | TokenProfileForTest;
 
 function baseAliasIndex(): ModelAliasIndex {
   return { byAlias: new Map(), byKey: new Map() };
@@ -798,14 +810,19 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
   });
 
-  it("reports Codex runtime auth for OpenAI status rows", async () => {
+  it("reports unified OpenAI OAuth auth for OpenAI status rows", async () => {
     setAuthProfiles({
-      "openai-codex:patrick@example.test": {
+      "openai:patrick@example.test": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
+      },
+      "openai:runtime-token": {
+        type: "token",
+        provider: "openai",
+        token: "token",
       },
     });
 
@@ -832,8 +849,8 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("[openai] endpoint: default auth:");
     expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).toContain("via codex runtime / openai-codex");
-    expect(reply?.text).toContain("openai-codex:patrick@example.test=OAuth");
+    expect(reply?.text).not.toContain("via codex runtime");
+    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
   }, 240_000);
 
   it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
@@ -843,9 +860,9 @@ describe("/model chat UX", () => {
         provider: "openai",
         key: "sk-openai-direct",
       },
-      "openai-codex:patrick@example.test": {
+      "openai:patrick@example.test": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -879,9 +896,9 @@ describe("/model chat UX", () => {
 
   it("does not borrow Codex auth when OpenAI model policy pins OpenClaw runtime", async () => {
     setAuthProfiles({
-      "openai-codex:patrick@example.test": {
+      "openai:patrick@example.test": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -912,7 +929,49 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("[openai] endpoint: default auth: missing");
     expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text).not.toContain("openai-codex:patrick@example.test=OAuth");
+    expect(reply?.text).not.toContain("openai:patrick@example.test=OAuth");
+    expect(reply?.text).not.toContain("openai:runtime-token=token");
+  });
+
+  it("honors Codex session runtime overrides when labeling OpenAI status auth", async () => {
+    setAuthProfiles({
+      "openai:patrick@example.test": {
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+      },
+    });
+
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "openai",
+      model: "gpt-5.5",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      sessionEntry: {
+        agentRuntimeOverride: "codex",
+      },
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
+    });
+
+    expect(reply?.text).toContain("[openai] endpoint: default auth:");
+    expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
+    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
   });
 
   it("uses workspace-scoped auth evidence in /model status labels", async () => {
@@ -1219,7 +1278,7 @@ describe("/model chat UX", () => {
         ...baseConfig(),
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://chatgpt.com/backend-api/codex",
               models: [
                 {
@@ -1734,7 +1793,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   it.each([
     ["openai", "gpt-5.5"],
-    ["openai-codex", "gpt-5.5"],
+    ["openai", "gpt-5.5"],
   ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
     setDirectiveTestProviders([
       {

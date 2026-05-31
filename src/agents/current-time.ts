@@ -1,3 +1,4 @@
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   type TimeFormatPreference,
   formatUserTime,
@@ -23,9 +24,10 @@ type TimeConfigLike = {
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
-  const formattedTime =
-    formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ?? new Date(nowMs).toISOString();
-  const utcTime = new Date(nowMs).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const timestampMs = resolveDateTimestampMs(nowMs);
+  const date = new Date(timestampMs);
+  const formattedTime = formatUserTime(date, userTimezone, userTimeFormat) ?? date.toISOString();
+  const utcTime = date.toISOString().replace("T", " ").slice(0, 16) + " UTC";
   const timeLine = `Current time: ${formattedTime} (${userTimezone})\nReference UTC: ${utcTime}`;
   return { userTimezone, formattedTime, timeLine };
 }

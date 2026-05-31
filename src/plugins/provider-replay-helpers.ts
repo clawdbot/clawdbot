@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderReasoningOutputMode,
   ProviderReplayPolicy,
@@ -22,7 +22,7 @@ export function buildOpenAICompatibleReplayPolicy(
   if (
     modelApi !== "openai-completions" &&
     modelApi !== "openai-responses" &&
-    modelApi !== "openai-codex-responses" &&
+    modelApi !== "openai-chatgpt-responses" &&
     modelApi !== "azure-openai-responses"
   ) {
     return undefined;
@@ -32,7 +32,7 @@ export function buildOpenAICompatibleReplayPolicy(
   const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
   const isResponsesFamily =
     modelApi === "openai-responses" ||
-    modelApi === "openai-codex-responses" ||
+    modelApi === "openai-chatgpt-responses" ||
     modelApi === "azure-openai-responses";
 
   return {

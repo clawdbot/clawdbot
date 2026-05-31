@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 
 describe("sandbox config", () => {

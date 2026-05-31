@@ -1,9 +1,11 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 
@@ -27,6 +29,25 @@ function runAssertion(
     killSignal: "SIGKILL",
     timeout: options.timeoutMs,
   });
+}
+
+async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    return await callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
@@ -76,6 +97,32 @@ function startTcpFixture(portPath: string, connectionHandlerSource: string) {
       stdio: "pipe",
     },
   );
+}
+
+async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
+  port: number;
+  stop: () => Promise<void>;
+}> {
+  const sockets = new Set<Socket>();
+  const server = createServer(handler);
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  return {
+    port: address.port,
+    stop: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    },
+  };
 }
 
 describe("release user journey assertions", () => {
@@ -183,32 +230,24 @@ describe("release user journey assertions", () => {
   it("accepts ready ClickClack fixture state", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
-    const portPath = path.join(root, "port.txt");
-    const server = startTcpFixture(
-      portPath,
-      [
-        "(socket) => {",
-        "  const body = JSON.stringify({ socketCount: 1 });",
-        "  socket.end(`HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: ${Buffer.byteLength(body)}\\r\\n\\r\\n${body}`);",
-        "}",
-      ].join("\n"),
-    );
+    const server = await startTcpFixtureServer((socket) => {
+      const body = JSON.stringify({ socketCount: 1 });
+      socket.end(
+        `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+      );
+    });
 
     try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
-      const result = runAssertion(
-        home,
-        ["wait-clickclack-socket", `http://127.0.0.1:${port}`, "1"],
-        {
-          env: { OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" },
-          timeoutMs: 2500,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
+      await expect(
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
+          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
+            `http://127.0.0.1:${server.port}`,
+            "1",
+          ]),
+        ),
+      ).resolves.toBeUndefined();
     } finally {
-      await stopChild(server);
+      await server.stop();
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -216,31 +255,23 @@ describe("release user journey assertions", () => {
   it("bounds stalled ClickClack fixture HTTP probes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
-    const portPath = path.join(root, "port.txt");
-    const server = startTcpFixture(
-      portPath,
-      '(socket) => socket.write("HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n")',
+    const server = await startTcpFixtureServer((socket) =>
+      socket.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"),
     );
 
     try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
       const startedAt = Date.now();
-      const result = runAssertion(
-        home,
-        ["wait-clickclack-socket", `http://127.0.0.1:${port}`, "1"],
-        {
-          env: { OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" },
-          timeoutMs: 2500,
-        },
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.signal).not.toBe("SIGKILL");
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Timed out waiting for ClickClack websocket connection");
+      await expect(
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
+          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
+            `http://127.0.0.1:${server.port}`,
+            "0.2",
+          ]),
+        ),
+      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
       expect(Date.now() - startedAt).toBeLessThan(2500);
     } finally {
-      await stopChild(server);
+      await server.stop();
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -248,27 +279,21 @@ describe("release user journey assertions", () => {
   it("rejects loose HTTP timeout env values instead of parsing prefixes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
-    const portPath = path.join(root, "port.txt");
-    const server = startTcpFixture(
-      portPath,
-      '(socket) => socket.write("HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n")',
+    const server = await startTcpFixtureServer((socket) =>
+      socket.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"),
     );
 
     try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
-      const result = runAssertion(
-        home,
-        ["wait-clickclack-socket", `http://127.0.0.1:${port}`, "1"],
-        {
-          env: { OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" },
-          timeoutMs: 500,
-        },
-      );
-
-      expect(result.error).toMatchObject({ code: "ETIMEDOUT" });
-      expect(result.signal).toBe("SIGKILL");
+      await expect(
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
+          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
+            `http://127.0.0.1:${server.port}`,
+            "0.2",
+          ]),
+        ),
+      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
     } finally {
-      await stopChild(server);
+      await server.stop();
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -276,38 +301,30 @@ describe("release user journey assertions", () => {
   it("bounds ClickClack fixture error response bodies", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
-    const portPath = path.join(root, "port.txt");
-    const server = startTcpFixture(
-      portPath,
-      [
-        "(socket) => {",
-        '  const body = "x".repeat(128);',
-        "  socket.end(`HTTP/1.1 500 Internal Server Error\\r\\nContent-Type: text/plain\\r\\nContent-Length: ${Buffer.byteLength(body)}\\r\\n\\r\\n${body}`);",
-        "}",
-      ].join("\n"),
-    );
+    const server = await startTcpFixtureServer((socket) => {
+      const body = "x".repeat(128);
+      socket.end(
+        `HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+      );
+    });
 
     try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
-      const result = runAssertion(
-        home,
-        ["post-clickclack-inbound", `http://127.0.0.1:${port}`, "hello"],
-        {
-          env: {
+      await expect(
+        withEnv(
+          {
+            HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16",
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000",
           },
-          timeoutMs: 2500,
-        },
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.signal).not.toBe("SIGKILL");
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("ClickClack inbound response body exceeded 16 bytes");
-      expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+          () =>
+            runReleaseUserJourneyAssertion("post-clickclack-inbound", [
+              `http://127.0.0.1:${server.port}`,
+              "hello",
+            ]),
+        ),
+      ).rejects.toThrow("ClickClack inbound response body exceeded 16 bytes");
     } finally {
-      await stopChild(server);
+      await server.stop();
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -315,38 +332,30 @@ describe("release user journey assertions", () => {
   it("rejects loose body byte env values instead of parsing prefixes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
-    const portPath = path.join(root, "port.txt");
-    const server = startTcpFixture(
-      portPath,
-      [
-        "(socket) => {",
-        '  const body = "x".repeat(128);',
-        "  socket.end(`HTTP/1.1 500 Internal Server Error\\r\\nContent-Type: text/plain\\r\\nContent-Length: ${Buffer.byteLength(body)}\\r\\n\\r\\n${body}`);",
-        "}",
-      ].join("\n"),
-    );
+    const server = await startTcpFixtureServer((socket) => {
+      const body = "x".repeat(128);
+      socket.end(
+        `HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+      );
+    });
 
     try {
-      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
-      const result = runAssertion(
-        home,
-        ["post-clickclack-inbound", `http://127.0.0.1:${port}`, "hello"],
-        {
-          env: {
+      await expect(
+        withEnv(
+          {
+            HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16bytes",
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000",
           },
-          timeoutMs: 2500,
-        },
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.signal).not.toBe("SIGKILL");
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("fixture inbound failed: 500");
-      expect(result.stderr).not.toContain("response body exceeded 16 bytes");
+          () =>
+            runReleaseUserJourneyAssertion("post-clickclack-inbound", [
+              `http://127.0.0.1:${server.port}`,
+              "hello",
+            ]),
+        ),
+      ).rejects.toThrow("fixture inbound failed: 500");
     } finally {
-      await stopChild(server);
+      await server.stop();
       rmSync(root, { force: true, recursive: true });
     }
   });

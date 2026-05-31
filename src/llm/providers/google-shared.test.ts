@@ -2,7 +2,10 @@ import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { consumeGoogleGenerateContentStream } from "./google-shared.js";
+import {
+  buildGoogleGenerateContentParams,
+  consumeGoogleGenerateContentStream,
+} from "./google-shared.js";
 
 const model: Model<"google-generative-ai"> = {
   id: "gemini-test",
@@ -129,5 +132,17 @@ describe("consumeGoogleGenerateContentStream", () => {
       totalTokens: 17,
     });
     expect(output.usage.cost.total).toBeGreaterThan(0);
+  });
+});
+
+describe("buildGoogleGenerateContentParams", () => {
+  it("forwards stop sequences to Google generation config", () => {
+    const params = buildGoogleGenerateContentParams(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { stop: ["STOP"] },
+    );
+
+    expect(params.config?.stopSequences).toEqual(["STOP"]);
   });
 });

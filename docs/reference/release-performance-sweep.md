@@ -13,9 +13,11 @@ to the public blog post.
 
 Two audits are combined here:
 
-- **Release performance sweep:** GitHub Releases from `v2026.5.27` back through
+- **Release performance sweep:** GitHub Releases from `v2026.5.28` back through
   stable `v2026.4.23`, using the `OpenClaw Performance` workflow,
-  `profile=smoke`, `repeat=1`, mock-provider lane.
+  `profile=smoke`, mock-provider lane. Most tag rows are one sample; the
+  `v2026.5.27` and `v2026.5.28` rows use the latest repeat-3 release-branch
+  artifacts.
 - **Earlier April context:** published `clawgrit-reports` mock-provider
   baselines from `v2026.4.1` through `v2026.5.2`, used only to avoid treating
   the broken late-April releases as the public performance baseline.
@@ -27,42 +29,44 @@ Two audits are combined here:
   file count.
 
 <Warning>
-The main performance sweep uses one smoke sample per tag. Earlier April context
-uses published repeat-3 medians from `clawgrit-reports`. Treat the numbers as
-trend evidence and regression-hunting signal, not as release-gate statistics.
+The main performance sweep uses one smoke sample per tag, except the
+`v2026.5.27` and `v2026.5.28` rows, which use the latest repeat-3
+release-branch artifacts. Earlier April context uses published repeat-3
+medians from `clawgrit-reports`. Treat the numbers as trend evidence and
+regression-hunting signal, not as release-gate statistics.
 </Warning>
 
 ## Snapshot
 
-Performance coverage: **76 requested releases**, **73 artifact-backed points**,
-and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.27`.
+Performance coverage: **77 requested releases**, **74 artifact-backed points**,
+and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.28`.
 
 <CardGroup cols={2}>
   <Card title="Stable agent turn" icon="gauge">
-    **2.9x faster cold turn**
+    **5.1x faster cold turn**
 
     - `v2026.4.14`: 9.8s
-    - `v2026.5.27`: 3.4s
+    - `v2026.5.28`: 1.9s
 
   </Card>
   <Card title="Published package" icon="package">
-    **17.8MB tarball**
+    **17.9MB tarball**
 
     Latest stable package, down from the 43.3MB March package-size peak.
 
   </Card>
   <Card title="Latest stable install" icon="hard-drive">
-    **786.9MB fresh install**
+    **361.7MiB fresh install**
 
-    `v2026.5.27` still contains the nested OpenClaw dependency tree. The
-    next-release state on `main` is 407.4MB.
+    `v2026.5.28` cuts the nested OpenClaw dependency tree sharply, but a
+    smaller 259.7MiB nested tree still remains in the local install audit.
 
   </Card>
   <Card title="Dependency graph" icon="boxes">
-    **371 installed packages**
+    **300 installed packages**
 
-    Latest stable release. Current `main` is down to 314 after the follow-up
-    dependency cleanup.
+    Latest stable release, measured as unique package name/version roots in a
+    fresh install with scripts disabled.
 
   </Card>
 </CardGroup>
@@ -84,45 +88,44 @@ and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.27`.
 
   </Card>
   <Card title="Latest stable" icon="tag">
-    **786.9MB install**
+    **361.7MiB install**
 
-    `2026.5.27` reduced the peak but still installed a 675.9MB nested
-    OpenClaw tree.
+    `2026.5.28` cuts fresh install size by 52.8% from `2026.5.27`, but still
+    installs a 259.7MiB nested OpenClaw tree.
 
   </Card>
-  <Card title="Next-release state" icon="scissors">
-    **407.4MB install**
+  <Card title="Dependency graph" icon="scissors">
+    **300 package roots**
 
-    Current `main` keeps shrinkwrap, removes the nested tree, and installs
-    314 packages.
+    `2026.5.28` installs 71 fewer unique package name/version roots than
+    `2026.5.27`.
 
   </Card>
 </CardGroup>
 
 <Tip>
-Shrinkwrap was not the problem by itself. The bad package shape was. Current
-`main` still ships shrinkwrap, but npm no longer materializes a second
-OpenClaw dependency tree during install.
+Shrinkwrap was not the problem by itself. The bad package shape was.
+`v2026.5.28` still ships shrinkwrap, but the nested dependency tree is much
+smaller and the all-platform canvas fanout is gone in the local audit.
 </Tip>
 
-## What Changed After 5.27
+## What Changed In 5.28
 
-The cleanup between `v2026.5.27` and current `main` removed the duplicate
-default-install graph instead of removing the capabilities themselves.
+The cleanup between `v2026.5.27` and `v2026.5.28` reduced the default-install
+graph instead of removing the capabilities themselves.
 
 <CardGroup cols={2}>
   <Card title="Root default graph" icon="git-branch">
-    Root shrinkwrap package paths fell from **372** to **331**. Unique package
-    names fell from **357** to **318**.
+    Unique package name/version roots fell from **371** to **300**. Package
+    instances fell from **372** to **301**.
   </Card>
-  <Card title="Direct root dependencies" icon="unplug">
-    `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`,
-    `@earendil-works/pi-coding-agent`, and `pdfjs-dist` left the default root
-    dependency path.
+  <Card title="Nested tree" icon="unplug">
+    Nested `openclaw/node_modules` fell from **656.1MiB** to **259.7MiB** in
+    the same local install audit.
   </Card>
   <Card title="Native optional cones" icon="cpu">
-    The all-platform `@napi-rs/canvas` and `@mariozechner/clipboard` native
-    package cones stopped landing in the default install.
+    The all-platform `@napi-rs/canvas` native package cone stopped landing in
+    the default install.
   </Card>
   <Card title="Supply-chain surface" icon="shield">
     Fewer default packages means fewer tarballs, maintainers, native binaries,
@@ -138,11 +141,11 @@ Do not use the late-April broken rows as public performance baselines.
 
 For the blog narrative, use the earlier April published baseline as scale:
 
-| Metric          | Earlier April baseline | `v2026.5.27` |                    Delta |
+| Metric          | Earlier April baseline | `v2026.5.28` |                    Delta |
 | --------------- | ---------------------: | -----------: | -----------------------: |
-| Cold agent turn |                9,819ms |      3,378ms | 65.6% lower, 2.9x faster |
-| Warm agent turn |                7,458ms |      2,973ms | 60.1% lower, 2.5x faster |
-| Agent peak RSS  |                686.2MB |      635.5MB |               7.4% lower |
+| Cold agent turn |                9,819ms |      1,908ms | 80.6% lower, 5.1x faster |
+| Warm agent turn |                7,458ms |      1,870ms | 74.9% lower, 4.0x faster |
+| Agent peak RSS  |                686.2MB |      581.0MB |              15.3% lower |
 
 The earlier April baseline is `v2026.4.14` from the published
 `clawgrit-reports` mock-provider run. That run used repeat 3 and failed only
@@ -150,32 +153,33 @@ because the diagnostic timeline was not emitted; the cold, warm, and RSS
 medians are still useful as rough scale. Treat this as narrative context, not a
 release-gate statistic.
 
-Within the single-sample stable May sweep, the line moved more modestly:
+Within the May sweep, the latest release-branch row moved materially from
+`v2026.5.2`:
 
-| Metric          | `v2026.5.2` | `v2026.5.27` |       Delta |
+| Metric          | `v2026.5.2` | `v2026.5.28` |       Delta |
 | --------------- | ----------: | -----------: | ----------: |
-| Cold agent turn |     3,897ms |      3,378ms | 13.3% lower |
-| Warm agent turn |     3,610ms |      2,973ms | 17.6% lower |
-| Agent peak RSS  |     613.7MB |      635.5MB | 3.6% higher |
+| Cold agent turn |     3,897ms |      1,908ms | 51.0% lower |
+| Warm agent turn |     3,610ms |      1,870ms | 48.2% lower |
+| Agent peak RSS  |     613.7MB |      581.0MB |  5.3% lower |
 
-Best prerelease point in the single-sample sweep:
+Compared with the previous stable release:
 
-| Metric          | `v2026.5.27` | `v2026.5.27-beta.1` |       Delta |
-| --------------- | -----------: | ------------------: | ----------: |
-| Cold agent turn |      3,378ms |             2,575ms | 23.8% lower |
-| Warm agent turn |      2,973ms |             2,217ms | 25.4% lower |
-| Agent peak RSS  |      635.5MB |             635.3MB |        flat |
+| Metric          | `v2026.5.27` | `v2026.5.28` |       Delta |
+| --------------- | -----------: | -----------: | ----------: |
+| Cold agent turn |      2,231ms |      1,908ms | 14.5% lower |
+| Warm agent turn |      2,226ms |      1,870ms | 16.0% lower |
+| Agent peak RSS  |      649.0MB |      581.0MB | 10.5% lower |
 
 ### Install footprint
 
-| Metric                                          |  Baseline | Current main |       Delta |
+| Metric                                          |  Baseline | `v2026.5.28` |       Delta |
 | ----------------------------------------------- | --------: | -----------: | ----------: |
-| Install size from `2026.5.22` peak              | 1,020.6MB |      407.4MB | 60.1% lower |
-| Install size from latest release `2026.5.27`    |   786.9MB |      407.4MB | 48.2% lower |
-| Dependencies from monthly high `2026.2.26`      |       645 |          314 | 51.3% lower |
-| Dependencies from latest release `2026.5.27`    |       371 |          314 | 15.4% lower |
-| Nested `openclaw/node_modules` from `2026.5.22` |   911.8MB |          0MB |     removed |
-| Nested `openclaw/node_modules` from `2026.5.27` |   675.9MB |          0MB |     removed |
+| Install size from `2026.5.22` peak              | 1,020.6MB |     361.7MiB | 64.6% lower |
+| Install size from latest release `2026.5.27`    |  767.1MiB |     361.7MiB | 52.8% lower |
+| Dependencies from monthly high `2026.2.26`      |       645 |          300 | 53.5% lower |
+| Dependencies from latest release `2026.5.27`    |       371 |          300 | 19.1% lower |
+| Nested `openclaw/node_modules` from `2026.5.22` |   911.8MB |     259.7MiB | 71.5% lower |
+| Nested `openclaw/node_modules` from `2026.5.27` |  656.1MiB |     259.7MiB | 60.4% lower |
 
 ### npm package size
 
@@ -187,7 +191,8 @@ Best prerelease point in the single-sample sweep:
 | `2026.4.29` |             22.9MB |           74.6MB |  9,309 | package pruning visible           |
 | `2026.5.12` |             23.4MB |           80.1MB | 12,035 | major external-plugin split       |
 | `2026.5.22` |             17.2MB |           76.9MB | 12,386 | docs/assets excluded from package |
-| `2026.5.27` |             17.8MB |           79.0MB | 12,509 | latest stable package             |
+| `2026.5.27` |             17.8MB |           79.0MB | 12,509 | previous stable package           |
+| `2026.5.28` |             17.9MB |           81.0MB |  9,082 | latest stable package             |
 
 `2026.5.12` is the visible plugin-extraction milestone in the changelog:
 Amazon Bedrock, Bedrock Mantle, Slack, OpenShell sandbox, Anthropic Vertex,
@@ -211,7 +216,7 @@ Earlier published context:
 | `v2026.4.20` | FAIL |  22,314ms |  18,811ms |        810.8MB |
 | `v2026.4.22` | FAIL |   9,630ms |   7,459ms |        743.0MB |
 
-Supplied single-sample sweep:
+Supplied sweep:
 
 | Release             | Kova | Cold turn | Warm turn | Agent peak RSS |
 | ------------------- | ---- | --------: | --------: | -------------: |
@@ -229,7 +234,8 @@ Supplied single-sample sweep:
 | `v2026.5.22`        | PASS |   4,494ms |   4,093ms |        654.3MB |
 | `v2026.5.26`        | PASS |   2,626ms |   2,282ms |        660.4MB |
 | `v2026.5.27-beta.1` | PASS |   2,575ms |   2,217ms |        635.3MB |
-| `v2026.5.27`        | PASS |   3,378ms |   2,973ms |        635.5MB |
+| `v2026.5.27`        | PASS |   2,231ms |   2,226ms |        649.0MB |
+| `v2026.5.28`        | PASS |   1,908ms |   1,870ms |        581.0MB |
 
 ## Source probes
 
@@ -249,7 +255,8 @@ Representative source-probe points:
 | `v2026.5.22`        |              2,081ms |                 1,884ms |        5,095ms |        444.2MB |
 | `v2026.5.26`        |              1,546ms |                 1,634ms |          656ms |        400.4MB |
 | `v2026.5.27-beta.1` |              1,462ms |                 1,548ms |          548ms |        394.0MB |
-| `v2026.5.27`        |              1,874ms |                 1,925ms |          660ms |        398.0MB |
+| `v2026.5.27`        |              1,491ms |                 1,571ms |          553ms |        401.5MB |
+| `v2026.5.28`        |              1,457ms |                 1,474ms |          623ms |        386.1MB |
 
 The `v2026.5.22` CLI health spike is visible in this table even though the
 agent-turn lane still passed. Keep the source probes when investigating
@@ -258,8 +265,7 @@ targeted CLI or gateway regressions.
 ## Install footprint audit
 
 Dependency samples use one stable release per month, plus the
-`2026.5.22` shrinkwrap-introduction event, latest `2026.5.27`, and current
-`main`.
+`2026.5.22` shrinkwrap-introduction event and the latest `2026.5.28` release.
 
 | Point              | Installed deps | Fresh install | OpenClaw package | Nested `openclaw/node_modules` | Root shrinkwrap | Canvas install behavior                   |
 | ------------------ | -------------: | ------------: | ---------------: | -----------------------------: | --------------- | ----------------------------------------- |
@@ -269,8 +275,8 @@ Dependency samples use one stable release per month, plus the
 | Apr `2026.4.29`    |            392 |       335.0MB |           97.4MB |                            0MB | no              | none installed                            |
 | `2026.5.22`        |            401 |     1,020.6MB |        1,020.4MB |                        911.8MB | yes             | nested: all 12 `@napi-rs/canvas` packages |
 | May `2026.5.26`    |            371 |       767.5MB |          767.4MB |                        656.4MB | yes             | nested: all 12 `@napi-rs/canvas` packages |
-| Latest `2026.5.27` |            371 |       786.9MB |          786.7MB |                        675.9MB | yes             | nested: all 12 `@napi-rs/canvas` packages |
-| Current `main`     |            314 |       407.4MB |          101.0MB |                            0MB | yes             | top-level wrapper + `darwin-arm64`        |
+| `2026.5.27`        |            371 |      767.1MiB |         766.9MiB |                       656.1MiB | yes             | nested: all 12 `@napi-rs/canvas` packages |
+| Latest `2026.5.28` |            300 |      361.7MiB |         361.6MiB |                       259.7MiB | yes             | none installed                            |
 
 ### Shrinkwrap boundary
 
@@ -284,11 +290,12 @@ Dependency samples use one stable release per month, plus the
     `openclaw/node_modules`.
   </Card>
   <Card title="Latest stable" icon="tag">
-    `2026.5.27` keeps shrinkwrap and still installs 675.9MB under nested
+    `2026.5.28` keeps shrinkwrap and still installs 259.7MiB under nested
     `openclaw/node_modules`.
   </Card>
-  <Card title="Current main" icon="check">
-    `main` keeps shrinkwrap and removes the nested OpenClaw dependency tree.
+  <Card title="Canvas fanout fixed" icon="check">
+    `2026.5.28` no longer installs any `@napi-rs/canvas` packages in the local
+    fresh install audit.
   </Card>
 </CardGroup>
 
@@ -304,12 +311,13 @@ Published tarball inspection verifies the boundary:
 | `2026.5.25` | no                | n/a                        | no stable npm release                 |
 | `2026.5.26` | yes               | yes                        | nested dependency tree still present  |
 | `2026.5.27` | yes               | yes                        | nested dependency tree still present  |
-| `main`      | n/a               | yes                        | nested dependency tree removed        |
+| `2026.5.28` | yes               | yes                        | nested dependency tree much smaller   |
 
-The important distinction: **shrinkwrap itself is not the problem**. Current
-`main` still ships root shrinkwrap. The problem was the package shape that made
-npm materialize a large nested OpenClaw dependency tree and all 12
-`@napi-rs/canvas` platform packages.
+The important distinction: **shrinkwrap itself is not the problem**.
+`v2026.5.28` still ships root shrinkwrap. The problem was the package shape
+that made npm materialize a large nested OpenClaw dependency tree and all 12
+`@napi-rs/canvas` platform packages. The nested tree is smaller in `v2026.5.28`,
+and the canvas platform fanout no longer lands in the local audit.
 
 For a plain-English explanation of shrinkwrap and the maintainer-level package
 checks, see [npm shrinkwrap](/gateway/security/shrinkwrap).
@@ -337,24 +345,3 @@ Related docs:
 - [Plugin dependency resolution](/plugins/dependency-resolution)
 - [Plugin inventory](/plugins/plugin-inventory)
 - [Full release validation](/reference/full-release-validation)
-
-## Unavailable performance runs
-
-| Release             | Run                                                                          | Result    | Reason                                                                                                        |
-| ------------------- | ---------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `v2026.5.3-1`       | [26561664645](https://github.com/openclaw/openclaw/actions/runs/26561664645) | failure   | mock-provider job failed: CLI startup timed out waiting for qa-channel ready; no qa-channel accounts reported |
-| `v2026.5.3`         | [26561666722](https://github.com/openclaw/openclaw/actions/runs/26561666722) | failure   | mock-provider job failed: CLI startup timed out waiting for qa-channel ready; no qa-channel accounts reported |
-| `v2026.4.29-beta.2` | [26561683635](https://github.com/openclaw/openclaw/actions/runs/26561683635) | cancelled | optional baseline fetch hung before artifact upload                                                           |
-
-## Follow-up gates
-
-Recommended release checks from this sweep:
-
-1. Run the mock-provider performance smoke for release candidates and retain
-   artifacts.
-2. Track cold turn, warm turn, agent RSS, Gateway `readyz`, and CLI health.
-3. Fresh-install the packed tarball with scripts disabled.
-4. Record installed dependency count, install size, package size, nested
-   `openclaw/node_modules` size, and native optional package shape.
-5. Fail or hold release review when nested dependency trees or all-platform
-   native packages appear unexpectedly.

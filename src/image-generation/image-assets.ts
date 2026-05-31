@@ -1,9 +1,9 @@
-import { canonicalizeBase64 } from "../media/base64.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { canonicalizeBase64 } from "../media/base64.js";
 import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js";
 
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";

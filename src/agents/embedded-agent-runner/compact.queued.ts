@@ -28,7 +28,7 @@ import {
   maybeCompactAgentHarnessSession,
   resolveAgentHarnessPolicy,
 } from "../harness/selection.js";
-import { isOpenAICodexProvider, isOpenAIProvider } from "../openai-codex-routing.js";
+import { isOpenAIProvider } from "../openai-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -516,9 +516,6 @@ function shouldAttemptNativeHarnessCompaction(params: {
   contextProvider?: string;
   selectedHarnessRuntime?: string | null;
 }): boolean {
-  if (isOpenAICodexProvider(params.provider)) {
-    return true;
-  }
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.selectedHarnessRuntime);
   if (!selectedRuntime || selectedRuntime === "auto" || selectedRuntime === "openclaw") {
     return false;

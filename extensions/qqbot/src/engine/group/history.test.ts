@@ -75,19 +75,19 @@ describe("engine/group/history", () => {
       expect(formatAttachmentTags([])).toBe("");
     });
 
-    it("renders MEDIA:path for entries with a source", () => {
+    it("renders bracketed source tags for entries with a source", () => {
       expect(formatAttachmentTags([{ type: "image", localPath: "/tmp/a.png" }])).toBe(
-        "MEDIA:/tmp/a.png",
+        "[image: /tmp/a.png]",
       );
       expect(formatAttachmentTags([{ type: "image", url: "https://x/b.png" }])).toBe(
-        "MEDIA:https://x/b.png",
+        "[image: https://x/b.png]",
       );
     });
 
     it("inlines transcript for voice w/ source", () => {
       expect(
         formatAttachmentTags([{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi" }]),
-      ).toBe('MEDIA:/tmp/v.wav (transcript: "hi")');
+      ).toBe('[voice: /tmp/v.wav] (transcript: "hi")');
     });
 
     it("uses descriptive tags when no source is available", () => {
@@ -108,7 +108,7 @@ describe("engine/group/history", () => {
           { type: "image", localPath: "/tmp/a.png" },
           { type: "voice", transcript: "hi" },
         ]),
-      ).toBe('MEDIA:/tmp/a.png\n[voice (transcript: "hi")]');
+      ).toBe('[image: /tmp/a.png]\n[voice (transcript: "hi")]');
     });
   });
 
@@ -144,7 +144,7 @@ describe("engine/group/history", () => {
           content: "see",
           attachments: [{ content_type: "image/png", url: "https://x/a.png" }],
         }),
-      ).toBe("see MEDIA:https://x/a.png");
+      ).toBe("see [image: https://x/a.png]");
     });
   });
 

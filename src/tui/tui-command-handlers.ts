@@ -4,6 +4,11 @@ import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/in
 import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
+  formatGoalContinuationPrompt,
+  formatGoalResumeContinuationPrompt,
+  parseGoalCommand,
+} from "../auto-reply/reply/commands-goal.js";
+import {
   formatThinkingLevels,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
@@ -67,6 +72,21 @@ function isBtwCommand(text: string): boolean {
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+}
+
+function goalContinuationPrompt(text: string): string | null {
+  const parsed = parseGoalCommand(text);
+  if (!parsed) {
+    return null;
+  }
+  const action = parsed.action;
+  if (action === "start" || action === "set" || action === "create") {
+    return formatGoalContinuationPrompt(parsed.text) || null;
+  }
+  if (action === "resume") {
+    return formatGoalResumeContinuationPrompt(parsed.text);
+  }
+  return null;
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -396,6 +416,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             });
             chatLog.addSystem(result.text);
             await refreshSessionInfo();
+            const continuation = goalContinuationPrompt(raw);
+            if (continuation) {
+              await sendMessage(continuation);
+            }
           } catch (err) {
             chatLog.addSystem(`goal failed: ${sanitizeRenderableText(String(err))}`);
           }

@@ -590,7 +590,7 @@ describe("detectChangedScope", () => {
     ).toEqual({
       runFastOnly: true,
       runPluginContracts: true,
-      runCiRouting: false,
+      runCiRouting: true,
     });
   });
 
@@ -598,9 +598,15 @@ describe("detectChangedScope", () => {
     expect(
       detectNodeFastScope([
         ".github/workflows/ci.yml",
+        "scripts/check-changed.mjs",
         "scripts/ci-changed-scope.mjs",
+        "scripts/run-vitest.mjs",
+        "scripts/test-projects.test-support.d.mts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
+        "test/scripts/changed-lanes.test.ts",
+        "test/scripts/run-vitest.test.ts",
+        "test/scripts/test-projects.test.ts",
         "docs/ci.md",
       ]),
     ).toEqual({

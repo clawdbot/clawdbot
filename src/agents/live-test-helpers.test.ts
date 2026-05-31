@@ -28,15 +28,15 @@ describe("isLiveProfileKeyModeEnabled", () => {
 });
 
 describe("live credential precedence", () => {
-  it("uses profile-first auth for Codex even when the global live mode is env-first", () => {
-    expect(resolveLiveCredentialPrecedence("openai-codex", false)).toBe("profile-first");
-    expect(requiresLiveProfileCredential("openai-codex", false)).toBe(true);
+  it("uses profile-first auth for OpenAI even when the global live mode is env-first", () => {
+    expect(resolveLiveCredentialPrecedence("openai", false)).toBe("profile-first");
+    expect(requiresLiveProfileCredential("openai", false)).toBe(true);
   });
 
   it("keeps env-first auth for normal providers unless profile keys are required", () => {
-    expect(resolveLiveCredentialPrecedence("openai", false)).toBe("env-first");
-    expect(resolveLiveCredentialPrecedence("openai", true)).toBe("profile-first");
-    expect(requiresLiveProfileCredential("openai", false)).toBe(false);
-    expect(requiresLiveProfileCredential("openai", true)).toBe(true);
+    expect(resolveLiveCredentialPrecedence("anthropic", false)).toBe("env-first");
+    expect(resolveLiveCredentialPrecedence("anthropic", true)).toBe("profile-first");
+    expect(requiresLiveProfileCredential("anthropic", false)).toBe(false);
+    expect(requiresLiveProfileCredential("anthropic", true)).toBe(true);
   });
 });

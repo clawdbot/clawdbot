@@ -1,6 +1,6 @@
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 type VoiceWakeConfig = {

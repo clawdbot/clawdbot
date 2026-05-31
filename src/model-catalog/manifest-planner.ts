@@ -1,13 +1,16 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
-import { normalizeModelCatalogProviderRows } from "./normalize.js";
-import { buildModelCatalogMergeKey, normalizeModelCatalogProviderId } from "./refs.js";
+import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import {
+  buildModelCatalogMergeKey,
+  normalizeModelCatalogProviderId,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalog,
   ModelCatalogAlias,
   ModelCatalogDiscovery,
   NormalizedModelCatalogRow,
-} from "./types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
 type ManifestModelCatalogPlugin = {
   id: string;

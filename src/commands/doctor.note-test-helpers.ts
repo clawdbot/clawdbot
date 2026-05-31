@@ -3,13 +3,13 @@ import { vi } from "vitest";
 
 export const terminalNoteMock: Mock<(...args: unknown[]) => unknown> = vi.fn();
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: (...args: unknown[]) => terminalNoteMock(...args),
 }));
 
 export async function loadDoctorCommandForTest(params?: { unmockModules?: string[] }) {
   vi.resetModules();
-  vi.doMock("../terminal/note.js", () => ({
+  vi.doMock("../../packages/terminal-core/src/note.js", () => ({
     note: (...args: unknown[]) => terminalNoteMock(...args),
   }));
   for (const modulePath of params?.unmockModules ?? []) {

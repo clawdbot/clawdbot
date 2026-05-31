@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const INVALID_REQUEST = "INVALID_REQUEST";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";

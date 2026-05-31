@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prefixSystemMessage } from "../infra/system-message.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
   "Session ended. Messages here will no longer be routed.";

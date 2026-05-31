@@ -1,4 +1,7 @@
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import {
+  canLoadActivatedBundledPluginPublicSurface,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
+} from "./facade-runtime.js";
 export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 
 type CloseTrackedBrowserTabsParams = {
@@ -17,13 +20,20 @@ function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolea
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
-function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
-  cachedBrowserMaintenanceSurface ??=
-    loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
-      dirName: "browser",
-      artifactBasename: "browser-maintenance.js",
-    });
-  return cachedBrowserMaintenanceSurface;
+function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface | null {
+  const request = {
+    dirName: "browser",
+    artifactBasename: "browser-maintenance.js",
+  };
+  if (!canLoadActivatedBundledPluginPublicSurface(request)) {
+    return null;
+  }
+  if (!cachedBrowserMaintenanceSurface) {
+    cachedBrowserMaintenanceSurface =
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>(request) ??
+      undefined;
+  }
+  return cachedBrowserMaintenanceSurface ?? null;
 }
 
 export async function closeTrackedBrowserTabsForSessions(
@@ -33,11 +43,14 @@ export async function closeTrackedBrowserTabsForSessions(
     return 0;
   }
 
-  let surface: BrowserMaintenanceSurface;
+  let surface: BrowserMaintenanceSurface | null;
   try {
     surface = loadBrowserMaintenanceSurface();
   } catch (error) {
     params.onWarn?.(`browser cleanup unavailable: ${String(error)}`);
+    return 0;
+  }
+  if (!surface) {
     return 0;
   }
   return await surface.closeTrackedBrowserTabsForSessions(params);

@@ -25,7 +25,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
+vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   colorize: (_rich: boolean, _color: unknown, text: string) => text,
   isRich: () => false,
   theme: { error: "error" },

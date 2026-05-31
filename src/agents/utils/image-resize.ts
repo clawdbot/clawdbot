@@ -1,6 +1,9 @@
 import type { ImageContent } from "../../llm/types.js";
-import { applyExifOrientation } from "./exif-orientation.js";
-import { loadPhoton } from "./photon.js";
+import {
+  createImageProcessor,
+  isImageProcessorUnavailableError,
+  type ImageProbe,
+} from "../../media/image-ops.js";
 
 export interface ImageResizeOptions {
   maxWidth?: number; // Default: 2000
@@ -29,14 +32,18 @@ const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
   jpegQuality: 80,
 };
 
+function maxBinaryBytesForBase64Budget(maxBase64Bytes: number): number {
+  return Math.floor(maxBase64Bytes / 4) * 3;
+}
+
 interface EncodedCandidate {
   data: string;
   encodedSize: number;
   mimeType: string;
 }
 
-function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate {
-  const data = Buffer.from(buffer).toString("base64");
+function encodeCandidate(buffer: Buffer, mimeType: string): EncodedCandidate {
+  const data = buffer.toString("base64");
   return {
     data,
     encodedSize: Buffer.byteLength(data, "utf-8"),
@@ -44,18 +51,24 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
   };
 }
 
+function orientedDimensions(probe: ImageProbe): { width: number; height: number } {
+  return probe.orientation && probe.orientation >= 5 && probe.orientation <= 8
+    ? { width: probe.height, height: probe.width }
+    : { width: probe.width, height: probe.height };
+}
+
 /**
  * Resize an image to fit within the specified max dimensions and encoded file size.
  * Returns null if the image cannot be resized below maxBytes.
  *
- * Uses Photon (Rust/WASM) for image processing. If Photon is not available,
+ * Uses Rastermill for image processing. If no Rastermill backend is available,
  * returns null.
  *
  * Strategy for staying under maxBytes:
  * 1. First resize to maxWidth/maxHeight
- * 2. Try both PNG and JPEG formats, pick the smaller one
- * 3. If still too large, try JPEG with decreasing quality
- * 4. If still too large, progressively reduce dimensions until 1x1
+ * 2. Let Rastermill choose JPEG or PNG for the image transparency profile
+ * 3. If still too large, search decreasing quality/compression settings
+ * 4. If still too large, progressively reduce dimensions
  */
 export async function resizeImage(
   img: ImageContent,
@@ -64,23 +77,14 @@ export async function resizeImage(
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const inputBuffer = Buffer.from(img.data, "base64");
   const inputBase64Size = Buffer.byteLength(img.data, "utf-8");
+  const processor = createImageProcessor();
 
-  const photon = await loadPhoton();
-  if (!photon) {
-    return null;
-  }
-
-  let image: ReturnType<typeof photon.PhotonImage.new_from_byteslice> | undefined;
   try {
-    const inputBytes = new Uint8Array(inputBuffer);
-    const rawImage = photon.PhotonImage.new_from_byteslice(inputBytes);
-    image = applyExifOrientation(photon, rawImage, inputBytes);
-    if (image !== rawImage) {
-      rawImage.free();
+    const probe = await processor.probe(inputBuffer);
+    if (!probe) {
+      return null;
     }
-
-    const originalWidth = image.get_width();
-    const originalHeight = image.get_height();
+    const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
     const format = img.mimeType?.split("/")[1] ?? "png";
 
     // Check if already within all limits (dimensions AND encoded size)
@@ -100,78 +104,40 @@ export async function resizeImage(
       };
     }
 
-    // Calculate initial dimensions respecting max limits
-    let targetWidth = originalWidth;
-    let targetHeight = originalHeight;
-
-    if (targetWidth > opts.maxWidth) {
-      targetHeight = Math.round((targetHeight * opts.maxWidth) / targetWidth);
-      targetWidth = opts.maxWidth;
-    }
-    if (targetHeight > opts.maxHeight) {
-      targetWidth = Math.round((targetWidth * opts.maxHeight) / targetHeight);
-      targetHeight = opts.maxHeight;
-    }
-
-    function tryEncodings(
-      width: number,
-      height: number,
-      jpegQualities: number[],
-    ): EncodedCandidate[] {
-      const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
-
-      try {
-        const candidates: EncodedCandidate[] = [encodeCandidate(resized.get_bytes(), "image/png")];
-        for (const quality of jpegQualities) {
-          candidates.push(encodeCandidate(resized.get_bytes_jpeg(quality), "image/jpeg"));
-        }
-        return candidates;
-      } finally {
-        resized.free();
-      }
+    const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40, 35]));
+    const output = await processor.encode(inputBuffer, {
+      format: "auto",
+      limits: {
+        maxWidth: opts.maxWidth,
+        maxHeight: opts.maxHeight,
+      },
+      maxBytes: maxBinaryBytesForBase64Budget(opts.maxBytes),
+      opaque: { format: "jpeg", quality: opts.jpegQuality },
+      transparent: { format: "png" },
+      search: {
+        quality: qualitySteps,
+        compressionLevel: [6, 9],
+      },
+    });
+    const candidate = encodeCandidate(output.data, output.mimeType);
+    if (candidate.encodedSize > opts.maxBytes || output.withinBudget === false) {
+      return null;
     }
 
-    const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40]));
-    let currentWidth = targetWidth;
-    let currentHeight = targetHeight;
-
-    while (true) {
-      const candidates = tryEncodings(currentWidth, currentHeight, qualitySteps);
-      for (const candidate of candidates) {
-        if (candidate.encodedSize < opts.maxBytes) {
-          return {
-            data: candidate.data,
-            mimeType: candidate.mimeType,
-            originalWidth,
-            originalHeight,
-            width: currentWidth,
-            height: currentHeight,
-            wasResized: true,
-          };
-        }
-      }
-
-      if (currentWidth === 1 && currentHeight === 1) {
-        break;
-      }
-
-      const nextWidth = currentWidth === 1 ? 1 : Math.max(1, Math.floor(currentWidth * 0.75));
-      const nextHeight = currentHeight === 1 ? 1 : Math.max(1, Math.floor(currentHeight * 0.75));
-      if (nextWidth === currentWidth && nextHeight === currentHeight) {
-        break;
-      }
-
-      currentWidth = nextWidth;
-      currentHeight = nextHeight;
+    return {
+      data: candidate.data,
+      mimeType: candidate.mimeType,
+      originalWidth,
+      originalHeight,
+      width: output.width,
+      height: output.height,
+      wasResized: !output.data.equals(inputBuffer),
+    };
+  } catch (error) {
+    if (isImageProcessorUnavailableError(error)) {
+      return null;
     }
-
     return null;
-  } catch {
-    return null;
-  } finally {
-    if (image) {
-      image.free();
-    }
   }
 }
 

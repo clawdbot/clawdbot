@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -5,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  listTsdownOutputRoots,
+  parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   pruneUntrackedGeneratedSourceDeclarations,
@@ -34,6 +37,41 @@ async function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
+  it("parses wrapper help before any tsdown work", () => {
+    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
+    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
+      forwardedArgs: ["--format", "esm"],
+      help: false,
+    });
+  });
+
+  it("prints wrapper help without invoking pnpm or tsdown", () => {
+    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).not.toContain("Scope:");
+    expect(result.stdout).not.toContain("pnpm");
+  });
+
+  it("forwards explicit tsdown args after wrapper args are parsed", () => {
+    const result = resolveTsdownBuildInvocation({
+      args: ["--format", "esm"],
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.args).toContain("tsdown");
+    expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
+    expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
+  });
+
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
     const rootDir = createTempDir("openclaw-pnpm-runner-");
     const npmExecPath = path.join(rootDir, "pnpm.cjs");
@@ -239,22 +277,135 @@ describe("resolveTsdownBuildInvocation", () => {
     const distFile = path.join(rootDir, "dist", "stale.js");
     const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
     const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
+    const agentCorePackageFile = path.join(rootDir, "packages", "agent-core", "dist", "stale.js");
+    const netPolicyPackageFile = path.join(rootDir, "packages", "net-policy", "dist", "stale.js");
+    const pluginSdkPackageFile = path.join(rootDir, "packages", "plugin-sdk", "dist", "keep.js");
+    const packageSourceFile = path.join(rootDir, "packages", "agent-core", "src", "keep.ts");
     const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
     await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(agentCorePackageFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(netPolicyPackageFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginSdkPackageFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(packageSourceFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
     await fsPromises.writeFile(distFile, "stale\n");
     await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
     await fsPromises.writeFile(distRuntimeFile, "stale\n");
+    await fsPromises.writeFile(agentCorePackageFile, "stale\n");
+    await fsPromises.writeFile(netPolicyPackageFile, "stale\n");
+    await fsPromises.writeFile(pluginSdkPackageFile, "keep\n");
+    await fsPromises.writeFile(packageSourceFile, "keep\n");
     await fsPromises.writeFile(unrelatedFile, "keep\n");
+
+    const outputRoots = listTsdownOutputRoots();
+    expect(outputRoots).toEqual(
+      expect.arrayContaining([
+        path.join("packages", "agent-core", "dist"),
+        path.join("packages", "net-policy", "dist"),
+      ]),
+    );
+    expect(outputRoots).not.toContain(path.join("packages", "plugin-sdk", "dist"));
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
     await expectPathMissing(distFile);
     await expectPathMissing(pluginGeneratedFile);
     await expectPathMissing(path.join(rootDir, "dist-runtime"));
+    await expectPathMissing(path.join(rootDir, "packages", "agent-core", "dist"));
+    await expectPathMissing(path.join(rootDir, "packages", "net-policy", "dist"));
+    await expect(fsPromises.readFile(pluginSdkPackageFile, "utf8")).resolves.toBe("keep\n");
+    await expect(fsPromises.readFile(packageSourceFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("removes CLI startup metadata during default tsdown clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-default-");
+    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
+    await fsPromises.mkdir(path.dirname(metadataFile), { recursive: true });
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+
+    cleanTsdownOutputRoots({ cwd: rootDir });
+
+    await expectPathMissing(metadataFile);
+  });
+
+  it("preserves CLI startup metadata across opted-in build-all tsdown clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-");
+    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
+    const staleFile = path.join(rootDir, "dist", "stale.js");
+    const nestedStaleFile = path.join(rootDir, "dist", "nested", "stale.js");
+    await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+    await fsPromises.writeFile(staleFile, "stale\n");
+    await fsPromises.writeFile(nestedStaleFile, "stale\n");
+
+    cleanTsdownOutputRoots({
+      cwd: rootDir,
+      env: { OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1" },
+    });
+
+    await expect(fsPromises.readFile(metadataFile, "utf8")).resolves.toBe(
+      '{"generatedBy":"test"}\n',
+    );
+    await expectPathMissing(staleFile);
+    await expectPathMissing(nestedStaleFile);
+  });
+
+  it("preserves existing package declarations when tsdown DTS output is skipped", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-skip-dts-");
+    const declarationFile = path.join(
+      rootDir,
+      "packages",
+      "media-understanding-common",
+      "dist",
+      "index.d.mts",
+    );
+    const nestedDeclarationFile = path.join(
+      rootDir,
+      "packages",
+      "media-understanding-common",
+      "dist",
+      "nested",
+      "types.d.ts",
+    );
+    const staleJsFile = path.join(
+      rootDir,
+      "packages",
+      "media-understanding-common",
+      "dist",
+      "index.mjs",
+    );
+    const nestedStaleFile = path.join(
+      rootDir,
+      "packages",
+      "media-understanding-common",
+      "dist",
+      "chunks",
+      "old.js",
+    );
+    const agentCorePackageFile = path.join(rootDir, "packages", "agent-core", "dist", "stale.js");
+    await fsPromises.mkdir(path.dirname(declarationFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(nestedDeclarationFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(agentCorePackageFile), { recursive: true });
+    await fsPromises.writeFile(declarationFile, "export {};\n");
+    await fsPromises.writeFile(nestedDeclarationFile, "export {};\n");
+    await fsPromises.writeFile(staleJsFile, "stale\n");
+    await fsPromises.writeFile(nestedStaleFile, "old\n");
+    await fsPromises.writeFile(agentCorePackageFile, "stale\n");
+
+    cleanTsdownOutputRoots({
+      cwd: rootDir,
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+    });
+
+    await expect(fsPromises.readFile(declarationFile, "utf8")).resolves.toBe("export {};\n");
+    await expect(fsPromises.readFile(nestedDeclarationFile, "utf8")).resolves.toBe("export {};\n");
+    await expectPathMissing(staleJsFile);
+    await expectPathMissing(nestedStaleFile);
+    await expectPathMissing(path.join(rootDir, "packages", "agent-core", "dist"));
   });
 
   it("prunes untracked generated declaration files that shadow source entries", async () => {

@@ -326,7 +326,7 @@ export async function resolveDiscordChannelAllowlist(params: {
       results.push({
         input,
         resolved: false,
-        channelName: channelName,
+        channelName,
       });
       continue;
     }
@@ -361,7 +361,7 @@ export async function resolveDiscordChannelAllowlist(params: {
     results.push({
       input,
       resolved: false,
-      channelName: channelName,
+      channelName,
     });
   }
 

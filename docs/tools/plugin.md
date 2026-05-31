@@ -186,7 +186,7 @@ Key policy rules:
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
-  separate: `openai-codex/*` is legacy OpenAI-provider config, while the bundled
+  separate: legacy Codex model refs are legacy config repaired by doctor, while the bundled
   `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
   refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
 

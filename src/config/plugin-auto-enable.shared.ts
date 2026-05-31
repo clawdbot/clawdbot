@@ -1,5 +1,7 @@
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   listPotentialConfiguredChannelPresenceSignals,
   type ChannelPresenceSignalSource,
@@ -13,17 +15,12 @@ import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import {
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
-import { collectConfiguredModelRefs } from "./model-refs.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
@@ -322,7 +319,7 @@ function isAutoEnableConfiguredChannelSignal(params: {
 function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   return (
-    !!entries &&
+    Boolean(entries) &&
     typeof entries === "object" &&
     Object.values(entries).some(
       (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webSearch),
@@ -333,14 +330,16 @@ function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
 function hasConfiguredWebSearchProviderSelection(cfg: OpenClawConfig): boolean {
   const provider = cfg.tools?.web?.search?.provider;
   return (
-    cfg.tools?.web?.search?.enabled !== false && typeof provider === "string" && !!provider.trim()
+    cfg.tools?.web?.search?.enabled !== false &&
+    typeof provider === "string" &&
+    Boolean(provider.trim())
   );
 }
 
 function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   return (
-    !!entries &&
+    Boolean(entries) &&
     typeof entries === "object" &&
     Object.values(entries).some(
       (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webFetch),
@@ -351,7 +350,7 @@ function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
 function hasConfiguredPluginConfigEntry(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   return (
-    !!entries &&
+    Boolean(entries) &&
     typeof entries === "object" &&
     Object.values(entries).some((entry) => isRecord(entry) && isRecord(entry.config))
   );
@@ -394,7 +393,7 @@ function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
 
 function hasOwnPluginEntry(cfg: OpenClawConfig, pluginId: string): boolean {
   const entries = cfg.plugins?.entries;
-  return !!entries && typeof entries === "object" && Object.hasOwn(entries, pluginId);
+  return Boolean(entries) && typeof entries === "object" && Object.hasOwn(entries, pluginId);
 }
 
 function isPluginEntryExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -473,7 +472,7 @@ function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
 
 function hasPluginEntries(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
-  return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
+  return Boolean(entries) && typeof entries === "object" && Object.keys(entries).length > 0;
 }
 
 function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {
@@ -805,7 +804,7 @@ function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string):
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const channelConfig = channels?.[channelId];
   return (
-    !!channelConfig &&
+    Boolean(channelConfig) &&
     typeof channelConfig === "object" &&
     !Array.isArray(channelConfig) &&
     (channelConfig as { enabled?: unknown }).enabled === true

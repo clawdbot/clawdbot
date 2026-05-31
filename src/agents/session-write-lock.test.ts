@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const FAKE_STARTTIME = 12345;
 let testing: typeof import("./session-write-lock.js").testing;
@@ -282,7 +282,7 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
-  it("reclaims payload-less orphan lock files after the short init grace", async () => {
+  it("preserves short-timeout recovery for payload-less orphan lock files", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       await fs.writeFile(lockPath, "", "utf8");
       const orphanDate = new Date(Date.now() - 10_000);
@@ -290,13 +290,51 @@ describe("acquireSessionWriteLock", () => {
 
       const lock = await acquireSessionWriteLock({
         sessionFile,
-        timeoutMs: 10_000,
+        timeoutMs: 500,
         staleMs: 60_000,
       });
       const raw = await fs.readFile(lockPath, "utf8");
       const payload = JSON.parse(raw) as { pid?: unknown };
       expect(payload.pid).toBe(process.pid);
       await lock.release();
+    });
+  });
+
+  it("reclaims payload-less orphan lock files past the 30s init grace", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      await fs.writeFile(lockPath, "", "utf8");
+      const orphanDate = new Date(Date.now() - 35_000);
+      await fs.utimes(lockPath, orphanDate, orphanDate);
+
+      // 35s > 30s grace, so the payload-less lock is reclaimed.
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 30_000,
+        staleMs: 60_000,
+      });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { pid?: unknown };
+      expect(payload.pid).toBe(process.pid);
+      await lock.release();
+    });
+  });
+
+  it("preserves payload-less lock files within the 30s cleanup grace", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await fs.writeFile(lockPath, "", "utf8");
+      const orphanDate = new Date(Date.now() - 10_000);
+      await fs.utimes(lockPath, orphanDate, orphanDate);
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir: root,
+        staleMs: 60_000,
+        removeStale: true,
+      });
+
+      expect(result.cleaned).toEqual([]);
+      expect(result.locks).toHaveLength(1);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
     });
   });
 

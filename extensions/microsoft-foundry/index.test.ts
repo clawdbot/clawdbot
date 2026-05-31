@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
@@ -73,7 +73,9 @@ function requirePrepareRuntimeAuth(
   return prepareRuntimeAuth;
 }
 
-function requireRuntimeAuthResult(result: { apiKey?: string; baseUrl?: string } | undefined) {
+function requireRuntimeAuthResult(
+  result: { apiKey?: string; baseUrl?: string; expiresAt?: number } | undefined,
+) {
   if (!result) {
     throw new Error("expected Microsoft Foundry runtime auth result");
   }
@@ -275,6 +277,10 @@ describe("microsoft-foundry plugin", () => {
     execFileSyncMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keeps the API key profile bound when multiple auth profiles exist without explicit order", async () => {
@@ -486,6 +492,42 @@ describe("microsoft-foundry plugin", () => {
     expect(first.apiKey).toBe("soon-expiring-token");
     const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
     expect(second.apiKey).toBe("fresh-token");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds Entra token fallback expiry when the process clock is invalid", async () => {
+    const provider = registerProvider();
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    mockAzureCliTokenRaw(JSON.stringify({ accessToken: "fallback-token" }));
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
+
+    const prepared = requireRuntimeAuthResult(
+      await provider.prepareRuntimeAuth?.(buildFoundryRuntimeAuthContext()),
+    );
+
+    expect(prepared.apiKey).toBe("fallback-token");
+    expect(prepared.expiresAt).toBe(55 * 60 * 1000);
+  });
+
+  it("treats an invalid process clock as an Entra token cache miss", async () => {
+    const provider = registerProvider();
+    mockAzureCliToken({ accessToken: "cached-token", expiresInMs: 10 * 60_000 });
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
+    const runtimeContext = buildFoundryRuntimeAuthContext();
+
+    const first = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
+    expect(first.apiKey).toBe("cached-token");
+
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    mockAzureCliTokenRaw(
+      JSON.stringify({
+        accessToken: "refreshed-token",
+        expiresOn: "2026-05-29T12:10:00.000Z",
+      }),
+    );
+    const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
+
+    expect(second.apiKey).toBe("refreshed-token");
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 

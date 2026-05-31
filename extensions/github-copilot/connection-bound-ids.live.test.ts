@@ -221,7 +221,9 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     const input = Array.isArray(capturedPayload?.input) ? capturedPayload.input : [];
     const replayedAssistant = input.find(
       (item): item is Record<string, unknown> =>
-        !!item && typeof item === "object" && (item as Record<string, unknown>).type === "message",
+        Boolean(item) &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "message",
     );
 
     expect(replayedAssistant?.id).toMatch(/^msg_[a-f0-9]{16}$/);

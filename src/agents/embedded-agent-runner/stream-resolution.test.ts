@@ -81,8 +81,8 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
         model: {
-          api: "openai-codex-responses",
-          provider: "openai-codex",
+          api: "openai-chatgpt-responses",
+          provider: "openai",
           id: "codex-mini-latest",
         } as never,
       }),
@@ -154,8 +154,8 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "codex-mini-latest",
       } as never,
       resolvedApiKey: "oauth-bearer-token",
@@ -164,7 +164,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
     const result = await expectStreamResultRecord(
       streamFn(
-        { provider: "openai-codex", id: "codex-mini-latest" } as never,
+        { provider: "openai", id: "codex-mini-latest" } as never,
         { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
         {},
       ),
@@ -406,15 +406,15 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.5",
       } as never,
       resolvedApiKey: "oauth-bearer-token",
     });
 
     const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+      streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {}),
       "codex api key result",
     );
     expect(result.apiKey).toBe("oauth-bearer-token");
@@ -431,19 +431,19 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.5",
       } as never,
       authStorage,
     });
 
     const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+      streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {}),
       "codex stored api key result",
     );
     expect(result.apiKey).toBe("stored-bearer-token");
-    expect(authStorage.getApiKey).toHaveBeenCalledWith("openai-codex");
+    expect(authStorage.getApiKey).toHaveBeenCalledWith("openai");
   });
 
   it("forwards the run abort signal into the OpenClaw native fallback when callers omit one", async () => {
@@ -455,15 +455,15 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       sessionId: "session-1",
       signal: runSignal,
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.5",
       } as never,
       resolvedApiKey: "oauth-bearer-token",
     });
 
     const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+      streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {}),
       "codex signal and api key result",
     );
     expect(result.signal).toBe(runSignal);
@@ -480,15 +480,15 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       sessionId: "session-1",
       signal: runSignal,
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.5",
       } as never,
       resolvedApiKey: "oauth-bearer-token",
     });
 
     const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {
+      streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {
         signal: explicitSignal,
       }),
       "codex explicit signal result",
@@ -505,14 +505,14 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       sessionId: "session-1",
       signal: runSignal,
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.5",
       } as never,
     });
 
     const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+      streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {}),
       "codex unauthenticated signal result",
     );
     expect(result.signal).toBe(runSignal);
@@ -525,8 +525,8 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.5",
       } as never,
       resolvedApiKey: "oauth-bearer-token",
@@ -534,7 +534,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
     const systemPrompt = `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail`;
     const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
+      streamFn({ provider: "openai", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
       "codex stripped context result",
     );
     expect(result.systemPrompt).toBe("intro\ntail");

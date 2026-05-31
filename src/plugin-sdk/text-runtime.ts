@@ -13,17 +13,17 @@ export * from "../../packages/markdown-core/src/render-aware-chunking.js";
 export * from "../../packages/markdown-core/src/render.js";
 export * from "../../packages/markdown-core/src/tables.js";
 export * from "../shared/global-singleton.js";
-export * from "../shared/record-coerce.js";
+export * from "../../packages/normalization-core/src/record-coerce.js";
 export * from "../shared/scoped-expiring-id-cache.js";
-export * from "../shared/string-coerce.js";
-export * from "../shared/string-normalization.js";
+export * from "../../packages/normalization-core/src/string-coerce.js";
+export * from "../../packages/normalization-core/src/string-normalization.js";
 export * from "../shared/string-sample.js";
 export * from "../shared/text/assistant-visible-text.js";
 export * from "../shared/text/auto-linked-file-ref.js";
 export * from "../shared/text/code-regions.js";
 export * from "../shared/text/reasoning-tags.js";
 export * from "../shared/text/strip-markdown.js";
-export * from "../terminal/safe-text.js";
+export * from "../../packages/terminal-core/src/safe-text.js";
 export * from "../infra/system-message.ts";
 export * from "../utils/directive-tags.js";
 export * from "../utils/chunk-items.js";
@@ -40,7 +40,7 @@ export {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
 export {
   CONFIG_DIR,
   clamp,

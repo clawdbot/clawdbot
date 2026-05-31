@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 
@@ -12,8 +13,7 @@ vi.mock("./cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) =>
-    provider === "codex-cli" ? "openai-codex" : provider,
+  resolveProviderIdForAuth: (provider: string) => (provider === "codex-cli" ? "openai" : provider),
 }));
 
 import {
@@ -32,7 +32,7 @@ describe("buildAuthHealthSummary", () => {
   function mockFreshCodexCliCredentials() {
     readCodexCliCredentialsCachedMock.mockReturnValue({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "fresh-cli-access",
       refresh: "fresh-cli-refresh",
       expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
@@ -49,9 +49,9 @@ describe("buildAuthHealthSummary", () => {
     return {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           ...params,
         },
       },
@@ -125,23 +125,23 @@ describe("buildAuthHealthSummary", () => {
     const store = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "stale-access",
           refresh: "stale-refresh",
           expires: now - 10_000,
         },
-        "openai-codex:named": {
+        "openai:named": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "fresh-access",
           refresh: "fresh-refresh",
           expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
         },
       },
       order: {
-        "openai-codex": ["openai-codex:named"],
+        openai: ["openai:named"],
       },
     };
 
@@ -151,18 +151,18 @@ describe("buildAuthHealthSummary", () => {
     });
 
     expect(profileStatuses(summary)).toEqual({
-      "openai-codex:default": "expired",
-      "openai-codex:named": "ok",
+      "openai:default": "expired",
+      "openai:named": "ok",
     });
-    const provider = summary.providers.find((entry) => entry.provider === "openai-codex");
+    const provider = summary.providers.find((entry) => entry.provider === "openai");
     expect(provider?.status).toBe("ok");
     expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
     expect(provider?.effectiveProfiles?.map((profile) => profile.profileId)).toEqual([
-      "openai-codex:named",
+      "openai:named",
     ]);
     expect(provider?.profiles.map((profile) => profile.profileId)).toEqual([
-      "openai-codex:default",
-      "openai-codex:named",
+      "openai:default",
+      "openai:named",
     ]);
   });
 
@@ -180,7 +180,7 @@ describe("buildAuthHealthSummary", () => {
         },
       },
       order: {
-        "openai-codex": [],
+        openai: [],
       },
     };
 
@@ -272,14 +272,14 @@ describe("buildAuthHealthSummary", () => {
     });
 
     const statuses = profileStatuses(summary);
-    expect(statuses["openai-codex:default"]).toBe("expired");
+    expect(statuses["openai:default"]).toBe("expired");
   });
 
   it("keeps healthy local oauth over fresher imported Codex CLI credentials in health status", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     readCodexCliCredentialsCachedMock.mockReturnValue({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "fresh-cli-access",
       refresh: "fresh-cli-refresh",
       expires: now + 7 * DEFAULT_OAUTH_WARN_MS,
@@ -288,9 +288,9 @@ describe("buildAuthHealthSummary", () => {
     const store = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "healthy-local-access",
           refresh: "healthy-local-refresh",
           expires: now + DEFAULT_OAUTH_WARN_MS + 10_000,
@@ -303,7 +303,7 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai:default");
     expect(profile?.status).toBe("ok");
     expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 10_000);
   });
@@ -313,9 +313,9 @@ describe("buildAuthHealthSummary", () => {
     const store = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "near-expiry-access",
           refresh: "near-expiry-refresh",
           expires: now + 2 * 60_000,
@@ -328,7 +328,7 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: 60_000,
     });
 
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai:default");
     expect(profile?.status).toBe("expiring");
   });
 
@@ -346,7 +346,7 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: 60_000,
     });
 
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai:default");
     expect(profile?.status).toBe("expiring");
     expect(profile?.expiresAt).toBe(now + 2 * 60_000);
   });
@@ -374,6 +374,35 @@ describe("buildAuthHealthSummary", () => {
 
     expect(statuses["github-copilot:invalid-expires"]).toBe("missing");
     expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
+  });
+
+  it("does not expose out-of-range oauth expiry values in health rollups", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:bad-expiry": {
+          type: "oauth" as const,
+          provider: "openai",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: MAX_DATE_TIMESTAMP_MS + 1,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai:bad-expiry");
+    const provider = summary.providers.find((entry) => entry.provider === "openai");
+
+    expect(profile?.status).toBe("missing");
+    expect(profile?.expiresAt).toBeUndefined();
+    expect(provider?.status).toBe("missing");
+    expect(provider?.expiresAt).toBeUndefined();
   });
 
   it("does not normalize provider aliases when filtering and grouping profile health", () => {

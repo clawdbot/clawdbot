@@ -127,7 +127,7 @@ describe("provider-usage.format", () => {
         updatedAt: now,
         providers: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             displayName: "Codex",
             windows: [],
             error: "Token expired",

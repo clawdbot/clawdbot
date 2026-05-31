@@ -195,7 +195,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai-codex/gpt-5.5). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.5). Leave unset to inherit the routed agent model.",
   },
   "voice.mode": {
     label: "Discord Voice Mode",

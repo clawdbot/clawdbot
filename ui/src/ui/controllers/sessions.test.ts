@@ -1251,6 +1251,75 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.count).toBe(1);
   });
 
+  it("removes deleted sessions from cached chat agent targets", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+      chatAgentSessionRowsByAgent: {
+        work: [
+          { key: "agent:work:dashboard:deleted", kind: "direct", updatedAt: 3 },
+          { key: "agent:work:main", kind: "direct", updatedAt: 1 },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:work:dashboard:deleted",
+      reason: "delete",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "deleted" });
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(state.chatAgentSessionRowsByAgent?.work?.map((session) => session.key)).toEqual([
+      "agent:work:main",
+    ]);
+  });
+
+  it("keeps out-of-scope session events out of scoped results", () => {
+    const state = createState(async () => undefined, {
+      sessionsResultAgentId: "work",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:work:main", kind: "direct", updatedAt: 1 }],
+      },
+      chatAgentSessionRowsByAgent: {
+        ops: [{ key: "agent:ops:old", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      session: {
+        key: "agent:ops:main",
+        kind: "direct",
+        agentId: "ops",
+        updatedAt: 2,
+      },
+      reason: "message",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "inserted" });
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:work:main",
+    ]);
+    expect(state.chatAgentSessionRowsByAgent?.ops?.map((session) => session.key)).toEqual([
+      "agent:ops:main",
+      "agent:ops:old",
+    ]);
+  });
+
   it("does not synthesize new sessions from partial events without a store-backed row", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {

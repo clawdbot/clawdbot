@@ -1,8 +1,8 @@
-import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { SkillCommandSpec } from "../types.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {

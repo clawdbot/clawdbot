@@ -1,5 +1,5 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { type ResolvedTelegramAccount } from "./accounts.js";
+import type { ResolvedTelegramAccount } from "./accounts.js";
 import type { TelegramProbe } from "./probe.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";

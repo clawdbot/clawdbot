@@ -1,5 +1,5 @@
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { isRecord as isJsonObject } from "../shared/record-coerce.js";
 
 function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: string }): undefined {
   if (params.onMissing === "throw") {

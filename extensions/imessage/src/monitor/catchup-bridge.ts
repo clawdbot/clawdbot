@@ -1,3 +1,4 @@
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { IMessageRpcClient } from "../client.js";
 import {
@@ -88,6 +89,11 @@ export async function runIMessageCatchup(
   const payloadByGuid = new Map<string, IMessagePayload>();
 
   const fetchFn: CatchupFetchFn = async ({ sinceMs, sinceRowid, limit }) => {
+    const sinceISO = timestampMsToIsoString(sinceMs);
+    if (!sinceISO) {
+      warnLog(`imessage catchup: invalid since timestamp ${sinceMs}`);
+      return { resolved: false, rows: [] };
+    }
     let chatsResult: { chats?: ChatsListEntry[] } | undefined;
     try {
       chatsResult = await client.request<{ chats?: ChatsListEntry[] }>(
@@ -100,7 +106,6 @@ export async function runIMessageCatchup(
       return { resolved: false, rows: [] };
     }
     const chats = chatsResult?.chats ?? [];
-    const sinceISO = new Date(sinceMs).toISOString();
     const collected: IMessageCatchupRow[] = [];
     const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
     let historyFetchFailed = false;

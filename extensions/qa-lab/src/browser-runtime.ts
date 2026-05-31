@@ -1,3 +1,4 @@
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 
 type QaBrowserGateway = {
@@ -102,10 +103,7 @@ function normalizeBrowserQuery(
 }
 
 function resolveBrowserTimeoutMs(timeoutMs: number | undefined, fallbackMs: number) {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return fallbackMs;
-  }
-  return Math.max(1, Math.floor(timeoutMs));
+  return resolvePositiveTimerTimeoutMs(timeoutMs, fallbackMs);
 }
 
 export async function callQaBrowserRequest<T = unknown>(

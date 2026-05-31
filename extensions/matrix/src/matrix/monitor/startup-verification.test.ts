@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../runtime-api.js";
+import { setMatrixRuntime } from "../../runtime.js";
 import { ensureMatrixStartupVerification } from "./startup-verification.js";
 
 function createTempStateDir(): string {
@@ -10,6 +17,18 @@ function createTempStateDir(): string {
 
 function createStateFilePath(rootDir: string): string {
   return path.join(rootDir, "startup-verification.json");
+}
+
+async function readPersistedStartupState(rootDir: string) {
+  const store = createPluginStateKeyedStoreForTests<{
+    attemptedAt?: string;
+    outcome?: string;
+  }>("matrix", {
+    namespace: "startup-verification",
+    maxEntries: 1_000,
+    env: { ...process.env, OPENCLAW_STATE_DIR: rootDir },
+  });
+  return await store.lookup("default");
 }
 
 function createAuth(accountId = "default") {
@@ -80,6 +99,20 @@ function createHarness(params?: {
 }
 
 describe("ensureMatrixStartupVerification", () => {
+  beforeEach(() => {
+    setMatrixRuntime({
+      state: {
+        openKeyedStore: (options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests("matrix", options),
+      },
+    } as unknown as PluginRuntime);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
+  });
+
   it("skips automatic requests when the device is already verified", async () => {
     const tempHome = createTempStateDir();
     const harness = createHarness({ verified: true });
@@ -200,7 +233,31 @@ describe("ensureMatrixStartupVerification", () => {
     expect(result.kind).toBe("requested");
     expect(harness.client.crypto.requestVerification).toHaveBeenCalledWith({ ownUser: true });
 
-    expect(fs.existsSync(createStateFilePath(tempHome))).toBe(true);
+    await expect(readPersistedStartupState(tempHome)).resolves.toMatchObject({
+      attemptedAt: "2026-03-08T12:00:00.000Z",
+      outcome: "requested",
+    });
+    expect(fs.existsSync(createStateFilePath(tempHome))).toBe(false);
+  });
+
+  it("falls back when startup verification nowMs is outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
+    const tempHome = createTempStateDir();
+    const stateFilePath = createStateFilePath(tempHome);
+    const harness = createHarness();
+
+    const result = await ensureMatrixStartupVerification({
+      client: harness.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+      nowMs: 8_640_000_000_000_001,
+    });
+
+    expect(result.kind).toBe("requested");
+    await expect(readPersistedStartupState(tempHome)).resolves.toMatchObject({
+      attemptedAt: "2026-05-30T12:00:00.000Z",
+    });
   });
 
   it("keeps startup verification failures non-fatal", async () => {
@@ -278,7 +335,7 @@ describe("ensureMatrixStartupVerification", () => {
       nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
     });
 
-    expect(fs.existsSync(stateFilePath)).toBe(true);
+    await expect(readPersistedStartupState(tempHome)).resolves.toBeDefined();
 
     const verified = createHarness({ verified: true });
     const result = await ensureMatrixStartupVerification({
@@ -290,5 +347,6 @@ describe("ensureMatrixStartupVerification", () => {
 
     expect(result.kind).toBe("verified");
     expect(fs.existsSync(stateFilePath)).toBe(false);
+    await expect(readPersistedStartupState(tempHome)).resolves.toBeUndefined();
   });
 });

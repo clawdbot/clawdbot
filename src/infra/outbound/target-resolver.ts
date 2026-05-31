@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelDirectoryEntry,
@@ -6,7 +7,6 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
 import { maybeResolveIdLikeTarget, type ResolvedIdLikeTarget } from "./target-id-resolution.js";
@@ -28,6 +28,7 @@ export type ResolvedMessagingTarget = {
   kind: TargetResolveKind;
   display?: string;
   source: "normalized" | "directory";
+  resolutionSource: "plugin" | "directory" | "normalized";
 };
 
 export type ResolveMessagingTargetResult =
@@ -314,6 +315,7 @@ function buildNormalizedResolveResult(params: {
       kind: params.kind,
       display: stripTargetPrefixes(params.normalized),
       source: "normalized",
+      resolutionSource: "normalized",
     },
   };
 }
@@ -403,6 +405,7 @@ export async function resolveMessagingTarget(params: {
         kind,
         display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
         source: "directory",
+        resolutionSource: "directory",
       },
     };
   }
@@ -418,6 +421,7 @@ export async function resolveMessagingTarget(params: {
             kind,
             display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
             source: "directory",
+            resolutionSource: "directory",
           },
         };
       }

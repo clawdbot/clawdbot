@@ -19,6 +19,7 @@ import {
   registerMemoryCapability,
   type MemoryPluginCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
@@ -27,6 +28,7 @@ import memoryPlugin, {
   normalizeEmbeddingVector,
   normalizeRecallQuery,
   shouldCapture,
+  testing,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.js";
 import { installTmpDirHarness } from "./test-helpers.js";
@@ -1061,6 +1063,40 @@ describe("memory plugin e2e", () => {
           await vi.advanceTimersByTimeAsync(15_000);
         },
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized auto-recall timeout timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      await expect(
+        testing.runWithTimeout({
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+          task: async () => "ok",
+        }),
+      ).resolves.toEqual({ status: "ok", value: "ok" });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("falls back for invalid auto-recall timeout timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      await expect(
+        testing.runWithTimeout({
+          timeoutMs: Number.NaN,
+          task: async () => "ok",
+        }),
+      ).resolves.toEqual({ status: "ok", value: "ok" });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1);
     } finally {
       vi.useRealTimers();
     }

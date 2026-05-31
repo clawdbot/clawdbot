@@ -1,11 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("command secret targets module import", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
+  let lazyImportProbe: {
+    channelsError: unknown;
+    listSecretTargetRegistryEntries: ReturnType<typeof vi.fn>;
+    modelsHasApiKey: boolean;
+    qrRemoteHasToken: boolean;
+  };
 
-  it("does not touch the registry during module import", async () => {
+  beforeAll(async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => {
       throw new Error("registry touched too early");
     });
@@ -16,13 +19,29 @@ describe("command secret targets module import", () => {
     }));
 
     const mod = await import("./command-secret-targets.js");
+    let channelsError: unknown;
+    try {
+      mod.getChannelsCommandSecretTargetIds();
+    } catch (error) {
+      channelsError = error;
+    }
+    lazyImportProbe = {
+      channelsError,
+      listSecretTargetRegistryEntries,
+      modelsHasApiKey: mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey"),
+      qrRemoteHasToken: mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token"),
+    };
+  });
 
-    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    expect(mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey")).toBe(true);
-    expect(mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token")).toBe(true);
-    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    expect(() => mod.getChannelsCommandSecretTargetIds()).toThrow("registry touched too early");
-    expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("does not touch the registry during module import", async () => {
+    expect(lazyImportProbe.modelsHasApiKey).toBe(true);
+    expect(lazyImportProbe.qrRemoteHasToken).toBe(true);
+    expect(lazyImportProbe.channelsError).toEqual(new Error("registry touched too early"));
+    expect(lazyImportProbe.listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
   });
 
   it("loads registry lazily for agent runtime plugin credential targets", async () => {

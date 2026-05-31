@@ -1,4 +1,5 @@
 import path from "node:path";
+import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +25,7 @@ export function buildMigrationReportDir(
   stateDir: string,
   nowMs = Date.now(),
 ): string {
-  const stamp = new Date(nowMs).toISOString().replaceAll(":", "-");
+  const stamp = timestampMsToIsoFileStamp(nowMs);
   return path.join(stateDir, "migration", providerId, stamp);
 }
 

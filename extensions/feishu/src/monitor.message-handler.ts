@@ -12,7 +12,7 @@ import type { FeishuChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
-  core: PluginRuntime;
+  channelRuntime: PluginRuntime["channel"];
   accountId: string;
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
@@ -23,6 +23,7 @@ type FeishuMessageReceiveHandlerContext = {
     botOpenId?: string;
     botName?: string;
     runtime?: RuntimeEnv;
+    channelRuntime?: PluginRuntime["channel"];
     chatHistories?: Map<string, HistoryEntry[]>;
     accountId?: string;
     processingClaimHeld?: boolean;
@@ -154,7 +155,7 @@ function resolveFeishuDebounceMentions(params: {
 
 export function createFeishuMessageReceiveHandler({
   cfg,
-  core,
+  channelRuntime,
   accountId,
   runtime,
   chatHistories,
@@ -168,7 +169,7 @@ export function createFeishuMessageReceiveHandler({
   resolveSequentialKey = ({ accountId, event }) =>
     `feishu:${accountId}:${event.message.chat_id?.trim() || "unknown"}`,
 }: FeishuMessageReceiveHandlerContext): (data: unknown) => Promise<void> {
-  const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
+  const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
     cfg,
     channel: "feishu",
   });
@@ -196,6 +197,7 @@ export function createFeishuMessageReceiveHandler({
         botOpenId: getBotOpenId(accountId),
         botName: getBotName(accountId),
         runtime,
+        channelRuntime,
         chatHistories,
         accountId,
         processingClaimHeld: true,
@@ -238,7 +240,7 @@ export function createFeishuMessageReceiveHandler({
     }
   };
 
-  const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
+  const inboundDebouncer = channelRuntime.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
     buildKey: (event) => {
       const chatId = event.message.chat_id?.trim();
@@ -255,7 +257,7 @@ export function createFeishuMessageReceiveHandler({
         return false;
       }
       const text = resolveDebounceText(event);
-      return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
+      return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

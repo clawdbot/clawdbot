@@ -1,7 +1,8 @@
 import { html } from "lit";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import { createChatSessionsLoadOverrides } from "../app-chat.ts";
+import { createChatSessionsLoadOverrides, scopedAgentListParamsForSession } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
+import { formatDateTimeMs } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { pathForTab } from "../navigation.ts";
@@ -18,6 +20,7 @@ import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
 import {
   buildAgentMainSessionKey,
+  isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -56,6 +59,7 @@ export function renderChatSessionSelect(
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
   options: { surface?: ChatSessionSelectSurface } = {},
 ) {
+  rememberChatAgentSessionRows(state, state.sessionsResult);
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const agentOptions = resolveChatAgentFilterOptions(state);
   const hasAgentSelect = agentOptions.length > 1;
@@ -109,6 +113,7 @@ function resolveNextChatSessionOffset(
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     ...createChatSessionsLoadOverrides(state),
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
   });
 }
 
@@ -495,8 +500,9 @@ function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]
       .filter(Boolean)
       .join("/"),
   ].filter(Boolean);
-  if (typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt)) {
-    parts.push(new Date(row.updatedAt).toLocaleString());
+  const updatedAt = formatDateTimeMs(row.updatedAt, undefined, "");
+  if (updatedAt) {
+    parts.push(updatedAt);
   }
   return parts.join(" · ");
 }
@@ -808,6 +814,7 @@ function renderChatModelSelect(state: AppViewState) {
         data-chat-model-select="true"
         aria-label=${t("chat.selectors.model")}
         title=${selectedLabel}
+        .value=${live(currentOverride)}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
           const next = (e.target as HTMLSelectElement).value.trim();
@@ -1013,15 +1020,15 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   const client = state.client;
-  let switchPromise: Promise<boolean>;
+  const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
-    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
+    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
       const nextSwitches = { ...state.chatModelSwitchPromises };
       delete nextSwitches[targetSessionKey];
       state.chatModelSwitchPromises = nextSwitches;
     }
   };
-  switchPromise = (async () => {
+  const switchPromise: Promise<boolean> = (async () => {
     try {
       await client.request("sessions.patch", {
         key: targetSessionKey,
@@ -1039,6 +1046,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
       clearPendingSwitch();
     }
   })();
+  switchPromiseRef.current = switchPromise;
   state.chatModelSwitchPromises = {
     ...state.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
@@ -1113,37 +1121,84 @@ type ChatAgentFilterOption = {
   label: string;
 };
 
-function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
+export function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
 }
 
-function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: string): boolean {
-  const parsed = parseAgentSessionKey(key);
-  if (parsed) {
-    return normalizeAgentId(parsed.agentId) === agentId;
+function resolvePreferredSessionCandidateAgentId(
+  row: SessionsListResult["sessions"][number],
+  defaultAgentId: string,
+): string | null {
+  if (row.kind === "global" || row.kind === "unknown" || isCronSessionKey(row.key)) {
+    return null;
   }
-  return agentId === defaultAgentId;
+  if (isSubagentSessionKey(row.key) || row.spawnedBy) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(row.key);
+  return normalizeAgentId(parsed?.agentId ?? defaultAgentId);
 }
 
-function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
+function rememberChatAgentSessionRows(
+  state: AppViewState,
+  sessions: SessionsListResult | null,
+): void {
+  if (!sessions) {
+    return;
+  }
+  const rows = sessions.sessions;
+  const refreshedAgentId = normalizeOptionalString(state.sessionsResultAgentId);
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const grouped = new Map<string, SessionsListResult["sessions"]>();
+  for (const row of rows) {
+    const agentId = resolvePreferredSessionCandidateAgentId(row, defaultAgentId);
+    if (!agentId) {
+      continue;
+    }
+    grouped.set(agentId, [...(grouped.get(agentId) ?? []), row]);
+  }
+  if (grouped.size === 0 && !refreshedAgentId) {
+    return;
+  }
+  state.chatAgentSessionRowsByAgent ??= {};
+  if (refreshedAgentId) {
+    state.chatAgentSessionRowsByAgent[refreshedAgentId] = grouped.get(refreshedAgentId) ?? [];
+  }
+  for (const [agentId, agentRows] of grouped) {
+    state.chatAgentSessionRowsByAgent[agentId] = agentRows;
+  }
+}
+
+function rowsForPreferredAgentSession(
+  state: AppViewState,
+  normalizedAgentId: string,
+  defaultAgentId: string,
+): SessionsListResult["sessions"] {
+  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
+  for (const row of state.chatAgentSessionRowsByAgent?.[normalizedAgentId] ?? []) {
+    byKey.set(row.key, row);
+  }
+  for (const row of state.sessionsResult?.sessions ?? []) {
+    if (resolvePreferredSessionCandidateAgentId(row, defaultAgentId) === normalizedAgentId) {
+      byKey.set(row.key, row);
+    }
+  }
+  return [...byKey.values()];
+}
+
+export function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
   const normalizedAgentId = normalizeAgentId(agentId);
   if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
     return state.sessionKey;
   }
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const eligible = (state.sessionsResult?.sessions ?? [])
+  const eligible = rowsForPreferredAgentSession(state, normalizedAgentId, defaultAgentId)
     .filter((row) => {
       if (!isSessionKeyTiedToAgent(row.key, normalizedAgentId, defaultAgentId)) {
         return false;
       }
-      if (row.kind === "global" || row.kind === "unknown") {
-        return false;
-      }
-      if (isCronSessionKey(row.key)) {
-        return false;
-      }
-      return !isSubagentSessionKey(row.key) && !row.spawnedBy;
+      return resolvePreferredSessionCandidateAgentId(row, defaultAgentId) === normalizedAgentId;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (eligible[0]?.key) {
@@ -1152,7 +1207,7 @@ function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): 
   return buildAgentMainSessionKey({ agentId: normalizedAgentId });
 }
 
-function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
+export function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
   const seen = new Set<string>();
   const options: ChatAgentFilterOption[] = [];
   const add = (agentId: string) => {
@@ -1247,7 +1302,7 @@ export function resolveSessionOptionGroups(
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    const isSubagent = isSubagentSessionKey(row.key) || Boolean(row.spawnedBy);
     if (isSubagent && row.key !== sessionKey) {
       continue;
     }

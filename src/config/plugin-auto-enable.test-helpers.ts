@@ -1,7 +1,7 @@
 import path from "node:path";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { type PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { type PluginOrigin } from "../plugins/plugin-origin.types.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 

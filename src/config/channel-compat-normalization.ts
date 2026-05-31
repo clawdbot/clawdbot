@@ -69,7 +69,7 @@ export function normalizeLegacyStreamingAliases(
     return { entry: params.entry, changed: false };
   }
 
-  let updated = { ...params.entry };
+  const updated = { ...params.entry };
   let changed = false;
   const streaming = ensureNestedRecord(updated, "streaming");
   const block = ensureNestedRecord(streaming, "block");

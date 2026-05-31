@@ -29,4 +29,5 @@ export {
 } from "openclaw/plugin-sdk/media-runtime";
 export { detectMime } from "openclaw/plugin-sdk/media-mime";
 export { ensureMediaDir, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+export { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 export { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";

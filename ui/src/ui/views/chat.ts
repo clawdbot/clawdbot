@@ -165,6 +165,7 @@ export type ChatProps = {
     defaultId?: string;
   } | null;
   currentAgentId: string;
+  fullMessageAgentId?: string;
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
@@ -502,8 +503,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     return;
   }
   const imageItems: DataTransferItem[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  for (const item of Array.from(items)) {
     if (item.type.startsWith("image/")) {
       imageItems.push(item);
     }
@@ -1249,6 +1249,7 @@ export function renderChat(props: ChatProps) {
               return renderStreamingGroup(
                 item.text,
                 item.startedAt,
+                item.isStreaming,
                 props.onOpenSidebar,
                 assistantIdentity,
                 props.basePath,
@@ -1261,6 +1262,8 @@ export function renderChat(props: ChatProps) {
               }
               return renderMessageGroup(item, {
                 onOpenSidebar: props.onOpenSidebar,
+                sessionKey: props.sessionKey,
+                agentId: props.fullMessageAgentId,
                 showReasoning,
                 showToolCalls: props.showToolCalls,
                 autoExpandToolCalls: Boolean(props.autoExpandToolCalls),

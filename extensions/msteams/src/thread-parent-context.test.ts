@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
 import {
   resetThreadParentContextCachesForTest,
@@ -95,6 +95,10 @@ describe("fetchParentMessageCached", () => {
     resetThreadParentContextCachesForTest();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("invokes the fetcher on first call", async () => {
     const mockMsg: GraphThreadMessage = {
       id: "p1",
@@ -150,21 +154,31 @@ describe("fetchParentMessageCached", () => {
 
   it("re-fetches after TTL expires", async () => {
     vi.useFakeTimers();
-    try {
-      const fetcher = vi.fn(async () => ({
-        id: "p1",
-        body: { content: "hi", contentType: "text" },
-      }));
+    const fetcher = vi.fn(async () => ({
+      id: "p1",
+      body: { content: "hi", contentType: "text" },
+    }));
 
-      await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
-      // 5 min TTL: advance just beyond.
-      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    // 5 min TTL: advance just beyond.
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
 
-      expect(fetcher).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache parent fetches when the expiry would exceed Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const fetcher = vi.fn(async () => ({
+      id: "p1",
+      body: { content: "hi", contentType: "text" },
+    }));
+
+    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("evicts oldest entries when exceeding the 100-entry cap", async () => {

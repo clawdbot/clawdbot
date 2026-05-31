@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
@@ -54,7 +54,7 @@ export function resolveToolDisplay(params: {
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  let { verb, detail } = resolveToolVerbAndDetailForArgs({
+  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
@@ -65,6 +65,8 @@ export function resolveToolDisplay(params: {
     detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
+  const { verb } = toolDisplayParts;
+  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);

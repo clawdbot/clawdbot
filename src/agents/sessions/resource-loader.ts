@@ -781,7 +781,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
   private loadThemes(
     paths: string[],
-    includeDefaults: boolean = true,
+    includeDefaults = true,
   ): {
     themes: Theme[];
     diagnostics: ResourceDiagnostic[];

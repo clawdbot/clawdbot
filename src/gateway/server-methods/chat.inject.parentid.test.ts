@@ -43,7 +43,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last.type).toBe("message");
 
       // The regression we saw: raw jsonl appends omitted this field entirely.
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(true);
+      expect(Object.hasOwn(last, "parentId")).toBe(true);
       expect(last).toHaveProperty("id");
       expect(last).toHaveProperty("message");
     } finally {
@@ -89,7 +89,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", messageId);
       expect(last).toHaveProperty("message");
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
+      expect(Object.hasOwn(last, "parentId")).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

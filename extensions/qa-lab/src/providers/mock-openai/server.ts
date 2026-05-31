@@ -74,7 +74,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   // the caller supplied one — that's the most reliable signal.
   const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
   const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai") {
     return "openai";
   }
   if (provider === "anthropic" || provider === "claude-cli") {
@@ -445,7 +445,7 @@ function extractInputText(content: unknown[]): string {
   return content
     .filter(
       (entry): entry is { type: "input_text"; text: string } =>
-        !!entry &&
+        Boolean(entry) &&
         typeof entry === "object" &&
         (entry as { type?: unknown }).type === "input_text" &&
         typeof (entry as { text?: unknown }).text === "string",
@@ -609,14 +609,14 @@ function normalizePromptPathCandidate(candidate: string) {
 function readTargetFromPrompt(prompt: string) {
   const backtickedMatches = Array.from(prompt.matchAll(/`([^`]+)`/g))
     .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => Boolean(value));
   if (backtickedMatches.length > 0) {
     return backtickedMatches[0];
   }
 
   const quotedMatches = Array.from(prompt.matchAll(/"([^"]+)"/g))
     .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => Boolean(value));
   if (quotedMatches.length > 0) {
     return quotedMatches[0];
   }
@@ -1042,6 +1042,41 @@ function isHeartbeatPrompt(text: string) {
   return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
 }
 
+function readFirstMediaPath(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  const media = value as {
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    path?: unknown;
+    filePath?: unknown;
+    attachments?: unknown;
+  };
+  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  if (Array.isArray(media.mediaUrls)) {
+    const mediaUrl = media.mediaUrls.find(
+      (candidate) => typeof candidate === "string" && candidate.trim(),
+    );
+    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+      return mediaUrl.trim();
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      const mediaPath = readFirstMediaPath(attachment);
+      if (mediaPath) {
+        return mediaPath;
+      }
+    }
+  }
+  return "";
+}
+
 function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
@@ -1068,7 +1103,12 @@ function buildAssistantText(
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
+  const mediaPath =
+    typeof toolJson?.details === "object" &&
+    toolJson.details !== null &&
+    !Array.isArray(toolJson.details)
+      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
+      : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
@@ -1184,7 +1224,7 @@ function buildAssistantText(
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
   if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
+    return `Protocol note: generated the QA lighthouse image successfully. Attachment: ${mediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
     return [

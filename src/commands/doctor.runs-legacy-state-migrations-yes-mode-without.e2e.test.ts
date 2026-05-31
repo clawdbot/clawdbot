@@ -12,6 +12,7 @@ import {
 } from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
+  useMockProviders: false,
   resolvePluginProviders: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
 
@@ -21,7 +22,12 @@ vi.mock("../plugins/providers.runtime.js", async () => {
   );
   return {
     ...actual,
-    resolvePluginProviders: providerRuntimeMocks.resolvePluginProviders,
+    resolvePluginProviders: (
+      params: Parameters<typeof actual.resolvePluginProviders>[0],
+    ): ProviderPlugin[] =>
+      providerRuntimeMocks.useMockProviders
+        ? providerRuntimeMocks.resolvePluginProviders(params)
+        : actual.resolvePluginProviders(params),
   };
 });
 
@@ -35,6 +41,7 @@ describe("doctor command", () => {
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
     vi.clearAllMocks();
+    providerRuntimeMocks.useMockProviders = false;
     providerRuntimeMocks.resolvePluginProviders.mockReturnValue([]);
   });
 
@@ -141,6 +148,7 @@ describe("doctor command", () => {
         },
       },
     });
+    providerRuntimeMocks.useMockProviders = true;
     providerRuntimeMocks.resolvePluginProviders.mockReturnValue([
       {
         id: "anthropic",

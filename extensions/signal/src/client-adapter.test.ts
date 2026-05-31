@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalRpcRequest as signalRpcRequestImpl,
   detectSignalApiMode,
@@ -35,6 +35,11 @@ beforeEach(() => {
   vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
     mockStreamContainerEvents as any,
   );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function setApiMode(mode: SignalApiMode) {
@@ -102,17 +107,13 @@ function expectRpcCall(params: {
   expect(method).toBe(params.method);
   if (params.rpcParams) {
     expectFields(requireRecord(rpcParams, "rpc params"), params.rpcParams);
-  } else {
-    if (rpcParams === undefined) {
-      throw new Error("expected rpc params argument");
-    }
+  } else if (rpcParams === undefined) {
+    throw new Error("expected rpc params argument");
   }
   if (params.options) {
     expectFields(requireRecord(options, "rpc options"), params.options);
-  } else {
-    if (options === undefined) {
-      throw new Error("expected rpc options argument");
-    }
+  } else if (options === undefined) {
+    throw new Error("expected rpc options argument");
   }
 }
 
@@ -377,6 +378,44 @@ describe("signalCheck", () => {
       status: null,
       error: "Signal API not reachable at http://localhost:8080",
     });
+  });
+
+  it("drops cached auto mode when the current clock is not a valid date timestamp", async () => {
+    setApiMode("auto");
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(signalCheck("http://auto-invalid-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+    await expect(signalCheck("http://auto-invalid-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache auto mode when the expiry timestamp would exceed the valid date range", async () => {
+    setApiMode("auto");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(signalCheck("http://auto-overflow-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+    await expect(signalCheck("http://auto-overflow-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
   });
 });
 

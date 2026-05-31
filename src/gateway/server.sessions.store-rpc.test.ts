@@ -100,7 +100,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
     loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
-    getRuntimeConfig: getRuntimeConfig,
+    getRuntimeConfig,
   } as never;
   async function directSessionReq<TPayload = unknown>(
     method: keyof typeof sessionsHandlers,

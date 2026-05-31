@@ -205,6 +205,7 @@ File + dialog helpers:
 
 ```bash
 openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref <ref>
+openclaw browser upload media://inbound/file.pdf --ref <ref>
 openclaw browser waitfordownload
 openclaw browser download <ref> report.pdf
 openclaw browser dialog --accept
@@ -215,6 +216,10 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp
 root). Use `waitfordownload` or `download` when the agent needs to wait for a
 specific file and return its path; those explicit waiters own the next download.
+Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed
+inbound media, including `media://inbound/<id>` and sandbox-relative
+`media/inbound/<id>` references. Nested media refs, traversal, and arbitrary
+local paths remain rejected.
 When an action opens a modal dialog, the action response returns
 `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to
 answer it directly. Dialogs handled outside OpenClaw appear under

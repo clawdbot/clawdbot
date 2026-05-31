@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -143,5 +144,41 @@ describe("qa web runtime", () => {
     const snapshot = await qaWebSnapshot({ pageId: second.pageId });
     expect(snapshot.text).toBe("hello from body");
     await closeAllQaWebSessions();
+  });
+
+  it("caps oversized web runtime timeouts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      const opened = await qaWebOpenPage({
+        url: "http://127.0.0.1:3000/chat",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await qaWebWait({
+        pageId: opened.pageId,
+        selector: "textarea",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      await qaWebEvaluate({
+        pageId: opened.pageId,
+        expression: "'ok'",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      await closeAllQaWebSessions();
+
+      expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
+        waitUntil: "domcontentloaded",
+        timeout: MAX_TIMER_TIMEOUT_MS,
+      });
+      expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", {
+        timeout: MAX_TIMER_TIMEOUT_MS,
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+    } finally {
+      clearTimeoutSpy.mockRestore();
+      timeoutSpy.mockRestore();
+    }
   });
 });

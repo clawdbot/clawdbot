@@ -1,4 +1,3 @@
-import type { AgentMessage } from "../agents/runtime/index.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
@@ -28,7 +27,7 @@ export type PluginNextTurnInjectionEnqueueResult = {
 
 export type PluginAgentTurnPrepareEvent = {
   prompt: string;
-  messages: AgentMessage[] | unknown[];
+  messages: unknown[];
   queuedInjections: PluginNextTurnInjectionRecord[];
 };
 

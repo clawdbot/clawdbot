@@ -60,17 +60,6 @@ export function executeSqliteQueryTakeFirstSync<Row>(
   return executeSqliteQuerySync<Row>(db, query).rows[0];
 }
 
-export function executeSqliteQueryTakeFirstOrThrowSync<Row>(
-  db: DatabaseSync,
-  query: CompilableQuery<Row>,
-): Row {
-  const row = executeSqliteQueryTakeFirstSync<Row>(db, query);
-  if (!row) {
-    throw new Error("Kysely query returned no rows");
-  }
-  return row;
-}
-
 export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
   kyselyByDatabase.delete(db);
 }

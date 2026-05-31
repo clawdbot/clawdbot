@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acknowledgeNodePendingWork,
   drainNodePendingWork,
@@ -78,6 +78,36 @@ describe("node pending work", () => {
 
     // Drain well after the item has expired (Date.now() + 60s > enqueue time + 5s)
     drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("expires timed pending work immediately when the enqueue clock is invalid", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const { item } = enqueueNodePendingWork({
+        nodeId: "node-7",
+        type: "location.request",
+        expiresInMs: 5_000,
+      });
+      expect(item.createdAtMs).toBe(0);
+      expect(item.expiresAtMs).toBe(0);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    drainNodePendingWork("node-7", { nowMs: 1_000 });
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("expires timed pending work immediately when expiry would exceed Date bounds", () => {
+    const { item } = enqueueNodePendingWork({
+      nodeId: "node-8",
+      type: "location.request",
+      expiresInMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(item.expiresAtMs).toBe(0);
+
+    drainNodePendingWork("node-8", { nowMs: Date.now() });
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 });

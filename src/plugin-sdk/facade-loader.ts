@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
@@ -14,21 +13,11 @@ import { resolveBundledFacadeModuleLocation } from "./facade-resolution-shared.j
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
-const nodeRequire = createRequire(import.meta.url);
 const moduleLoaders: PluginModuleLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
 let facadeLoaderSourceTransformFactory: PluginModuleLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
-
-function getSourceTransformFactory() {
-  if (facadeLoaderSourceTransformFactory) {
-    return facadeLoaderSourceTransformFactory;
-  }
-  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
-  facadeLoaderSourceTransformFactory = createJiti;
-  return facadeLoaderSourceTransformFactory;
-}
 
 function getOpenClawPackageRoot() {
   if (cachedOpenClawPackageRoot) {
@@ -63,7 +52,9 @@ function getModuleLoader(modulePath: string) {
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
-    createLoader: getSourceTransformFactory(),
+    ...(facadeLoaderSourceTransformFactory
+      ? { createLoader: facadeLoaderSourceTransformFactory }
+      : {}),
   });
 }
 

@@ -1,7 +1,10 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -152,7 +155,7 @@ function resolveConfiguredAuthProfileOrder(params: {
     ...new Set(
       orderedProfileIds
         .map((profileId) => profileId?.trim())
-        .filter((profileId): profileId is string => !!profileId),
+        .filter((profileId): profileId is string => Boolean(profileId)),
     ),
   ];
 }

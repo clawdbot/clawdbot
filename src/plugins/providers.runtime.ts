@@ -1,4 +1,4 @@
-import { sortUniqueStrings } from "../shared/string-normalization.js";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";

@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { armTimer, onTimer } from "./service/timer.js";
+import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -192,19 +191,10 @@ describe("CronService - armTimer tight loop prevention", () => {
     const now = Date.parse("2026-02-28T12:32:00.000Z");
     const pastDueMs = 17 * 60 * 1000;
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
+    });
 
     const state = createTimerState({
       storePath: store.storePath,

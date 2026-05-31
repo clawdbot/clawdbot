@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -13,10 +17,6 @@ import {
   type RoutePeer,
 } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,

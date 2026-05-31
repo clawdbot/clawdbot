@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -8,13 +8,17 @@ const EMPTY_STORE: AuthProfileStore = {
 };
 
 describe("formatAuthDoctorHint", () => {
-  it("does not report restored qwen portal auth as removed", async () => {
-    const hint = await formatAuthDoctorHint({
+  let restoredQwenHint: string;
+
+  beforeAll(async () => {
+    restoredQwenHint = await formatAuthDoctorHint({
       store: EMPTY_STORE,
       provider: "qwen-portal",
     });
+  });
 
-    expect(hint).toBe("");
+  it("does not report restored qwen portal auth as removed", () => {
+    expect(restoredQwenHint).toBe("");
   });
 
   it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {

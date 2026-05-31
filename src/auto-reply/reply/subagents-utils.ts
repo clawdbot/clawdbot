@@ -1,8 +1,8 @@
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
@@ -80,7 +80,7 @@ export function resolveSubagentTargetFromRuns(params: {
   const numericOrder = [
     ...deduped.filter((entry) => isActive(entry)),
     ...deduped.filter(
-      (entry) => !isActive(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+      (entry) => !isActive(entry) && Boolean(entry.endedAt) && (entry.endedAt ?? 0) >= recentCutoff,
     ),
   ];
   if (/^\d+$/.test(trimmed)) {

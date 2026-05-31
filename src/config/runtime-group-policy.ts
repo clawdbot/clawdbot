@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GroupPolicy } from "./types.base.js";
 
 type RuntimeGroupPolicyResolution = {

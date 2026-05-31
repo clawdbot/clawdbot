@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
@@ -5,15 +6,14 @@ import {
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import {
@@ -45,6 +45,7 @@ import type {
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   buildToolLifecycleErrorResult,
+  extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -603,16 +604,20 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!params.onToolResult) {
       return;
     }
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
+    const parsed = parseInlineDirectives(message, {
+      stripAudioTag: true,
+      stripReplyTags: true,
+    });
+    const mediaArtifact = result ? extractToolResultMediaArtifact(result) : undefined;
     const filteredMediaUrls = filterToolResultMediaUrls(
       toolName,
-      mediaUrls ?? [],
+      mediaArtifact?.mediaUrls ?? [],
       result,
       params.trustedLocalMediaToolNames,
     );
     if (
       params.sourceReplyDeliveryMode === "message_tool_only" &&
-      cleanedText &&
+      parsed.text &&
       filteredMediaUrls.length === 0 &&
       hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts,
@@ -622,13 +627,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     ) {
       return;
     }
-    if (!cleanedText && filteredMediaUrls.length === 0) {
+    if (!parsed.text && filteredMediaUrls.length === 0) {
       return;
     }
     try {
       void params.onToolResult({
-        text: cleanedText,
+        text: parsed.text,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+        ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
       });
     } catch {
       // ignore tool result delivery failures

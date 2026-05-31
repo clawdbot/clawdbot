@@ -340,7 +340,7 @@ export function startGatewayConfigReloader(opts: {
         await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
         return;
       }
-      let snapshot = await opts.readSnapshot();
+      const snapshot = await opts.readSnapshot();
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
         if (snapshot.hash === lastAppliedWriteHash) {
           return;

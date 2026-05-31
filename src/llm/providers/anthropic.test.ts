@@ -193,4 +193,27 @@ describe("Anthropic provider", () => {
       effort: "high",
     });
   });
+
+  it("forwards simple stop sequences to Anthropic stop_sequences", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        stop: ["STOP"],
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect((capturedPayload as { stop_sequences?: unknown }).stop_sequences).toEqual(["STOP"]);
+  });
 });

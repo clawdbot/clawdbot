@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramErrorScopeKey,
@@ -116,6 +117,72 @@ describe("telegram error policy", () => {
         scopeKey,
         cooldownMs: 1000,
         errorMessage: "A",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress or keep cooldowns when the process clock is invalid", () => {
+    const scopeKey = buildTelegramErrorScopeKey({
+      accountId: "work",
+      chatId: 42,
+    });
+
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(true);
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      expect(
+        shouldSuppressTelegramError({
+          scopeKey,
+          cooldownMs: 1000,
+          errorMessage: "429",
+        }),
+      ).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not store cooldowns whose expiry would exceed the Date range", () => {
+    const scopeKey = buildTelegramErrorScopeKey({
+      accountId: "work",
+      chatId: 42,
+    });
+    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
+
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(false);
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "429",
       }),
     ).toBe(false);
   });

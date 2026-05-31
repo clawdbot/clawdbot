@@ -26,7 +26,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -553,19 +553,24 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
+  const outboundSessionThreadId =
+    resolvedThreadId !== undefined ? `${chatId}:${resolvedThreadId}` : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
     route: baseRoute,
-    threadId: resolvedThreadId,
+    threadId: outboundSessionThreadId,
     currentSessionKey: params.currentSessionKey,
     precedence: ["threadId", "currentSession"],
     canRecoverCurrentThread: ({ route }) =>
       route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
+  const deliveryThreadId =
+    resolvedThreadId ?? parseTelegramThreadId(route.threadId) ?? route.threadId;
   return {
     ...route,
+    ...(deliveryThreadId !== undefined ? { threadId: deliveryThreadId } : {}),
     from:
-      route.threadId !== undefined
-        ? `telegram:${chatId}:topic:${route.threadId}`
+      deliveryThreadId !== undefined
+        ? `telegram:${chatId}:topic:${deliveryThreadId}`
         : `telegram:${chatId}`,
   };
 }

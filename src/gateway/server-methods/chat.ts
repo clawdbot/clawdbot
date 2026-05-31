@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -20,6 +22,7 @@ import {
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatInjectParams,
+  validateChatMessageGetParams,
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
@@ -82,8 +85,6 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -127,11 +128,14 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
+  readSessionMessageByIdAsync,
+  readSessionMessagesAsync,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
@@ -504,7 +508,7 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
         }
         const trimmed = mediaUrl.trim();
         if (trimmed) {
-          lines.push(`MEDIA:${trimmed}`);
+          lines.push(`Attachment: ${trimmed}`);
         }
       }
       if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {
@@ -1387,11 +1391,26 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     typeof (message as { timestamp?: unknown }).timestamp === "number"
       ? (message as { timestamp: number }).timestamp
       : Date.now();
+  const rawMetadata =
+    message && typeof message === "object"
+      ? (message as Record<string, unknown>)["__openclaw"]
+      : undefined;
+  const metadata =
+    rawMetadata && typeof rawMetadata === "object" && !Array.isArray(rawMetadata)
+      ? (rawMetadata as Record<string, unknown>)
+      : {};
+  const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
+  const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   return {
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
-    __openclaw: { truncated: true, reason: "oversized" },
+    __openclaw: {
+      ...(metadataId ? { id: metadataId } : {}),
+      ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
+      truncated: true,
+      reason: "oversized",
+    },
   };
 }
 
@@ -2330,6 +2349,35 @@ export function dropPreSessionStartAnnouncePairs(
   return changed ? kept : messages;
 }
 
+function readChatHistoryMessageId(message: unknown): string | undefined {
+  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return typeof metadata?.id === "string" ? metadata.id : undefined;
+}
+
+async function isChatMessageIdVisibleAfterHistoryFilters(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile: string | undefined;
+  messageId: string;
+  sessionStartedAt?: number;
+}): Promise<boolean> {
+  if (params.sessionStartedAt === undefined) {
+    return true;
+  }
+  const messages = await readSessionMessagesAsync(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    {
+      mode: "full",
+      reason: "chat.message.get visibility",
+    },
+  );
+  return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
+    (message) => readChatHistoryMessageId(message) === params.messageId,
+  );
+}
+
 function dropLocalHistoryOverreadContextMessage(
   messages: unknown[],
   contextMessage: unknown,
@@ -2391,16 +2439,21 @@ export const chatHandlers: GatewayRequestHandlers = {
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const localReadMax = max > 0 ? max + 1 : 0;
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
+    const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
+    const localHistoryReadOptions = {
+      maxMessages: rawHistoryWindow.maxMessages + 1,
+      maxLines: rawHistoryWindow.maxLines + 1,
+    };
     const localMessages =
       sessionId && storePath
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            maxMessages: localReadMax,
+            ...localHistoryReadOptions,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];
-    const overreadContextMessage = localMessages.length > max ? localMessages[0] : undefined;
+    const overreadContextMessage =
+      localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
     const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
       dropPreSessionStartAnnouncePairs(
         localMessages,
@@ -2472,6 +2525,94 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+    });
+  },
+  "chat.message.get": async ({ params, respond, context }) => {
+    if (!validateChatMessageGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.message.get params: ${formatValidationErrors(validateChatMessageGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const { sessionKey, messageId, maxChars } = params as {
+      sessionKey: string;
+      agentId?: string;
+      messageId: string;
+      maxChars?: number;
+    };
+    const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
+      requestedSessionKey: sessionKey,
+      agentId: agentIdOverride,
+    });
+    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+    const { cfg, storePath, entry } = loadSessionEntry(sessionKey, sessionLoadOptions);
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: sessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
+    const sessionId = entry?.sessionId;
+    if (!sessionId) {
+      respond(true, { ok: false, unavailableReason: "not_found" });
+      return;
+    }
+
+    const resolved = await readSessionMessageByIdAsync(
+      sessionId,
+      storePath,
+      entry?.sessionFile,
+      messageId,
+    );
+    if (!resolved.found) {
+      respond(true, { ok: false, unavailableReason: "not_found" });
+      return;
+    }
+    const visible = await isChatMessageIdVisibleAfterHistoryFilters({
+      sessionId,
+      storePath,
+      sessionFile: entry?.sessionFile,
+      messageId,
+      sessionStartedAt:
+        typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    });
+    if (!visible) {
+      respond(true, { ok: false, unavailableReason: "not_found" });
+      return;
+    }
+    if (resolved.oversized) {
+      respond(true, { ok: false, unavailableReason: "oversized" });
+      return;
+    }
+
+    const effectiveMaxChars =
+      typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
+    const projectedMessage = resolved.message
+      ? projectChatDisplayMessage(resolved.message, {
+          maxChars: effectiveMaxChars,
+        })
+      : undefined;
+    const projected = projectedMessage
+      ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
+      : undefined;
+    if (!projected) {
+      respond(true, { ok: false, unavailableReason: "not_visible" });
+      return;
+    }
+
+    respond(true, {
+      ok: true,
+      message: projected,
     });
   },
   "chat.abort": async ({ params, respond, context, client }) => {

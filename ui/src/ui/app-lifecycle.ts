@@ -20,9 +20,11 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -42,6 +44,11 @@ type LifecycleHost = {
   allowExternalEmbedUrls: boolean;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
+  settings?: { gatewayUrl?: string | null };
+  sessionKey: string;
+  chatMessage: string;
+  chatQueue: ChatQueueItem[];
+  pendingGatewayUrl?: string | null;
   realtimeTalkSession?: { stop: () => void } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: string;
@@ -74,13 +81,18 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
-  const bootstrapReady = loadControlUiBootstrapConfig(host);
+  const bootstrapReady = loadControlUiBootstrapConfig(
+    host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+  );
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {
       return;
+    }
+    if (!host.pendingGatewayUrl) {
+      restoreChatComposerState(host, { preserveCurrent: true });
     }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   });
@@ -157,6 +169,9 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("chatMessage") || changed.has("chatQueue")) {
+    persistChatComposerState(host);
+  }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }

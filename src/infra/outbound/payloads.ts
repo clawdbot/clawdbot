@@ -18,7 +18,7 @@ import {
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
-import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
 export type NormalizedOutboundPayload = {
@@ -397,7 +397,7 @@ export function formatOutboundPayloadLog(
     lines.push(payload.text.trimEnd());
   }
   for (const url of payload.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n");
 }

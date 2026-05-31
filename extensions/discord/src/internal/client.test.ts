@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, ComponentRegistry, type AnyListener } from "./client.js";
 import { BaseCommand } from "./commands.js";
@@ -101,6 +102,19 @@ describe("ComponentRegistry", () => {
     expect(registry.resolve("encoded:payload=two", { componentType: ComponentType.Button })).toBe(
       button,
     );
+  });
+
+  it("caps oversized one-off component wait timers", () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const registry = new ComponentRegistry<Button>();
+
+    void registry.waitForMessageComponent(
+      { id: "message-1", channelId: "channel-1" } as never,
+      Number.MAX_SAFE_INTEGER,
+    );
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });
 
@@ -340,6 +354,47 @@ describe("Client.deployCommands", () => {
 
     await client.dispatchGatewayEvent("CHANNEL_UPDATE", { id: "c1" });
     await client.fetchChannel("c1");
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse cached REST objects while the process clock is invalid", async () => {
+    const client = createInternalTestClient();
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "c1", type: 0, name: "old" })
+      .mockResolvedValueOnce({ id: "c1", type: 0, name: "fresh" })
+      .mockResolvedValueOnce({ id: "c1", type: 0, name: "recovered" });
+    attachRestMock(client, { get });
+
+    const first = await client.fetchChannel("c1");
+    expect(first.name).toBe("old");
+
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const second = await client.fetchChannel("c1");
+
+    expect(second.name).toBe("fresh");
+
+    vi.mocked(Date.now).mockReturnValue(1_000);
+    const third = await client.fetchChannel("c1");
+
+    expect(third.name).toBe("recovered");
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not cache REST objects when the cache expiry would exceed the Date range", async () => {
+    const client = createInternalTestClient();
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "c1", type: 0, name: "first" })
+      .mockResolvedValueOnce({ id: "c1", type: 0, name: "second" });
+    attachRestMock(client, { get });
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+
+    const first = await client.fetchChannel("c1");
+    const second = await client.fetchChannel("c1");
+
+    expect(first.name).toBe("first");
+    expect(second.name).toBe("second");
     expect(get).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   InteractiveReply,
@@ -6,10 +10,6 @@ import type {
   MessagePresentationButton,
 } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,

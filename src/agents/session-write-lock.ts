@@ -2,9 +2,9 @@ import "../infra/fs-safe-defaults.js";
 import type fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -52,9 +52,12 @@ const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
 function yieldEventLoop(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
-// A payload-less lock can be left behind if shutdown lands between open("wx")
-// and the owner metadata write. Keep the grace short so 10s callers recover.
-const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
+// A payload-less lock can be left behind during the window between open("wx")
+// and the owner metadata write if the owner is suspended (CPU pressure,
+// container freeze, I/O stall, GC pause). 30 s covers realistic system
+// pauses while staying well below DEFAULT_TIMEOUT_GRACE_MS (120 s).
+const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 30_000;
+const SHORT_TIMEOUT_ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
 
 type CleanupState = {
   registered: boolean;
@@ -565,6 +568,7 @@ async function shouldReclaimContendedLockFile(
   details: LockInspectionDetails,
   staleMs: number,
   nowMs: number,
+  orphanPayloadGraceMs = ORPHAN_LOCK_PAYLOAD_GRACE_MS,
 ): Promise<boolean> {
   if (!details.stale) {
     return false;
@@ -575,11 +579,18 @@ async function shouldReclaimContendedLockFile(
   try {
     const stat = await fs.stat(lockPath);
     const ageMs = Math.max(0, nowMs - stat.mtimeMs);
-    return ageMs > Math.min(staleMs, ORPHAN_LOCK_PAYLOAD_GRACE_MS);
+    return ageMs > Math.min(staleMs, orphanPayloadGraceMs);
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     return code !== "ENOENT";
   }
+}
+
+function resolveOrphanLockPayloadGraceMs(timeoutMs: number): number {
+  if (timeoutMs < ORPHAN_LOCK_PAYLOAD_GRACE_MS) {
+    return SHORT_TIMEOUT_ORPHAN_LOCK_PAYLOAD_GRACE_MS;
+  }
+  return ORPHAN_LOCK_PAYLOAD_GRACE_MS;
 }
 
 async function shouldRemoveLockDuringCleanup(
@@ -779,6 +790,7 @@ export async function acquireSessionWriteLock(params: {
   });
   const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs);
+  const orphanPayloadGraceMs = resolveOrphanLockPayloadGraceMs(timeoutMs);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
@@ -816,7 +828,13 @@ export async function acquireSessionWriteLock(params: {
             readOwnerProcessArgs: readProcessArgsSync,
             respectMaxHold: !heldByThisProcess,
           });
-          return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
+          return await shouldReclaimContendedLockFile(
+            lockPath,
+            inspected,
+            staleMs,
+            nowMs,
+            orphanPayloadGraceMs,
+          );
         },
         shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
           await yieldEventLoop();
@@ -831,7 +849,13 @@ export async function acquireSessionWriteLock(params: {
             readOwnerProcessArgs: readProcessArgsSync,
             respectMaxHold: !heldByThisProcess,
           });
-          return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
+          return await shouldReclaimContendedLockFile(
+            lockPath,
+            inspected,
+            staleMs,
+            nowMs,
+            orphanPayloadGraceMs,
+          );
         },
       });
       return { release: lock.release };

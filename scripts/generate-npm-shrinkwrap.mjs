@@ -429,6 +429,11 @@ function shouldUseLegacyPeerDepsForShrinkwrap(
   packageJson,
   packageExtensions = readWorkspacePackageExtensions(),
 ) {
+  if (
+    packageExtensionMarksOptionalPeer({ peerDependenciesMeta: packageJson.peerDependenciesMeta })
+  ) {
+    return true;
+  }
   const dependencies = Object.keys(packageJson.dependencies ?? {});
   if (dependencies.length === 0) {
     return false;
@@ -669,20 +674,26 @@ function generateShrinkwrap(packageDir, options = {}) {
       readShrinkwrapOverrides(),
       {},
     );
+    const peerResolutionArgs = shouldUseLegacyPeerDepsForShrinkwrap(packageJson)
+      ? ["--legacy-peer-deps"]
+      : [];
     const npmInstallArgs = [
       "install",
       "--package-lock-only",
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      ...(shouldUseLegacyPeerDepsForShrinkwrap(packageJson) ? ["--legacy-peer-deps"] : []),
+      ...peerResolutionArgs,
     ];
     writeFileSync(
       path.join(tempDir, "package.json"),
       `${JSON.stringify(packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides), null, 2)}\n`,
     );
     runNpm(npmInstallArgs, tempDir);
-    runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
+    runNpm(
+      ["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund", ...peerResolutionArgs],
+      tempDir,
+    );
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
     const generated = restoreCurrentPnpmLockedPackages(
       normalizeNpmVersionDrift(

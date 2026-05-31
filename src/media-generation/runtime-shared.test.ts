@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   deriveAspectRatioFromSize,
   normalizeDurationToClosestMax,
@@ -105,7 +105,7 @@ describe("media-generation runtime shared candidates", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
             },
           },
         },
@@ -120,7 +120,7 @@ describe("media-generation runtime shared candidates", () => {
         },
         {
           id: "openai",
-          aliases: ["openai-codex"],
+          aliases: ["openai"],
           defaultModel: "gpt-image-2",
           isConfigured: () => true,
         },

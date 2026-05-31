@@ -9,9 +9,9 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
 } from "../runtime-api.js";
-import { type ResolvedGoogleChatAccount } from "./accounts.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
-import { type GoogleChatAudienceType } from "./auth.js";
+import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";

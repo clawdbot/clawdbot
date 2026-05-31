@@ -14,7 +14,7 @@ vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => chatChannels(),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: (...args: unknown[]) => note(...args),
 }));
 

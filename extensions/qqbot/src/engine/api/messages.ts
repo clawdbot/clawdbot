@@ -98,6 +98,7 @@ export class MessageApi {
       msgId?: string;
       messageReference?: string;
       inlineKeyboard?: InlineKeyboard;
+      forcePlainText?: boolean;
     },
   ): Promise<MessageResponse> {
     const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
@@ -108,6 +109,7 @@ export class MessageApi {
       msgSeq,
       opts?.messageReference,
       opts?.inlineKeyboard,
+      opts?.forcePlainText,
     );
     const path = messagePath(scope, targetId);
     return this.sendAndNotify(creds.appId, token, "POST", path, body, { text: content });
@@ -119,12 +121,13 @@ export class MessageApi {
     targetId: string,
     content: string,
     creds: Credentials,
+    opts?: { forcePlainText?: boolean },
   ): Promise<MessageResponse> {
     if (!content?.trim()) {
       throw new Error("Proactive message content must not be empty");
     }
     const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
-    const body = this.buildProactiveBody(content);
+    const body = this.buildProactiveBody(content, opts?.forcePlainText);
     const path = messagePath(scope, targetId);
     return this.sendAndNotify(creds.appId, token, "POST", path, body, { text: content });
   }
@@ -262,15 +265,17 @@ export class MessageApi {
     msgSeq: number,
     messageReference?: string,
     inlineKeyboard?: InlineKeyboard,
+    forcePlainText = false,
   ): Record<string, unknown> {
-    const body: Record<string, unknown> = this.markdownSupport
+    const useMarkdown = this.markdownSupport && !forcePlainText;
+    const body: Record<string, unknown> = useMarkdown
       ? { markdown: { content }, msg_type: 2, msg_seq: msgSeq }
       : { content, msg_type: 0, msg_seq: msgSeq };
 
     if (msgId) {
       body.msg_id = msgId;
     }
-    if (messageReference && !this.markdownSupport) {
+    if (messageReference && !useMarkdown) {
       body.message_reference = { message_id: messageReference };
     }
     if (inlineKeyboard) {
@@ -279,8 +284,10 @@ export class MessageApi {
     return body;
   }
 
-  private buildProactiveBody(content: string): Record<string, unknown> {
-    return this.markdownSupport ? { markdown: { content }, msg_type: 2 } : { content, msg_type: 0 };
+  private buildProactiveBody(content: string, forcePlainText = false): Record<string, unknown> {
+    return this.markdownSupport && !forcePlainText
+      ? { markdown: { content }, msg_type: 2 }
+      : { content, msg_type: 0 };
   }
 }
 

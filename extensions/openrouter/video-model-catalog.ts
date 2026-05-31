@@ -1,6 +1,6 @@
-import {
-  type UnifiedModelCatalogEntry,
-  type UnifiedModelCatalogProviderContext,
+import type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";

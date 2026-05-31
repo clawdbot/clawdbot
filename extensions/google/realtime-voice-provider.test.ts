@@ -100,6 +100,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     for (const key of ENV_KEYS) {
       const value = envSnapshot[key];
       if (value === undefined) {
@@ -450,6 +451,34 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(websocketSession.initialMessage.setup.generationConfig.responseModalities).toEqual([
       "AUDIO",
     ]);
+  });
+
+  it("rejects browser session expiry outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {
+          apiKey: "gemini-key",
+        },
+      }),
+    ).rejects.toThrow("Google realtime browser session expiry is outside the supported Date range");
+    expect(createTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects browser session creation while the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {
+          apiKey: "gemini-key",
+        },
+      }),
+    ).rejects.toThrow("Google realtime browser session expiry is outside the supported Date range");
+    expect(createTokenMock).not.toHaveBeenCalled();
   });
 
   it("can opt out of Google Live session resumption and context compression", async () => {

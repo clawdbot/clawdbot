@@ -108,7 +108,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   let lastStreamMock: StreamMock | undefined;
 
   function createDispatcher(
-    conversationType: string = "personal",
+    conversationType = "personal",
     msteamsConfig: Record<string, unknown> = {},
     extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
   ) {

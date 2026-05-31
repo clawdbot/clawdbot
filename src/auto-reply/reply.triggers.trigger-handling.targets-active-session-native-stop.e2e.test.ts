@@ -23,8 +23,8 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
-const TEST_PRIMARY_PROFILE_ID = "openai-codex:primary@example.test";
-const TEST_SECONDARY_PROFILE_ID = "openai-codex:secondary@example.test";
+const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
+const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";
 const TEST_TIME_ZONE = "America/Chicago";
 const TELEGRAM_DIRECT_MESSAGE = {
   From: "telegram:111",
@@ -779,12 +779,12 @@ describe("trigger handling", () => {
             profiles: {
               [TEST_PRIMARY_PROFILE_ID]: {
                 type: "oauth",
-                provider: "openai-codex",
+                provider: "openai",
                 access: "oauth-access-token-josh",
               },
               [TEST_SECONDARY_PROFILE_ID]: {
                 type: "oauth",
-                provider: "openai-codex",
+                provider: "openai",
                 access: "oauth-access-token",
               },
             },
@@ -799,7 +799,7 @@ describe("trigger handling", () => {
           {
             version: 1,
             order: {
-              "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+              openai: [TEST_PRIMARY_PROFILE_ID],
             },
           },
           null,
@@ -814,7 +814,7 @@ describe("trigger handling", () => {
 
       const res = await getReplyFromConfig(
         makeNativeTelegramCommandMessage({
-          body: `/model openai-codex/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
+          body: `/model openai/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
           slashSessionKey,
           targetSessionKey,
         }),
@@ -832,7 +832,7 @@ describe("trigger handling", () => {
       await expectNextRunUsesTargetSession(
         { cfg, targetSessionKey, runEmbeddedAgentMock },
         {
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.4",
           authProfileId: TEST_SECONDARY_PROFILE_ID,
           authProfileIdSource: "user",

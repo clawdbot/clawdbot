@@ -7,7 +7,7 @@ import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

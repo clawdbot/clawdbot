@@ -61,7 +61,7 @@ function traverseToLeafParent(params: {
         `Invalid path shape at ${params.segments.slice(0, index).join(".") || "<root>"}.`,
       );
     }
-    if (params.requireExistingSegment && !Object.prototype.hasOwnProperty.call(cursor, segment)) {
+    if (params.requireExistingSegment && !Object.hasOwn(cursor, segment)) {
       throw new Error(
         `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
       );
@@ -176,7 +176,7 @@ export function setPathExistingStrict(
   if (!isRecord(cursor)) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
+  if (!Object.hasOwn(cursor, leaf)) {
     throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
   }
   if (!isDeepStrictEqual(cursor[leaf], value)) {
@@ -202,7 +202,7 @@ export function deletePathStrict(root: Record<string, unknown>, segments: string
   if (!isRecord(cursor)) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
+  if (!Object.hasOwn(cursor, leaf)) {
     return false;
   }
   delete cursor[leaf];

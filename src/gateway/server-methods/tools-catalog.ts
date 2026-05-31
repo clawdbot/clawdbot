@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -25,7 +26,6 @@ import {
   getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type ToolCatalogEntry = {

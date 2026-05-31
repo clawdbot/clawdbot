@@ -145,12 +145,12 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds);
+    await writeOAuthCredentials("openai", creds);
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     }>(defaultAgentDir);
-    expectFields(parsed.profiles?.["openai-codex:default"], {
+    expectFields(parsed.profiles?.["openai:default"], {
       refresh: "refresh-token",
       access: "access-token",
       type: "oauth",
@@ -178,7 +178,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds, undefined, {
+    await writeOAuthCredentials("openai", creds, undefined, {
       syncSiblingAgents: true,
     });
 
@@ -187,7 +187,7 @@ describe("writeOAuthCredentials", () => {
       const parsed = JSON.parse(raw) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expectFields(parsed.profiles?.["openai-codex:default"], {
+      expectFields(parsed.profiles?.["openai:default"], {
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
@@ -212,13 +212,13 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
+    await writeOAuthCredentials("openai", creds, kidAgentDir);
 
     const kidRaw = await fs.readFile(authProfilePathFor(kidAgentDir), "utf8");
     const kidParsed = JSON.parse(kidRaw) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
-    expectFields(kidParsed.profiles?.["openai-codex:default"], {
+    expectFields(kidParsed.profiles?.["openai:default"], {
       access: "access-kid",
       type: "oauth",
     });
@@ -245,7 +245,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds, extKid, {
+    await writeOAuthCredentials("openai", creds, extKid, {
       syncSiblingAgents: true,
     });
 
@@ -255,7 +255,7 @@ describe("writeOAuthCredentials", () => {
       const parsed = JSON.parse(raw) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expectFields(parsed.profiles?.["openai-codex:default"], {
+      expectFields(parsed.profiles?.["openai:default"], {
         refresh: "refresh-ext",
         access: "access-ext",
         type: "oauth",
@@ -551,15 +551,15 @@ describe("applyAuthProfileConfig", () => {
     const next = applyAuthProfileConfig(
       {},
       {
-        profileId: "openai-codex:id-abc",
-        provider: "openai-codex",
+        profileId: "openai:id-abc",
+        provider: "openai",
         mode: "oauth",
         displayName: "Work account",
       },
     );
 
-    expect(next.auth?.profiles?.["openai-codex:id-abc"]).toEqual({
-      provider: "openai-codex",
+    expect(next.auth?.profiles?.["openai:id-abc"]).toEqual({
+      provider: "openai",
       mode: "oauth",
       displayName: "Work account",
     });

@@ -5,6 +5,7 @@ import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
@@ -1384,7 +1385,7 @@ export function isCodexFastServiceTier(value: unknown): boolean {
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return resolvePositiveTimerTimeoutMs(value, fallback);
 }
 
 function normalizeHeaders(value: unknown): Record<string, string> {

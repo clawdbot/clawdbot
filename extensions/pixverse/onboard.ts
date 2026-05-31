@@ -1,7 +1,7 @@
-import {
-  type ProviderAuthContext,
-  type ProviderAuthMethod,
-  type ProviderAuthMethodNonInteractiveContext,
+import type {
+  ProviderAuthContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,

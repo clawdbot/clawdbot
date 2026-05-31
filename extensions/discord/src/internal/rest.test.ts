@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
@@ -96,6 +97,21 @@ describe("RequestClient", () => {
 
     await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
     expect(client.getSchedulerMetrics().maxConcurrentWorkers).toBe(4);
+  });
+
+  it("caps oversized REST client request timeouts before scheduling aborts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchSpy = vi.fn(async () => createJsonResponse({ ok: true }));
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      queueRequests: false,
+      timeout: Number.MAX_SAFE_INTEGER,
+    });
+
+    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
+
+    expect(client.options.timeout).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses the default background stale timeout for non-finite lane overrides", async () => {

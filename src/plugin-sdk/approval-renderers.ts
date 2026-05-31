@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildApprovalPresentation,
   type ExecApprovalReplyDecision,
@@ -9,7 +10,6 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;

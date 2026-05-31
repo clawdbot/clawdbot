@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deletePluginSessionSchedulerJob,
   registerPluginSessionSchedulerJob,
@@ -48,15 +52,12 @@ function resolveSchedule(
     if (!Number.isFinite(params.delayMs) || params.delayMs < 0) {
       return undefined;
     }
-    const timestamp = Date.now() + Math.max(1, Math.floor(params.delayMs));
-    if (!Number.isFinite(timestamp)) {
+    const timestamp = resolveExpiresAtMsFromDurationMs(Math.max(1, Math.floor(params.delayMs)));
+    const at = timestampMsToIsoString(timestamp);
+    if (!at) {
       return undefined;
     }
-    const at = new Date(timestamp);
-    if (!Number.isFinite(at.getTime())) {
-      return undefined;
-    }
-    return { kind: "at", at: at.toISOString() };
+    return { kind: "at", at };
   }
   const rawAt = (params as { at?: unknown }).at;
   const at = rawAt instanceof Date ? rawAt : new Date(rawAt as string | number | Date);

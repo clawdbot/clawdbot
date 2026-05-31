@@ -1,10 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 export { safeParseJson } from "../server-json.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";

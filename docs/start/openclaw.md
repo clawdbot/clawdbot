@@ -196,27 +196,21 @@ Inbound attachments (images/audio/docs) can be surfaced to your command via temp
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (if audio transcription is enabled)
 
-Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). The directive must start the line as plain text, outside code fences and without Markdown wrappers such as bold or inline code. Example:
+Outbound attachments from the agent use structured media fields on the message tool or reply payload, such as `media`, `mediaUrl`, `mediaUrls`, `path`, or `filePath`. Example message-tool arguments:
 
+```json
+{
+  "message": "Here's the screenshot.",
+  "mediaUrl": "https://example.com/screenshot.png"
+}
 ```
-Here's the screenshot.
-MEDIA:https://example.com/screenshot.png
-```
 
-OpenClaw extracts these and sends them as media alongside the text.
-
-These forms are not attachment directives and are sent as normal text:
-
-```md
-**MEDIA:https://example.com/screenshot.png**
-`MEDIA:https://example.com/screenshot.png`
-Here is the screenshot: MEDIA:https://example.com/screenshot.png
-```
+OpenClaw sends structured media alongside the text. Legacy final assistant replies may still be normalized for compatibility, but tool output, browser output, streaming blocks, and message actions do not parse text as attachment commands.
 
 Local-path behavior follows the same file-read trust model as the agent:
 
-- If `tools.fs.workspaceOnly` is `true`, outbound `MEDIA:` local paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
-- If `tools.fs.workspaceOnly` is `false`, outbound `MEDIA:` can use host-local files the agent is already allowed to read.
+- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `false`, outbound local media can use host-local files the agent is already allowed to read.
 - Local paths can be absolute, workspace-relative, or home-relative with `~/`.
 - Host-local sends still only allow media and safe document types (images, audio, video, PDF, and Office documents). Plain text and secret-like files are not treated as sendable media.
 

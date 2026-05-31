@@ -38,8 +38,8 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
       "export const pluginCommandGroups = 'plugins';\n",
     ],
     ["src/cli/secrets-cli.ts", "export const secretsHelp = 'secrets';\n"],
-    ["src/terminal/links.ts", "export const links = 'links';\n"],
-    ["src/terminal/theme.ts", "export const theme = 'theme';\n"],
+    ["packages/terminal-core/src/links.ts", "export const links = 'links';\n"],
+    ["packages/terminal-core/src/theme.ts", "export const theme = 'theme';\n"],
   ]);
   for (const [relativePath, contents] of fixtures) {
     writeFixtureFile(rootDir, relativePath, contents);
@@ -93,6 +93,7 @@ describe("write-cli-startup-metadata", () => {
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
       browserHelpText: string;
       channelOptions: string[];
+      generatorSignature: string;
       nodesHelpText: string;
       rootHelpText: string;
       secretsHelpText: string;
@@ -104,6 +105,7 @@ describe("write-cli-startup-metadata", () => {
       };
     };
     expect(written.channelOptions).toContain("matrix");
+    expect(written.generatorSignature).toMatch(/^[a-f0-9]{40}$/u);
     expect(written.browserHelpText).toContain("Usage:");
     expect(written.browserHelpText).toContain("openclaw browser");
     expect(written.secretsHelpText).toContain("Usage:");
@@ -154,6 +156,16 @@ describe("write-cli-startup-metadata", () => {
     await writeMetadata();
     expect(nodesRenderCount).toBe(1);
 
+    const staleGeneratorMetadata = JSON.parse(readFileSync(outputPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    staleGeneratorMetadata.generatorSignature = "stale-generator";
+    writeFileSync(outputPath, `${JSON.stringify(staleGeneratorMetadata, null, 2)}\n`, "utf8");
+
+    await writeMetadata();
+    expect(nodesRenderCount).toBe(2);
+
     writeFixtureFile(
       tempRoot,
       "extensions/canvas/src/cli.ts",
@@ -165,7 +177,7 @@ describe("write-cli-startup-metadata", () => {
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
       nodesHelpText: string;
     };
-    expect(nodesRenderCount).toBe(2);
-    expect(written.nodesHelpText).toContain("openclaw nodes 2");
+    expect(nodesRenderCount).toBe(3);
+    expect(written.nodesHelpText).toContain("openclaw nodes 3");
   });
 });

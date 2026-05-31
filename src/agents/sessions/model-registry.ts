@@ -9,15 +9,15 @@ import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { registerApiProvider } from "../../llm/api-registry.js";
 import { resetApiProviders } from "../../llm/providers/register-builtins.js";
-import {
-  type AnthropicMessagesCompat,
-  type Api,
-  type AssistantMessageEventStreamContract,
-  type Context,
-  type Model,
-  type OpenAICompletionsCompat,
-  type OpenAIResponsesCompat,
-  type SimpleStreamOptions,
+import type {
+  AnthropicMessagesCompat,
+  Api,
+  AssistantMessageEventStreamContract,
+  Context,
+  Model,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  SimpleStreamOptions,
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
@@ -475,7 +475,7 @@ export class ModelRegistry {
 
   private validateConfig(config: ModelsConfig): void {
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-      const hasProviderApi = !!providerConfig.api;
+      const hasProviderApi = Boolean(providerConfig.api);
       const models = providerConfig.models ?? [];
 
       if (models.length === 0) {
@@ -495,7 +495,7 @@ export class ModelRegistry {
       }
 
       for (const modelDef of models) {
-        const hasModelApi = !!modelDef.api;
+        const hasModelApi = Boolean(modelDef.api);
 
         if (!hasProviderApi && !hasModelApi) {
           throw new Error(

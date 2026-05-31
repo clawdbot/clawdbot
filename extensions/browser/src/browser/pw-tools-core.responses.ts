@@ -32,7 +32,6 @@ export async function responseBodyViaPlaywright(opts: {
   const promise = new Promise<unknown>((resolve, reject) => {
     let done = false;
     let timer: NodeJS.Timeout | undefined;
-    let handler: ((resp: unknown) => void) | undefined;
 
     const cleanup = () => {
       if (timer) {
@@ -44,7 +43,7 @@ export async function responseBodyViaPlaywright(opts: {
       }
     };
 
-    handler = (resp: unknown) => {
+    const handler: ((resp: unknown) => void) | undefined = (resp: unknown) => {
       if (done) {
         return;
       }

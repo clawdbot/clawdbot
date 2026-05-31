@@ -358,7 +358,7 @@ function extractLiveDockerPackageScripts(packageJson) {
 }
 
 function stripLiveDockerPackageScripts(packageJson) {
-  const clone = JSON.parse(JSON.stringify(packageJson));
+  const clone = structuredClone(packageJson);
   const scripts = clone.scripts;
   if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) {
     return clone;
@@ -377,7 +377,7 @@ function extractPackageScripts(packageJson) {
 }
 
 function stripPackageScripts(packageJson) {
-  const clone = JSON.parse(JSON.stringify(packageJson));
+  const clone = structuredClone(packageJson);
   delete clone.scripts;
   return clone;
 }

@@ -67,6 +67,14 @@ vi.mock("../agents/command/session-store.runtime.js", () => {
   };
 });
 
+vi.mock("../agents/command/cli-compaction.js", () => {
+  return {
+    runCliTurnCompactionLifecycle: vi.fn(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    ),
+  };
+});
+
 vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   return {
     buildAcpResult: vi.fn(),
@@ -577,6 +585,7 @@ describe("agentCommand", () => {
           messageChannel: "telegram",
           deliver: true,
           allowModelOverride: false,
+          sessionEffects: "internal",
         },
         runtime,
         { sendMessageTelegram },
@@ -1208,7 +1217,8 @@ describe("agentCommand", () => {
 
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("global");
+      expect(callArgs?.sessionKey).toBe("agent:ops:global");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
   });
 

@@ -2,7 +2,7 @@ import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
 
 export { normalizeFastMode };
 

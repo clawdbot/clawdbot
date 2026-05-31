@@ -5,6 +5,7 @@ import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
@@ -26,6 +27,7 @@ export type ResolvePluginModuleLoaderCacheEntryParams = {
   loaderFilename?: string;
   aliasMap?: Record<string, string>;
   tryNative?: boolean;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
   sharedCacheScopeKey?: string;
@@ -133,6 +135,7 @@ function resolveDefaultPluginModuleLoaderConfig(
     modulePath: params.modulePath,
     argv1: params.argvEntry ?? process.argv[1],
     moduleUrl: params.importerUrl,
+    devSourceRoot: params.devSourceRoot,
     ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
     ...(params.pluginSdkResolution ? { pluginSdkResolution: params.pluginSdkResolution } : {}),
   });
@@ -291,6 +294,7 @@ export function getCachedPluginModuleLoader(
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
+  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
   const cached = params.cache.get(cacheEntry.scopedCacheKey);
   if (cached) {

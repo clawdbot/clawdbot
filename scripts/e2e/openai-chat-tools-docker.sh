@@ -13,11 +13,39 @@ if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then
   PROFILE_FILE="$HOME/.profile"
 fi
 
+read_profile_openai_api_key() {
+  local profile_file="$1"
+  (
+    set +u
+    set -a
+    # shellcheck disable=SC1090
+    source "$profile_file" >/dev/null
+    set +a
+    printf '%s' "${OPENAI_API_KEY:-}"
+  )
+}
+
+PROFILE_STATUS="none"
+if [ -f "$PROFILE_FILE" ] && [ -r "$PROFILE_FILE" ]; then
+  PROFILE_STATUS="$PROFILE_FILE"
+fi
+
+OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
+if [ "$PROFILE_STATUS" != "none" ]; then
+  OPENAI_API_KEY_VALUE="$(read_profile_openai_api_key "$PROFILE_FILE")"
+fi
+if [[ "$OPENAI_API_KEY_VALUE" == "undefined" || "$OPENAI_API_KEY_VALUE" == "null" ]]; then
+  OPENAI_API_KEY_VALUE=""
+fi
+if [ -z "$OPENAI_API_KEY_VALUE" ]; then
+  echo "ERROR: OPENAI_API_KEY was not available after sourcing $PROFILE_STATUS." >&2
+  exit 1
+fi
+
 docker_e2e_build_or_reuse "$IMAGE_NAME" openai-chat-tools "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 openai-chat-tools empty)"
 
 PROFILE_MOUNT=()
-PROFILE_STATUS="none"
 if [ -f "$PROFILE_FILE" ] && [ -r "$PROFILE_FILE" ]; then
   set -a
   # shellcheck disable=SC1090

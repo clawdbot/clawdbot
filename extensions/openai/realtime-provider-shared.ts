@@ -1,3 +1,4 @@
+import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderHttpError,
   resolveProviderRequestHeaders,
@@ -125,9 +126,10 @@ async function createOpenAIRealtimeSecret(
     payload && typeof payload === "object"
       ? (payload as Record<string, unknown>).expires_at
       : undefined;
+  const expiresAtMs = resolveExpiresAtMsFromEpochSeconds(expiresAt);
   return {
     value: clientSecret,
-    ...(typeof expiresAt === "number" ? { expiresAt } : {}),
+    ...(expiresAtMs === undefined ? {} : { expiresAt: expiresAtMs }),
   };
 }
 

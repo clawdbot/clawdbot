@@ -41,6 +41,7 @@ function invokeExecFileCallback(args: unknown[], error: Error | null) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   clearConfigSchemaResponseCacheForTests();
   vi.clearAllMocks();
 });
@@ -171,6 +172,16 @@ describe("config schema response cache", () => {
   it("can be cleared when config writes change schema inputs", () => {
     loadConfigSchemaResponseForTests();
     clearConfigSchemaResponseCacheForTests();
+    loadConfigSchemaResponseForTests();
+
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache schema responses when cache expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    loadConfigSchemaResponseForTests();
     loadConfigSchemaResponseForTests();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);

@@ -199,8 +199,8 @@ Use `openclaw models auth login --provider <id> --profile-id <profileId>` for
 providers that support named auth profiles during login.
 
 ```bash
-openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
-openclaw models auth login --provider openai-codex --profile-id openai-codex:lain
+openclaw models auth login --provider openai --profile-id openai:ritsuko
+openclaw models auth login --provider openai --profile-id openai:lain
 ```
 
 This is the easiest way to keep multiple OAuth logins for the same provider

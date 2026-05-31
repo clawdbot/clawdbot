@@ -8,15 +8,15 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1053.0",
-    "@aws-sdk/s3-request-presigner": "3.1053.0",
+    "@aws-sdk/client-s3": "3.1056.0",
+    "@aws-sdk/s3-request-presigner": "3.1056.0",
     "@tloncorp/tlon-skill": "0.4.0",
     "@urbit/aura": "3.0.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.30"

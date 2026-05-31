@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
@@ -494,8 +495,7 @@ export function deferGatewayRestartUntilIdle(opts: {
   reason?: string;
   timeoutIntent?: GatewayRestartIntent;
 }): void {
-  const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
-  const pollMs = Math.max(10, Math.floor(pollMsRaw));
+  const pollMs = resolveTimerTimeoutMs(opts.pollMs, DEFAULT_DEFERRAL_POLL_MS, 10);
   const maxWaitMs =
     typeof opts.maxWaitMs === "number" && Number.isFinite(opts.maxWaitMs) && opts.maxWaitMs > 0
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))

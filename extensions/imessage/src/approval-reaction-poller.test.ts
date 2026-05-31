@@ -115,6 +115,54 @@ describe("iMessage approval reaction poller", () => {
     });
   });
 
+  it("does not bind observed approval prompts when the process clock is invalid", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }] };
+      }
+      if (method === "messages.history") {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "SMS;-;+15551230000",
+              chat_identifier: "+15551230000",
+              is_from_me: true,
+              sender: "+15551230000",
+              text: "Exec approval required\nID: exec-1",
+              reactions: [
+                {
+                  id: 7,
+                  sender: "+15551230000",
+                  is_from_me: true,
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+
+    try {
+      await pollPendingIMessageApprovalReactions({
+        client: createClient(request),
+        cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+        accountId: "default",
+        allowRecentChatDiscovery: true,
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
+  });
+
   it("uses learned chat ids for fast scoped polling after discovery", async () => {
     registerIMessageApprovalReactionTarget({
       accountId: "default",

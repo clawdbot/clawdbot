@@ -1389,7 +1389,7 @@ export class GatewayClient {
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)
         ? Math.max(1, Math.min(30_000, rawMinInterval))
         : 1000;
-    const interval = Math.max(this.tickIntervalMs, minInterval);
+    const interval = resolveSafeTimeoutDelayMs(Math.max(this.tickIntervalMs, minInterval));
     this.tickTimer = setInterval(() => {
       if (this.closed) {
         return;
@@ -1470,7 +1470,6 @@ export class GatewayClient {
             : this.requestTimeoutMs;
     const signal = opts?.signal;
     const p = new Promise<T>((resolve, reject) => {
-      let abortHandler: (() => void) | undefined;
       const timeout =
         timeoutMs === null
           ? null
@@ -1488,7 +1487,7 @@ export class GatewayClient {
           signal.removeEventListener("abort", abortHandler);
         }
       };
-      abortHandler = () => {
+      const abortHandler: (() => void) | undefined = () => {
         const pending = this.pending.get(id);
         this.pending.delete(id);
         pending?.cleanup?.();

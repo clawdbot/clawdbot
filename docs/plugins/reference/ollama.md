@@ -21,3 +21,4 @@ providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchP
 ## Related docs
 
 - [ollama](/providers/ollama)
+- [ollama-cloud](/providers/ollama-cloud)

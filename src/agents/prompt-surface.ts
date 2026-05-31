@@ -2,17 +2,6 @@ import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kin
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
-export type AgentPromptRenderContext = {
-  surface: AgentPromptSurfaceKind;
-  agentRuntimeId?: string;
-  backendKind?: string;
-  availableTools?: ReadonlySet<string>;
-  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-  acpEnabled?: boolean;
-  runtimeChannel?: string;
-  runtimeCapabilities?: readonly string[];
-};
-
 export function buildOpenClawToolFallbackText(params: {
   surface: AgentPromptSurfaceKind;
   execToolName: string;

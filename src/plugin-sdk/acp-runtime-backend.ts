@@ -1,11 +1,11 @@
 // Lightweight ACP runtime backend helpers for startup-loaded plugins.
 
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";

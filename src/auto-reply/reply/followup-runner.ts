@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -26,7 +27,6 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -507,6 +507,7 @@ export function createFollowupRunner(params: {
         sessionKey: replySessionKey ?? "",
         kind: "queued_followup",
         resetTriggered: false,
+        routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: queued.abortSignal,
       });
       if (admission.status === "skipped") {

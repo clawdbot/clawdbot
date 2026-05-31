@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-analysis.js";
@@ -560,7 +560,6 @@ function copyExecApprovalsFallback(tempPath: string, filePath: string): void {
 function renameExecApprovalsWithFallback(tempPath: string, filePath: string): void {
   try {
     fs.renameSync(tempPath, filePath);
-    return;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     // Windows can reject rename-overwrite when another process has a transient

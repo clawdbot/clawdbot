@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockTimeoutError } from "../session-write-lock-error.js";
@@ -185,8 +190,7 @@ function parseExpireTimeMs(expireTime: string | undefined): number | null {
   if (!expireTime) {
     return null;
   }
-  const timestamp = Date.parse(expireTime);
-  return Number.isFinite(timestamp) ? timestamp : null;
+  return asDateTimestampMs(Date.parse(expireTime)) ?? null;
 }
 
 function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
@@ -342,7 +346,10 @@ async function ensureGooglePromptCache(
   deps: GooglePromptCacheDeps,
 ): Promise<string | null> {
   const baseUrl = normalizeGoogleApiBaseUrl(params.model.baseUrl);
-  const now = deps.now?.() ?? Date.now();
+  const now = asDateTimestampMs(deps.now?.() ?? Date.now());
+  if (now === undefined) {
+    return null;
+  }
   const systemPromptDigest = digestSystemPrompt(params.systemPrompt);
   const matchKey = buildGooglePromptCacheMatchKey({
     provider: params.provider,
@@ -354,7 +361,10 @@ async function ensureGooglePromptCache(
   });
   const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
 
-  if (latestEntry?.status === "failed" && latestEntry.retryAfter > now) {
+  if (
+    latestEntry?.status === "failed" &&
+    isFutureDateTimestampMs(latestEntry.retryAfter, { nowMs: now })
+  ) {
     return null;
   }
 
@@ -362,7 +372,7 @@ async function ensureGooglePromptCache(
   const refreshWindowMs = resolveGooglePromptCacheRefreshWindowMs(params.cacheRetention);
   if (latestEntry?.status === "ready" && latestEntry.cachedContent) {
     const expiresAt = parseExpireTimeMs(latestEntry.expireTime);
-    const isExpired = expiresAt !== null && expiresAt <= now;
+    const isExpired = expiresAt !== null && !isFutureDateTimestampMs(expiresAt, { nowMs: now });
     if (!isExpired) {
       const needsRefresh = expiresAt !== null && expiresAt - now <= refreshWindowMs;
       if (!needsRefresh) {
@@ -420,7 +430,8 @@ async function ensureGooglePromptCache(
       systemPromptDigest,
       cacheConfigDigest: params.cacheConfigDigest,
       cacheRetention: params.cacheRetention,
-      retryAfter: now + GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS,
+      retryAfter:
+        resolveExpiresAtMsFromDurationMs(GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS, { nowMs: now }) ?? 0,
     });
     return null;
   }

@@ -31,7 +31,7 @@ export async function waitForEventLoopReady(
   const maxWaitMs = resolveFiniteTimeoutDelayMs(options.maxWaitMs, DEFAULT_MAX_WAIT_MS, {
     minMs: 0,
   });
-  const intervalMs = resolvePositiveInteger(options.intervalMs, DEFAULT_INTERVAL_MS);
+  const intervalMs = resolveFiniteTimeoutDelayMs(options.intervalMs, DEFAULT_INTERVAL_MS);
   const driftThresholdMs = resolvePositiveInteger(
     options.driftThresholdMs,
     DEFAULT_DRIFT_THRESHOLD_MS,

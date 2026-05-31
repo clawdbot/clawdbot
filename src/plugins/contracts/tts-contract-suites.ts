@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
@@ -1224,6 +1224,7 @@ export function describeTtsProviderRuntimeContract() {
 
 export function describeTtsAutoApplyContract() {
   describe("tts auto-apply contract", () => {
+    beforeAll(setupTtsRuntime);
     beforeEach(setupTtsContractTest);
 
     const baseCfg: OpenClawConfig = asLegacyOpenClawConfig({
@@ -1276,10 +1277,8 @@ export function describeTtsAutoApplyContract() {
         expect(fetchMock).toHaveBeenCalledTimes(params.expectedFetchCalls);
         if (params.expectSamePayload) {
           expect(result).toBe(params.payload);
-        } else {
-          if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
-            throw new Error("expected auto TTS to attach mediaUrl");
-          }
+        } else if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
+          throw new Error("expected auto TTS to attach mediaUrl");
         }
       });
     }

@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";

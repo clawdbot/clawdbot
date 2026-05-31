@@ -15,7 +15,10 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
@@ -451,7 +454,7 @@ async function runWithTimeout<T>(params: {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const TIMEOUT = Symbol("timeout");
   const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
-    timeout = setTimeout(() => resolve(TIMEOUT), params.timeoutMs);
+    timeout = setTimeout(() => resolve(TIMEOUT), resolveTimerTimeoutMs(params.timeoutMs, 1));
     timeout.unref?.();
   });
   const taskPromise = params.task();
@@ -469,6 +472,10 @@ async function runWithTimeout<T>(params: {
     }
   }
 }
+
+export const testing = {
+  runWithTimeout,
+} as const;
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
   const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
@@ -1017,7 +1024,7 @@ export default definePluginEntry({
                   return -1 * direction;
                 }
                 if (a[col] > b[col]) {
-                  return 1 * direction;
+                  return direction;
                 }
                 return 0;
               });

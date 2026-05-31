@@ -1,3 +1,5 @@
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -11,8 +13,6 @@ import {
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
-import { theme } from "../../terminal/theme.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 

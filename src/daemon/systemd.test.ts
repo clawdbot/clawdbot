@@ -1,9 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+type ExecFileCallback = (
+  error: ExecFileException | null,
+  stdout: string,
+  stderr: string,
+) => void;
+type ExecFileMock = (
+  command: string,
+  args: string[],
+  options: ExecFileOptionsWithStringEncoding,
+  callback: ExecFileCallback,
+) => unknown;
+
+const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -11,13 +24,35 @@ vi.mock("node:fs", async (importOriginal) => ({
   existsSync: existsSyncMock,
 }));
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessExecFile(
-    Object.assign(execFileMock, {
-      __promisify__: vi.fn(),
-    }) as typeof import("node:child_process").execFile,
-  );
+vi.mock("./exec-file.js", () => {
+  return {
+    execFileUtf8: async (
+      command: string,
+      args: string[],
+      options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
+    ) => {
+      let settled:
+        | {
+            stdout: string;
+            stderr: string;
+            code: number;
+          }
+        | undefined;
+
+      execFileMock(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+        settled = {
+          stdout: stdout ?? "",
+          stderr: stderr || error?.message || "",
+          code: error && typeof error.code === "number" ? error.code : error ? 1 : 0,
+        };
+      });
+
+      if (!settled) {
+        throw new Error(`execFile mock did not settle for ${command} ${args.join(" ")}`);
+      }
+      return settled;
+    },
+  };
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
@@ -167,6 +202,9 @@ describe("systemd availability", () => {
     existsSyncMock.mockReturnValue(true);
     execFileMock.mockImplementation((_cmd, args, opts, cb) => {
       assertUserSystemctlArgs(args, "status");
+      if (!opts.env) {
+        throw new Error("expected systemctl env");
+      }
       expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
       expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
       cb(null, "", "");
@@ -418,7 +456,7 @@ describe("isSystemdServiceEnabled", () => {
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args[0]).toBe("--machine");
-        expect(String(args[1])).toMatch(/^[^@]+@$/);
+        expect(args[1]).toMatch(/^[^@]+@$/);
         expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;

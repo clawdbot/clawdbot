@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -12,7 +13,6 @@ import {
 } from "./postinstall-bundled-plugins.mjs";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
-const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
@@ -29,9 +29,13 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
-const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
+const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -66,12 +70,111 @@ function pruneStaleRuntimeSymlinks() {
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  for (const root of TSDOWN_OUTPUT_ROOTS) {
+  const env = params.env ?? process.env;
+  const roots = listTsdownOutputRoots();
+  const protectedDeclarationPaths =
+    env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? listExistingDeclarationOutputPaths({
+          cwd,
+          fs: fsImpl,
+          roots,
+        })
+      : new Set();
+  const protectedPaths = new Set([
+    ...protectedDeclarationPaths,
+    ...listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }),
+  ]);
+  for (const root of roots) {
     const rootPath = path.join(cwd, root);
     try {
-      fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      if (hasProtectedChild({ rootPath, protectedPaths })) {
+        cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
+      } else {
+        fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      }
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
+    }
+  }
+}
+
+function hasProtectedChild({ rootPath, protectedPaths }) {
+  const rootWithSeparator = `${path.resolve(rootPath)}${path.sep}`;
+  for (const protectedPath of protectedPaths) {
+    if (protectedPath.startsWith(rootWithSeparator)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    const resolvedEntryPath = path.resolve(entryPath);
+    if (protectedPaths.has(resolvedEntryPath)) {
+      continue;
+    }
+    try {
+      if (entry.isDirectory()) {
+        cleanOutputRootExcept(entryPath, protectedPaths, fsImpl);
+        fsImpl.rmdirSync(entryPath);
+      } else {
+        fsImpl.rmSync(entryPath, { force: true });
+      }
+    } catch {
+      // Keep best-effort semantics; protected declaration children can keep a directory non-empty.
+    }
+  }
+}
+
+function listExistingDeclarationOutputPaths({ cwd, fs: fsImpl, roots }) {
+  const protectedPaths = new Set();
+  for (const root of roots) {
+    collectDeclarationOutputPaths(path.join(cwd, root), protectedPaths, fsImpl);
+  }
+  return protectedPaths;
+}
+
+function listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }) {
+  const protectedPaths = new Set();
+  if (env[PRESERVE_CLI_STARTUP_METADATA_ENV] !== "1") {
+    return protectedPaths;
+  }
+  for (const relativePath of PRESERVED_TSDOWN_OUTPUT_FILES) {
+    const absolutePath = path.resolve(cwd, relativePath);
+    try {
+      if (fsImpl.statSync(absolutePath).isFile()) {
+        protectedPaths.add(absolutePath);
+      }
+    } catch {
+      // Missing preserved outputs are normal on first build.
+    }
+  }
+  return protectedPaths;
+}
+
+function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      collectDeclarationOutputPaths(entryPath, protectedPaths, fsImpl);
+    } else if (DECLARATION_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
+      protectedPaths.add(path.resolve(entryPath));
     }
   }
 }
@@ -79,7 +182,7 @@ export function cleanTsdownOutputRoots(params = {}) {
 export function pruneStaleRootChunkFiles(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const roots = TSDOWN_OUTPUT_ROOTS.map((root) => path.join(cwd, root));
+  const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
     let entries = [];
     try {
@@ -102,6 +205,10 @@ export function pruneStaleRootChunkFiles(params = {}) {
       }
     }
   }
+}
+
+export function listTsdownOutputRoots() {
+  return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
 }
 
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
@@ -355,6 +462,32 @@ function resolveTsdownEnv(env, params = {}) {
   };
 }
 
+export function tsdownBuildUsage() {
+  return [
+    "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
+    "",
+    "Builds OpenClaw with tsdown and validates emitted import diagnostics.",
+    "",
+    "Options:",
+    "  -h, --help  Show this help without starting tsdown.",
+    "",
+    "Other arguments are forwarded to tsdown.",
+  ].join("\n");
+}
+
+export function parseTsdownBuildArgs(argv) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    return {
+      forwardedArgs: [],
+      help: true,
+    };
+  }
+  return {
+    forwardedArgs: argv,
+    help: false,
+  };
+}
+
 export function createTsdownOutputScanner(params = {}) {
   const maxCaptureBytes = params.maxCaptureBytes ?? DEFAULT_CAPTURE_BYTES;
   let captured = "";
@@ -399,13 +532,14 @@ export function createTsdownOutputScanner(params = {}) {
 
 export function resolveTsdownBuildInvocation(params = {}) {
   const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const forwardedArgs = params.args ?? [];
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    ...extraArgs,
+    ...forwardedArgs,
   ];
   if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
     return {
@@ -540,11 +674,16 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
+  const args = parseTsdownBuildArgs(process.argv.slice(2));
+  if (args.help) {
+    console.log(tsdownBuildUsage());
+    process.exit(0);
+  }
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation();
+  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
   const result = await runTsdownBuildInvocation(invocation);
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {

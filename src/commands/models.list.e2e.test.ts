@@ -673,9 +673,7 @@ describe("models list/status", () => {
   it("filters stale spark rows from models list and registry views", async () => {
     const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
       id === "gpt-5.3-codex-spark" &&
-      (provider === "openai" ||
-        provider === "azure-openai-responses" ||
-        provider === "openai-codex");
+      (provider === "openai" || provider === "azure-openai-responses" || provider === "openai");
     shouldSuppressBuiltInModel.mockImplementation(suppressSpark);
     shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");

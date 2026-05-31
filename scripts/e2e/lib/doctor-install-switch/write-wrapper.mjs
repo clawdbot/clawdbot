@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 
-const [, , wrapperPath, npmBin, logPath = `${process.env.HOME}/openclaw-wrapper-argv.log`] =
-  process.argv;
+const [wrapperPath, npmBin, logPath = `${process.env.HOME}/openclaw-wrapper-argv.log`] =
+  process.argv.slice(2);
 
 if (!wrapperPath || !npmBin || !logPath || logPath.startsWith("undefined/")) {
   console.error("usage: write-wrapper.mjs <wrapper-path> <npm-bin> [log-path]");

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
@@ -87,8 +88,8 @@ export class UrbitSSEClient {
     this.onReconnect = options.onReconnect ?? null;
     this.autoReconnect = options.autoReconnect !== false;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
-    this.reconnectDelay = options.reconnectDelay ?? 1000;
-    this.maxReconnectDelay = options.maxReconnectDelay ?? 30000;
+    this.reconnectDelay = resolveTimerTimeoutMs(options.reconnectDelay, 1000);
+    this.maxReconnectDelay = resolveTimerTimeoutMs(options.maxReconnectDelay, 30000);
     this.logger = options.logger ?? {};
     this.ssrfPolicy = options.ssrfPolicy;
     this.lookupFn = options.lookupFn;

@@ -112,12 +112,12 @@ function inMemoryCodexPluginsIO(
 } {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
-    plugins: JSON.parse(JSON.stringify(initial)),
+    plugins: structuredClone(initial),
   };
   return {
-    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
-    currentConfig: () => JSON.parse(JSON.stringify(store)),
-    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    current: () => structuredClone(store.plugins ?? {}),
+    currentConfig: () => structuredClone(store),
+    readConfig: () => Promise.resolve(structuredClone(store)),
     mutate: async (update) => {
       update(store);
     },
@@ -735,7 +735,7 @@ describe("codex command", () => {
   });
 
   it("shows model ids from Codex app-server", async () => {
-    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
+    const config = { auth: { order: { openai: ["openai:work"] } } };
     const listCodexAppServerModels = vi.fn(async (_options?: { config?: unknown }) => ({
       models: [
         {
@@ -825,7 +825,7 @@ describe("codex command", () => {
   });
 
   it("reports status unavailable when every Codex probe fails", async () => {
-    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
+    const config = { auth: { order: { openai: ["openai:work"] } } };
     const offline = { ok: false as const, error: "offline" };
     const deps = createDeps({
       readCodexStatusProbes: vi.fn(async () => ({
@@ -1277,7 +1277,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1349,7 +1349,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1402,12 +1402,11 @@ describe("codex command", () => {
     expect(result.text).not.toContain("subscription unavailable");
   });
 
-  it("shows Codex auth order before OpenAI fallback order", async () => {
+  it("shows OpenAI subscription auth before API-key fallback order", async () => {
     const config = {
       auth: {
         order: {
-          openai: ["openai:api-key"],
-          "openai-codex": ["openai-codex:personal-email@gmail.com"],
+          openai: ["openai:personal-email@gmail.com", "openai:api-key"],
         },
       },
     };
@@ -1421,9 +1420,9 @@ describe("codex command", () => {
             provider: "openai",
             key: "sk-test",
           },
-          "openai-codex:personal-email@gmail.com": {
+          "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1431,7 +1430,7 @@ describe("codex command", () => {
           },
         },
         lastGood: {
-          "openai-codex": "openai-codex:personal-email@gmail.com",
+          openai: "openai:personal-email@gmail.com",
         },
       },
       config,
@@ -1463,7 +1462,7 @@ describe("codex command", () => {
     expect(result.text).toContain(
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
     );
-    expect(result.text).not.toContain("api-key");
+    expect(result.text).toContain("\n  2. api-key   API key   — available if needed");
   });
 
   it("explains when an API-key backup is active because the subscription is paused", async () => {
@@ -1477,7 +1476,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1490,7 +1489,7 @@ describe("codex command", () => {
           },
           "openai:work-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "work-access-token",
             refresh: "work-refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1587,7 +1586,7 @@ describe("codex command", () => {
         profiles: {
           "openai:personal-email@gmail.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: now + 60 * 60 * 1000,
@@ -1646,10 +1645,10 @@ describe("codex command", () => {
     expect(result.text).toContain("Now using: api-key-backup");
     expect(result.text).toContain("subscription rate-limited");
     expect(result.text).toContain(
-      "\n  1. api-key-backup   API key   — active now \u00b7 billed per token",
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
     );
     expect(result.text).toContain(
-      "\n  2. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+      "\n  2. api-key-backup   API key   — active now \u00b7 billed per token",
     );
     expect(result.text).not.toContain(
       "personal-email@gmail.com   ChatGPT subscription   — active now",
@@ -1663,17 +1662,17 @@ describe("codex command", () => {
       {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "stale-access-token",
             refresh: "stale-refresh-token",
             expires: now + 2 * 24 * 60 * 60 * 1000,
             email: "previous@example.com",
           },
-          "openai-codex:fresh-email@example.com": {
+          "openai:fresh-email@example.com": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "fresh-access-token",
             refresh: "fresh-refresh-token",
             expires: now + 9 * 24 * 60 * 60 * 1000,
@@ -1681,10 +1680,10 @@ describe("codex command", () => {
           },
         },
         order: {
-          "openai-codex": ["openai-codex:fresh-email@example.com", "openai-codex:default"],
+          openai: ["openai:fresh-email@example.com", "openai:default"],
         },
         lastGood: {
-          "openai-codex": "openai-codex:default",
+          openai: "openai:default",
         },
       },
       config,
@@ -1717,7 +1716,7 @@ describe("codex command", () => {
       "\n  2. previous@example.com   ChatGPT subscription   — available if needed",
     );
     expect(result.text).not.toContain("previous@example.com   ChatGPT subscription   — active now");
-    expect(result.text).not.toContain("openai-codex:");
+    expect(result.text).not.toContain("openai:");
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
@@ -1779,26 +1778,26 @@ describe("codex command", () => {
       {
         version: 1,
         profiles: {
-          "openai-codex:fresh@example.com": {
+          "openai:fresh@example.com": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "fresh-token",
             expires: now - 1000,
             email: "fresh@example.com",
           },
-          "openai-codex:stale@example.com": {
+          "openai:stale@example.com": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "stale-token",
             expires: now - 2000,
             email: "stale@example.com",
           },
         },
         order: {
-          "openai-codex": ["openai-codex:fresh@example.com", "openai-codex:stale@example.com"],
+          openai: ["openai:fresh@example.com", "openai:stale@example.com"],
         },
         lastGood: {
-          "openai-codex": "openai-codex:stale@example.com",
+          openai: "openai:stale@example.com",
         },
       },
       config,
@@ -3319,7 +3318,7 @@ describe("codex command", () => {
         schemaVersion: 1,
         threadId: "thread-123",
         cwd: "/repo",
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         modelProvider: "openai",
       }),
     );
@@ -3371,7 +3370,7 @@ describe("codex command", () => {
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
     });
     expect(requestConversationBinding).toHaveBeenCalledWith({
       summary: "Codex app-server thread thread-123 in /repo",

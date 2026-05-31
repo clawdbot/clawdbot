@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../terminal/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 describe("gateway startup log", () => {
@@ -57,9 +57,9 @@ describe("gateway startup log", () => {
       cfg: {
         agents: {
           defaults: {
-            model: "openai-codex/gpt-5.5",
+            model: "openai/gpt-5.5",
             models: {
-              "openai-codex/gpt-5.5": {
+              "openai/gpt-5.5": {
                 params: {
                   fastMode: true,
                   thinking: "medium",
@@ -78,9 +78,9 @@ describe("gateway startup log", () => {
     });
 
     const firstInfoCall = info.mock.calls[0];
-    expect(firstInfoCall?.[0]).toBe("agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)");
+    expect(firstInfoCall?.[0]).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
     expect(stripAnsi(String(firstInfoCall?.[1]?.consoleMessage))).toBe(
-      "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
+      "agent model: openai/gpt-5.5 (thinking=medium, fast=on)",
     );
   });
 
@@ -90,12 +90,12 @@ describe("gateway startup log", () => {
         cfg: {
           agents: {
             defaults: {
-              model: "openai-codex/gpt-5.5",
+              model: "openai/gpt-5.5",
             },
             list: [{ id: "main", default: true, fastModeDefault: true }],
           },
         },
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
       }),
     ).toBe("thinking=medium, fast=on");
@@ -108,12 +108,12 @@ describe("gateway startup log", () => {
           agents: {
             defaults: {
               models: {
-                "openai-codex/gpt-5.5": { params: { thinking: "off", fastMode: true } },
+                "openai/gpt-5.5": { params: { thinking: "off", fastMode: true } },
               },
             },
           },
         },
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
       }),
     ).toBe("thinking=off, fast=on");

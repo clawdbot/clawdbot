@@ -1,4 +1,5 @@
 import os from "node:os";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -15,7 +16,7 @@ import {
   shouldPreferActiveRuntimeAliasAuthLabel,
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -32,7 +33,6 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -49,7 +49,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
   "github-copilot",
   "google-gemini-cli",
-  "openai-codex",
+  "openai",
 ]);
 
 let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
@@ -115,6 +115,23 @@ function shouldLoadUsageSummary(params: {
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
 }
 
+function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
+  const auth = normalizeOptionalLowercaseString(authLabel);
+  if (!auth) {
+    return undefined;
+  }
+  if (auth.startsWith("oauth")) {
+    return "oauth";
+  }
+  if (auth.startsWith("token")) {
+    return "token";
+  }
+  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
+    return "api_key";
+  }
+  return undefined;
+}
+
 function formatSessionTaskLine(sessionKey: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
@@ -164,8 +181,8 @@ function resolveStatusRuntimeProvider(params: {
 }): string {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
   const provider = normalizeOptionalLowercaseString(params.provider);
-  if (harness === "codex" && provider === "openai") {
-    return "openai-codex";
+  if (harness === "codex" && (provider === "openai" || provider === "codex")) {
+    return "openai";
   }
   if (harness === "claude-cli" && provider === "anthropic") {
     return "claude-cli";
@@ -293,8 +310,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModelAuth = activeModelAuth;
   }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const usageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const currentUsageProvider =
-    resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
+    resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
+    resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&

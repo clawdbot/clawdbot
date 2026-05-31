@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -42,7 +43,6 @@ import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-bin
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -506,14 +506,7 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let {
-    analysisOk,
-    allowlistMatches,
-    allowlistSatisfied,
-    segments,
-    segmentAllowlistEntries,
-    segmentSatisfiedBy,
-  } = evaluateSystemRunAllowlist({
+  const allowlistEvaluation = evaluateSystemRunAllowlist({
     shellCommand: parsed.shellPayload,
     argv: parsed.argv,
     approvals,
@@ -526,6 +519,9 @@ async function evaluateSystemRunPolicyPhase(
     skillBins: bins,
     autoAllowSkills,
   });
+  const { allowlistMatches, segments, segmentAllowlistEntries, segmentSatisfiedBy } =
+    allowlistEvaluation;
+  let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;

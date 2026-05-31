@@ -11,7 +11,7 @@ import {
 } from "./pending-uploads-fs.js";
 import { clearPendingUploads } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
-import { msteamsRuntimeStub } from "./test-runtime.js";
+import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 // Track temp dirs created by each test so afterEach can clean them up.
 const createdTempDirs: string[] = [];

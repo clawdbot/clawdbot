@@ -139,7 +139,6 @@ async function deployDiscordCommands(params: {
   try {
     try {
       await params.client.deployCommands({ mode: "reconcile" });
-      return;
     } catch (err) {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(

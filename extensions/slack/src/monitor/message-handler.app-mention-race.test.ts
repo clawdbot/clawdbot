@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const prepareSlackMessageMock =
   vi.fn<
@@ -151,6 +151,10 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     clearSlackRuntime();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("allows a single app_mention retry when message event was dropped before dispatch", async () => {
     prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
       if (opts.source === "message") {
@@ -167,6 +171,43 @@ describe("createSlackMessageHandler app_mention race handling", () => {
 
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retain app_mention retry allowance when the current clock is not a valid date timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+      if (opts.source === "message") {
+        return null;
+      }
+      return { ctxPayload: {} };
+    });
+
+    const handler = createTestHandler();
+
+    await sendMessageEvent(handler, "1700000000.000125");
+    nowSpy.mockReturnValue(1_700_000_000_000);
+    await sendMentionEvent(handler, "1700000000.000125");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not retain app_mention retry allowance when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+      if (opts.source === "message") {
+        return null;
+      }
+      return { ctxPayload: {} };
+    });
+
+    const handler = createTestHandler();
+
+    await sendMessageEvent(handler, "1700000000.000126");
+    await sendMentionEvent(handler, "1700000000.000126");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
   });
 
   it("allows app_mention while message handling is still in-flight, then keeps later duplicates deduped", async () => {

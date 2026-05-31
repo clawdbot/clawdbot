@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const SSH_TOKEN = /^[A-Za-z0-9._-]+$/;
 const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;

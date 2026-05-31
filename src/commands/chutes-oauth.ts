@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
   CHUTES_AUTHORIZE_ENDPOINT,
@@ -9,7 +10,6 @@ import {
 } from "../agents/chutes-oauth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type OAuthPrompt = {
   message: string;

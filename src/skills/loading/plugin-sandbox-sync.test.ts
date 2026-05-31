@@ -66,7 +66,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -127,7 +127,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -170,7 +170,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });

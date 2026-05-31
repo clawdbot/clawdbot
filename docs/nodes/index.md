@@ -218,7 +218,7 @@ and approve the new request so the gateway stores the updated command snapshot.
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
 
-CLI helper (writes to a temp file and prints `MEDIA:<path>`):
+CLI helper (writes to a temp file and prints the saved path):
 
 ```bash
 openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png

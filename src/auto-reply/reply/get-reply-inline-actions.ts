@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -7,10 +11,6 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import {
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
@@ -261,6 +261,50 @@ export async function handleInlineActions(params: {
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+
+  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  if (!isStopLikeInbound && targetSessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
+    const incoming = resolveAbortCutoffFromContext(ctx);
+    const shouldSkip = cutoff
+      ? shouldSkipMessageByAbortCutoff({
+          cutoffMessageSid: cutoff.messageSid,
+          cutoffTimestamp: cutoff.timestamp,
+          messageSid: incoming?.messageSid,
+          timestamp: incoming?.timestamp,
+        })
+      : false;
+    if (shouldSkip) {
+      typing.cleanup();
+      return { kind: "reply", reply: undefined };
+    }
+    if (cutoff) {
+      await (
+        await loadAbortCutoffRuntime()
+      ).clearAbortCutoffInSessionRuntime({
+        sessionEntry: targetSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
+  }
+
+  const isEmptyConfig = Object.keys(cfg).length === 0;
+  const skipWhenConfigEmpty = command.channelId
+    ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
+    : false;
+  if (
+    skipWhenConfigEmpty &&
+    isEmptyConfig &&
+    command.from &&
+    command.to &&
+    command.from !== command.to
+  ) {
+    typing.cleanup();
+    return { kind: "reply", reply: undefined };
+  }
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
   const shouldLoadSkillCommands =
@@ -269,7 +313,7 @@ export async function handleInlineActions(params: {
     // `/skill …` needs the full skill command list.
     (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
   const skillCommands =
-    shouldLoadSkillCommands && params.skillCommands
+    shouldLoadSkillCommands && params.skillCommands && params.skillCommands.length > 0
       ? params.skillCommands
       : shouldLoadSkillCommands
         ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
@@ -279,7 +323,6 @@ export async function handleInlineActions(params: {
             skillFilter,
           })
         : [];
-  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
@@ -405,34 +448,6 @@ export async function handleInlineActions(params: {
     await opts.onBlockReply(reply);
   };
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && targetSessionEntry) {
-    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
-    const incoming = resolveAbortCutoffFromContext(ctx);
-    const shouldSkip = cutoff
-      ? shouldSkipMessageByAbortCutoff({
-          cutoffMessageSid: cutoff.messageSid,
-          cutoffTimestamp: cutoff.timestamp,
-          messageSid: incoming?.messageSid,
-          timestamp: incoming?.timestamp,
-        })
-      : false;
-    if (shouldSkip) {
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
-    }
-    if (cutoff) {
-      await (
-        await loadAbortCutoffRuntime()
-      ).clearAbortCutoffInSessionRuntime({
-        sessionEntry: targetSessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
-    }
-  }
-
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender
       ? extractInlineSimpleCommand(cleanedBody)
@@ -542,21 +557,6 @@ export async function handleInlineActions(params: {
 
   if (directiveAck) {
     await sendInlineReply(directiveAck);
-  }
-
-  const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.channelId
-    ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
-    : false;
-  if (
-    skipWhenConfigEmpty &&
-    isEmptyConfig &&
-    command.from &&
-    command.to &&
-    command.from !== command.to
-  ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
   }
 
   let abortedLastRun = initialAbortedLastRun;

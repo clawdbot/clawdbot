@@ -463,6 +463,36 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("reports assistant media metadata when the process clock is outside the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-bad-clock-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, handled, end } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const payload = responseJson(end) as {
+            available?: boolean;
+            mediaTicket?: string;
+            mediaTicketExpiresAt?: string;
+          };
+          expect(payload.available).toBe(true);
+          expect(payload.mediaTicket).toBeUndefined();
+          expect(payload.mediaTicketExpiresAt).toBeUndefined();
+        },
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("serves assistant local media with a scoped media ticket after metadata auth", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-ticket-",

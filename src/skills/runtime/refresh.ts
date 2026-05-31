@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import chokidar, { type FSWatcher } from "chokidar";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
 import {
@@ -243,7 +243,7 @@ function addTrustedSymlinkSkillWatchTargets(
   let watched = 0;
   let directoryScans = 0;
   let rawEntries = 0;
-  for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+  for (const queued of queue) {
     if (
       watched >= MAX_SYMLINK_WATCH_TARGETS_PER_ROOT ||
       directoryScans >= MAX_SYMLINK_WATCH_DIRECTORY_SCANS_PER_ROOT ||
@@ -251,7 +251,7 @@ function addTrustedSymlinkSkillWatchTargets(
     ) {
       break;
     }
-    const current = queue[queueIndex];
+    const current = queued;
     if (!current) {
       continue;
     }
@@ -373,7 +373,7 @@ function tryRealpath(filePath: string): string | null {
 function isPathInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 

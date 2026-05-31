@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   die,
   ensureValue,
@@ -126,7 +127,8 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): NpmUpdateOptions {
+export function parseArgs(argv: string[]): NpmUpdateOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: NpmUpdateOptions = {
     apiKeyEnv: undefined,
     betaValidation: undefined,
@@ -138,25 +140,25 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
     provider: "openai",
     updateTarget: "",
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--package-spec":
-        options.packageSpec = ensureValue(argv, i, arg);
+        options.packageSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--update-target":
-        options.updateTarget = ensureValue(argv, i, arg);
+        options.updateTarget = ensureValue(args, i, arg);
         i++;
         break;
       case "--fresh-target":
-        options.freshTargetSpec = ensureValue(argv, i, arg);
+        options.freshTargetSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--beta-validation": {
-        const next = argv[i + 1];
+        const next = args[i + 1];
         if (next && !next.startsWith("-")) {
           options.betaValidation = next;
           i++;
@@ -167,24 +169,24 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
       }
       case "--platform":
       case "--only":
-        options.platforms = parsePlatformList(ensureValue(argv, i, arg));
+        options.platforms = parsePlatformList(ensureValue(args, i, arg));
         i++;
         break;
       case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
+        options.provider = parseProvider(ensureValue(args, i, arg));
         i++;
         break;
       case "--model":
-        options.modelId = ensureValue(argv, i, arg);
+        options.modelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
+        options.hostIp = ensureValue(args, i, arg);
         i++;
         break;
       case "--api-key-env":
       case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
+        options.apiKeyEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--json":
@@ -199,6 +201,10 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
     }
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 function platformRecord<T>(value: T): Record<Platform, T> {
@@ -1090,6 +1096,8 @@ class NpmUpdateSmoke {
   }
 }
 
-await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

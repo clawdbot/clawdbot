@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
+  sessionsTailCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
@@ -31,6 +32,7 @@ const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
+const sessionsTailCommand = mocks.sessionsTailCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
@@ -88,6 +90,10 @@ vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand: mocks.sessionsCleanupCommand,
 }));
 
+vi.mock("../../commands/sessions-tail.js", () => ({
+  sessionsTailCommand: mocks.sessionsTailCommand,
+}));
+
 vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
@@ -134,6 +140,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    sessionsTailCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
@@ -342,6 +349,31 @@ describe("registerStatusHealthSessionsCommands", () => {
 
     expectCommandOptions(sessionsCleanupCommand, {
       allAgents: true,
+    });
+  });
+
+  it("runs sessions tail with forwarded progress options", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/sessions.json",
+      "--agent",
+      "work",
+      "tail",
+      "--session-key",
+      "agent:main:telegram:direct:owner",
+      "--tail",
+      "5",
+      "--follow",
+    ]);
+
+    expectCommandOptions(sessionsTailCommand, {
+      sessionKey: "agent:main:telegram:direct:owner",
+      store: "/tmp/sessions.json",
+      agent: "work",
+      allAgents: false,
+      follow: true,
+      tail: "5",
     });
   });
 

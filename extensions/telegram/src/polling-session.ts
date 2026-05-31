@@ -19,7 +19,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { type TelegramTransport } from "./fetch.js";
+import type { TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
@@ -629,7 +629,7 @@ export class TelegramPollingSession {
         continue;
       }
       const ageMs = now - handler.startedAt;
-      if (ageMs <= this.#spooledUpdateHandlerTimeoutMs) {
+      if (ageMs < this.#spooledUpdateHandlerTimeoutMs) {
         continue;
       }
       if (!timedOut || ageMs > timedOut.ageMs) {
@@ -1125,4 +1125,9 @@ const isGetUpdatesConflict = (err: unknown) => {
     .join(" ");
   const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
   return normalizedHaystack.includes("getupdates");
+};
+
+export const testing = {
+  resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
+    resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };

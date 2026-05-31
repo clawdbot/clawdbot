@@ -264,6 +264,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
       kind: "group",
       display: "general",
       source: "normalized",
+      resolutionSource: "plugin",
     });
 
     expect(resolveTarget).toHaveBeenCalledWith({

@@ -21,6 +21,7 @@ import {
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
@@ -1052,8 +1053,8 @@ export async function recordShortTermRecalls(params: {
     return;
   }
 
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
   const todayBucket =
@@ -1199,8 +1200,8 @@ export async function recordGroundedShortTermCandidates(params: {
     return;
   }
 
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
@@ -1281,8 +1282,8 @@ export async function recordDreamingPhaseSignals(params: {
   if (keys.length === 0) {
     return;
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
 
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
@@ -1334,8 +1335,8 @@ export async function recordRemConsideredPhaseSignals(params: {
   if (keys.length === 0) {
     return;
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
 
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
@@ -1376,8 +1377,8 @@ export async function readLightStagedKeys(params: {
   if (!workspaceDir) {
     return new Set();
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readPhaseSignalStore(workspaceDir, nowIso);
   const keys = new Set<string>();
   for (const [key, entry] of Object.entries(store.entries)) {
@@ -1409,8 +1410,8 @@ export async function rankShortTermPromotionCandidates(
     return [];
   }
 
-  const nowMs = Number.isFinite(options.nowMs) ? (options.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(options.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
   const minRecallCount = toFiniteNonNegativeInt(
     options.minRecallCount,
@@ -1550,8 +1551,8 @@ export async function readShortTermRecallEntries(params: {
   if (!workspaceDir) {
     return [];
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
   return Object.values(store.entries).filter(
     (entry): entry is ShortTermRecallEntry =>
@@ -1838,8 +1839,8 @@ export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
   const workspaceDir = options.workspaceDir.trim();
-  const nowMs = Number.isFinite(options.nowMs) ? (options.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(options.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const limit = Number.isFinite(options.limit)
     ? Math.max(0, Math.floor(options.limit as number))
     : options.candidates.length;

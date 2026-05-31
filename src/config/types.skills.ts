@@ -44,11 +44,26 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillsWorkshopConfig = {
+  /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */
+  autonomous?: {
+    /** Allow agents to create pending proposals from durable conversation signals. */
+    enabled?: boolean;
+  };
+  /** Whether proposal lifecycle actions need explicit approval. */
+  approvalPolicy?: "pending" | "auto";
+  /** Maximum pending/quarantined proposals retained per workspace. */
+  maxPending?: number;
+  /** Maximum generated skill proposal size in bytes. */
+  maxSkillBytes?: number;
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
+  workshop?: SkillsWorkshopConfig;
   entries?: Record<string, SkillConfig>;
 };

@@ -1,7 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { fetchJson } from "../../scripts/tool-search-gateway-e2e.ts";
+import {
+  fetchJson,
+  readToolSearchGatewayFetchLimits,
+} from "../../scripts/tool-search-gateway-e2e.ts";
 
 describe("tool search gateway e2e fetch helper", () => {
+  it("rejects loose numeric env limits instead of parsing prefixes", () => {
+    expect(() =>
+      readToolSearchGatewayFetchLimits({
+        OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS: "1e3",
+      }),
+    ).toThrow("invalid OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS: 1e3");
+    expect(() =>
+      readToolSearchGatewayFetchLimits({
+        OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES: "1000ms",
+      }),
+    ).toThrow("invalid OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES: 1000ms");
+    expect(
+      readToolSearchGatewayFetchLimits({
+        OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES: "4096",
+        OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS: "120000",
+      }),
+    ).toEqual({
+      bodyMaxBytes: 4096,
+      timeoutMs: 120_000,
+    });
+  });
+
   it("aborts requests that never resolve", async () => {
     let signal: AbortSignal | undefined;
     await expect(

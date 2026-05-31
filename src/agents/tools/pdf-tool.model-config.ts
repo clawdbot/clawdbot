@@ -43,7 +43,7 @@ function resolveConfiguredTextModelFromConfig(params: {
   const providerCfg = findNormalizedProviderValue(providers, params.providerId);
   const modelId = providerCfg?.models
     ?.find(
-      (model) =>
+      (model: { id?: string; input?: readonly string[] }) =>
         Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("text"),
     )
     ?.id?.trim();

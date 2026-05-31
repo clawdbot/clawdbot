@@ -1,8 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeSortedUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
 type KnownNodeDevicePairingSource = {

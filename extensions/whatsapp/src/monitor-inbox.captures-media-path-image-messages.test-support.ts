@@ -49,7 +49,13 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await vi.waitFor(() => {
+      expect(
+        onMessage.mock.calls.length +
+          sock.readMessages.mock.calls.length +
+          inboundLoggerInfoMock.mock.calls.length,
+      ).toBeGreaterThan(0);
+    });
     return { onMessage, listener, sock };
   }
 

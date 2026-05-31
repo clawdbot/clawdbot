@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {

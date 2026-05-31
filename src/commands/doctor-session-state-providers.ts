@@ -1,3 +1,6 @@
+import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
@@ -16,9 +19,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
-import { normalizeStringEntriesLower } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {

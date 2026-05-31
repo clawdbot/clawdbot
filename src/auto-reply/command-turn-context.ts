@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type CommandTurnKind = "native" | "text-slash" | "normal";
 export type CommandTurnSource = "native" | "text" | "message";

@@ -1862,6 +1862,13 @@ describe("collectCodexRouteWarnings", () => {
                 model: "openai-codex/gpt-5.4-mini",
               },
             },
+            imageGenerationModel: {
+              primary: "openai-codex/gpt-image-2",
+              fallbacks: ["openai-codex/gpt-image-1"],
+            },
+            videoGenerationModel: {
+              primary: "openai-codex/sora-2",
+            },
             models: {
               "openai-codex/gpt-5.5": { alias: "codex" },
             },
@@ -1907,6 +1914,9 @@ describe("collectCodexRouteWarnings", () => {
         "Repaired Codex model routes:",
         "- agents.defaults.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- agents.defaults.imageGenerationModel.primary: openai-codex/gpt-image-2 -> openai/gpt-image-2.",
+        "- agents.defaults.imageGenerationModel.fallbacks.0: openai-codex/gpt-image-1 -> openai/gpt-image-1.",
+        "- agents.defaults.videoGenerationModel.primary: openai-codex/sora-2 -> openai/sora-2.",
         "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- agents.defaults.subagents.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.subagents.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
@@ -1936,6 +1946,13 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.cfg.agents?.defaults?.compaction?.model).toBeUndefined();
     expect(result.cfg.agents?.defaults?.compaction?.memoryFlush?.model).toBe("openai/gpt-5.4-mini");
+    expect(result.cfg.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "openai/gpt-image-2",
+      fallbacks: ["openai/gpt-image-1"],
+    });
+    expect(result.cfg.agents?.defaults?.videoGenerationModel).toEqual({
+      primary: "openai/sora-2",
+    });
     expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(result.cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "codex", agentRuntime: { id: "codex" } },
@@ -3457,7 +3474,7 @@ describe("collectCodexRouteWarnings", () => {
         agentId: "worker",
         config: cfg,
       }).runtime,
-    ).toBe("codex");
+    ).toBe("auto");
 
     const result = maybeRepairCodexRoutes({
       cfg,

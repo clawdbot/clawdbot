@@ -10,7 +10,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { asRecord } from "./record-shared.js";
 
 type GatewayAttachment = {

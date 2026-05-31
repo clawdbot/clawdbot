@@ -159,7 +159,7 @@ function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
 }
 
 function ensureUniqueName(base: string, existing: Set<string>): string {
-  let name = sanitizeName(base);
+  const name = sanitizeName(base);
   if (!existing.has(name)) {
     existing.add(name);
     return name;

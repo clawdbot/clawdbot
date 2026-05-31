@@ -13,6 +13,7 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
   abortAndDrainEmbeddedAgentRun,
@@ -35,6 +36,7 @@ import {
   updateActiveEmbeddedRunSnapshot,
   updateActiveEmbeddedRunSessionFile,
   waitForActiveEmbeddedRuns,
+  waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
@@ -338,6 +340,24 @@ describe("embedded-agent runner run registry", () => {
     }
   });
 
+  it("clamps oversized embedded run wait timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const handle = createRunHandle();
+      setActiveEmbeddedRun("session-running", handle);
+
+      const waitPromise = waitForEmbeddedAgentRunEnd("session-running", MAX_TIMER_TIMEOUT_MS + 1);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      clearActiveEmbeddedRun("session-running", handle);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for active runs to drain", async () => {
     vi.useFakeTimers();
     try {
@@ -367,6 +387,28 @@ describe("embedded-agent runner run registry", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       const result = await waitPromise;
       expect(result.drained).toBe(false);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized active-run drain poll intervals", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const handle = createRunHandle();
+      setActiveEmbeddedRun("session-a", handle);
+
+      const waitPromise = waitForActiveEmbeddedRuns(undefined, {
+        pollMs: Number.MAX_SAFE_INTEGER,
+      });
+      await Promise.resolve();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      clearActiveEmbeddedRun("session-a", handle);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await expect(waitPromise).resolves.toEqual({ drained: true });
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();

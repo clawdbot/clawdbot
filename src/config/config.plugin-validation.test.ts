@@ -963,6 +963,22 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
+    const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
+    await mkdirSafe(path.dirname(helperPath));
+    await fs.writeFile(helperPath, "export default {};\n", "utf-8");
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: { enabled: true },
+      });
+
+      expect(res.ok).toBe(true);
+    } finally {
+      await fs.rm(helperPath, { force: true });
+    }
+  });
+
   it("surfaces plugin config diagnostics", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },

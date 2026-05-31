@@ -15,7 +15,7 @@ const providerEndpointPlugins = vi.hoisted(() => [
   {
     providerEndpoints: [
       { endpointClass: "openai-public", hosts: ["api.openai.com"] },
-      { endpointClass: "openai-codex", hosts: ["chatgpt.com"] },
+      { endpointClass: "openai", hosts: ["chatgpt.com"] },
       { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
       { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
@@ -197,16 +197,14 @@ describe("provider attribution", () => {
     });
   });
 
-  it("returns a hidden-spec OpenAI Codex attribution policy", () => {
-    expect(
-      resolveProviderAttributionPolicy("openai-codex", { OPENCLAW_VERSION: "2026.3.22" }),
-    ).toEqual({
-      provider: "openai-codex",
+  it("maps legacy OpenAI Codex attribution to canonical OpenAI policy", () => {
+    expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
+      provider: "openai",
       enabledByDefault: true,
       verification: "vendor-hidden-api-spec",
       hook: "request-headers",
       reviewNote:
-        "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
+        "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
       product: "OpenClaw",
       version: "2026.3.22",
       headers: {
@@ -252,7 +250,6 @@ describe("provider attribution", () => {
       ["openrouter", true, "vendor-documented", "request-headers"],
       ["nvidia", true, "vendor-documented", "request-headers"],
       ["openai", true, "vendor-hidden-api-spec", "request-headers"],
-      ["openai-codex", true, "vendor-hidden-api-spec", "request-headers"],
       ["xai", true, "vendor-hidden-api-spec", "request-headers"],
       ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
       ["google", false, "vendor-sdk-hook-only", "user-agent-extra"],
@@ -395,15 +392,15 @@ describe("provider attribution", () => {
 
     expectRecordFields(
       resolveProviderRequestPolicy({
-        provider: "openai-codex",
+        provider: "openai",
         api: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         transport: "stream",
         capability: "llm",
       }),
       {
-        endpointClass: "openai-codex",
-        attributionProvider: "openai-codex",
+        endpointClass: "openai",
+        attributionProvider: "openai",
         allowsHiddenAttribution: true,
       },
     );
@@ -902,6 +899,24 @@ describe("provider attribution", () => {
         shouldStripResponsesPromptCache: false,
       },
     );
+    expectRecordFields(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        capability: "llm",
+        transport: "stream",
+      }),
+      {
+        endpointClass: "openai",
+        attributionProvider: "openai",
+        allowsOpenAIServiceTier: true,
+        supportsOpenAIReasoningCompatPayload: true,
+        allowsResponsesStore: true,
+        supportsResponsesStoreField: true,
+        shouldStripResponsesPromptCache: false,
+      },
+    );
 
     expectRecordFields(
       resolveProviderRequestCapabilities({
@@ -1285,19 +1300,19 @@ describe("provider attribution", () => {
       {
         name: "native OpenAI Codex responses",
         input: {
-          provider: "openai-codex",
-          api: "openai-codex-responses",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           capability: "llm" as const,
           transport: "stream" as const,
         },
         expected: {
           knownProviderFamily: "openai-family",
-          endpointClass: "openai-codex",
+          endpointClass: "openai",
           isKnownNativeEndpoint: true,
           allowsOpenAIServiceTier: true,
           supportsOpenAIReasoningCompatPayload: true,
-          allowsResponsesStore: false,
+          allowsResponsesStore: true,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: false,

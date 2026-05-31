@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   searchClawHubPackages,
   type ClawHubPackageFamily,
@@ -5,8 +7,6 @@ import {
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { theme } from "../terminal/theme.js";
 
 export type PluginsSearchOptions = {
   json?: boolean;

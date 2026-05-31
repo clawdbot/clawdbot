@@ -66,6 +66,7 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
@@ -100,6 +101,7 @@ type SettingsHost = {
   eventLogBuffer: unknown[];
   basePath: string;
   agentsList?: AgentsListResult | null;
+  selectedAgentId?: string | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   pendingGatewayUrl?: string | null;
@@ -126,6 +128,12 @@ type LocalUserIdentityHost = {
   userName?: string | null;
   userAvatar?: string | null;
 };
+
+function resolveDreamingAgentIdForSession(host: SettingsHost): string {
+  return normalizeAgentId(
+    parseAgentSessionKey(host.sessionKey)?.agentId ?? host.agentsList?.defaultId ?? "main",
+  );
+}
 
 type SettingsAppHost = SettingsHost &
   AgentFilesState &
@@ -384,11 +392,9 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
       return;
     case "cron":
       void loadCron(host);
-      return;
     case "overview":
     case "tools":
     case undefined:
-      return;
   }
 }
 
@@ -414,6 +420,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "communications":
       case "appearance":
       case "automation":
+      case "mcp":
       case "infrastructure":
       case "aiAgents":
         {
@@ -466,6 +473,7 @@ export async function refreshActiveTab(host: SettingsHost) {
         await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
         break;
       case "dreams":
+        host.selectedAgentId = resolveDreamingAgentIdForSession(host);
         await loadConfig(app);
         await Promise.all([
           loadDreamingStatus(app),

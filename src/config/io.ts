@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import JSON5 from "json5";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { isVerbose } from "../global-state.js";
@@ -26,8 +28,6 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import { collectManifestModelIdNormalizationPolicies } from "../shared/provider-model-id-normalization.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -1205,7 +1205,7 @@ function restoreAuthoredTildePathsForWrite(
 
   const out: Record<string, unknown> = { ...next };
   for (const [childKey, childValue] of Object.entries(out)) {
-    if (Object.prototype.hasOwnProperty.call(authored, childKey)) {
+    if (Object.hasOwn(authored, childKey)) {
       out[childKey] = restoreAuthoredTildePathsForWrite(
         childValue,
         authored[childKey],

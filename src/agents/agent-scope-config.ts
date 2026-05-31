@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type {
   AgentContextLimitsConfig,
@@ -6,7 +7,6 @@ import type {
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 

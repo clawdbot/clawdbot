@@ -157,8 +157,7 @@ export function expandPackageDistImportClosure(params) {
   }
 
   const queue = [...expectedSet].filter((file) => fileSet.has(file));
-  for (let index = 0; index < queue.length; index += 1) {
-    const importerPath = queue[index];
+  for (const importerPath of queue) {
     for (const importedPath of importsByImporter.get(importerPath) ?? []) {
       if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
         expectedSet.add(importedPath);

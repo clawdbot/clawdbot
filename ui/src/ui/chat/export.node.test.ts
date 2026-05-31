@@ -26,4 +26,24 @@ describe("chat export", () => {
 Final answer
 `);
   });
+
+  it("omits invalid message timestamps instead of throwing", () => {
+    const markdown = buildChatMarkdown(
+      [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: Number.POSITIVE_INFINITY,
+        },
+      ],
+      "Bot",
+    );
+
+    expect(markdown).toBe(`# Chat with Bot
+
+## You
+
+hello
+`);
+  });
 });

@@ -110,6 +110,50 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   });
 });
 
+test("sessions.reset skips browser cleanup when root browser support is disabled", async () => {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({ browser: { enabled: false } });
+  try {
+    await seedActiveMainSession();
+    embeddedRunMock.activeIds.add("sess-main");
+    embeddedRunMock.waitResults.set("sess-main", true);
+
+    const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      "sessions.reset",
+      {
+        key: "main",
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  } finally {
+    await writeConfigFile({});
+  }
+});
+
+test("sessions.reset skips browser cleanup when the browser plugin entry is disabled", async () => {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({ plugins: { entries: { browser: { enabled: false } } } });
+  try {
+    await seedActiveMainSession();
+    embeddedRunMock.activeIds.add("sess-main");
+    embeddedRunMock.waitResults.set("sess-main", true);
+
+    const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      "sessions.reset",
+      {
+        key: "main",
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  } finally {
+    await writeConfigFile({});
+  }
+});
+
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");

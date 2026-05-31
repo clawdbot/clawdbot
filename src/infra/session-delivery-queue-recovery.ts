@@ -1,3 +1,8 @@
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
@@ -70,6 +75,14 @@ function computeSessionDeliveryBackoffMs(retryCount: number): number {
 
 function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
   return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+}
+
+function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
+  const durationMs = resolveNonNegativeIntegerOption(maxRecoveryMs, 60_000);
+  if (durationMs <= 0) {
+    return resolveDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
 }
 
 export function isSessionDeliveryEligibleForRetry(
@@ -214,7 +227,7 @@ export async function recoverPendingSessionDeliveries(opts: {
 
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
   const summary = createEmptyRecoverySummary();
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const deadline = resolveSessionDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
 
   for (const entry of pending) {
     if (Date.now() >= deadline) {

@@ -166,10 +166,10 @@ describe("normalizePluginsConfig", () => {
 
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
-      allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
-      deny: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
+      allow: ["openai", "google-gemini-cli", "minimax-portal-auth"],
+      deny: ["openai", "google-gemini-cli", "minimax-portal-auth"],
       entries: {
-        "openai-codex": {
+        openai: {
           enabled: true,
         },
         "google-gemini-cli": {

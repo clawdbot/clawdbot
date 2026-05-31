@@ -26,9 +26,9 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
-const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
+const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
 const OPENAI_PROVIDER = "openai";
-const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";

@@ -1,14 +1,13 @@
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
-import { splitMediaFromOutput } from "../media/parse.js";
-import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
@@ -272,8 +271,8 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
-// Core tool names that are allowed to emit local MEDIA: paths. Plugin tools
-// must be explicitly passed as trusted run-local names by the caller.
+// Core tool names that are allowed to emit trusted local media artifacts.
+// Plugin tools must be explicitly passed as trusted run-local names by the caller.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
   "apply_patch",
@@ -388,7 +387,7 @@ export function filterToolResultMediaUrls(
   if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
     // When the current run provides its exact trusted local-media tool names,
     // require the raw emitted tool name to match one of them before allowing
-    // local MEDIA: paths.
+    // local media paths.
     // This blocks normalized aliases and case-variant collisions such as
     // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
     // registered tool's media trust. TTS-generated local files carry a
@@ -412,8 +411,7 @@ export function filterToolResultMediaUrls(
  *
  * Strategy (first match wins):
  * 1. Read structured `details.media` attachments from tool details.
- * 2. Parse `MEDIA:` directive tokens from text content blocks.
- * 3. Fall back to `details.path` when image content exists (legacy imageResult).
+ * 2. Fall back to `details.path` when image content exists (legacy imageResult).
  *
  * Returns an empty array when no media is found (e.g. embedded `read` tool
  * returns base64 image data but no file path; those need a different delivery
@@ -459,9 +457,12 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
     pushString(attachment.filePath);
     pushString(attachment.fileUrl);
   };
-  if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
-    urls.push(media.mediaUrl.trim());
-  }
+  pushString(media.media);
+  pushString(media.path);
+  pushString(media.url);
+  pushString(media.mediaUrl);
+  pushString(media.filePath);
+  pushString(media.fileUrl);
   if (Array.isArray(media.mediaUrls)) {
     for (const value of media.mediaUrls) {
       pushString(value);
@@ -479,42 +480,17 @@ function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
   return media.outbound === false;
 }
 
-function extractTextContentMediaArtifact(content: unknown[]): {
-  mediaUrls: string[];
-  audioAsVoice?: boolean;
-  hasImageContent: boolean;
-} {
-  const mediaUrls: string[] = [];
-  let audioAsVoice = false;
-  let hasImageContent = false;
-
+function hasImageContentBlock(content: unknown[]): boolean {
   for (const item of content) {
     if (!item || typeof item !== "object") {
       continue;
     }
     const entry = item as Record<string, unknown>;
     if (entry.type === "image") {
-      hasImageContent = true;
-      continue;
-    }
-    if (entry.type !== "text" || typeof entry.text !== "string") {
-      continue;
-    }
-
-    const parsed = splitMediaFromOutput(entry.text);
-    if (parsed.audioAsVoice) {
-      audioAsVoice = true;
-    }
-    if (parsed.mediaUrls?.length) {
-      mediaUrls.push(...parsed.mediaUrls);
+      return true;
     }
   }
-
-  return {
-    mediaUrls,
-    ...(audioAsVoice ? { audioAsVoice: true } : {}),
-    hasImageContent,
-  };
+  return false;
 }
 
 export function extractToolResultMediaArtifact(
@@ -544,18 +520,9 @@ export function extractToolResultMediaArtifact(
     return undefined;
   }
 
-  const textMedia = extractTextContentMediaArtifact(content);
-
-  if (textMedia.mediaUrls.length > 0) {
-    return {
-      mediaUrls: textMedia.mediaUrls,
-      ...(textMedia.audioAsVoice ? { audioAsVoice: true } : {}),
-    };
-  }
-
   // Fall back to legacy details.path when image content exists but no
-  // structured media details or MEDIA: text.
-  if (textMedia.hasImageContent) {
+  // structured media details.
+  if (hasImageContentBlock(content)) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {

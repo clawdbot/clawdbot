@@ -1,4 +1,5 @@
 import { formatCliCommand, parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
@@ -128,7 +129,9 @@ function resolveAnthropicSetupTokenExpiry(rawExpiresIn?: unknown): number | unde
   if (typeof rawExpiresIn !== "string" || rawExpiresIn.trim().length === 0) {
     return undefined;
   }
-  return Date.now() + parseDurationMs(rawExpiresIn.trim(), { defaultUnit: "d" });
+  return resolveExpiresAtMsFromDurationMs(
+    parseDurationMs(rawExpiresIn.trim(), { defaultUnit: "d" }),
+  );
 }
 
 async function runAnthropicSetupTokenAuth(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {

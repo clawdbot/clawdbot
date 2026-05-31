@@ -17,7 +17,7 @@ vi.mock("../wizard/setup.js", () => ({
   runSetupWizard: mocks.runSetupWizard,
 }));
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: mocks.restoreTerminalState,
 }));
 

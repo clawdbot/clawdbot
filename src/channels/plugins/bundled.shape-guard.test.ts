@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
@@ -195,6 +195,35 @@ afterEach(() => {
 
 describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
+  let realBundledSourceTreeProbe: {
+    hasAccountInspect: boolean;
+    pluginIds: string[];
+  };
+
+  beforeAll(async () => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
+      return {
+        ...actual,
+        listBundledChannelPluginMetadata: (params: {
+          includeChannelConfigs: boolean;
+          includeSyntheticChannelConfigs: boolean;
+        }) =>
+          actual
+            .listBundledChannelPluginMetadata(params)
+            .filter((metadata) => metadata.manifest.id === "slack"),
+      };
+    });
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=real-bundled-source-tree-preload",
+    );
+    realBundledSourceTreeProbe = {
+      hasAccountInspect: bundled.hasBundledChannelEntryFeature("slack", "accountInspect"),
+      pluginIds: [...bundled.listBundledChannelPluginIds()],
+    };
+  });
 
   it("lists source bundled plugin roots without in-process directory scans", () => {
     expectNoReaddirSyncDuring(() => {
@@ -225,28 +254,8 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("loads real bundled channel entry contracts from the source tree", async () => {
-    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
-      return {
-        ...actual,
-        listBundledChannelPluginMetadata: (params: {
-          includeChannelConfigs: boolean;
-          includeSyntheticChannelConfigs: boolean;
-        }) =>
-          actual
-            .listBundledChannelPluginMetadata(params)
-            .filter((metadata) => metadata.manifest.id === "slack"),
-      };
-    });
-
-    const bundled = await importFreshModule<typeof import("./bundled.js")>(
-      import.meta.url,
-      "./bundled.js?scope=real-bundled-source-tree",
-    );
-
-    expect(bundled.listBundledChannelPluginIds()).toEqual(["slack"]);
-    expect(bundled.hasBundledChannelEntryFeature("slack", "accountInspect")).toBe(true);
+    expect(realBundledSourceTreeProbe.pluginIds).toEqual(["slack"]);
+    expect(realBundledSourceTreeProbe.hasAccountInspect).toBe(true);
   });
 
   it("fills sparse bundled channel plugin metadata from package metadata", async () => {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveAgentDir,
   resolveDefaultAgentDir,
@@ -18,7 +19,6 @@ import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-pro
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withFileLock } from "../../../infra/file-lock.js";
-import { isRecord } from "../../../shared/record-coerce.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type StaleOAuthProfileShadow = {

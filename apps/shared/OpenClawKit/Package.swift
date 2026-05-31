@@ -13,6 +13,10 @@ let package = Package(
         .library(name: "OpenClawKit", targets: ["OpenClawKit"]),
         .library(name: "OpenClawChatUI", targets: ["OpenClawChatUI"]),
     ],
+    traits: [
+        .trait(name: "Talk", description: "ElevenLabs cloud TTS / talk support"),
+        .default(enabledTraits: ["Talk"]),
+    ],
     dependencies: [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.1"),
         .package(url: "https://github.com/gonzalezreal/textual", exact: "0.3.1"),
@@ -28,7 +32,7 @@ let package = Package(
             name: "OpenClawKit",
             dependencies: [
                 "OpenClawProtocol",
-                .product(name: "ElevenLabsKit", package: "ElevenLabsKit"),
+                .product(name: "ElevenLabsKit", package: "ElevenLabsKit", condition: .when(traits: ["Talk"])),
             ],
             path: "Sources/OpenClawKit",
             resources: [

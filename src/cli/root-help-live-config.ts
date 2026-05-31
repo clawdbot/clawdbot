@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
 function hasEntries(value: object | undefined): boolean {
-  return !!value && Object.keys(value).length > 0;
+  return value !== undefined && Object.keys(value).length > 0;
 }
 
 function hasListEntries(value: string[] | undefined): boolean {

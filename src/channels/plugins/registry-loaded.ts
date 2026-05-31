@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
   ActivePluginChannelRegistration,
 } from "../../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
 
 export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {

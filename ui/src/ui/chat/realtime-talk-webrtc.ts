@@ -228,9 +228,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
           final: true,
           payload: { message: this.extractErrorDetail(event.error) },
         });
-        return;
+
       default:
-        return;
     }
   }
 

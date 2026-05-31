@@ -10,7 +10,7 @@ async function normalizeLegacyChoice(
   if (authChoice === "oauth") {
     return "setup-token";
   }
-  if (typeof authChoice !== "string" || !authChoice.endsWith("-cli")) {
+  if (typeof authChoice !== "string") {
     return authChoice;
   }
   const { normalizeLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");

@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const INPUT_PROVENANCE_KIND_VALUES = [
   "external_user",

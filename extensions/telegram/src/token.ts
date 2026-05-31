@@ -132,7 +132,7 @@ export function resolveTelegramToken(
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
     const accounts = telegramCfg?.accounts;
     const hasConfiguredAccounts =
-      !!accounts &&
+      Boolean(accounts) &&
       typeof accounts === "object" &&
       !Array.isArray(accounts) &&
       Object.keys(accounts).length > 0;

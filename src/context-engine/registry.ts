@@ -1,7 +1,7 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -96,11 +96,7 @@ function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
   params: unknown,
   key: K,
 ): params is SessionKeyCompatParams & Required<Pick<LegacyCompatParamMap, K>> {
-  return (
-    params !== null &&
-    typeof params === "object" &&
-    Object.prototype.hasOwnProperty.call(params, key)
-  );
+  return params !== null && typeof params === "object" && Object.hasOwn(params, key);
 }
 
 function withoutLegacyCompatKeys<T extends SessionKeyCompatParams>(

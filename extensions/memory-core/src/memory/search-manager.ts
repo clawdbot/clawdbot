@@ -224,7 +224,6 @@ export async function getMemorySearchManager(params: {
       if (!primary) {
         return { entry: null, failureReason };
       }
-      let cacheEntry!: CachedQmdManagerEntry;
       const wrapper = new FallbackMemoryManager(
         {
           primary,
@@ -240,7 +239,7 @@ export async function getMemorySearchManager(params: {
           }
         },
       );
-      cacheEntry = {
+      const cacheEntry: CachedQmdManagerEntry = {
         identityKey: expectedIdentityKey,
         manager: wrapper,
       };

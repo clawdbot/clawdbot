@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -54,6 +55,8 @@ describe("secret ref resolver", () => {
     allowSymlinkCommand?: boolean;
     trustedDirs?: string[];
     args?: string[];
+    timeoutMs?: number;
+    noOutputTimeoutMs?: number;
   };
   type FileProviderConfig = {
     source: "file";
@@ -203,6 +206,18 @@ describe("secret ref resolver", () => {
   itPosix("resolves exec refs with protocolVersion 1 response", async () => {
     const value = await resolveExecSecret(execProtocolV1ScriptPath);
     expect(value).toBe("value:openai/api-key");
+  });
+
+  itPosix("clamps oversized exec provider timeouts", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const value = await resolveExecSecret(execProtocolV1ScriptPath, {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(value).toBe("value:openai/api-key");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   itPosix("uses timeoutMs as the default no-output timeout for exec providers", async () => {

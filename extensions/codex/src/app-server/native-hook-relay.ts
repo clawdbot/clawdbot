@@ -5,6 +5,10 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  finiteSecondsToTimerSafeMilliseconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
@@ -61,11 +65,11 @@ export function resolveCodexNativeHookRelayUnregisterGraceMs(
 ): number {
   const hookTimeoutMs =
     typeof hookTimeoutSec === "number" && Number.isFinite(hookTimeoutSec) && hookTimeoutSec > 0
-      ? Math.ceil(hookTimeoutSec) * 1000
+      ? (finiteSecondsToTimerSafeMilliseconds(Math.ceil(hookTimeoutSec)) ?? 0)
       : 0;
   return Math.max(
     CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
-    hookTimeoutMs + CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS,
+    addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
   );
 }
 

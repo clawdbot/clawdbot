@@ -656,9 +656,8 @@ describe("plugin-sdk root alias", () => {
 
   it("falls back and removes stale diagnostic listeners when the dist subscription is invalid", () => {
     const seen: string[] = [];
-    let lazyModule!: ReturnType<typeof loadRootAliasWithStubs>;
     const preexistingListener = (): void => undefined;
-    lazyModule = loadRootAliasWithStubs({
+    const lazyModule: ReturnType<typeof loadRootAliasWithStubs> = loadRootAliasWithStubs({
       aliasPath: createDistAliasPath(),
       distEntries: ["diagnostic-events-W3Hz61fI.js"],
       monolithicExports: {

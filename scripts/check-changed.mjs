@@ -1,4 +1,4 @@
-import { accessSync, chmodSync, constants, mkdtempSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -30,6 +30,11 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 ];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
+const TARGETED_CORE_LINT_PATH_LIMIT = 8;
+const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
 let corepackPnpmShimDir;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
@@ -244,7 +249,17 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.coreTests) {
-    addLint("lint core", ["lint:core"]);
+    const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
+    if (coreLintCommand) {
+      addCommand(
+        coreLintCommand.name,
+        coreLintCommand.bin,
+        coreLintCommand.args,
+        coreLintCommand.env,
+      );
+    } else {
+      addLint("lint core", ["lint:core"]);
+    }
   }
   if (
     lanes.liveDockerTooling &&
@@ -299,6 +314,34 @@ export function createChangedCheckPlan(result, options = {}) {
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
       .join(", "),
+  };
+}
+
+export function createTargetedCoreLintCommand(paths, env = process.env, options = {}) {
+  if (
+    paths.some(
+      (changedPath) =>
+        !LINTABLE_CORE_PATH_RE.test(changedPath) &&
+        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+    )
+  ) {
+    return null;
+  }
+  const targets = paths
+    .filter((changedPath) => LINTABLE_CORE_PATH_RE.test(changedPath))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (targets.length === 0 || targets.length > TARGETED_CORE_LINT_PATH_LIMIT) {
+    return null;
+  }
+  const fileExists = options.fileExists ?? existsSync;
+  if (!targets.every((target) => fileExists(target))) {
+    return null;
+  }
+  return {
+    name: targets.length === 1 ? "lint core changed file" : "lint core changed files",
+    bin: "node",
+    args: ["scripts/run-oxlint.mjs", "--tsconfig", CORE_OXLINT_TS_CONFIG, ...targets],
+    env,
   };
 }
 

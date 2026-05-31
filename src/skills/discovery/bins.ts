@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SkillEntry } from "../types.js";
 
 export function collectSkillBins(entries: SkillEntry[]): string[] {

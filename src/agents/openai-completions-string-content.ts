@@ -41,10 +41,10 @@ export function stripCompletionMessagesToRoleContent(messages: unknown[]): unkno
     }
     const record = message as Record<string, unknown>;
     const stripped: Record<string, unknown> = {};
-    if (Object.prototype.hasOwnProperty.call(record, "role")) {
+    if (Object.hasOwn(record, "role")) {
       stripped.role = record.role;
     }
-    if (Object.prototype.hasOwnProperty.call(record, "content")) {
+    if (Object.hasOwn(record, "content")) {
       stripped.content = record.content;
     }
     return stripped;

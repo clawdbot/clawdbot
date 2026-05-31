@@ -87,7 +87,7 @@ async function cleanupMatrixQaTempDevices(
 ): Promise<void> {
   await client.stop().catch(() => undefined);
   const uniqueDeviceIds = [
-    ...new Set(deviceIds.filter((deviceId): deviceId is string => !!deviceId)),
+    ...new Set(deviceIds.filter((deviceId): deviceId is string => Boolean(deviceId))),
   ];
   if (uniqueDeviceIds.length > 0) {
     await client.deleteOwnDevices(uniqueDeviceIds).catch(() => undefined);

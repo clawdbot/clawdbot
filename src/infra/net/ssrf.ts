@@ -14,8 +14,8 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "@openclaw/net-policy/ip";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,

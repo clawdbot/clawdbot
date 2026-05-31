@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 
 function makeStream(chunks: Uint8Array[], delayMs?: number) {
@@ -156,6 +157,23 @@ describe("readResponseWithLimit", () => {
       expect(buf).toEqual(expected);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized idle timeout timers while reading chunks", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const body = makeStream([new Uint8Array([1]), new Uint8Array([2])]);
+      const res = new Response(body);
+
+      const buf = await readResponseWithLimit(res, 100, {
+        chunkTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      });
+
+      expect(buf).toEqual(Buffer.from([1, 2]));
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
     }
   });
 

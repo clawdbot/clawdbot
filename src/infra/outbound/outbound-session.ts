@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -9,8 +11,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 

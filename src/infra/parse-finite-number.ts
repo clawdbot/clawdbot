@@ -13,4 +13,4 @@ export {
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,
-} from "../shared/number-coercion.js";
+} from "../../packages/normalization-core/src/number-coercion.js";

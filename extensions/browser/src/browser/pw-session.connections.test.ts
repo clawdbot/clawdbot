@@ -17,7 +17,6 @@ type BrowserMockBundle = {
 };
 
 function makeBrowser(targetId: string, url: string): BrowserMockBundle {
-  let context: import("playwright-core").BrowserContext;
   const browserClose = vi.fn(async () => {});
   const page = {
     on: vi.fn(),
@@ -26,7 +25,7 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
     url: vi.fn(() => url),
   } as unknown as import("playwright-core").Page;
 
-  context = {
+  const context: import("playwright-core").BrowserContext = {
     pages: () => [page],
     on: vi.fn(),
     newCDPSession: vi.fn(async () => ({
@@ -66,7 +65,6 @@ function makeEmptyBrowser(): BrowserMockBundle {
 }
 
 function makeDisconnectedReadBrowser(): BrowserMockBundle {
-  let context: import("playwright-core").BrowserContext;
   const browserClose = vi.fn(async () => {});
   const page = {
     on: vi.fn(),
@@ -79,7 +77,7 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
     }),
   } as unknown as import("playwright-core").Page;
 
-  context = {
+  const context: import("playwright-core").BrowserContext = {
     pages: () => [page],
     on: vi.fn(),
     newCDPSession: vi.fn(async () => {

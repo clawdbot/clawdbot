@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
   parseAccessGroupAllowFromEntry,
@@ -5,7 +6,6 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { AccessGroupConfig } from "../config/types.access-groups.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 export { ACCESS_GROUP_ALLOW_FROM_PREFIX, parseAccessGroupAllowFromEntry };
 

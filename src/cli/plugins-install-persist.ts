@@ -1,3 +1,4 @@
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -18,7 +19,6 @@ import {
   type PluginUninstallDirectoryRemoval,
 } from "../plugins/uninstall.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   applySlotSelectionForPlugin,

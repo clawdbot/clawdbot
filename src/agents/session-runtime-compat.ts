@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveCliRuntimeModelBackendBinding } from "./cli-backends.js";
-import { resolveContextConfigProviderForRuntime } from "./openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "./openai-routing.js";
 
 export type SessionRuntimeCompatEntry = Pick<
   SessionEntry,

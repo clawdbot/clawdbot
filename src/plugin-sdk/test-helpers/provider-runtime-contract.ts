@@ -7,7 +7,7 @@ import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID =
-  "../../../extensions/openai/openai-codex-provider.runtime.js";
+  "../../../extensions/openai/openai-chatgpt-provider.runtime.js";
 const refreshOpenAICodexTokenMock = vi.fn();
 
 function installProviderRuntimeContractMocks() {
@@ -263,7 +263,7 @@ export function describeGithubCopilotProviderRuntimeContract(
               id === "gpt-5.2-codex"
                 ? createModel({
                     id,
-                    api: "openai-codex-responses",
+                    api: "openai-chatgpt-responses",
                     provider: "github-copilot",
                     baseUrl: "https://api.copilot.example",
                   })
@@ -416,7 +416,7 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
 export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("openai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
     const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["openai", "openai-codex"], pluginId: "openai", name: "OpenAI", load },
+      { providerIds: ["openai", "openai"], pluginId: "openai", name: "OpenAI", load },
     ]);
 
     it("owns openai gpt-5.4 forward-compat resolution", () => {
@@ -534,10 +534,10 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const credential = {
         type: "oauth" as const,
-        provider: "openai-codex",
+        provider: "openai",
         access: "cached-access-token",
         refresh: "refresh-token",
         expires: Date.now() - 60_000,
@@ -551,17 +551,18 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns forward-compat codex models", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
+        authProfileMode: "oauth",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
               ? createModel({
                   id,
-                  api: "openai-codex-responses",
-                  provider: "openai-codex",
+                  api: "openai-chatgpt-responses",
+                  provider: "openai",
                   baseUrl: "https://chatgpt.com/backend-api",
                 })
               : null,
@@ -570,25 +571,26 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
       expectFields(model, {
         id: "gpt-5.4",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         contextWindow: 1_050_000,
         maxTokens: 128_000,
       });
     });
 
     it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
+        authProfileMode: "oauth",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.5"
               ? createModel({
                   id,
-                  api: "openai-codex-responses",
-                  provider: "openai-codex",
+                  api: "openai-chatgpt-responses",
+                  provider: "openai",
                   baseUrl: "https://chatgpt.com/backend-api",
                   input: ["text", "image"],
                   cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
@@ -601,8 +603,8 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
       expectFields(model, {
         id: "gpt-5.5",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         contextWindow: 400_000,
         contextTokens: 272_000,
         maxTokens: 128_000,
@@ -610,17 +612,18 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("claims codex mini models through the Codex OAuth route", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4-mini",
+        authProfileMode: "oauth",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.4"
               ? createModel({
                   id,
-                  api: "openai-codex-responses",
-                  provider: "openai-codex",
+                  api: "openai-chatgpt-responses",
+                  provider: "openai",
                   baseUrl: "https://chatgpt.com/backend-api",
                   cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
                   contextWindow: 272_000,
@@ -632,8 +635,8 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
       expectFields(model, {
         id: "gpt-5.4-mini",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         contextWindow: 400_000,
         contextTokens: 272_000,
         maxTokens: 128_000,
@@ -642,11 +645,17 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns codex transport defaults", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       expect(
         provider.prepareExtraParams?.({
-          provider: "openai-codex",
+          provider: "openai",
           modelId: "gpt-5.4",
+          model: createModel({
+            id: "gpt-5.4",
+            provider: "openai",
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          }),
           extraParams: { temperature: 0.2 },
         }),
       ).toEqual({
@@ -656,7 +665,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("chatgpt.com/backend-api/wham/usage")) {
           return makeResponse(200, {
@@ -677,15 +686,15 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider.fetchUsageSnapshot?.({
           config: {} as never,
           env: {} as NodeJS.ProcessEnv,
-          provider: "openai-codex",
+          provider: "openai",
           token: "codex-token",
           accountId: "acc-1",
           timeoutMs: 5_000,
           fetchFn: mockFetch as unknown as typeof fetch,
         }),
       ).resolves.toEqual({
-        provider: "openai-codex",
-        displayName: "Codex",
+        provider: "openai",
+        displayName: "OpenAI",
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });

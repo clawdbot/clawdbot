@@ -128,6 +128,19 @@ describe("resolveBundledStaticCatalogModel", () => {
     }
   });
 
+  it("can include bundled runtime-discovery manifest catalog rows for configured fallbacks", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "runtime" })]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: {},
+      includeRuntimeDiscovery: true,
+    });
+
+    expect(model?.maxTokens).toBe(8192);
+  });
+
   it("requires an exact provider and model match", () => {
     setManifestPlugins([createMistralManifestPlugin()]);
 

@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isNodeVersionManagerRuntime,
   resolveLinuxSystemCaBundle,
 } from "../bootstrap/node-extra-ca-certs.js";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,

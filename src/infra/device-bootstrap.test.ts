@@ -76,6 +76,17 @@ describe("device bootstrap tokens", () => {
     });
   });
 
+  it("rejects bootstrap token issuance when expiry would exceed the Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    const baseDir = await createTempDir();
+
+    await expect(issueDeviceBootstrapToken({ baseDir })).rejects.toThrow(
+      "Device bootstrap token expiry could not be resolved.",
+    );
+  });
+
   it("verifies valid bootstrap tokens and binds them to the first device identity", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
@@ -594,6 +605,36 @@ describe("device bootstrap tokens", () => {
     });
 
     await expect(verifyBootstrapToken(baseDir, "expiredToken")).resolves.toEqual({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    });
+  });
+
+  it("prunes persisted bootstrap tokens with invalid issued timestamps", async () => {
+    vi.useFakeTimers();
+    const baseDir = await createTempDir();
+    const bootstrapPath = resolveBootstrapPath(baseDir);
+    await fs.mkdir(path.dirname(bootstrapPath), { recursive: true });
+
+    vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
+    await fs.writeFile(
+      bootstrapPath,
+      `${JSON.stringify(
+        {
+          invalidToken: {
+            token: "invalidToken",
+            ts: Number.POSITIVE_INFINITY,
+            issuedAtMs: Number.POSITIVE_INFINITY,
+            profile: { roles: ["node"], scopes: [] },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await expect(verifyBootstrapToken(baseDir, "invalidToken")).resolves.toEqual({
       ok: false,
       reason: "bootstrap_token_invalid",
     });

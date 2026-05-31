@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 
 type CollectorMode = "local" | "docker";
 
@@ -169,6 +170,7 @@ Collector container in front of the receiver.
 }
 
 function parseArgs(argv: string[]): CliOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: CliOptions = {
     collectorMode: "local",
     outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
@@ -177,14 +179,14 @@ function parseArgs(argv: string[]): CliOptions {
     help: false,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     if (arg === "--help" || arg === "-h") {
       options.help = true;
       continue;
     }
     const readValue = () => {
-      const value = argv[index + 1]?.trim();
+      const value = args[index + 1]?.trim();
       if (!value) {
         throw new Error(`${arg} requires a value`);
       }
@@ -1334,6 +1336,7 @@ async function main() {
 export const testing = {
   appendCapturedBodyText,
   decodeRequestBody,
+  parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,
 };

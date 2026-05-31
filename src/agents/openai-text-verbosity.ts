@@ -1,4 +1,4 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { log } from "./embedded-agent-runner/logger.js";
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */

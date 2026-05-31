@@ -7,9 +7,11 @@ import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
+  recordCurrentStorageMetaDeviceId,
   repairCurrentTokenStorageMetaDeviceId,
   resolveMatrixStateFilePath,
   resolveMatrixStoragePaths,
+  writeStorageMeta,
 } from "./storage.js";
 
 const createBackupArchiveMock = vi.hoisted(() =>
@@ -257,6 +259,35 @@ describe("matrix client storage paths", () => {
   function writeJson(rootDir: string, filename: string, value: Record<string, unknown>) {
     fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value, null, 2));
   }
+
+  it("records a learned deviceId in storage metadata without startup JSON", () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveMatrixStoragePaths({
+      ...defaultStorageAuth,
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      writeStorageMeta({
+        storagePaths,
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        deviceId: null,
+      }),
+    ).toBe(true);
+
+    expect(
+      recordCurrentStorageMetaDeviceId({
+        rootDir: storagePaths.rootDir,
+        deviceId: "DEVICE123",
+      }),
+    ).toBe(true);
+
+    const meta = JSON.parse(fs.readFileSync(storagePaths.metaPath, "utf8")) as {
+      deviceId?: string | null;
+    };
+    expect(meta.deviceId).toBe("DEVICE123");
+    expect(fs.existsSync(path.join(storagePaths.rootDir, "startup-verification.json"))).toBe(false);
+  });
 
   function seedExistingStorageRoot(params: {
     accessToken: string;

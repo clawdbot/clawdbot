@@ -25,6 +25,7 @@ function createFakeCodexClient(): CodexAppServerClient {
   return {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
+    setActiveSharedLeaseCountProviderForUnscopedNotifications: vi.fn(),
     addCloseHandler: vi.fn(() => () => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
@@ -111,7 +112,7 @@ describe("codex provider", () => {
     });
     expectRecordFields(result.provider, {
       auth: "token",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
     });
     expect(result.provider.models).toHaveLength(1);
     expectRecordFields(result.provider.models[0], {
@@ -308,7 +309,7 @@ describe("codex provider", () => {
     expectRecordFields(model, {
       id: "custom-model",
       provider: "codex",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       input: ["text"],
     });

@@ -1,3 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
@@ -15,10 +18,7 @@ import type {
   CliBackendNativeToolMode,
   PluginTextTransforms,
 } from "../plugins/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type CliBackendsDeps = {
   resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;

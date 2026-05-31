@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 type QaCronRunLogEntry = {
   ts?: number;
@@ -13,6 +14,10 @@ type QaCronRunsPage = {
   entries?: QaCronRunLogEntry[];
 };
 
+export function resolveCronRunPollIntervalMs(intervalMs: number | undefined): number {
+  return resolveTimerTimeoutMs(intervalMs ?? 1_000, 1_000, 0);
+}
+
 export async function waitForCronRunCompletion(params: {
   callGateway: (
     method: string,
@@ -25,7 +30,7 @@ export async function waitForCronRunCompletion(params: {
   intervalMs?: number;
 }) {
   const timeoutMs = params.timeoutMs ?? 90_000;
-  const intervalMs = params.intervalMs ?? 1_000;
+  const intervalMs = resolveCronRunPollIntervalMs(params.intervalMs);
   const startedAt = Date.now();
   let lastEntries: QaCronRunLogEntry[] = [];
   while (Date.now() - startedAt < timeoutMs) {
@@ -49,7 +54,11 @@ export async function waitForCronRunCompletion(params: {
     if (completed) {
       return completed;
     }
-    await sleep(intervalMs);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(intervalMs, remainingMs));
   }
   throw new Error(
     `timed out waiting for cron run completion for ${params.jobId}: ${formatErrorMessage(lastEntries)}`,

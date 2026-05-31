@@ -196,6 +196,9 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.include).toEqual([
       "../../packages/markdown-core/src/**/*.ts",
       "../../packages/media-generation-core/src/**/*.ts",
+      "../../packages/model-catalog-core/src/**/*.ts",
+      "../../packages/normalization-core/src/**/*.ts",
+      "../../packages/terminal-core/src/**/*.ts",
       "../../src/plugin-sdk/**/*.ts",
       "../../src/video-generation/dashscope-compatible.ts",
       "../../src/video-generation/types.ts",

@@ -1,6 +1,6 @@
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { theme } from "../terminal/theme.js";
 
 export type SessionDisplayRow = {
   key: string;

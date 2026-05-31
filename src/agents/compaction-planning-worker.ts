@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildHistoryPrunePlan,
   buildOversizedFallbackPlan,
@@ -78,15 +79,18 @@ function runCompactionPlanningWorker(params: {
 
   return new Promise<CompactionPlanningWorkerValue>((resolve, reject) => {
     let settled = false;
-    const timeout = setTimeout(() => {
-      settle(
-        () =>
-          reject(
-            new CompactionPlanningWorkerError("compaction planning worker timed out", "timeout"),
-          ),
-        true,
-      );
-    }, params.timeoutMs ?? COMPACTION_PLANNING_WORKER_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => {
+        settle(
+          () =>
+            reject(
+              new CompactionPlanningWorkerError("compaction planning worker timed out", "timeout"),
+            ),
+          true,
+        );
+      },
+      resolveTimerTimeoutMs(params.timeoutMs, COMPACTION_PLANNING_WORKER_TIMEOUT_MS),
+    );
 
     const abort = () => {
       settle(() => reject(params.signal?.reason ?? new Error("compaction planning aborted")), true);

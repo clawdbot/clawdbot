@@ -438,14 +438,14 @@ describe("getStatusSummary", () => {
       model: "gpt-5.5-codex",
     });
     vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5-codex",
     });
     statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
       "agent:main:main": {
         sessionId: "session-1",
         updatedAt: Date.now(),
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.5-codex",
         modelOverrideSource: "user",
       },
@@ -454,7 +454,7 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
-    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai-codex/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai/gpt-5.5-codex");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 });

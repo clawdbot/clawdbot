@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
@@ -6,7 +7,6 @@ import { estimateBase64DecodedBytes } from "../../media/base64.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 

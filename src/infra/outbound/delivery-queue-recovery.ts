@@ -1,3 +1,7 @@
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
@@ -79,6 +83,17 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+
+function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
+  const durationMs =
+    typeof maxRecoveryMs === "number" && Number.isFinite(maxRecoveryMs)
+      ? Math.max(0, Math.trunc(maxRecoveryMs))
+      : 60_000;
+  if (durationMs <= 0) {
+    return resolveDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
+}
 
 function getErrnoCode(err: unknown): string | null {
   return err && typeof err === "object" && "code" in err
@@ -602,7 +617,7 @@ export async function recoverPendingDeliveries(opts: {
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const deadline = resolveRecoveryDeadlineMs(opts.maxRecoveryMs);
   const summary = createEmptyRecoverySummary();
 
   for (let i = 0; i < pending.length; i++) {

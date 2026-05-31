@@ -235,9 +235,8 @@ describe("createLaneTextDeliverer", () => {
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
     const truncatedFinal =
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
-    let answer: ReturnType<typeof createTestDraftStream>;
     let deliveredText = "";
-    answer = createTestDraftStream({
+    const answer: ReturnType<typeof createTestDraftStream> = createTestDraftStream({
       onStop: () => {
         answer.setMessageId(999);
         deliveredText = fullAnswer;

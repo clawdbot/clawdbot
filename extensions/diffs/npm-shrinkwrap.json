@@ -8,18 +8,18 @@
       "name": "@openclaw/diffs",
       "version": "2026.5.30",
       "dependencies": {
-        "@pierre/diffs": "1.2.3",
+        "@pierre/diffs": "1.2.4",
         "@pierre/theme": "1.0.3",
         "@shikijs/langs": "4.1.0",
         "playwright-core": "1.60.0",
-        "typebox": "1.1.38",
+        "typebox": "1.1.39",
         "zod": "4.4.3"
       }
     },
     "node_modules/@pierre/diffs": {
-      "version": "1.2.3",
-      "resolved": "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.2.3.tgz",
-      "integrity": "sha512-ul83DHH1yqgGxJAw2tqQm2gDO+oQsaF82ZVocwJYfXAm2FhZyyKPTdtv6jswR4A5eF/ILPjiQxyfScMhQcofbA==",
+      "version": "1.2.4",
+      "resolved": "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.2.4.tgz",
+      "integrity": "sha512-SEuYxGpSCHVvfoLly/Q/OYpJSBLWaVLV3M3wI/VBW7aZmzYenNe4aXjOf5sIKJMWW5gbZe9WdLvtKUt6cQ1k1A==",
       "license": "apache-2.0",
       "dependencies": {
         "@pierre/theme": "1.0.3",
@@ -599,9 +599,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     },
     "node_modules/unist-util-is": {

@@ -1,6 +1,6 @@
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { writeRuntimeJson } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
 import { serializeGatewayDiscoveryBeacon } from "./discovery.js";
 import {
   isProbeReachable,

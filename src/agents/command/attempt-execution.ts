@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -20,7 +21,6 @@ import {
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -34,7 +34,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.j
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../openai-codex-routing.js";
+import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
@@ -461,7 +461,7 @@ export function runAgentAttempt(params: {
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
-    ? ({ runtime: "openclaw" } as const)
+    ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
     : resolveAvailableAgentHarnessPolicy({
         provider: params.providerOverride,
         modelId: params.modelOverride,
@@ -504,7 +504,7 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
-    (agentHarnessPolicy.runtime === "openclaw" && embeddedAgentProvider !== params.providerOverride
+    (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {

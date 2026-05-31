@@ -211,6 +211,26 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(successor.getLabel(oldUserId)).toBeUndefined();
   });
 
+  it("rotates with a fallback timestamp when the injected clock is invalid", async () => {
+    const dir = await createTmpDir();
+    const { manager, sessionFile } = createCompactedSession(dir);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00Z"));
+
+    try {
+      const result = await rotateTranscriptAfterCompaction({
+        sessionManager: manager,
+        sessionFile,
+        now: () => new Date(Number.NaN),
+      });
+
+      expect(result.rotated).toBe(true);
+      const successor = SessionManager.open(requireString(result.sessionFile, "successor file"));
+      expect(successor.getHeader()?.timestamp).toBe("2026-05-30T12:00:00.000Z");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("deduplicates stale pre-compaction session state", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);

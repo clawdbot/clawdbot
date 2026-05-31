@@ -1,5 +1,8 @@
+import {
+  normalizeUniqueStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeUniqueStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 

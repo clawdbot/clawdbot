@@ -37,7 +37,8 @@ function resolveProviderAuthLoginCommand(params: {
   if (!choice) {
     return undefined;
   }
-  return formatCliCommand(`openclaw models auth login --provider ${choice.providerId}`);
+  const providerId = normalizeProviderIdForAuth(choice.providerId, aliases);
+  return formatCliCommand(`openclaw models auth login --provider ${providerId}`);
 }
 
 export function buildProviderAuthRecoveryHint(params: {

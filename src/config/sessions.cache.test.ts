@@ -7,10 +7,12 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   getSerializedSessionStore,
   getSerializedSessionStoreCacheStatsForTest,
+  getSerializedSessionStorePromptRefs,
   getSessionStoreSnapshotCacheStatsForTest,
   getSessionStoreStringInternStatsForTest,
   readSessionStoreCache,
   setSerializedSessionStore,
+  setSerializedSessionStorePromptRefs,
   writeSessionStoreCache,
 } from "./sessions/store-cache.js";
 import {
@@ -27,6 +29,7 @@ import {
   updateLastRoute,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
+import type { SessionSkillPromptRef } from "./sessions/types.js";
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
@@ -100,6 +103,24 @@ describe("Session Store Cache", () => {
       `serialized:${maxEntries + 1}`,
     );
     expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(maxEntries);
+  });
+
+  it("keeps serialized prompt refs on the serialized cache entry lifecycle", () => {
+    const promptRef: SessionSkillPromptRef = {
+      version: 1,
+      algorithm: "sha256",
+      hash: "a".repeat(64),
+      bytes: 123,
+    };
+    const refs = new Map([["session:1", promptRef]]);
+
+    setSerializedSessionStore("store:refs", "{}");
+    setSerializedSessionStorePromptRefs("store:refs", refs);
+
+    expect(getSerializedSessionStorePromptRefs("store:refs")).toBe(refs);
+
+    setSerializedSessionStore("store:refs", "{}");
+    expect(getSerializedSessionStorePromptRefs("store:refs")).toBeUndefined();
   });
 
   it("should load session store from disk on first call", async () => {
@@ -290,8 +311,11 @@ describe("Session Store Cache", () => {
     const entry = cached?.["session:1"] as (SessionEntry & { polluted?: boolean }) | undefined;
 
     expect(entry).toBeDefined();
+    if (!entry) {
+      throw new Error("Expected cached entry");
+    }
     expect(entry?.polluted).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(entry, "__proto__")).toBe(true);
+    expect(Object.hasOwn(entry as SessionEntry, "__proto__")).toBe(true);
     expect(Object.prototype).not.toHaveProperty("polluted");
   });
 
@@ -762,6 +786,8 @@ describe("Session Store Cache", () => {
         },
       }),
     });
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:2"].skillsSnapshot?.prompt).toBe(prompt);
     await fs.promises.rm(path.join(testDir, "skills-prompts"), {
       recursive: true,
       force: true,

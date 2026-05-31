@@ -3883,6 +3883,118 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Configured servers"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Enabled"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Filtered"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "MCP operator commands"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "No MCP servers configured."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "OAuth"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "openclaw mcp doctor --probe"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "openclaw mcp login &lt;name&gt;"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "openclaw mcp reload"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "openclaw mcp status --verbose"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "parallel"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Runtime changes apply after save and publish; active agents rebuild MCP runtimes on next use."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Save"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Servers"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "Status, diagnostics, auth, probing, and runtime reload."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/mcp.ts",
+      "text": "tool filter"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
       "text": "Add pattern"
     },

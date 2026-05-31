@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { clearFollowupQueue } from "./state.js";
 

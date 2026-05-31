@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -22,7 +23,6 @@ import {
   discoverConfigSecretTargetsByIds,
   type DiscoveredConfigSecretTarget,
 } from "../secrets/target-registry.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 type ResolveCommandSecretsResult = {
   resolvedConfig: OpenClawConfig;

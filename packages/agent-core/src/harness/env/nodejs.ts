@@ -288,7 +288,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let timedOut = false;
       let callbackError: ExecutionError | undefined;
       let child: ReturnType<typeof spawn> | undefined;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
 
       const onAbort = () => {
         if (child?.pid) {
@@ -299,8 +299,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
       const settle = (
         result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>,
       ) => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
         }
         if (options?.abortSignal) {
           options.abortSignal.removeEventListener("abort", onAbort);
@@ -327,7 +327,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       }
 
       const timeoutMs = resolveExecTimeoutMs(options?.timeout);
-      timeoutId =
+      timeoutRef.current =
         timeoutMs === undefined
           ? undefined
           : setTimeout(() => {
@@ -582,7 +582,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
     }
   }
 
-  async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+  async createTempDir(prefix = "tmp-"): Promise<Result<string, FileError>> {
     try {
       return ok(await mkdtemp(join(tmpdir(), prefix)));
     } catch (error) {

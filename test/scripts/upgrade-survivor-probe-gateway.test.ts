@@ -23,9 +23,14 @@ interface ProbeResult {
   stdout: string;
 }
 
-function runProbe(args: string[], timeout = 5_000): Promise<ProbeResult> {
+function runProbe(
+  args: string[],
+  timeout = 5_000,
+  env: NodeJS.ProcessEnv = {},
+): Promise<ProbeResult> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [probePath, ...args], {
+      env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -82,6 +87,47 @@ afterEach(() => {
 });
 
 describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
+  it("rejects loose numeric probe limits instead of parsing prefixes", async () => {
+    const out = path.join(makeTempDir(), "invalid.json");
+    const timeoutResult = await runProbe([
+      "--base-url",
+      "http://127.0.0.1:9",
+      "--path",
+      "/readyz",
+      "--expect",
+      "ready",
+      "--out",
+      out,
+      "--timeout-ms",
+      "1e3",
+    ]);
+
+    expect(timeoutResult.status).not.toBe(0);
+    expect(timeoutResult.stderr).toContain("invalid --timeout-ms: 1e3");
+
+    const bodyLimitResult = await runProbe(
+      [
+        "--base-url",
+        "http://127.0.0.1:9",
+        "--path",
+        "/readyz",
+        "--expect",
+        "ready",
+        "--out",
+        out,
+      ],
+      5_000,
+      {
+        OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64bytes",
+      },
+    );
+
+    expect(bodyLimitResult.status).not.toBe(0);
+    expect(bodyLimitResult.stderr).toContain(
+      "invalid OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: 64bytes",
+    );
+  });
+
   it("writes a result when the ready probe matches", async () => {
     const server = createHttpServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });

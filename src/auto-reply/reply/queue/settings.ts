@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import {
   normalizePersistedQueueMode,
   normalizeQueueDropPolicy,

@@ -909,9 +909,9 @@ export async function sendMessageIMessage(
     (opts.createClient
       ? await opts.createClient({ cliPath, dbPath })
       : await createIMessageRpcClient({ cliPath, dbPath }));
-  let shouldClose = !opts.client;
+  const shouldClose = !opts.client;
   let result: Record<string, unknown>;
-  let sendStartedAtMs = Date.now();
+  const sendStartedAtMs = Date.now();
   try {
     try {
       result = await client.request<Record<string, unknown>>("send", params, {

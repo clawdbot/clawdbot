@@ -332,7 +332,6 @@ export async function waitForAgentJob(params: {
     let pendingErrorTimer: NodeJS.Timeout | undefined;
     let pendingTimeoutTimer: NodeJS.Timeout | undefined;
     let pendingTimeoutSnapshot: AgentRunSnapshot | undefined;
-    let onAbort: (() => void) | undefined;
     let removeWaiter = () => {};
 
     const clearPendingErrorTimer = () => {
@@ -481,7 +480,7 @@ export async function waitForAgentJob(params: {
       const pendingError = getPendingAgentRunError(runId);
       finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
     }, timeoutMs);
-    onAbort = () => finish(null);
+    const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

@@ -83,10 +83,10 @@ export function watchChannelRuntimeContexts(
   });
 }
 
-export function createTaskScopedChannelRuntime(params: {
-  channelRuntime?: ChannelRuntimeSurface;
+export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(params: {
+  channelRuntime?: T;
 }): {
-  channelRuntime?: ChannelRuntimeSurface;
+  channelRuntime?: T;
   dispose: () => void;
 } {
   const baseRuntime = params.channelRuntime;
@@ -114,7 +114,7 @@ export function createTaskScopedChannelRuntime(params: {
     };
   };
 
-  const scopedRuntime: ChannelRuntimeSurface = {
+  const scopedRuntime = {
     ...baseRuntime,
     runtimeContexts: {
       ...runtimeContexts,
@@ -123,7 +123,7 @@ export function createTaskScopedChannelRuntime(params: {
         return trackLease(lease);
       },
     },
-  };
+  } as T;
 
   return {
     channelRuntime: scopedRuntime,

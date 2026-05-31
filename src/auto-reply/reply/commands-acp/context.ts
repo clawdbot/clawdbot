@@ -1,6 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../../acp/conversation-id.js";
 import { normalizeConversationTargetRef } from "../../../infra/outbound/session-binding-normalization.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import {
   resolveConversationBindingAccountIdFromMessage,

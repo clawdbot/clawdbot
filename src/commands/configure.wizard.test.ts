@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => {
       gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
     })),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
-      Boolean(config.auth?.profiles?.["openai-codex:default"]),
+      Boolean(config.auth?.profiles?.["openai:default"]),
     ),
     setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
   };
@@ -63,7 +63,7 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -502,8 +502,8 @@ describe("runConfigureWizard", () => {
     setupBaseWizardState({
       auth: {
         profiles: {
-          "openai-codex:default": {
-            provider: "openai-codex",
+          "openai:default": {
+            provider: "openai",
             mode: "oauth",
           },
         },
@@ -528,8 +528,8 @@ describe("runConfigureWizard", () => {
     setupBaseWizardState({
       auth: {
         profiles: {
-          "openai-codex:default": {
-            provider: "openai-codex",
+          "openai:default": {
+            provider: "openai",
             mode: "oauth",
           },
         },

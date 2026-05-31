@@ -7,6 +7,7 @@ export type ResolvedIdLikeTarget = {
   kind: ChannelDirectoryEntryKind | "channel";
   display?: string;
   source: "normalized" | "directory";
+  resolutionSource: "plugin";
 };
 
 export async function maybeResolveIdLikeTarget(params: {

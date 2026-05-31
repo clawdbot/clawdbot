@@ -1,5 +1,5 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";

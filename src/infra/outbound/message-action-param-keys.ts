@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "accountId",

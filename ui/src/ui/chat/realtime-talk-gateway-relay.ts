@@ -209,9 +209,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           );
           this.stopLocal();
         }
-        return;
+
       default:
-        return;
     }
   }
 
@@ -233,11 +232,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           1000,
       ),
     );
-    window.setTimeout(() => {
-      if (this.closed) {
-        return;
-      }
-    }, delayMs);
+    window.setTimeout(() => {}, delayMs);
   }
 
   private async handleToolCall(event: Extract<GatewayRelayEvent, { type?: "toolCall" }>) {

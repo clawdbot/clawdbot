@@ -87,6 +87,25 @@ vi.mock("./monitor/abort-handler.js", () => ({
 describe("iMessage monitor last-route updates", () => {
   const tempDirs: string[] = [];
 
+  async function createMessagesDbWithMaxRowid(maxRowid: number, dbPath?: string): Promise<string> {
+    let resolvedDbPath = dbPath;
+    if (!resolvedDbPath) {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-watch-watermark-"));
+      tempDirs.push(stateDir);
+      resolvedDbPath = path.join(stateDir, "chat.db");
+    }
+    fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(resolvedDbPath);
+    try {
+      database.exec("CREATE TABLE message (text TEXT);");
+      database.prepare("INSERT INTO message(rowid, text) VALUES (?, ?)").run(maxRowid, "watermark");
+    } finally {
+      database.close();
+    }
+    return resolvedDbPath;
+  }
+
   beforeEach(() => {
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
@@ -120,7 +139,7 @@ describe("iMessage monitor last-route updates", () => {
               is_from_me: false,
               text: "hello from imessage",
               is_group: false,
-              date: 1_714_000_000_000,
+              created_at: new Date().toISOString(),
             },
           },
         });
@@ -168,8 +187,201 @@ describe("iMessage monitor last-route updates", () => {
     expect(recordParams?.updateLastRoute?.sessionKey).toBe(recordParams?.sessionKey);
     expect(recordParams?.updateLastRoute?.sessionKey).not.toBe("agent:main:main");
     expect(recordParams?.updateLastRoute?.channel).toBe("imessage");
-    expect(recordParams?.updateLastRoute?.to).toBe("+15550001111");
+    expect(recordParams?.updateLastRoute?.to).toBe("imessage:+15550001111");
     expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
+  });
+
+  it("drops historical watch notifications on startup when catchup is disabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T05:23:18.000Z"));
+    const dbPath = await createMessagesDbWithMaxRowid(3000);
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 2023,
+              guid: "OLD-GUID-2023",
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "old row from another account",
+              is_group: false,
+              created_at: "2023-08-09T03:45:59.000Z",
+            },
+          },
+        });
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dbPath, dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true, since_rowid: 3000 },
+      { timeoutMs: 10_000 },
+    );
+    expect(recordInboundSessionMock).not.toHaveBeenCalled();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the default local chat.db path for the startup watermark", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-default-home-"));
+    tempDirs.push(homeDir);
+    vi.stubEnv("HOME", homeDir);
+    await createMessagesDbWithMaxRowid(4000, path.join(homeDir, "Library", "Messages", "chat.db"));
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true, since_rowid: 4000 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
+  it("accepts live watch notifications after startup when catchup is disabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T05:23:18.000Z"));
+    const dbPath = await createMessagesDbWithMaxRowid(3000);
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 3001,
+              guid: "LIVE-GUID-2026",
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "current row",
+              is_group: false,
+              created_at: "2023-08-09T03:45:59.000Z",
+            },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dbPath, dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(() => {
+      expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("subscribes without a startup watermark when the configured dbPath is not readable", async () => {
+    const dbPath = path.join(os.tmpdir(), `openclaw-missing-chat-${Date.now()}.db`);
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dbPath, dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      { timeoutMs: 10_000 },
+    );
+  });
+
+  it("subscribes without a startup watermark when node sqlite is unavailable", async () => {
+    vi.doMock("node:sqlite", () => {
+      throw new Error("node:sqlite unavailable");
+    });
+    vi.resetModules();
+    try {
+      const { monitorIMessageProvider: monitorWithoutSqlite } = await import("./monitor.js");
+      const client = {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+      await monitorWithoutSqlite({
+        config: {
+          channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main" },
+        } as never,
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      });
+
+      expect(client.request).toHaveBeenCalledWith(
+        "watch.subscribe",
+        { attachments: false, include_reactions: true },
+        { timeoutMs: 10_000 },
+      );
+    } finally {
+      vi.doUnmock("node:sqlite");
+      vi.resetModules();
+    }
   });
 
   it("advances the catchup cursor after startup catchup succeeds and a live row is handled", async () => {

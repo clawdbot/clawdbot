@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -113,7 +113,7 @@ export async function resolveConnectAuthState(params: {
   const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
     params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
 
-  let authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
+  const authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
     auth: params.resolvedAuth,
     connectAuth: sharedConnectAuth,
     req: params.req,

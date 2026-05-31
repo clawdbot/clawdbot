@@ -37,8 +37,8 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
 export function pcmToWav(
   pcmData: Uint8Array,
   sampleRate: number,
-  channels: number = 1,
-  bitsPerSample: number = 16,
+  channels = 1,
+  bitsPerSample = 16,
 ): Buffer {
   const byteRate = sampleRate * channels * (bitsPerSample / 8);
   const blockAlign = channels * (bitsPerSample / 8);
@@ -275,8 +275,8 @@ export async function audioFileToSilkBase64(
  */
 export async function waitForFile(
   filePath: string,
-  timeoutMs: number = 30000,
-  pollMs: number = 500,
+  timeoutMs = 30000,
+  pollMs = 500,
 ): Promise<number> {
   const start = Date.now();
   let lastSize = -1;
@@ -312,13 +312,11 @@ export async function waitForFile(
           stableCount = 0;
         }
         lastSize = stat.size;
-      } else {
-        if (Date.now() - fileAppearedAt > emptyGiveUpMs) {
-          debugError(
-            `[audio-convert] waitForFile: file still empty after ${emptyGiveUpMs}ms, giving up: ${path.basename(filePath)}`,
-          );
-          return 0;
-        }
+      } else if (Date.now() - fileAppearedAt > emptyGiveUpMs) {
+        debugError(
+          `[audio-convert] waitForFile: file still empty after ${emptyGiveUpMs}ms, giving up: ${path.basename(filePath)}`,
+        );
+        return 0;
       }
     } catch {
       if (!fileExists && Date.now() - start > noFileGiveUpMs) {

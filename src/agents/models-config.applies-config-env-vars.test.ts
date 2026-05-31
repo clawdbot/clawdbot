@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -94,6 +94,37 @@ async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
   });
   return { discoveryEnv, providers };
 }
+
+let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawModelsJsonWithDeps>>;
+let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
+
+beforeAll(async () => {
+  unauthenticatedProviderWritePlan = await planOpenClawModelsJsonWithDeps(
+    {
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      existingRaw: "",
+      existingParsed: null,
+    },
+    {
+      resolveImplicitProviders: async () => ({
+        openai: createImplicitOpenAiProvider(),
+        "auth-only": createImplicitOpenAiProvider({
+          baseUrl: "https://auth.example/v1",
+          api: "openai-responses",
+          models: [],
+        }),
+      }),
+    },
+  );
+  if (unauthenticatedProviderWritePlan.action !== "write") {
+    throw new Error("Expected models.json write plan");
+  }
+  unauthenticatedProviderParsed = JSON.parse(unauthenticatedProviderWritePlan.contents) as {
+    providers?: Record<string, unknown>;
+  };
+});
 
 describe("models-config", () => {
   it("threads plugin metadata snapshots into implicit provider discovery", async () => {
@@ -211,33 +242,9 @@ describe("models-config", () => {
   });
 
   it("does not write unauthenticated model providers that would invalidate models.json", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          openai: createImplicitOpenAiProvider(),
-          "auth-only": createImplicitOpenAiProvider({
-            baseUrl: "https://auth.example/v1",
-            api: "openai-responses",
-            models: [],
-          }),
-        }),
-      },
-    );
-
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
-    const parsed = JSON.parse(plan.contents) as { providers?: Record<string, unknown> };
-    expect(parsed.providers?.openai).toBeUndefined();
-    expect(parsed.providers?.["auth-only"]).toBeDefined();
+    expect(unauthenticatedProviderWritePlan.action).toBe("write");
+    expect(unauthenticatedProviderParsed.providers?.openai).toBeUndefined();
+    expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
   });
 
   it("treats empty replace-mode provider sets as authoritative", async () => {

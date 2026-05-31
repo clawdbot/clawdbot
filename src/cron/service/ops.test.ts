@@ -163,7 +163,7 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
-  it("preserves legacy top-level array jobs when adding a new job (#60799)", async () => {
+  it("keeps core add paths on SQLite and leaves legacy JSON for doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T08:00:00.000Z");
     const legacyJobs: CronJob[] = [
@@ -208,12 +208,10 @@ describe("cron service ops seam coverage", () => {
     }
 
     const loaded = await loadCronStore(storePath);
-    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
 
-    expect(loaded.jobs.map((job) => job.id)).toEqual(["legacy-alpha", "legacy-beta", newJob.id]);
-    expect(raw.jobs.map((job) => job.id)).toEqual(["legacy-alpha", "legacy-beta", newJob.id]);
+    expect(loaded.jobs.map((job) => job.id)).toEqual([newJob.id]);
+    expect(await fs.stat(storePath)).toBeTruthy();
+    await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("start marks interrupted running jobs failed, persists, and arms the timer", async () => {
@@ -284,51 +282,23 @@ describe("cron service ops seam coverage", () => {
     const createdAtMs = now - 86_400_000;
     const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
     const jobId = "future-sidecar-repair";
-    const statePath = storePath.replace(/\.json$/, "-state.json");
-
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
+    await writeCronStoreSnapshot({
       storePath,
-      JSON.stringify(
+      jobs: [
         {
-          version: 1,
-          jobs: [
-            {
-              id: jobId,
-              name: "future sidecar repair",
-              enabled: true,
-              createdAtMs,
-              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "daily" },
-              state: {},
-            },
-          ],
+          id: jobId,
+          name: "future sidecar repair",
+          enabled: true,
+          createdAtMs,
+          updatedAtMs: createdAtMs,
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "daily" },
+          state: { nextRunAtMs },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    await fs.writeFile(
-      statePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: {
-            [jobId]: {
-              state: { nextRunAtMs },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    const configBefore = await fs.readFile(storePath, "utf-8");
-
+      ],
+    });
     const state = createCronServiceState({
       storePath,
       cronEnabled: true,
@@ -342,14 +312,12 @@ describe("cron service ops seam coverage", () => {
     try {
       await start(state);
 
-      const configAfter = await fs.readFile(storePath, "utf-8");
-      const persistedState = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-        jobs: Record<string, { updatedAtMs?: unknown; state?: { nextRunAtMs?: unknown } }>;
-      };
+      const persisted = await loadCronStore(storePath);
+      const job = persisted.jobs.find((entry) => entry.id === jobId);
 
-      expect(configAfter).toBe(configBefore);
-      expect(persistedState.jobs[jobId]?.updatedAtMs).toBe(createdAtMs);
-      expect(persistedState.jobs[jobId]?.state?.nextRunAtMs).toBe(nextRunAtMs);
+      await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(job?.updatedAtMs).toBe(createdAtMs);
+      expect(job?.state?.nextRunAtMs).toBe(nextRunAtMs);
     } finally {
       stop(state);
     }

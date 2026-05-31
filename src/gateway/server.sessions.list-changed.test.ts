@@ -407,7 +407,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         id: "msg-usage-zero",
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.3-codex-spark",
           usage: {
             input: 5_107,
@@ -425,7 +425,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
         contextTokens: 123_456,
         totalTokens: 0,
@@ -449,7 +449,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -464,7 +464,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     totalTokensFresh: true,
     contextTokens: 123_456,
     estimatedCostUsd: 0,
-    modelProvider: "openai-codex",
+    modelProvider: "openai",
     model: "gpt-5.3-codex-spark",
   });
 });
@@ -500,7 +500,7 @@ test("sessions.changed mutation events include live session setting metadata", a
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -546,7 +546,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -854,7 +854,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,

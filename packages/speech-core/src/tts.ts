@@ -362,7 +362,7 @@ function asProviderConfigMap(value: unknown): Record<string, unknown> {
 }
 
 function hasOwnProperty(value: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 function normalizeProviderConfigMap(
@@ -598,9 +598,10 @@ function getResolvedSpeechProviderConfigForVoiceModel(params: {
 }
 
 export function resolveTtsConfig(
-  cfg: OpenClawConfig,
+  cfgInput: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): ResolvedTtsConfig {
+  let cfg = cfgInput;
   cfg = resolveTtsRuntimeConfig(cfg);
   const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
@@ -691,9 +692,10 @@ function resolveEffectiveTtsAutoState(params: {
 }
 
 export function buildTtsSystemPromptHint(
-  cfg: OpenClawConfig,
+  cfgInput: OpenClawConfig,
   agentId?: string,
 ): string | undefined {
+  let cfg = cfgInput;
   cfg = resolveTtsRuntimeConfig(cfg);
   const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({ cfg, agentId });
   if (autoMode === "off") {
@@ -1925,6 +1927,10 @@ export async function listSpeechVoices(params: {
   });
 }
 
+function hasLegacyFinalMediaDirective(text: string): boolean {
+  return /(?:^|\n)\s*MEDIA\s*:/i.test(text);
+}
+
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -2005,10 +2011,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (!ttsText.trim()) {
     return nextPayload;
   }
-  if (reply.hasMedia) {
-    return nextPayload;
-  }
-  if (text.includes("MEDIA:")) {
+  if (reply.hasMedia || hasLegacyFinalMediaDirective(text)) {
     return nextPayload;
   }
   if (!explicitTtsText && ttsText.trim().length < 10) {

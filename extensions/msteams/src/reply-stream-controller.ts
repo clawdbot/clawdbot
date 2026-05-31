@@ -151,7 +151,6 @@ export function createTeamsReplyStreamController(params: {
       // Starting a reply is not enough to decide that native streaming should
       // own delivery. Wait for text tokens or explicit progress work so
       // no-token replies keep the normal block-delivery path.
-      return;
     },
 
     onPartialReply(payload: { text?: string }): void {

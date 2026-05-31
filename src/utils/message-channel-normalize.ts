@@ -1,6 +1,6 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { listRegisteredChannelPluginIds } from "../channels/registry.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   type InternalMessageChannel,

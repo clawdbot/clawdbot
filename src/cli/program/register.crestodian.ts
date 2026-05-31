@@ -1,7 +1,7 @@
 import type { Command } from "commander";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { runCrestodian } from "../../crestodian/crestodian.js";
 import { defaultRuntime } from "../../runtime.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 

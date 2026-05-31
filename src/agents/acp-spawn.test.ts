@@ -910,7 +910,7 @@ describe("spawnAcpDirect", () => {
       {
         task: "Investigate flaky tests",
         agentId: "codex",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
       {
@@ -922,7 +922,7 @@ describe("spawnAcpDirect", () => {
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     });

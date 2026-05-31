@@ -70,9 +70,10 @@ export function createWebSendApi(params: {
       to: string,
       text: string,
       mediaBuffer?: Buffer,
-      mediaType?: string,
+      mediaTypeInput?: string,
       sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
+      let mediaType = mediaTypeInput;
       const jid = resolveOutboundJid(to);
       let payload: AnyMessageContent;
       if (mediaBuffer) {

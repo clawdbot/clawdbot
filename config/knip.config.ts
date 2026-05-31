@@ -184,6 +184,10 @@ const config = {
       entry: ["src/*.ts!"],
       project: ["src/**/*.ts!"],
     },
+    "packages/terminal-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/speech-core": {
       entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
       project: ["**/*.ts!"],

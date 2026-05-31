@@ -628,9 +628,9 @@ export async function deliverAgentCommandResult(
     applyChannelTransforms: deliver,
   });
   // Auto-reply-style media-path normalization must also run for the CLI
-  // `--deliver` path. Without it, relative `MEDIA:./out/photo.png` tokens
-  // reach the outbound loader unresolved and `assertLocalMediaAllowed` fails
-  // with "Local media path is not under an allowed directory". Mirrors the
+  // `--deliver` path. Without it, relative reply media paths reach the
+  // outbound loader unresolved and `assertLocalMediaAllowed` fails with
+  // "Local media path is not under an allowed directory". Mirrors the
   // normalizer wiring in `src/auto-reply/reply/agent-runner.ts`.
   const mediaNormalizedReplyPayloads =
     deliver && !deliveryStatus && !isInternalMessageChannel(deliveryChannel)

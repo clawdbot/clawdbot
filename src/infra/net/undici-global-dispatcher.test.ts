@@ -170,6 +170,7 @@ let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.
 let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
+let noProxySubprocessOutput = "";
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeAll(async () => {
@@ -182,6 +183,28 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = undiciGlobalDispatcherModule);
+    const moduleUrl = pathToFileURL(path.resolve("src/infra/net/undici-global-dispatcher.ts")).href;
+    const source = `
+      const dispatcherKey = Symbol.for("undici.globalDispatcher.1");
+      const mod = await import(${JSON.stringify(moduleUrl)});
+      mod.ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
+      if (globalThis[dispatcherKey] !== undefined) {
+        throw new Error("undici global dispatcher was initialized");
+      }
+      console.log("ok");
+    `;
+    const env = { ...process.env };
+    for (const key of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+    ]) {
+      delete env[key];
+    }
+    noProxySubprocessOutput = execNodeEvalSync(source, { env, imports: ["tsx"] });
   });
 
   beforeEach(() => {
@@ -209,31 +232,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
   });
 
   it("does not initialize the undici global dispatcher in a no-proxy subprocess", () => {
-    const moduleUrl = pathToFileURL(path.resolve("src/infra/net/undici-global-dispatcher.ts")).href;
-    const source = `
-      const dispatcherKey = Symbol.for("undici.globalDispatcher.1");
-      const mod = await import(${JSON.stringify(moduleUrl)});
-      mod.ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
-      if (globalThis[dispatcherKey] !== undefined) {
-        throw new Error("undici global dispatcher was initialized");
-      }
-      console.log("ok");
-    `;
-    const env = { ...process.env };
-    for (const key of [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-    ]) {
-      delete env[key];
-    }
-
-    const output = execNodeEvalSync(source, { env, imports: ["tsx"] });
-
-    expect(output.trim()).toBe("ok");
+    expect(noProxySubprocessOutput.trim()).toBe("ok");
   });
 
   it("explicitly tunes the global dispatcher when requested for embedded attempts", () => {

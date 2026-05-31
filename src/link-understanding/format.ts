@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 export function formatLinkUnderstandingBody(params: { body?: string; outputs: string[] }): string {
   const outputs = normalizeStringEntries(params.outputs);

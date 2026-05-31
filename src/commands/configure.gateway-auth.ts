@@ -183,7 +183,7 @@ export async function promptAuthConfig(
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   let next = cfg;
-  let authChoice: string = "skip";
+  let authChoice = "skip";
   let preferredProvider: string | undefined;
   while (true) {
     authChoice = await promptAuthChoiceGrouped({

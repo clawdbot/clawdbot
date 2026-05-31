@@ -3,7 +3,7 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
-import { normalizeOptionalString as readNonEmptyString } from "../shared/string-coerce.js";
+import { normalizeOptionalString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 export type GatewayExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 

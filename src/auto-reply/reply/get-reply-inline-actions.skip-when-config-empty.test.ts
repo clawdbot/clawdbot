@@ -12,13 +12,19 @@ import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
-const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, handleCommandsMock } =
-  vi.hoisted(() => ({
-    buildStatusReplyMock: vi.fn(),
-    createOpenClawToolsMock: vi.fn(),
-    getChannelPluginMock: vi.fn(),
-    handleCommandsMock: vi.fn(),
-  }));
+const {
+  buildStatusReplyMock,
+  createOpenClawToolsMock,
+  getChannelPluginMock,
+  handleCommandsMock,
+  listSkillCommandsForWorkspaceMock,
+} = vi.hoisted(() => ({
+  buildStatusReplyMock: vi.fn(),
+  createOpenClawToolsMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
+  handleCommandsMock: vi.fn(),
+  listSkillCommandsForWorkspaceMock: vi.fn(),
+}));
 
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
@@ -27,6 +33,10 @@ type HandleInlineActionsInput = Parameters<
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
+}));
+
+vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
+  listSkillCommandsForWorkspace: (...args: unknown[]) => listSkillCommandsForWorkspaceMock(...args),
 }));
 
 vi.mock("../../agents/openclaw-tools.runtime.js", () => ({
@@ -180,10 +190,47 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex =
   return call;
 }
 
+function mockToolDispatchedSkillCommand() {
+  const toolExecute = vi.fn(async () => ({ text: "sent" }));
+  createOpenClawToolsMock.mockReturnValue([
+    {
+      name: "send_status",
+      execute: toolExecute,
+    },
+  ]);
+  listSkillCommandsForWorkspaceMock.mockReturnValue([
+    {
+      name: "send_status",
+      skillName: "send-status",
+      description: "Send status",
+      dispatch: {
+        kind: "tool",
+        toolName: "send_status",
+        argMode: "raw",
+      },
+    },
+  ] satisfies SkillCommandSpec[]);
+  return toolExecute;
+}
+
+function officeHoursSkillCommands(): SkillCommandSpec[] {
+  return [
+    {
+      name: "office_hours",
+      skillName: "office-hours",
+      description: "Office hours",
+      promptTemplate: "Act as an engineering advisor.\n\nFocus on:\n$ARGUMENTS",
+      sourceFilePath: "/tmp/plugin/commands/office-hours.md",
+    },
+  ];
+}
+
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
+    listSkillCommandsForWorkspaceMock.mockReset();
+    listSkillCommandsForWorkspaceMock.mockReturnValue([]);
     getChannelPluginMock.mockReset();
     createOpenClawToolsMock.mockReset();
     buildStatusReplyMock.mockReset();
@@ -467,6 +514,76 @@ describe("handleInlineActions", () => {
     });
   });
 
+  it("skips stale queued /skill messages before loading or dispatching skills", async () => {
+    const typing = createTypingController();
+    const toolExecute = mockToolDispatchedSkillCommand();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-skill",
+      updatedAt: Date.now(),
+      abortCutoffMessageSid: "42",
+      abortedLastRun: true,
+    };
+    const sessionStore = { "s:main": sessionEntry };
+    const ctx = buildTestCtx({
+      Body: "/skill send_status now",
+      CommandBody: "/skill send_status now",
+      MessageSid: "41",
+    });
+
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "/skill send_status now",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/skill send_status now",
+        commandBodyNormalized: "/skill send_status now",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        sessionEntry,
+        sessionStore,
+        skillCommands: [],
+      },
+    });
+
+    expect(listSkillCommandsForWorkspaceMock).not.toHaveBeenCalled();
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(toolExecute).not.toHaveBeenCalled();
+  });
+
+  it("skips empty-config /skill tool dispatch before loading skills", async () => {
+    const typing = createTypingController();
+    const toolExecute = mockToolDispatchedSkillCommand();
+    const ctx = buildTestCtx({
+      From: "whatsapp:+999",
+      To: "whatsapp:+123",
+      Body: "/skill send_status now",
+      CommandBody: "/skill send_status now",
+    });
+
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "/skill send_status now",
+      command: {
+        isAuthorizedSender: true,
+        to: "whatsapp:+123",
+        rawBodyNormalized: "/skill send_status now",
+        commandBodyNormalized: "/skill send_status now",
+      },
+      overrides: {
+        allowTextCommands: true,
+        skillCommands: [],
+      },
+    });
+
+    expect(listSkillCommandsForWorkspaceMock).not.toHaveBeenCalled();
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(toolExecute).not.toHaveBeenCalled();
+  });
+
   it("clears /stop cutoff when a newer message arrives", async () => {
     const typing = createTypingController();
     const sessionEntry: SessionEntry = {
@@ -554,15 +671,7 @@ describe("handleInlineActions", () => {
       Body: "/office_hours build me a deployment plan",
       CommandBody: "/office_hours build me a deployment plan",
     });
-    const skillCommands: SkillCommandSpec[] = [
-      {
-        name: "office_hours",
-        skillName: "office-hours",
-        description: "Office hours",
-        promptTemplate: "Act as an engineering advisor.\n\nFocus on:\n$ARGUMENTS",
-        sourceFilePath: "/tmp/plugin/commands/office-hours.md",
-      },
-    ];
+    const skillCommands = officeHoursSkillCommands();
 
     const result = await handleInlineActions(
       createHandleInlineActionsInput({
@@ -590,6 +699,43 @@ describe("handleInlineActions", () => {
     expect(requireRecord(commandArgs.ctx, "handleCommands ctx").Body).toBe(
       "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
     );
+  });
+
+  it("loads workspace skills when /skill gets an empty preloaded command list", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+    const ctx = buildTestCtx({
+      Body: "/skill office_hours build me a deployment plan",
+      CommandBody: "/skill office_hours build me a deployment plan",
+    });
+    const skillCommands = officeHoursSkillCommands();
+    listSkillCommandsForWorkspaceMock.mockReturnValue(skillCommands);
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/skill office_hours build me a deployment plan",
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/skill office_hours build me a deployment plan",
+          commandBodyNormalized: "/skill office_hours build me a deployment plan",
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands: [],
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
+    expect(listSkillCommandsForWorkspaceMock).toHaveBeenCalledOnce();
+    expect(ctx.Body).toBe(
+      "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
+    );
+    const commandArgs = mockObjectArg(handleCommandsMock, "handleCommands");
+    expect(commandArgs.skillCommands).toEqual(skillCommands);
   });
 
   it("passes requesterAgentIdOverride into inline tool runtimes", async () => {

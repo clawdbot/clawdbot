@@ -1,4 +1,4 @@
-import { type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { readClampedInt } from "../shared/params.js";
 import {

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
@@ -30,6 +30,10 @@ describe("mattermost monitor resources", () => {
     sendMattermostTyping.mockReset();
     updateMattermostPost.mockReset();
     buildButtonProps.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("downloads media, preserves auth headers, and infers media kind", async () => {
@@ -118,6 +122,70 @@ describe("mattermost monitor resources", () => {
       message: "Pick a model",
       props: { attachments: [] },
     });
+  });
+
+  it("does not reuse cached lookups while the process clock is invalid", async () => {
+    fetchMattermostChannel
+      .mockResolvedValueOnce({ id: "chan-1", name: "old" })
+      .mockResolvedValueOnce({ id: "chan-1", name: "fresh" })
+      .mockResolvedValueOnce({ id: "chan-1", name: "recovered" });
+
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {} as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      saveRemoteMedia: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+
+    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual({
+      id: "chan-1",
+      name: "old",
+    });
+
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual({
+      id: "chan-1",
+      name: "fresh",
+    });
+
+    vi.mocked(Date.now).mockReturnValue(1_000);
+    await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual({
+      id: "chan-1",
+      name: "recovered",
+    });
+
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not cache lookups when cache expiry would exceed the Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    fetchMattermostUser
+      .mockResolvedValueOnce({ id: "user-1", username: "first" })
+      .mockResolvedValueOnce({ id: "user-1", username: "second" });
+
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {} as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      saveRemoteMedia: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+
+    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual({
+      id: "user-1",
+      username: "first",
+    });
+    await expect(resources.resolveUserInfo("user-1")).resolves.toEqual({
+      id: "user-1",
+      username: "second",
+    });
+
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
   });
 
   it("proxies typing indicators to the mattermost client helper", async () => {

@@ -1,13 +1,13 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildPairingConnectRecoveryTitle,
   describePairingConnectRequirement,
   type ConnectPairingRequiredReason,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import type { TableColumn } from "../terminal/table.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";

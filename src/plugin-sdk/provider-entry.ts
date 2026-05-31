@@ -1,4 +1,4 @@
-import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
+import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
 import type {
@@ -10,7 +10,7 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,

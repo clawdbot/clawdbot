@@ -222,7 +222,7 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   };
 });
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: terminalNoteMock,
 }));
 
@@ -742,7 +742,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     return Boolean(
       talk &&
       ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
-        Object.prototype.hasOwnProperty.call(talk, key),
+        Object.hasOwn(talk, key),
       ),
     );
   }

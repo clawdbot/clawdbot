@@ -42,7 +42,7 @@ export function buildCodexModelDefinition(model: {
   return {
     id,
     name: model.displayName?.trim() || id,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     reasoning: model.supportedReasoningEfforts.length > 0 || shouldDefaultToReasoningModel(id),
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -60,7 +60,7 @@ export function buildCodexProviderConfig(models: CodexAppServerModel[]): ModelPr
     baseUrl: CODEX_BASE_URL,
     apiKey: CODEX_APP_SERVER_AUTH_MARKER,
     auth: "token",
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     models: models.map(buildCodexModelDefinition),
   };
 }

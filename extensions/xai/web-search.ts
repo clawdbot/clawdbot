@@ -1,6 +1,6 @@
-import {
-  type WebSearchProviderPlugin,
-  type WebSearchProviderSetupContext,
+import type {
+  WebSearchProviderPlugin,
+  WebSearchProviderSetupContext,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { buildXaiWebSearchProviderBase } from "./web-search-provider-shared.js";
 

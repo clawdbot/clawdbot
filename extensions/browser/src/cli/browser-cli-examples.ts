@@ -27,6 +27,7 @@ export const browserActionExamples = [
   "openclaw browser drag 10 11",
   "openclaw browser select 9 OptionA OptionB",
   "openclaw browser upload /tmp/openclaw/uploads/file.pdf",
+  "openclaw browser upload media://inbound/file.pdf",
   'openclaw browser fill --fields \'[{"ref":"1","value":"Ada"}]\'',
   "openclaw browser dialog --accept",
   'openclaw browser wait --text "Done"',

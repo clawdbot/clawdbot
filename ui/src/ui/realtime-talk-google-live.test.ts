@@ -320,7 +320,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
   it("does not revive Talk status after stop while a tool consult settles", async () => {
     const onStatus = vi.fn();
-    let runId = "run-1";
+    const runId = "run-1";
     const listeners = new Set<(event: { event: string; payload?: unknown }) => void>();
     const client = {
       addEventListener: vi.fn((listener: (event: { event: string; payload?: unknown }) => void) => {

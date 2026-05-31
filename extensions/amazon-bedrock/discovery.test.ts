@@ -256,6 +256,28 @@ describe("bedrock discovery", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
+  it("skips cache when refreshInterval expiry overflows", async () => {
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] })
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] });
+
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    expect(sendMock).toHaveBeenCalledTimes(4);
+  });
+
   it("skips cache when refreshInterval is 0", async () => {
     sendMock
       .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })

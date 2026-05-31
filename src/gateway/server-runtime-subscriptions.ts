@@ -65,11 +65,18 @@ export function startGatewayEventSubscriptions(params: {
     return agentEventHandlerPromise;
   };
 
+  let sessionEventsModulePromise: Promise<typeof import("./server-session-events.js")> | null =
+    null;
+  const getSessionEventsModule = () => {
+    sessionEventsModulePromise ??= import("./server-session-events.js");
+    return sessionEventsModulePromise;
+  };
+
   let transcriptUpdateHandlerPromise: Promise<
     ReturnType<typeof import("./server-session-events.js").createTranscriptUpdateBroadcastHandler>
   > | null = null;
   const getTranscriptUpdateHandler = () => {
-    transcriptUpdateHandlerPromise ??= import("./server-session-events.js").then(
+    transcriptUpdateHandlerPromise ??= getSessionEventsModule().then(
       ({ createTranscriptUpdateBroadcastHandler }) =>
         createTranscriptUpdateBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,
@@ -84,7 +91,7 @@ export function startGatewayEventSubscriptions(params: {
     ReturnType<typeof import("./server-session-events.js").createLifecycleEventBroadcastHandler>
   > | null = null;
   const getLifecycleEventHandler = () => {
-    lifecycleEventHandlerPromise ??= import("./server-session-events.js").then(
+    lifecycleEventHandlerPromise ??= getSessionEventsModule().then(
       ({ createLifecycleEventBroadcastHandler }) =>
         createLifecycleEventBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,

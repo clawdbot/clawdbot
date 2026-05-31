@@ -1677,7 +1677,7 @@ export async function updateNpmInstalledPlugins(params: {
                     usedFallback: usedNpmFallback,
                   }),
               phase: "update",
-              result: result,
+              result,
             })
           : resultSource === "clawhub"
             ? formatClawHubInstallFailure({

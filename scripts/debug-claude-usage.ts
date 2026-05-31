@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
+import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 import {
   maskIdentifier,

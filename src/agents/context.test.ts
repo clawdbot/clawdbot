@@ -501,7 +501,7 @@ describe("resolveContextTokensForModel", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://chatgpt.com/backend-api",
               models: [
                 {
@@ -519,7 +519,7 @@ describe("resolveContextTokensForModel", () => {
           },
         },
       },
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       fallbackContextTokens: 272_000,
     });

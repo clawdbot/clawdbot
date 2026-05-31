@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
-import type { Model } from "../llm/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
@@ -420,7 +420,6 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    let timeout: NodeJS.Timeout;
     const cleanup = () => signal?.removeEventListener("abort", onAbort);
     const onDone = () => {
       cleanup();
@@ -431,7 +430,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       cleanup();
       reject(toAbortError(signal));
     };
-    timeout = setTimeout(onDone, ms);
+    const timeout: NodeJS.Timeout = setTimeout(onDone, ms);
     timeout.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -478,7 +477,6 @@ function waitForChildExit(
   }
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    let timeout: NodeJS.Timeout;
     const cleanup = () => {
       clearTimeout(timeout);
       child.off("exit", onExit);
@@ -493,7 +491,7 @@ function waitForChildExit(
       cleanup();
       reject(toAbortError(signal));
     };
-    timeout = setTimeout(finish, timeoutMs);
+    const timeout: NodeJS.Timeout = setTimeout(finish, timeoutMs);
     timeout.unref?.();
     child.once("exit", onExit);
     signal.addEventListener("abort", onAbort, { once: true });

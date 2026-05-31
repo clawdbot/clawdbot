@@ -254,6 +254,33 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+  it("lists Gateway sessions with invalid updated timestamps", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([
+          createSessionRow({
+            key: "agent:main:work",
+            cwd: "/tmp/openclaw",
+            title: "Work session",
+            updatedAt: Number.POSITIVE_INFINITY,
+          }),
+        ]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/tmp/openclaw" }));
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.updatedAt).toBeUndefined();
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("rejects session/list cursors when the cwd filter changes", async () => {
     const allRows = [
       createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),

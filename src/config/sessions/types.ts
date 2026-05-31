@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -371,6 +371,10 @@ export type SessionEntry = {
   pendingFinalDeliveryContext?: DeliveryContext;
   /** Durable send intent backing pending final delivery, when already created. */
   pendingFinalDeliveryIntentId?: string | null;
+  /** Current visible run delivery context used only for restart recovery. */
+  restartRecoveryDeliveryContext?: DeliveryContext;
+  /** Active run id that owns restartRecoveryDeliveryContext cleanup. */
+  restartRecoveryDeliveryRunId?: string;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

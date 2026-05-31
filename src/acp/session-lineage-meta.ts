@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const SUBAGENT_ROLES = ["orchestrator", "leaf"] as const;
 const SUBAGENT_CONTROL_SCOPES = ["children", "none"] as const;

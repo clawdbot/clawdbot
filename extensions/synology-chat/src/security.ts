@@ -3,6 +3,7 @@
  */
 
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   createFixedWindowRateLimiter,
@@ -78,8 +79,9 @@ export class RateLimiter {
 
   constructor(limit = 30, windowSeconds = 60, maxTrackedUsers = 5_000) {
     this.limit = limit;
+    const windowMs = finiteSecondsToTimerSafeMilliseconds(windowSeconds) ?? 1;
     this.limiter = createFixedWindowRateLimiter({
-      windowMs: Math.max(1, Math.floor(windowSeconds * 1000)),
+      windowMs,
       maxRequests: Math.max(1, Math.floor(limit)),
       maxTrackedKeys: Math.max(1, Math.floor(maxTrackedUsers)),
     });

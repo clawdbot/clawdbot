@@ -15,10 +15,14 @@ type MockManifestRegistry = {
   plugins: Array<{
     id: string;
     origin: string;
+    enabled?: boolean;
+    enabledByDefault?: boolean;
     kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
+    providers?: string[];
     providerAuthEnvVars?: Record<string, string[]>;
     providerAuthAliases?: Record<string, string>;
     setup?: {
+      requiresRuntime?: boolean;
       providers?: Array<{
         id: string;
         envVars?: string[];
@@ -54,8 +58,8 @@ const pluginRegistryMocks = vi.hoisted(() => {
           plugins: registry.plugins.map((plugin) => ({
             pluginId: plugin.id,
             origin: plugin.origin,
-            enabled: true,
-            enabledByDefault: true,
+            enabled: plugin.enabled ?? true,
+            enabledByDefault: plugin.enabledByDefault ?? true,
           })),
         },
         plugins: registry.plugins,
@@ -130,8 +134,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
-  it("lets openai-codex bootstrap from Codex app-server API-key env", () => {
-    expect(resolveProviderAuthEnvVarCandidates()["openai-codex"]).toEqual([
+  it("lets openai bootstrap from Codex app-server API-key env", () => {
+    expect(resolveProviderAuthEnvVarCandidates()["openai"]).toEqual([
       "CODEX_API_KEY",
       "OPENAI_API_KEY",
     ]);
@@ -652,6 +656,14 @@ describe("provider env vars dynamic manifest metadata", () => {
             ],
           },
         },
+        {
+          id: "legacy-setup-owner",
+          origin: "global",
+          providers: ["legacy-cloud"],
+          providerAuthAliases: {
+            "legacy-cloud-plan": "legacy-cloud",
+          },
+        },
       ],
       diagnostics: [],
     });
@@ -667,6 +679,34 @@ describe("provider env vars dynamic manifest metadata", () => {
         credentialMarker: "fireworks-local-credentials",
       },
     ]);
+    expect(lookupMaps.setupProviderFallbackRefs).toEqual([
+      "fireworks",
+      "fireworks-plan",
+      "legacy-cloud",
+      "legacy-cloud-plan",
+    ]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("excludes disabled plugin setup fallback refs from runtime auth lookup maps", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "disabled-setup-owner",
+          origin: "global",
+          enabled: false,
+          providers: ["disabled-cloud"],
+          providerAuthAliases: {
+            "disabled-cloud-plan": "disabled-cloud",
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+
+    expect(lookupMaps.setupProviderFallbackRefs).toEqual([]);
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
   });
 

@@ -1311,4 +1311,93 @@ describe("subagent registry lifecycle hardening", () => {
     ).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
+
+  it("dedupes browser cleanup when two callers complete the same run in parallel", async () => {
+    // registerSubagentRun fires both an in-process listener (phase='end') and a
+    // gateway waitForSubagentCompletion RPC; in embedded mode both resolve to
+    // the same runId and call completeSubagentRun. Without a per-entry dispatch
+    // guard, cleanupBrowserSessionsForLifecycleEnd fires once per caller,
+    // duplicating browser driver tab-close IPC.
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+    });
+
+    const completeParams = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" as const },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    };
+
+    await Promise.all([
+      controller.completeSubagentRun(completeParams),
+      controller.completeSubagentRun(completeParams),
+    ]);
+
+    expect(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    ).toHaveBeenCalledTimes(1);
+    expect(entry.browserCleanupDispatchedAt).toBeTypeOf("number");
+  });
+
+  it("drains the retire + announce tail for a duplicate completion held behind a slow first browser cleanup", async () => {
+    // The dispatch flag dedupes only the browser tab-close IPC. A duplicate
+    // completion caller must still reach retireRunModeBundleMcpRuntime and
+    // startSubagentAnnounceCleanupFlow while the first caller's cleanup
+    // promise is still pending, so a slow browser driver cannot strand
+    // completion delivery behind it.
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    let releaseFirstCleanup: (() => void) | undefined;
+    let firstCleanupEntered: (() => void) | undefined;
+    const firstCleanupEnteredPromise = new Promise<void>((resolve) => {
+      firstCleanupEntered = resolve;
+    });
+    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
+      () => {
+        firstCleanupEntered?.();
+        return new Promise<void>((resolve) => {
+          releaseFirstCleanup = resolve;
+        });
+      },
+    );
+
+    const completeParams = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" as const },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    };
+
+    // First caller takes the dispatch flag and parks inside the cleanup wrapper.
+    const firstCompletion = controller.completeSubagentRun(completeParams);
+    await firstCleanupEnteredPromise;
+
+    // Second caller observes the flag set, skips the cleanup wrapper, and must
+    // still drain the retire + announce tail without waiting on the first
+    // caller's still-pending cleanup.
+    await controller.completeSubagentRun(completeParams);
+
+    expect(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    ).toHaveBeenCalledTimes(1);
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalled();
+
+    // Release the held first cleanup so the first caller can settle too.
+    releaseFirstCleanup?.();
+    await expect(firstCompletion).resolves.toBeUndefined();
+  });
 });

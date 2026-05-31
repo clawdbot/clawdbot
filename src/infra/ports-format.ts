@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {

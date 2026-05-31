@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type SilentReplyPolicy = "allow" | "disallow";
 export type SilentReplyConversationType = "direct" | "group" | "internal";

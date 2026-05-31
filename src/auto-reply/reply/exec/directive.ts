@@ -1,10 +1,10 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ExecAsk,
   type ExecSecurity,
   type ExecTarget,
   normalizeExecTarget,
 } from "../../../infra/exec-approvals.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 
 type ExecDirectiveParse = {

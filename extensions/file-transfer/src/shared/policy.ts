@@ -367,7 +367,7 @@ export async function persistAllowAlways(input: {
       );
       // Use hasOwnProperty so a node with displayName "constructor" doesn't
       // accidentally hit Object.prototype.constructor and pretend to match.
-      let key = candidates.find((c) => Object.prototype.hasOwnProperty.call(fileTransfer, c));
+      let key = candidates.find((c) => Object.hasOwn(fileTransfer, c));
       if (!key) {
         key = assertSafeConfigKey(input.nodeDisplayName ?? input.nodeId);
         fileTransfer[key] = {};

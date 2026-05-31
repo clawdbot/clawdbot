@@ -381,7 +381,7 @@ describe("runEmbeddedAgent", () => {
       },
       auth: {
         order: {
-          openai: ["openai-codex:work", "openai:backup"],
+          openai: ["openai:work", "openai:backup"],
         },
       },
     };
@@ -410,7 +410,7 @@ describe("runEmbeddedAgent", () => {
 
     expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
       1,
-      "openai-codex",
+      "openai",
       "mock-1",
       agentDir,
       cfg,
@@ -419,7 +419,7 @@ describe("runEmbeddedAgent", () => {
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 
   it("resolves transport-owned OpenAI Codex runs against the runtime provider first", async () => {
@@ -451,7 +451,7 @@ describe("runEmbeddedAgent", () => {
       },
     };
     resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) => {
-      if (provider === "openai-codex" && modelId === "gpt-5.5") {
+      if (provider === "openai" && modelId === "gpt-5.5") {
         return createResolvedEmbeddedRunnerModel(provider, modelId);
       }
       return {
@@ -488,7 +488,7 @@ describe("runEmbeddedAgent", () => {
 
     expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
       1,
-      "openai-codex",
+      "openai",
       "gpt-5.5",
       agentDir,
       cfg,
@@ -498,7 +498,7 @@ describe("runEmbeddedAgent", () => {
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {

@@ -16,6 +16,10 @@ import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+} from "./harness/agent-end-side-effects.js";
+import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
   runHarnessContextEngineMaintenance,
@@ -23,13 +27,11 @@ import {
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
-  awaitAgentHarnessAgentEndHook,
-  runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { SessionManager } from "./sessions/index.js";
+import { SessionManager } from "./sessions/session-manager.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
@@ -149,7 +151,7 @@ function buildCliContextEngineAssistantMessage(params: {
   return buildCliHookAssistantMessage(params) as AgentMessage;
 }
 
-type CliAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 
 function shouldAwaitCliAgentEndHook(params: RunCliAgentParams): boolean {
   return !params.messageChannel && !params.messageProvider;
@@ -160,10 +162,10 @@ async function runCliAgentEndHook(
   hookParams: CliAgentEndHookParams,
 ): Promise<void> {
   if (shouldAwaitCliAgentEndHook(params)) {
-    await awaitAgentHarnessAgentEndHook(hookParams);
+    await awaitAgentEndSideEffects(hookParams);
     return;
   }
-  runAgentHarnessAgentEndHook(hookParams);
+  runAgentEndSideEffects(hookParams);
 }
 
 async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
@@ -358,6 +360,7 @@ export async function runPreparedCliAgent(
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
     trigger: params.trigger,
+    ...(params.config ? { config: params.config } : {}),
     ...(context.contextWindowInfo?.tokens
       ? { contextTokenBudget: context.contextWindowInfo.tokens }
       : {}),

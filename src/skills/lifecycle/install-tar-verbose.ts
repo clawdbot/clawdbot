@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 const TAR_VERBOSE_MONTHS = new Set([
   "Jan",

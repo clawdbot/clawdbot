@@ -1,4 +1,4 @@
-import { asPositiveSafeInteger } from "../shared/number-coercion.js";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,

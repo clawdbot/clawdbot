@@ -1,6 +1,6 @@
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
 
 afterEach(() => {
@@ -82,6 +82,57 @@ function expectStats(value: unknown, fields: Record<string, unknown>) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
+  let filenameScopeCase: {
+    cacheSize: number;
+    firstAliasType: string;
+    firstFilename: unknown;
+    firstOptions: Record<string, unknown>;
+    sameLoader: boolean;
+    secondAliasType: string;
+    secondFilename: unknown;
+    secondOptions: Record<string, unknown>;
+  };
+
+  beforeAll(async () => {
+    const { createJiti, getCachedPluginModuleLoader } = await loadCachedPluginModuleLoader(
+      "filename-scope-precompute",
+    );
+
+    const cache = new Map();
+    const first = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.ts",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      argvEntry: "/repo/openclaw.mjs",
+      preferBuiltDist: true,
+      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+    });
+    const second = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.ts",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      argvEntry: "/repo/openclaw.mjs",
+      preferBuiltDist: true,
+      loaderFilename: "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
+    });
+
+    first("/repo/dist/extensions/demo/api.ts");
+    second("/repo/dist/extensions/demo/api.ts");
+    const calls = createJiti.mock.calls;
+    const firstOptions = requireRecord(calls[0]?.[1], "first jiti options");
+    const secondOptions = requireRecord(calls[1]?.[1], "second jiti options");
+    filenameScopeCase = {
+      cacheSize: cache.size,
+      firstAliasType: typeof firstOptions.alias,
+      firstFilename: calls[0]?.[0],
+      firstOptions,
+      sameLoader: second === first,
+      secondAliasType: typeof secondOptions.alias,
+      secondFilename: calls[1]?.[0],
+      secondOptions,
+    };
+  });
+
   it("resolves deterministic cache entries for equivalent alias maps", async () => {
     const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
@@ -195,45 +246,20 @@ describe("getCachedPluginModuleLoader", () => {
   });
 
   it("keeps loader caches scoped by loader filename and dist preference", async () => {
-    const { createJiti, getCachedPluginModuleLoader } =
-      await loadCachedPluginModuleLoader("filename-scope");
-
-    const cache = new Map();
-    const first = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/dist/extensions/demo/api.ts",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      argvEntry: "/repo/openclaw.mjs",
-      preferBuiltDist: true,
-      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
-    });
-    const second = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/dist/extensions/demo/api.ts",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      argvEntry: "/repo/openclaw.mjs",
-      preferBuiltDist: true,
-      loaderFilename: "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
-    });
-
-    expect(second).not.toBe(first);
-    first("/repo/dist/extensions/demo/api.ts");
-    second("/repo/dist/extensions/demo/api.ts");
-    const firstOptions = expectJitiOptions(
-      createJiti,
-      0,
+    expect(filenameScopeCase.sameLoader).toBe(false);
+    expect(filenameScopeCase.firstFilename).toBe(
       "file:///repo/src/plugins/public-surface-loader.ts",
-      { tryNative: false, interopDefault: true },
     );
-    expect(firstOptions.alias).toBeTypeOf("object");
-    const secondOptions = expectJitiOptions(
-      createJiti,
-      1,
+    expect(filenameScopeCase.firstOptions.tryNative).toBe(false);
+    expect(filenameScopeCase.firstOptions.interopDefault).toBe(true);
+    expect(filenameScopeCase.firstAliasType).toBe("object");
+    expect(filenameScopeCase.secondFilename).toBe(
       "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
-      { tryNative: false, interopDefault: true },
     );
-    expect(secondOptions.alias).toBeTypeOf("object");
-    expect(cache.size).toBe(2);
+    expect(filenameScopeCase.secondOptions.tryNative).toBe(false);
+    expect(filenameScopeCase.secondOptions.interopDefault).toBe(true);
+    expect(filenameScopeCase.secondAliasType).toBe("object");
+    expect(filenameScopeCase.cacheSize).toBe(2);
   });
 
   it("lets callers override alias maps and tryNative while keeping cache keys stable", async () => {

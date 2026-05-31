@@ -7,7 +7,7 @@ import {
 } from "../../../config/legacy.shared.js";
 
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(target, key);
+  return Object.hasOwn(target, key);
 }
 
 function cleanupEmptyRecord(parent: Record<string, unknown>, key: string): void {

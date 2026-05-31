@@ -347,6 +347,25 @@ vi.mock("../plugins/status.js", () => ({
   formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
 }));
 
+vi.mock("../plugins/status-snapshot.js", () => ({
+  buildPluginRegistrySnapshotReport: ((
+    ...args: Parameters<
+      (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<
+        (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
+      >,
+      ReturnType<
+        (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
+      >
+    >(
+      buildPluginRegistrySnapshotReport,
+      ...args,
+    )) as (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"],
+}));
+
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: ((...args: unknown[]) =>
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (

@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
+import {
+  extractStandalonePlainTextToolCallText,
+  normalizePlainTextToolCallStreamEvents,
+  promoteStandalonePlainTextToolCallMessage,
+  scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallMessageNormalization,
+} from "../../packages/tool-call-repair/src/index.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
-import { parseStandalonePlainTextToolCallBlocks } from "./tool-payload.js";
 
 export type ProviderStreamWrapperFactory =
   | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
@@ -41,164 +48,6 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   return new Set(names);
 }
 
-function matchesLiteralPrefix(text: string, literal: string): boolean {
-  return literal.startsWith(text) || text.startsWith(literal);
-}
-
-function skipHorizontalWhitespace(text: string, start: number): number {
-  let cursor = start;
-  while (cursor < text.length && /[ \t]/.test(text[cursor] ?? "")) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function matchesAnyToolNamePrefix(text: string, toolNames: Set<string>): boolean {
-  if (!text) {
-    return true;
-  }
-  for (const toolName of toolNames) {
-    if (toolName.startsWith(text) || text.startsWith(toolName)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function couldStillBeJsonPayload(text: string, start: number): boolean {
-  let cursor = start;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-    cursor += 1;
-  }
-  return cursor >= text.length || text[cursor] === "{";
-}
-
-function couldStillBeBracketedToolCall(text: string, toolNames: Set<string>): boolean {
-  if (!text.startsWith("[")) {
-    return false;
-  }
-
-  const toolPrefix = "[tool:";
-  if (matchesLiteralPrefix(text, toolPrefix)) {
-    if (text.length <= toolPrefix.length) {
-      return true;
-    }
-    const nameStart = toolPrefix.length;
-    let cursor = nameStart;
-    while (cursor < text.length && text[cursor] !== "]") {
-      cursor += 1;
-    }
-    const name = text.slice(nameStart, cursor).trim();
-    if (!matchesAnyToolNamePrefix(name, toolNames)) {
-      return false;
-    }
-    if (cursor >= text.length) {
-      return true;
-    }
-    if (text[cursor] !== "]") {
-      return false;
-    }
-    return couldStillBeJsonPayload(text, cursor + 1);
-  }
-
-  let cursor = 1;
-  while (cursor < text.length && text[cursor] !== "\n" && text[cursor] !== "]") {
-    cursor += 1;
-  }
-  const firstLine = text.slice(1, cursor);
-  if (!matchesAnyToolNamePrefix(firstLine.trim(), toolNames)) {
-    return false;
-  }
-  if (cursor >= text.length) {
-    return true;
-  }
-  if (text[cursor] === "]") {
-    return couldStillBeJsonPayload(text, text[cursor + 1] === "\n" ? cursor + 2 : cursor + 1);
-  }
-  if (text[cursor] !== "\n") {
-    return false;
-  }
-  return couldStillBeJsonPayload(text, cursor + 1);
-}
-
-function couldStillBeHarmonyToolCall(text: string, toolNames: Set<string>): boolean {
-  const harmonyChannelPrefix = "<|channel|>";
-  let cursor = 0;
-  if (matchesLiteralPrefix(text, harmonyChannelPrefix)) {
-    if (text.length <= harmonyChannelPrefix.length) {
-      return true;
-    }
-    cursor = harmonyChannelPrefix.length;
-  }
-
-  const channelRest = text.slice(cursor);
-  const channelName = ["commentary", "analysis", "final"].find((marker) =>
-    matchesLiteralPrefix(channelRest, marker),
-  );
-  if (channelName) {
-    if (channelRest.length <= channelName.length) {
-      return true;
-    }
-    cursor += channelName.length;
-  } else if (cursor === 0) {
-    return false;
-  } else {
-    return false;
-  }
-
-  const constraintMarker = " to=";
-  const constraintRest = text.slice(cursor);
-  if (matchesLiteralPrefix(constraintRest, constraintMarker)) {
-    if (constraintRest.length <= constraintMarker.length) {
-      return true;
-    }
-    cursor += constraintMarker.length;
-    const nameStart = cursor;
-    while (cursor < text.length && text[cursor] !== " " && text[cursor] !== "\n") {
-      cursor += 1;
-    }
-    const name = text.slice(nameStart, cursor).trim();
-    if (!matchesAnyToolNamePrefix(name, toolNames)) {
-      return false;
-    }
-  }
-
-  cursor = skipHorizontalWhitespace(text, cursor);
-  if (cursor >= text.length) {
-    return true;
-  }
-  const codeMarker = "code";
-  const codeRest = text.slice(cursor);
-  if (matchesLiteralPrefix(codeRest, codeMarker)) {
-    if (codeRest.length <= codeMarker.length) {
-      return true;
-    }
-    cursor += codeMarker.length;
-    cursor = skipHorizontalWhitespace(text, cursor);
-    if (cursor >= text.length) {
-      return true;
-    }
-  }
-  const messageMarker = "<|message|>";
-  const messageRest = text.slice(cursor);
-  if (matchesLiteralPrefix(messageRest, messageMarker)) {
-    return true;
-  }
-  return text[cursor] === "{";
-}
-
-function couldStillBePlainTextToolCall(text: string, toolNames: Set<string>): boolean {
-  if (text.length > 256_000) {
-    return false;
-  }
-  const trimmed = text.trimStart();
-  return (
-    trimmed.length === 0 ||
-    couldStillBeBracketedToolCall(trimmed, toolNames) ||
-    couldStillBeHarmonyToolCall(trimmed, toolNames)
-  );
-}
-
 function createSyntheticToolCallId(): string {
   return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
@@ -221,65 +70,18 @@ function promotePlainTextToolCalls(
   toolNames: Set<string>,
 ): Record<string, unknown> | undefined {
   const messageRecord = toRecord(message);
-  if (!messageRecord) {
-    return undefined;
-  }
-  if (!Array.isArray(messageRecord.content)) {
-    if (typeof messageRecord.content !== "string" || !messageRecord.content.trim()) {
-      return undefined;
-    }
-    const parsed = parseStandalonePlainTextToolCallBlocks(messageRecord.content, {
-      allowedToolNames: toolNames,
-    });
-    if (!parsed) {
-      return undefined;
-    }
-    return {
-      ...messageRecord,
-      content: parsed.map(createPlainTextToolCallBlock),
-      stopReason: "toolUse",
-    };
-  }
   if (
-    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall") ||
-    messageRecord.content.length === 0
+    Array.isArray(messageRecord?.content) &&
+    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
   ) {
     return undefined;
   }
-
-  let promoted = false;
-  const nextContent: Array<Record<string, unknown>> = [];
-  for (const block of messageRecord.content) {
-    const blockRecord = toRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type !== "text") {
-      nextContent.push(blockRecord);
-      continue;
-    }
-    const text = typeof blockRecord.text === "string" ? blockRecord.text : "";
-    if (!text.trim()) {
-      continue;
-    }
-    const parsed = parseStandalonePlainTextToolCallBlocks(text, {
-      allowedToolNames: toolNames,
-    });
-    if (!parsed) {
-      return undefined;
-    }
-    nextContent.push(...parsed.map(createPlainTextToolCallBlock));
-    promoted = true;
-  }
-
-  if (!promoted) {
-    return undefined;
-  }
-  return {
-    ...messageRecord,
-    content: nextContent,
-    stopReason: "toolUse",
-  };
+  return promoteStandalonePlainTextToolCallMessage({
+    allowedToolNames: toolNames,
+    createToolCallBlock: (block, name) => createPlainTextToolCallBlock({ ...block, name }),
+    isRetainableNonTextBlock: () => true,
+    message,
+  });
 }
 
 function emitPromotedToolCallEvents(
@@ -302,6 +104,44 @@ function emitPromotedToolCallEvents(
   });
 }
 
+function extractPlainTextToolCallCandidate(message: unknown): string | undefined {
+  return extractStandalonePlainTextToolCallText({
+    allowOtherNonTextBlocks: true,
+    message,
+  });
+}
+
+function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCallNameMatcher {
+  return {
+    hasExactName: (name) => toolNames.has(name),
+    hasNamePrefix: (prefix) => {
+      for (const toolName of toolNames) {
+        if (toolName.startsWith(prefix)) {
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+}
+
+function normalizeProviderDoneMessage(
+  message: unknown,
+  toolNames: Set<string>,
+  matcher: PlainTextToolCallNameMatcher,
+): PlainTextToolCallMessageNormalization {
+  const scrubbedMessage = scrubOverCapPlainTextToolCallMessage({
+    candidateText: extractPlainTextToolCallCandidate(message),
+    matcher,
+    message,
+  });
+  if (scrubbedMessage) {
+    return { kind: "scrubbed", message: scrubbedMessage };
+  }
+  const promotedMessage = promotePlainTextToolCalls(message, toolNames);
+  return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
+}
+
 function wrapPlainTextToolCallStream(
   source: ReturnType<StreamFn>,
   context: Parameters<StreamFn>[1],
@@ -310,12 +150,11 @@ function wrapPlainTextToolCallStream(
   if (toolNames.size === 0) {
     return source;
   }
+  const matcher = createProviderToolNameMatcher(toolNames);
   const output = createAssistantMessageEventStream();
   const stream = output as unknown as { push(event: unknown): void; end(): void };
 
   void (async () => {
-    const bufferedTextEvents: unknown[] = [];
-    let bufferedText = "";
     let ended = false;
     const endStream = () => {
       if (!ended) {
@@ -323,54 +162,25 @@ function wrapPlainTextToolCallStream(
         stream.end();
       }
     };
-    const flushBufferedTextEvents = () => {
-      for (const event of bufferedTextEvents.splice(0)) {
-        stream.push(event);
-      }
-      bufferedText = "";
-    };
 
     try {
-      for await (const event of source as AsyncIterable<unknown>) {
-        const record = toRecord(event);
-        const type = typeof record?.type === "string" ? record.type : "";
-
-        if (type === "text_start" || type === "text_delta" || type === "text_end") {
-          bufferedTextEvents.push(event);
-          if (typeof record?.delta === "string") {
-            bufferedText += record.delta;
-          } else if (typeof record?.content === "string" && !bufferedText) {
-            bufferedText = record.content;
-          }
-          if (!couldStillBePlainTextToolCall(bufferedText, toolNames)) {
-            flushBufferedTextEvents();
-          }
-          continue;
-        }
-
-        if (type === "done") {
-          const promotedMessage = promotePlainTextToolCalls(record?.message, toolNames);
-          if (promotedMessage) {
-            bufferedTextEvents.splice(0);
-            bufferedText = "";
-            emitPromotedToolCallEvents(stream, promotedMessage);
-            stream.push({ ...record, reason: "toolUse", message: promotedMessage });
-          } else {
-            flushBufferedTextEvents();
-            stream.push(event);
-          }
-          endStream();
-          return;
-        }
-
-        flushBufferedTextEvents();
+      const normalizedEvents = normalizePlainTextToolCallStreamEvents(
+        source as AsyncIterable<unknown>,
+        {
+          createPromotedToolCallEvents: (message) => {
+            const events: unknown[] = [];
+            emitPromotedToolCallEvents({ push: (event: unknown) => events.push(event) }, message);
+            return events;
+          },
+          matcher,
+          normalizeDoneMessage: ({ message }) =>
+            normalizeProviderDoneMessage(message, toolNames, matcher),
+          stopAfterDone: true,
+        },
+      );
+      for await (const event of normalizedEvents) {
         stream.push(event);
-        if (type === "error") {
-          endStream();
-          return;
-        }
       }
-      flushBufferedTextEvents();
     } catch (error) {
       stream.push({
         type: "error",

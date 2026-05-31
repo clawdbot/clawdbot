@@ -13,7 +13,7 @@ export {
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
 export {
   asFiniteNumberInRange,
   asFiniteNumber,
@@ -24,14 +24,14 @@ export {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
-} from "../shared/number-coercion.js";
+} from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
   asRecord,
   asNullableRecord,
   asOptionalRecord,
   readStringField,
-} from "../shared/record-coerce.js";
+} from "../../packages/normalization-core/src/record-coerce.js";
 export { isRecord } from "../utils.js";
 export {
   normalizeAtHashSlug,
@@ -47,5 +47,5 @@ export {
   sortUniqueStrings,
   uniqueStrings,
   uniqueValues,
-} from "../shared/string-normalization.js";
+} from "../../packages/normalization-core/src/string-normalization.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";

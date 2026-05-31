@@ -12,6 +12,7 @@ type SlackThreadContext = {
 export function resolveSlackThreadContext(params: {
   message: SlackMessageEvent | SlackAppMentionEvent;
   replyToMode: ReplyToMode;
+  isDirectMessage?: boolean;
 }): SlackThreadContext {
   const incomingThreadTs = params.message.thread_ts;
   const eventTs = params.message.event_ts;
@@ -20,11 +21,17 @@ export function resolveSlackThreadContext(params: {
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
   const replyToId = incomingThreadTs ?? messageTs;
-  const messageThreadId = isThreadReply
-    ? incomingThreadTs
-    : params.replyToMode === "all"
-      ? messageTs
-      : undefined;
+  // Preserve thread context for Slack Agents & Assistants DM root messages
+  // where thread_ts == ts. Non-DM self-thread roots must stay unset because
+  // downstream tool threading treats MessageThreadId as an explicit thread
+  // target and overrides replyToMode to "all".
+  const isAssistantDmThreadRoot = hasThreadTs && !isThreadReply && params.isDirectMessage === true;
+  const messageThreadId =
+    isThreadReply || isAssistantDmThreadRoot
+      ? incomingThreadTs
+      : params.replyToMode === "all"
+        ? messageTs
+        : undefined;
   return {
     incomingThreadTs,
     messageTs,

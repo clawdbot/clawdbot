@@ -1,5 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
@@ -70,6 +70,28 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.isFree).toBe(true);
     expect(byPricing.tool.skipped).toBe(true);
     expect(byPricing.image.skipped).toBe(true);
+  });
+
+  it("drops out-of-range OpenRouter created_at timestamps", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/free-invalid-created:free",
+          name: "Free Invalid Created",
+          context_length: 16_384,
+          supported_parameters: [],
+          modality: "text",
+          created_at: 8_640_000_000_000_001,
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.createdAtMs).toBeNull();
   });
 
   it("requires an API key when probing", async () => {

@@ -8,6 +8,7 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
 import { parseMediaContentLength } from "./content-length.js";
 import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
@@ -390,12 +391,13 @@ async function readChunkWithIdleTimeout(
         timeoutId = undefined;
       }
     };
+    const resolvedChunkTimeoutMs = resolveTimerTimeoutMs(chunkTimeoutMs, 1);
     timeoutId = setTimeout(() => {
       timedOut = true;
       clear();
       void reader.cancel().catch(() => undefined);
-      reject(new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`));
-    }, chunkTimeoutMs);
+      reject(new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`));
+    }, resolvedChunkTimeoutMs);
     void reader.read().then(
       (result) => {
         clear();

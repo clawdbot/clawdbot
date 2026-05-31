@@ -1,8 +1,15 @@
 import crypto from "node:crypto";
 import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -41,7 +48,7 @@ import {
   resolveModelRefFromString,
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../../agents/openai-codex-routing.js";
+import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
@@ -60,13 +67,6 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import {
-  hasNonEmptyString,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  readStringValue,
-} from "../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -100,7 +100,7 @@ import {
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -622,7 +622,7 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
-const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 
@@ -718,10 +718,10 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
-  if (provider === "openai-codex") {
-    return "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai-codex` or run `openclaw configure`.";
+  if (provider === "openai") {
+    return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -1419,7 +1419,7 @@ export async function runAgentTurnWithFallback(params: {
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
-  let runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+  const runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
     run: params.followupRun.run,
     entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
     sessionKey: params.sessionKey,
@@ -1428,7 +1428,7 @@ export async function runAgentTurnWithFallback(params: {
     params.followupRun.run = runnableRun;
   }
   const runtimeConfig = resolveQueuedReplyRuntimeConfig(runnableRun.config);
-  let effectiveRun =
+  const effectiveRun =
     runtimeConfig === runnableRun.config
       ? runnableRun
       : {
@@ -1676,10 +1676,15 @@ export async function runAgentTurnWithFallback(params: {
             model: effectiveRun.model,
           }
         : candidateRun;
+    const persistedProvider = resolveOpenAIRuntimeProvider({
+      provider,
+      config: runtimeConfig,
+      workspaceDir: params.followupRun.run.workspaceDir,
+    });
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
       run: selectionRun,
-      provider,
+      provider: persistedProvider,
       model,
       force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
       ...(effectiveRun.autoFallbackPrimaryProbe

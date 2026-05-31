@@ -1335,6 +1335,135 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.isActive).toBe(true);
     expect(call?.isStreaming).toBe(true);
   });
+
+  it.each([
+    ["message thread id", { MessageThreadId: "501.000" }],
+    ["transport thread id", { TransportThreadId: "501.000" }],
+  ] as const)(
+    "queues same-session Slack DM turns instead of steering across Slack threads using %s",
+    async (_label, threadContext) => {
+      const queueSettings = await import("./queue/settings-runtime.js");
+      const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+        mode: "steer",
+        debounceMs: 500,
+        cap: 20,
+        dropPolicy: "summarize",
+      });
+      const activeRun = createReplyOperation({
+        sessionId: "active-session",
+        sessionKey: "session-key",
+        resetTriggered: false,
+        routeThreadId: "500.000",
+      });
+      activeRun.setPhase("running");
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReturnValueOnce("active-session")
+        .mockReturnValueOnce("active-session");
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+
+      try {
+        await runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            ctx: {
+              Body: "second top-level DM",
+              RawBody: "second top-level DM",
+              CommandBody: "second top-level DM",
+              Provider: "slack",
+              Surface: "slack",
+              ChatType: "direct",
+              OriginatingChannel: "slack",
+              OriginatingTo: "user:U1",
+              ...threadContext,
+            },
+            sessionCtx: {
+              Body: "second top-level DM",
+              BodyStripped: "second top-level DM",
+              Provider: "slack",
+              Surface: "slack",
+              ChatType: "direct",
+              OriginatingChannel: "slack",
+              OriginatingTo: "user:U1",
+              ...threadContext,
+            },
+          }),
+        );
+      } finally {
+        activeRun.complete();
+      }
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.shouldSteer).toBe(false);
+      expect(call.shouldFollowup).toBe(true);
+      expect(call.isActive).toBe(true);
+      expect(call.isStreaming).toBe(true);
+      expect(call.followupRun.originatingThreadId).toBe("501.000");
+    },
+  );
+
+  it("keeps non-Slack same-session turns steerable when route threads differ", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    const activeRun = createReplyOperation({
+      sessionId: "active-session",
+      sessionKey: "session-key",
+      resetTriggered: false,
+      routeThreadId: 42,
+    });
+    activeRun.setPhase("running");
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+
+    try {
+      await runPreparedReply(
+        baseParams({
+          isNewSession: false,
+          ctx: {
+            Body: "follow-up in another transport thread",
+            RawBody: "follow-up in another transport thread",
+            CommandBody: "follow-up in another transport thread",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "direct",
+            OriginatingChannel: "telegram",
+            OriginatingTo: "user:1",
+            MessageThreadId: 43,
+          },
+          sessionCtx: {
+            Body: "follow-up in another transport thread",
+            BodyStripped: "follow-up in another transport thread",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "direct",
+            OriginatingChannel: "telegram",
+            OriginatingTo: "user:1",
+            MessageThreadId: 43,
+          },
+        }),
+      );
+    } finally {
+      activeRun.complete();
+    }
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldSteer).toBe(true);
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.isStreaming).toBe(true);
+    expect(call.followupRun.originatingThreadId).toBe(43);
+  });
+
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");

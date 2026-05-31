@@ -583,6 +583,37 @@ describe("voice-call plugin", () => {
     expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
   });
 
+  it("reports stale call history with invalid ended timestamps", async () => {
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
+    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+      createCallRecord({
+        callId: "call-1",
+        providerCallId: "CA123",
+        state: "completed",
+        endReason: "completed",
+        endedAt: Number.POSITIVE_INFINITY,
+      }),
+    ]);
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.speak") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
+
+    const [ok, , error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("call is not active");
+    expect(error?.message).toContain("last state=completed");
+    expect(error?.message).toContain("endReason=completed");
+    expect(error?.message).not.toContain("endedAt=");
+  });
+
   it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
     const { methods } = setup({
       enabled: true,

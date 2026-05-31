@@ -18,12 +18,10 @@ const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SE
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
 const QA_LIVE_API_KEY_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 const QA_OPENAI_PROVIDER_ID = "openai";
-const QA_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   anthropic: ["OPENCLAW_LIVE_ANTHROPIC_KEY"],
   gemini: ["OPENCLAW_LIVE_GEMINI_KEY"],
-  openai: ["OPENCLAW_LIVE_OPENAI_KEY", "OPENAI_API_KEY"],
-  "openai-codex": [
+  openai: [
     "CODEX_API_KEY",
     "OPENCLAW_LIVE_CODEX_API_KEY",
     "OPENCLAW_LIVE_OPENAI_KEY",
@@ -69,12 +67,8 @@ function expandQaLiveApiKeyProviderIds(params: {
   providerIds: readonly string[];
 }) {
   const expanded = new Set(normalizeQaLiveProviderIds(params.providerIds));
-  if (
-    expanded.has(QA_OPENAI_CODEX_PROVIDER_ID) ||
-    (expanded.has(QA_OPENAI_PROVIDER_ID) && qaLiveOpenAiUsesCodexByDefault(params.cfg))
-  ) {
+  if (expanded.has(QA_OPENAI_PROVIDER_ID) && qaLiveOpenAiUsesCodexByDefault(params.cfg)) {
     expanded.add(QA_OPENAI_PROVIDER_ID);
-    expanded.add(QA_OPENAI_CODEX_PROVIDER_ID);
   }
   return [...expanded].toSorted();
 }
@@ -160,9 +154,6 @@ function qaLiveRequiresCodexAuth(params: {
   env: NodeJS.ProcessEnv;
 }) {
   const providerIds = normalizeQaLiveProviderIds(params.providerIds);
-  if (providerIds.includes(QA_OPENAI_CODEX_PROVIDER_ID)) {
-    return true;
-  }
   if (!providerIds.includes(QA_OPENAI_PROVIDER_ID)) {
     return false;
   }
@@ -288,10 +279,7 @@ export function assertQaLiveCodexAuthAvailable(params: {
   }
   if (
     resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_PROVIDER_ID, env, cfg: params.cfg })?.apiKey ||
-    resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_CODEX_PROVIDER_ID, env, cfg: params.cfg })
-      ?.apiKey ||
-    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID }) ||
-    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_CODEX_PROVIDER_ID })
+    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID })
   ) {
     return;
   }

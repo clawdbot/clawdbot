@@ -1,14 +1,11 @@
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  type BrowserConfig,
-  type BrowserProfileConfig,
-  type OpenClawConfig,
-} from "../config/config.js";
+import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,
@@ -166,6 +163,16 @@ function normalizePositiveInteger(raw: number | undefined, fallback: number): nu
   return value <= 0 ? fallback : value;
 }
 
+const MAX_BROWSER_TIMER_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
+
+function normalizeNonNegativeTimerMinutes(raw: number | undefined, fallback: number): number {
+  return Math.min(normalizeNonNegativeInteger(raw, fallback), MAX_BROWSER_TIMER_MINUTES);
+}
+
+function normalizePositiveTimerMinutes(raw: number | undefined, fallback: number): number {
+  return Math.min(normalizePositiveInteger(raw, fallback), MAX_BROWSER_TIMER_MINUTES);
+}
+
 function normalizeExecutablePath(raw: string | undefined): string | undefined {
   const value = normalizeOptionalString(raw);
   if (!value) {
@@ -222,7 +229,7 @@ function resolveBrowserTabCleanupConfig(
   const raw = cfg?.tabCleanup;
   return {
     enabled: raw?.enabled ?? true,
-    idleMinutes: normalizeNonNegativeInteger(
+    idleMinutes: normalizeNonNegativeTimerMinutes(
       raw?.idleMinutes,
       DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
     ),
@@ -230,7 +237,7 @@ function resolveBrowserTabCleanupConfig(
       raw?.maxTabsPerSession,
       DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
     ),
-    sweepMinutes: normalizePositiveInteger(
+    sweepMinutes: normalizePositiveTimerMinutes(
       raw?.sweepMinutes,
       DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
     ),

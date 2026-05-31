@@ -12,10 +12,7 @@ import {
   type GroupHistoryEntry,
 } from "./group-gating.js";
 
-function makeUnregisteredGroupMsg(
-  conversationId: string,
-  accountId: string = "default",
-): WebInboundMsg {
+function makeUnregisteredGroupMsg(conversationId: string, accountId = "default"): WebInboundMsg {
   return {
     id: `msg-${conversationId}`,
     from: conversationId,
