@@ -565,6 +565,62 @@ export function createSessionsSpawnTool(
             parentExecutionIdentityToken,
           ),
         );
+        const childSessionKey = result.childSessionKey?.trim();
+        const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
+        const shouldTrackViaRegistry =
+          result.status === "accepted" && Boolean(childSessionKey) && Boolean(childRunId);
+        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
+          const cfg = getRuntimeConfig();
+          const trackedSpawnMode = resolveTrackedSpawnMode({
+            requestedMode: result.mode,
+            threadRequested: thread,
+          });
+          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
+          const ownership = resolveSubagentSpawnOwnership({
+            cfg,
+            agentSessionKey: opts?.agentSessionKey,
+            completionOwnerKey: opts?.completionOwnerKey,
+          });
+          const requesterOrigin = normalizeDeliveryContext({
+            channel: opts?.agentChannel,
+            accountId: opts?.agentAccountId,
+            to: opts?.agentTo,
+            threadId: opts?.agentThreadId,
+          });
+          const shouldExpectCompletionMessage = result.inlineDelivery
+            ? false
+            : expectsCompletionMessage;
+          try {
+            registerSubagentRun({
+              runId: childRunId,
+              childSessionKey,
+              controllerSessionKey: ownership.controllerSessionKey,
+              requesterSessionKey: ownership.completionRequesterSessionKey,
+              requesterOrigin,
+              requesterDisplayKey: ownership.completionRequesterDisplayKey,
+              task,
+              taskName,
+              requesterAgentId: opts?.requesterAgentIdOverride,
+              cleanup: trackedCleanup,
+              label: label || undefined,
+              runTimeoutSeconds: result.runTimeoutSeconds,
+              expectsCompletionMessage: shouldExpectCompletionMessage,
+              spawnMode: trackedSpawnMode,
+              executionPlacement: result.execution,
+            });
+          } catch (err) {
+            // Best-effort only: the ACP turn was already started above, so deleting the
+            // child session record here does not guarantee the in-flight run was aborted.
+            await cleanupUntrackedAcpSession(childSessionKey);
+            return jsonResult({
+              status: "error",
+              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
+              childSessionKey,
+              runId: childRunId,
+              ...roleContext,
+            });
+          }
+        }
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
