@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-generate-session-playbook",
+  "name": "VC Trader AI Generate Session Playbook",
+  "description": "Read-only generator for a per-session trading playbook (computed; no mutation).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["generate_session_playbook"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

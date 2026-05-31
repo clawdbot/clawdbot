@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-get-playbook-history",
+  "name": "VC Trader AI Get Playbook History",
+  "description": "Read-only lookup of recent playbooks for a workspace.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["get_playbook_history"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

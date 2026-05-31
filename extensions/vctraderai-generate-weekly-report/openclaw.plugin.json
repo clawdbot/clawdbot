@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-generate-weekly-report",
+  "name": "VC Trader AI Generate Weekly Report",
+  "description": "Read-only generator for the workspace weekly trading report (computed; no mutation).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["generate_weekly_report"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

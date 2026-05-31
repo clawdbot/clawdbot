@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-build-prop-spec",
+  "name": "VC Trader AI Build Prop Spec",
+  "description": "Read-only builder for a prop-firm challenge spec envelope (computed; no mutation).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["build_prop_spec"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

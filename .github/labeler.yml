@@ -707,3 +707,23 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vctraderai-list-prop-firm-challenges/**"
+"plugin: vctraderai-generate-daily-report":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-generate-daily-report/**"
+"plugin: vctraderai-generate-weekly-report":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-generate-weekly-report/**"
+"plugin: vctraderai-generate-session-playbook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-generate-session-playbook/**"
+"plugin: vctraderai-get-playbook-history":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-playbook-history/**"
+"plugin: vctraderai-build-prop-spec":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-build-prop-spec/**"
