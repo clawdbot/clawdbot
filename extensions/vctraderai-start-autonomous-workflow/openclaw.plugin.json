@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-start-autonomous-workflow",
+  "name": "VC Trader AI Start Autonomous Workflow",
+  "description": "Starts an autonomous workflow run on the propfirm_manager. Calls back into propfirm_manager BFF at /api/v1/openclaw/workflows/start. Classified read-only-ish in V-OC tool_mapping cluster D - returns a workflow ID and initial status without mutating live trading or catalogue state.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "start_autonomous_workflow"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

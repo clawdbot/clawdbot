@@ -727,3 +727,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vctraderai-build-prop-spec/**"
+"plugin: vctraderai-start-autonomous-workflow":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-start-autonomous-workflow/**"
+"plugin: vctraderai-get-workflow-status":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-workflow-status/**"

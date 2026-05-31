@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-workflow-status",
+  "name": "VC Trader AI Get Workflow Status",
+  "description": "Read-only lookup of an autonomous workflow run status. Calls back into propfirm_manager BFF at /api/v1/openclaw/workflows/${workflow_id}/status.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_workflow_status"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

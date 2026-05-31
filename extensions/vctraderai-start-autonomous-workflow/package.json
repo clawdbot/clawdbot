@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-start-autonomous-workflow",
+  "version": "2026.5.31",
+  "private": true,
+  "description": "VC Trader AI autonomous workflow start tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
