@@ -1234,6 +1234,36 @@ describe("readWorkspaceFileWithGuards", () => {
     expect(result).toStrictEqual({ ok: false, reason: "io", error: readError });
     expect(closeSpy).toHaveBeenCalled();
   });
+
+  it("assembles full content when fs.read returns short reads", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-short-read-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const fullContent = "ABCDEFGHIJ";
+    await fs.writeFile(filePath, fullContent, "utf-8");
+
+    // Simulate short reads: yield 3 bytes at a time
+    const originalRead = syncFs.read.bind(syncFs);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
+    ) => {
+      const chunk = Math.min(length, 3);
+      originalRead(fd, buffer, offset, chunk, position, callback);
+    }) as typeof syncFs.read);
+
+    const result = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: tempDir,
+    });
+
+    expect(result).toStrictEqual({ ok: true, content: fullContent });
+    // Must have called read more than once to reassemble full content
+    expect(readSpy.mock.calls.length).toBeGreaterThan(1);
+  });
 });
 
 describe("filterBootstrapFilesForSession", () => {
