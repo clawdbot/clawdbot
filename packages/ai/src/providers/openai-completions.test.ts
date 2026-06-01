@@ -43,6 +43,7 @@ const mockOpenAIOptionsRef: { options: unknown[]; payloads: unknown[]; requests:
   payloads: [],
   requests: [],
 };
+const mockRequestOptionsRef: { options: unknown[] } = { options: [] };
 
 vi.mock("openai", () => {
   class MockOpenAI {
@@ -55,6 +56,7 @@ vi.mock("openai", () => {
         create: (params: unknown, requestOptions: unknown) => {
           mockOpenAIOptionsRef.payloads.push(params);
           mockOpenAIOptionsRef.requests.push(requestOptions);
+          mockRequestOptionsRef.options.push(requestOptions);
           return {
             withResponse: async () => {
               if (mockChunksRef.stream) {
@@ -813,6 +815,20 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedPayload).not.toHaveProperty("tools");
+  });
+
+  it("disables OpenAI SDK retries for streaming requests by default", async () => {
+    mockChunksRef.chunks = [makeTextChunk("Hello"), makeFinishChunk("stop")];
+    mockRequestOptionsRef.options = [];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockRequestOptionsRef.options).toHaveLength(1);
+    expect(mockRequestOptionsRef.options[0]).toMatchObject({ maxRetries: 0 });
   });
 
   it("clamps requested max tokens to the model output cap", async () => {

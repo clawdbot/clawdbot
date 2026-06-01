@@ -76,6 +76,7 @@ function prepareCatalogExecutor(
     sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
+    withOwnedTranscriptWrites: (run) => run(),
   });
 }
 

@@ -86,6 +86,7 @@ export function prepareEmbeddedAttemptStream(input: {
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
+  withOwnedTranscriptWrites: <T>(run: () => Promise<T>) => Promise<T>;
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -395,12 +396,16 @@ export function prepareEmbeddedAttemptStream(input: {
         if (options?.steeringMode) {
           input.activeSession.agent.steeringMode = options.steeringMode;
         }
-        await steerActiveSessionWithOptionalDeliveryWait(
-          input.activeSession,
-          text,
-          options,
-          attempt.sessionKey,
-        );
+        // Wrap the steering write in the owned transcript write context so a concurrent
+        // session takeover cannot silently drop the queued message (#87180).
+        await input.withOwnedTranscriptWrites(async () => {
+          await steerActiveSessionWithOptionalDeliveryWait(
+            input.activeSession,
+            text,
+            options,
+            attempt.sessionKey,
+          );
+        });
       } finally {
         activeQueueAdmissions--;
       }

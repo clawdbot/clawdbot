@@ -47,6 +47,7 @@ type StreamPhaseInput = Omit<
   | "onBlockReply"
   | "onBlockReplyFlush"
   | "runAbortController"
+  | "withOwnedTranscriptWrites"
 >;
 
 export async function prepareEmbeddedAttemptStreamRuntime(input: {
@@ -161,6 +162,10 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     getRunState: input.lifecycle.readRunState,
     onBlockReply,
     onBlockReplyFlush,
+    // Steering writes must run inside the owned transcript write context so a
+    // concurrent session takeover cannot silently drop the queued message (#87180).
+    withOwnedTranscriptWrites: (run) =>
+      withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, run),
   });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
