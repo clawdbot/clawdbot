@@ -6,9 +6,21 @@ import {
   getTaskByIdForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "./task-owner-access.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "./task-registry.js";
+import {
+  createTaskRecord as createTaskRecordOrNull,
+  resetTaskRegistryForTests,
+} from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
+  const task = createTaskRecordOrNull(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
 
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });

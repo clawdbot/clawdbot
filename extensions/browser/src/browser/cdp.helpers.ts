@@ -397,7 +397,9 @@ type CdpSocketOptions = {
 };
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {

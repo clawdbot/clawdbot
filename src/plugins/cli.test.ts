@@ -370,6 +370,7 @@ describe("registerPluginCliCommands", () => {
     });
     expect(loadOptions.activate).toBe(false);
     expect(loadOptions.cache).toBe(false);
+    expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 
@@ -455,8 +456,8 @@ describe("registerPluginCliCommands", () => {
         ],
       }),
     );
-    mocks.memoryRegister.mockImplementation(({ program }: { program: Command }) => {
-      const canvas = program.command("canvas").description("Canvas commands");
+    mocks.memoryRegister.mockImplementation(({ program: programLocal }: { program: Command }) => {
+      const canvas = programLocal.command("canvas").description("Canvas commands");
       canvas.command("snapshot").action(mocks.memoryListAction);
     });
 

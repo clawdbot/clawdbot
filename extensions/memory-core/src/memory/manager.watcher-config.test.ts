@@ -493,7 +493,7 @@ describe("memory watcher config", () => {
     // attaching a watcher per entry, defeating the constant-watcher-profile
     // goal of this fix. The PR explicitly gates the native path off those
     // platforms.
-    const originalPlatform = process.platform;
+    const originalPlatformValue = process.platform;
     try {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -519,7 +519,7 @@ describe("memory watcher config", () => {
       );
     } finally {
       Object.defineProperty(process, "platform", {
-        value: originalPlatform,
+        value: originalPlatformValue,
         configurable: true,
       });
     }
@@ -529,7 +529,7 @@ describe("memory watcher config", () => {
     // Windows uses ReadDirectoryChangesW for `fs.watch(dir, { recursive: true })`,
     // which is a single-watcher native recursive backend (constant FD profile).
     // The PR explicitly opts Windows into the native path alongside macOS.
-    const originalPlatform = process.platform;
+    const originalPlatformLocal = process.platform;
     try {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -569,7 +569,7 @@ describe("memory watcher config", () => {
       }
     } finally {
       Object.defineProperty(process, "platform", {
-        value: originalPlatform,
+        value: originalPlatformLocal,
         configurable: true,
       });
     }

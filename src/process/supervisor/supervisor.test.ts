@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnProcessAdapter } from "./types.js";
 
@@ -263,6 +264,58 @@ describe("process supervisor", () => {
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(exit.reason).toBe("overall-timeout");
+    expect(exit.timedOut).toBe(true);
+  });
+
+  it("classifies a natural close after a missed overall deadline as timed out", async () => {
+    vi.useFakeTimers();
+    const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-timeout-race",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 10,
+      stdinMode: "pipe-closed",
+    });
+
+    const exitPromise = run.wait();
+    nowSpy.mockReturnValue(1_011);
+    adapter.settle(0);
+
+    const exit = await exitPromise;
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    expect(exit.reason).toBe("overall-timeout");
+    expect(exit.timedOut).toBe(true);
+  });
+
+  it("uses the refreshed no-output deadline when a missed timer races natural close", async () => {
+    vi.useFakeTimers();
+    const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-no-output-race",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 100,
+      noOutputTimeoutMs: 10,
+      stdinMode: "pipe-closed",
+    });
+
+    const exitPromise = run.wait();
+    nowSpy.mockReturnValue(1_005);
+    adapter.emitStdout("progress");
+    nowSpy.mockReturnValue(1_016);
+    adapter.settle(0);
+
+    const exit = await exitPromise;
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    expect(exit.reason).toBe("no-output-timeout");
+    expect(exit.noOutputTimedOut).toBe(true);
     expect(exit.timedOut).toBe(true);
   });
 

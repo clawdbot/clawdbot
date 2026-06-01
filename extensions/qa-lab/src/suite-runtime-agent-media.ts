@@ -131,7 +131,9 @@ async function resolveGeneratedImagePath(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms`);
 }

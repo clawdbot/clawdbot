@@ -701,7 +701,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const pw = await getPwAiModule();
           const snap = plan.wantsRoleSnapshot
             ? pw
-              ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs).catch(async (err) => {
+              ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs).catch(async (err: unknown) => {
                   const fallback = await cdpRoleSnapshot();
                   if (fallback) {
                     return fallback;

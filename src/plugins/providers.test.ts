@@ -436,35 +436,6 @@ function expectAutoEnabledProviderLoad(params: { rawConfig: unknown; autoEnabled
   });
   expectProviderRuntimeRegistryLoad({ config: params.autoEnabledConfig });
 }
-
-function expectResolvedAllowlistState(params?: {
-  expectedAllow?: readonly string[];
-  unexpectedAllow?: readonly string[];
-  expectedEntries?: Record<string, { enabled?: boolean }>;
-  expectedOnlyPluginIds?: readonly string[];
-}) {
-  expectLastRuntimeRegistryLoad(
-    params?.expectedOnlyPluginIds ? { onlyPluginIds: params.expectedOnlyPluginIds } : undefined,
-  );
-
-  const config = getLastResolvedPluginConfig();
-  const allow = config?.plugins?.allow ?? [];
-
-  if (params?.expectedAllow) {
-    for (const pluginId of params.expectedAllow) {
-      expect(allow).toContain(pluginId);
-    }
-  }
-  if (params?.expectedEntries) {
-    for (const [pluginId, entry] of Object.entries(params.expectedEntries)) {
-      expect(config?.plugins?.entries?.[pluginId]).toEqual(entry);
-    }
-  }
-  params?.unexpectedAllow?.forEach((disallowedPluginId) => {
-    expect(allow).not.toContain(disallowedPluginId);
-  });
-}
-
 function expectOwningPluginIds(provider: string, expectedPluginIds?: readonly string[]) {
   expect(resolveOwningPluginIdsForProvider({ provider })).toEqual(expectedPluginIds);
 }
@@ -509,15 +480,19 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
-    vi.doMock("./plugin-metadata-snapshot.js", () => ({
-      loadPluginMetadataSnapshot: (params: Parameters<LoadPluginMetadataSnapshot>[0]) => {
+    vi.doMock("./plugin-metadata-snapshot.js", () => {
+      const loadSnapshot = (params: Parameters<LoadPluginMetadataSnapshot>[0]) => {
         loadPluginMetadataSnapshotMock(params);
         return {
           manifestRegistry: loadPluginManifestRegistryMock(),
           index: createProviderRegistrySnapshotFixture(),
         };
-      },
-    }));
+      };
+      return {
+        loadPluginMetadataSnapshot: loadSnapshot,
+        resolvePluginMetadataSnapshot: loadSnapshot,
+      };
+    });
     vi.doMock("./current-plugin-metadata-snapshot.js", () => ({
       getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
         getCurrentPluginMetadataSnapshotMock(...args),

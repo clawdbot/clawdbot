@@ -83,6 +83,8 @@ type FoundryDeploymentConfigInput = {
 type FoundryModelCapabilities = {
   modelName: string;
   api: FoundryProviderApi;
+  reasoning: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
   input: Array<"text" | "image">;
   compat?: FoundryModelCompat;
 };
@@ -96,6 +98,8 @@ function normalizeModelInput(input?: unknown): Array<"text" | "image"> {
 
 type FoundryModelCompat = {
   supportsStore?: boolean;
+  supportsReasoningEffort?: boolean;
+  supportedReasoningEfforts?: string[];
   maxTokensField: "max_completion_tokens" | "max_tokens";
 };
 
@@ -151,6 +155,67 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
     normalized.startsWith("o3") ||
     normalized.startsWith("o4")
   );
+}
+
+export function supportsFoundryReasoningEffort(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  if (
+    !normalized ||
+    /^gpt-5-chat(?:-|$)/u.test(normalized) ||
+    /^o1-mini(?:-|$)/u.test(normalized)
+  ) {
+    return false;
+  }
+  return (
+    normalized.startsWith("gpt-5") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3") ||
+    normalized.startsWith("o4")
+  );
+}
+
+function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
+  const normalized = normalizeFoundryModelName(value);
+  if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
+    return undefined;
+  }
+  if (normalized === "gpt-5.1-codex-max") {
+    return ["none", "medium", "high", "xhigh"];
+  }
+  if (normalized === "gpt-5-pro") {
+    return ["high"];
+  }
+  if (/^gpt-5\.[2-9](?:\.|-|$)/u.test(normalized)) {
+    return ["none", "low", "medium", "high"];
+  }
+  if (/^gpt-5\.1(?:-|$)/u.test(normalized)) {
+    return ["none", "low", "medium", "high"];
+  }
+  if (/^gpt-5-codex(?:-|$)/u.test(normalized)) {
+    return ["low", "medium", "high"];
+  }
+  if (/^gpt-5(?:-|$)/u.test(normalized)) {
+    return ["minimal", "low", "medium", "high"];
+  }
+  return ["low", "medium", "high"];
+}
+
+function buildFoundryThinkingLevelMap(
+  efforts: string[] | undefined,
+): Record<string, string | null> | undefined {
+  if (!efforts) {
+    return undefined;
+  }
+  const supported = new Set(efforts);
+  return {
+    off: supported.has("none") ? "none" : null,
+    minimal: supported.has("minimal") ? "minimal" : null,
+    low: supported.has("low") ? "low" : null,
+    medium: supported.has("medium") ? "medium" : null,
+    high: supported.has("high") ? "high" : null,
+    xhigh: supported.has("xhigh") ? "xhigh" : null,
+    max: null,
+  };
 }
 
 export function isFoundryProviderApi(value?: string | null): value is FoundryProviderApi {
@@ -219,11 +284,18 @@ function buildFoundryModelCompat(
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
   const needsMaxCompletionTokens = requiresFoundryMaxCompletionTokens(configuredModelName);
-  if (resolvedApi !== DEFAULT_GPT5_API && !needsMaxCompletionTokens) {
-    return undefined;
+  const supportsReasoningEffort = supportsFoundryReasoningEffort(configuredModelName);
+  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(configuredModelName);
+  if (resolvedApi !== DEFAULT_GPT5_API) {
+    return {
+      supportsReasoningEffort,
+      ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+      maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
+    };
   }
   return {
     ...(resolvedApi === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
+    ...(supportsReasoningEffort ? { supportsReasoningEffort, supportedReasoningEfforts } : {}),
     maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
   };
 }
@@ -237,9 +309,14 @@ export function resolveFoundryModelCapabilities(
   const modelName = resolveConfiguredModelNameHint(modelId, modelNameHint) ?? modelId;
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
+  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
   return {
     modelName,
     api,
+    reasoning: supportsFoundryReasoningEffort(modelName),
+    ...(supportedReasoningEfforts
+      ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts) }
+      : {}),
     input:
       normalizedInput.includes("image") || supportsFoundryImageInput(modelName)
         ? ["text", "image"]
@@ -273,10 +350,10 @@ function buildFoundryProviderConfig(
 ): ModelProviderConfig {
   const runtimeApiKey = options?.authMethod === "api-key" ? options.apiKey : undefined;
   const isApiKeyAuth = options?.authMethod === "api-key";
+  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
   const deployments = options?.deployments?.length
     ? options.deployments
-    : [{ name: modelId, modelName: modelNameHint ?? undefined }];
-  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
+    : [{ name: modelId, modelName: modelNameHint ?? undefined, api: resolvedApi }];
   return {
     baseUrl: buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, resolvedApi),
     api: resolvedApi,
@@ -292,14 +369,17 @@ function buildFoundryProviderConfig(
       const capabilities = resolveFoundryModelCapabilities(
         deployment.name,
         deployment.modelName,
-        deployment.api,
+        deployment.api ?? resolvedApi,
       );
       return Object.assign(
         {
           id: deployment.name,
           name: capabilities.modelName,
           api: capabilities.api,
-          reasoning: false,
+          reasoning: capabilities.reasoning,
+          ...(capabilities.thinkingLevelMap
+            ? { thinkingLevelMap: capabilities.thinkingLevelMap }
+            : {}),
           input: capabilities.input,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 128e3,

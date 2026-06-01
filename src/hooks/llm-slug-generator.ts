@@ -73,6 +73,9 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
       cleanupBundleMcpOnRunEnd: true,
+      // Internal helper run: route failures lane-local so an upstream 400/billing
+      // here cannot poison the shared profile (#71709).
+      authProfileFailurePolicy: "local",
     });
 
     // Extract text from payloads

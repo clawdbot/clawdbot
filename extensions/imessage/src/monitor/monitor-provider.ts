@@ -1036,7 +1036,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime,
       onNotification: (msg) => {
         if (msg.method === "message") {
-          void handleMessage(msg.params).catch((err) => {
+          void handleMessage(msg.params).catch((err: unknown) => {
             runtime.error?.(`imessage: handler failed: ${String(err)}`);
           });
         } else if (msg.method === "error") {

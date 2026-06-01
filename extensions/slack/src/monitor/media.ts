@@ -209,7 +209,7 @@ async function saveSlackMedia(params: {
           },
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
     }

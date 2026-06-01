@@ -103,7 +103,7 @@ describe("formatInboundEnvelope", () => {
     expect(body).toBe("[Signal Signal Group id:123] Bob (42): ping");
   });
 
-  it("keeps direct messages unprefixed", () => {
+  it("prefixes direct messages with the header sender", () => {
     const body = formatInboundEnvelope({
       channel: "iMessage",
       from: "+1555",
@@ -111,7 +111,37 @@ describe("formatInboundEnvelope", () => {
       chatType: "direct",
       senderLabel: "Alice",
     });
-    expect(body).toBe("[iMessage +1555] hello");
+    expect(body).toBe("[iMessage +1555] +1555: hello");
+  });
+
+  it("uses display text for direct body prefixes when from includes an id", () => {
+    const body = formatInboundEnvelope({
+      channel: "Telegram",
+      from: "Alice id:123",
+      body: "hello",
+      chatType: "direct",
+    });
+    expect(body).toBe("[Telegram Alice id:123] Alice: hello");
+  });
+
+  it("uses a stable direct body prefix when id display text contains a colon", () => {
+    const body = formatInboundEnvelope({
+      channel: "Telegram",
+      from: "Ops: Alice id:123",
+      body: "/status",
+      chatType: "direct",
+    });
+    expect(body).toBe("[Telegram Ops: Alice id:123] (sender): /status");
+  });
+
+  it("uses a stable direct body prefix when from is an opaque id label", () => {
+    const body = formatInboundEnvelope({
+      channel: "LINE",
+      from: "user:U123",
+      body: "hello",
+      chatType: "direct",
+    });
+    expect(body).toBe("[LINE user:U123] (sender): hello");
   });
 
   it("includes elapsed time when previousTimestamp is provided", () => {
@@ -141,7 +171,7 @@ describe("formatInboundEnvelope", () => {
       chatType: "direct",
       envelope: { includeElapsed: false, includeTimestamp: false },
     });
-    expect(body).toBe("[Telegram Alice] follow-up message");
+    expect(body).toBe("[Telegram Alice] Alice: follow-up message");
   });
 
   it("prefixes DM body with (self) when fromMe is true", () => {

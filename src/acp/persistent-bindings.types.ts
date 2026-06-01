@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
+import { normalizeText } from "@openclaw/acp-core/normalize-text";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
-import { normalizeText } from "./normalize-text.js";
-import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 
-export { normalizeText } from "./normalize-text.js";
+export { normalizeText } from "@openclaw/acp-core/normalize-text";
 
 export type ConfiguredAcpBindingChannel = ChannelId;
 

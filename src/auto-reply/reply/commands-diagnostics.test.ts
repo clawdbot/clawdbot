@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import type { PluginCommandContext } from "../../plugins/types.js";
+import type { PluginCommandContext, PluginCommandHandler } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
 import { createDiagnosticsCommandHandler } from "./commands-diagnostics.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -161,7 +161,7 @@ function registerCodexDiagnosticsCommandForTest(
   handler: (ctx: PluginCommandContext) => Promise<unknown>,
 ) {
   const calls: PluginCommandContext[] = [];
-  const commandHandler = vi.fn(async (ctx: PluginCommandContext) => {
+  const commandHandler = vi.fn<PluginCommandHandler>(async (ctx) => {
     calls.push(ctx);
     await handler(ctx);
     if (ctx.diagnosticsPreviewOnly) {
@@ -201,11 +201,19 @@ function registerCodexDiagnosticsCommandForTest(
             buttons: [
               {
                 label: "Send diagnostics",
+                action: {
+                  type: "command",
+                  command: "/codex diagnostics confirm abc123def456",
+                },
                 value: "/codex diagnostics confirm abc123def456",
                 style: "danger" as const,
               },
               {
                 label: "Cancel",
+                action: {
+                  type: "command",
+                  command: "/codex diagnostics cancel abc123def456",
+                },
                 value: "/codex diagnostics cancel abc123def456",
                 style: "secondary" as const,
               },

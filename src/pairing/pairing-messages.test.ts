@@ -54,6 +54,9 @@ describe("buildPairingReply", () => {
       `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
     );
     expect(text).toMatch(commandRe);
+    expect(
+      text.match(new RegExp(`pairing approve ${testCase.channel} ${testCase.code}`, "g")),
+    ).toHaveLength(1);
   }
 
   function expectProfileAwarePairingReply(testCase: (typeof pairingReplyCases)[number]) {

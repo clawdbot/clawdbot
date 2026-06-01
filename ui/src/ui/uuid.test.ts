@@ -16,10 +16,9 @@ describe("generateUUID", () => {
   it("falls back to crypto.getRandomValues", () => {
     const id = generateUUID({
       getRandomValues: (bytes) => {
-        // @ts-expect-error
-        for (let i = 0; i < bytes.length; i++) {
-          // @ts-expect-error
-          bytes[i] = i;
+        const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        for (let i = 0; i < view.length; i++) {
+          view[i] = i;
         }
         return bytes;
       },

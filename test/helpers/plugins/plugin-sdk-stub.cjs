@@ -1,8 +1,6 @@
 "use strict";
 
-let stub;
-
-stub = new Proxy(
+const stub = new Proxy(
   function pluginSdkStub() {
     return stub;
   },

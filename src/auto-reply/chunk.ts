@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
 export type TextChunkProvider = ChannelId;
 
@@ -67,7 +68,7 @@ export function resolveTextChunkLimit(
       ? opts.fallbackLimit
       : DEFAULT_CHUNK_LIMIT;
   const providerOverride = (() => {
-    if (!provider) {
+    if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
       return undefined;
     }
     const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
@@ -105,7 +106,7 @@ export function resolveChunkMode(
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {
-  if (!provider) {
+  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
     return DEFAULT_CHUNK_MODE;
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
@@ -411,7 +412,6 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
 
       if (maxIdxIfNeedNewline <= start) {
-        fenceToSplit = undefined;
         breakIdx = windowEnd;
       } else {
         const minProgressIdx = Math.min(
@@ -438,7 +438,6 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
         if (!pickedNewline) {
           if (minProgressIdx > maxIdxIfAlreadyNewline) {
-            fenceToSplit = undefined;
             breakIdx = windowEnd;
           } else {
             breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);

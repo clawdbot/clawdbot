@@ -114,6 +114,24 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("does not arm stale active-row suppression for an unowned selected-session final", () => {
+    const state = createState({ sessionKey: "main" }) as ChatState & {
+      lastLocalTerminalReconcile?: unknown;
+    };
+    const payload: ChatEventPayload = {
+      runId: "observed-run",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Observed reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.lastLocalTerminalReconcile).toBeUndefined();
+  });
+
   it("ignores selected-agent global events for another agent", () => {
     const state = createState({
       sessionKey: "global",
@@ -204,6 +222,129 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe("Live reply");
     expect(state.chatRunId).toBe("run-1");
+  });
+
+  it("appends gateway deltaText when the cumulative snapshot matches the current prefix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+  });
+
+  it("uses the cumulative snapshot when the first observed delta joins mid-stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+  });
+
+  it("appends gateway deltaText when no full message snapshot is present", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+  });
+
+  it("uses the cumulative snapshot when a missed delta would make append stale", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "!",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world!" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello world!");
+  });
+
+  it("uses the cumulative snapshot when a same-length missed replacement changes the prefix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "AB",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "E",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "CDE" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("CDE");
+  });
+
+  it("replaces the stream when gateway deltaText marks a replacement", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Alpha beta",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "Alpha",
+      replace: true,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "ignored snapshot" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Alpha");
   });
 
   it("adopts the run id for selected-session live deltas observed from another channel", () => {
@@ -1143,6 +1284,32 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages).toEqual(messages);
   });
 
+  it("applies current session metadata from chat history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionId: "legacy-session",
+      thinkingLevel: "low",
+      sessionInfo: {
+        key: "main",
+        sessionId: "session-main",
+        thinkingLevel: "medium",
+        modelProvider: "openai",
+        model: "gpt-5",
+        updatedAt: 123,
+      },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    const result = await loadChatHistory(state);
+
+    expect(result?.sessionInfo?.sessionId).toBe("session-main");
+    expect(state.currentSessionId).toBe("session-main");
+    expect(state.chatThinkingLevel).toBe("medium");
+  });
+
   it("omits literal global agentId until selected/default agent is known", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const state = createState({
@@ -1612,7 +1779,6 @@ describe("loadChatHistory retry handling", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
       limit: 100,
-      maxChars: 4000,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
@@ -1768,6 +1934,171 @@ describe("loadChatHistory retry handling", () => {
       "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
     );
     expect(state.chatLoading).toBe(false);
+  });
+
+  it("coalesces duplicate in-flight history loads for the selected session", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    history.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+      thinkingLevel: "low",
+    });
+    await firstLoad;
+    await secondLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "ready" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("preserves a first send appended while the startup history request is in flight", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const optimisticMessage = {
+      role: "user",
+      content: [{ type: "text", text: "send before history settles" }],
+      timestamp: 123,
+    };
+    state.chatMessages = [optimisticMessage];
+    state.chatRunId = "run-after-history-start";
+    state.chatStream = "";
+    state.chatStreamStartedAt = 456;
+
+    history.resolve({ messages: [], thinkingLevel: "low" });
+    await load;
+
+    expect(state.chatMessages).toEqual([optimisticMessage]);
+    expect(state.chatRunId).toBe("run-after-history-start");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(456);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("preserves late assistant messages when startup history only catches up to the user turn", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "send before history settles" }],
+      timestamp: 123,
+    };
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "answer before history catches up" }],
+      timestamp: 456,
+    };
+    state.chatMessages = [userMessage, assistantMessage];
+
+    history.resolve({ messages: [userMessage], thinkingLevel: "low" });
+    await load;
+
+    expect(state.chatMessages).toEqual([userMessage, assistantMessage]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("keeps repeated late prompts when startup history only has an older matching prompt", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const repeatedPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 200,
+    };
+    state.chatMessages = [repeatedPrompt];
+
+    history.resolve({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "continue" }],
+          timestamp: 100,
+        },
+      ],
+      thinkingLevel: "low",
+    });
+    await load;
+
+    expect(state.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "continue" }],
+        timestamp: 100,
+      },
+      repeatedPrompt,
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("starts a fresh same-session history load after local messages change", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.chatMessages = [{ role: "user", content: [{ type: "text", text: "new local ask" }] }];
+    const freshLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "old history" }] }],
+    });
+    await staleLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "user", content: [{ type: "text", text: "new local ask" }] },
+    ]);
+
+    freshRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+    });
+    await freshLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+    ]);
   });
 
   it("ignores stale history responses after switching sessions", async () => {

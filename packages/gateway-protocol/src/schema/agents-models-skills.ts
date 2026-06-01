@@ -56,6 +56,19 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    thinkingLevels: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            id: NonEmptyString,
+            label: NonEmptyString,
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
+    thinkingDefault: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -555,6 +568,16 @@ const SkillProposalTargetSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SkillProposalOriginSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
+    runId: Type.Optional(NonEmptyString),
+    messageId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 const SkillProposalRecordSchema = Type.Object(
   {
     schema: Type.Literal("openclaw.skill-workshop.proposal.v1"),
@@ -566,6 +589,7 @@ const SkillProposalRecordSchema = Type.Object(
     createdAt: NonEmptyString,
     updatedAt: NonEmptyString,
     createdBy: SkillProposalSourceSchema,
+    origin: Type.Optional(SkillProposalOriginSchema),
     proposedVersion: NonEmptyString,
     draftFile: Type.Literal("PROPOSAL.md"),
     draftHash: NonEmptyString,

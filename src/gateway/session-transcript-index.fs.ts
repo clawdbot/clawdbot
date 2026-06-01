@@ -97,7 +97,9 @@ function extractJsonNumberFieldPrefix(prefix: string, field: string): number | u
 }
 
 async function yieldTranscriptIndexScan(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function touchCachedIndex(filePath: string, entry: CacheEntry): SessionTranscriptIndex {

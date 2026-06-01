@@ -42,8 +42,12 @@ function createDeviceIdentity(): DeviceIdentity {
 
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
   // Yield a couple of macrotasks so any accidental async forwarding would fire.
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   expect(hasInvoke()).toBe(false);
 }
 
@@ -238,7 +242,9 @@ describe("node.invoke approval bypass", () => {
       const challengePromise = resolveDevice
         ? onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge")
         : null;
-      await new Promise<void>((resolve) => ws.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        ws.once("open", resolve);
+      });
       const nonce = (() => {
         if (!challengePromise) {
           return Promise.resolve("");
@@ -279,7 +285,9 @@ describe("node.invoke approval bypass", () => {
   const connectTrustedBackend = async (scopes: string[]) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     trackConnectChallengeNonce(ws);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
     const res = await connectReq(ws, {
       token: "secret",
       scopes,

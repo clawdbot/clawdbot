@@ -99,6 +99,39 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts nullable delivery clears on update params", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            channel: null,
+            to: null,
+            threadId: null,
+            accountId: null,
+            failureDestination: null,
+          },
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            failureDestination: {
+              channel: null,
+              to: null,
+              accountId: null,
+              mode: null,
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts remove params for id and jobId selectors", () => {
     expect(validateCronRemoveParams({ id: "job-1" })).toBe(true);
     expect(validateCronRemoveParams({ jobId: "job-2" })).toBe(true);

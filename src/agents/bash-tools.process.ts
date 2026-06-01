@@ -370,14 +370,14 @@ export function createProcessTool(
       };
 
       const runningSessionResult = (
-        session: ProcessSession,
+        sessionLocal: ProcessSession,
         text: string,
       ): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: {
           status: "running",
           sessionId: params.sessionId,
-          name: deriveSessionName(session.command),
+          name: deriveSessionName(sessionLocal.command),
         },
       });
 

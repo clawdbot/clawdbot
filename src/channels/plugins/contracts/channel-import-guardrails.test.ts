@@ -561,9 +561,9 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
       continue;
     }
-    const basename = resolved.split("/").at(-1) ?? "";
+    const basenameLocal = resolved.split("/").at(-1) ?? "";
     expect(
-      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
+      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basenameLocal),
       `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
   }

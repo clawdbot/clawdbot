@@ -279,7 +279,7 @@ describe("handleModelsCommand", () => {
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
     try {
-      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => undefined));
+      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => {}));
 
       const resultPromise = handleModelsCommand(buildParams("/models"), true);
       await vi.advanceTimersByTimeAsync(750);

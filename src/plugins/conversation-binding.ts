@@ -946,7 +946,7 @@ function dispatchPluginConversationBindingResolved(params: {
 }): void {
   // Keep platform interaction acks fast even if the plugin does slow post-bind work.
   queueMicrotask(() => {
-    void notifyPluginConversationBindingResolved(params).catch((error) => {
+    void notifyPluginConversationBindingResolved(params).catch((error: unknown) => {
       log.warn(`plugin binding resolved dispatch failed: ${String(error)}`);
     });
   });

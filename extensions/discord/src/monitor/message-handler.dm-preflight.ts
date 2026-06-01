@@ -24,6 +24,10 @@ async function loadDiscordSendRuntime() {
   return await discordSendRuntimePromise;
 }
 
+function resolveDiscordDmPairingSenderId(sender: DiscordSenderIdentity): string {
+  return sender.isPluralKit ? `pk:${sender.id}` : sender.id;
+}
+
 export async function resolveDiscordDmPreflightAccess(params: {
   preflight: DiscordMessagePreflightParams;
   author: User;
@@ -79,10 +83,15 @@ export async function resolveDiscordDmPreflightAccess(params: {
   await handleDiscordDmCommandDecision({
     senderAccess: dmAccess.senderAccess,
     accountId: params.resolvedAccountId,
+    // Use the resolved sender identity (e.g. PluralKit member UUID) here so
+    // the pairing record is keyed under the same stableId that
+    // resolveDiscordDmCommandAccess / createDiscordDmIngressSubject use on
+    // subsequent inbound messages. Previously this used the raw gateway
+    // author id, which only matched non-PK users.
     sender: {
-      id: params.author.id,
-      tag: formatDiscordUserTag(params.author),
-      name: params.author.username ?? undefined,
+      id: resolveDiscordDmPairingSenderId(params.sender),
+      tag: params.sender.tag ?? formatDiscordUserTag(params.author),
+      name: params.sender.name ?? params.author.username ?? undefined,
     },
     onPairingCreated: async (code) => {
       logVerbose(

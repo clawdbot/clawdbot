@@ -482,6 +482,37 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   const anthropicThinkingError = new Error(
     "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
   );
+  const terminalThinkingSignatureError =
+    "ValidationException: invalid signature on thinking block in message history";
+
+  function createTestAssistantMessage(
+    overrides: Partial<AssistantMessage> & Pick<AssistantMessage, "content" | "stopReason">,
+  ): AssistantMessage {
+    return castAgentMessage({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 0,
+      ...overrides,
+    }) as AssistantMessage;
+  }
+
+  function createTestStreamErrorMessage(errorMessage: string): AssistantMessage {
+    return createTestAssistantMessage({
+      content: [{ type: "text", text: "stream failed" }],
+      stopReason: "error",
+      errorMessage,
+    });
+  }
 
   it("retries once with omitted-reasoning text when the request is rejected before streaming", async () => {
     let callCount = 0;
@@ -582,6 +613,131 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(bedrockThinkingError);
     expect(callCount).toBe(2);
+  });
+
+  it("retries pre-content terminal stream-error events with omitted-reasoning text", async () => {
+    let callCount = 0;
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
+    const finalMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "recovered" }],
+      stopReason: "stop",
+    });
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      ((_model, context) => {
+        callCount += 1;
+        const attempt = callCount;
+        contexts.push(context as { messages?: AgentMessage[] });
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          if (attempt === 1) {
+            stream.push({
+              type: "error",
+              reason: "error",
+              error: createTestStreamErrorMessage(terminalThinkingSignatureError),
+            });
+          } else {
+            stream.push({ type: "done", reason: "stop", message: finalMessage });
+          }
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    const response = wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+          },
+        ]),
+      } as never,
+      {} as never,
+    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    const events: unknown[] = [];
+    for await (const event of response) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: "done", reason: "stop", message: finalMessage }]);
+    await expect(response.result()).resolves.toEqual(finalMessage);
+    expect(callCount).toBe(2);
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
+
+  it("does not retry non-thinking terminal stream-error events", async () => {
+    let callCount = 0;
+    const errorMessage = createTestStreamErrorMessage("rate limit exceeded");
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "error", reason: "error", error: errorMessage });
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
+      result: () => Promise<unknown>;
+    } & AsyncIterable<unknown>;
+    const events: unknown[] = [];
+    for await (const event of response) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: "error", reason: "error", error: errorMessage }]);
+    await expect(response.result()).resolves.toEqual(errorMessage);
+    expect(callCount).toBe(1);
+  });
+
+  it("does not retry terminal stream-error events after output was yielded", async () => {
+    let callCount = 0;
+    const partialMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "" }],
+      stopReason: "stop",
+    });
+    const errorMessage = createTestStreamErrorMessage(terminalThinkingSignatureError);
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: partialMessage });
+          stream.push({ type: "error", reason: "error", error: errorMessage });
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
+      result: () => Promise<unknown>;
+    } & AsyncIterable<unknown>;
+    const events: unknown[] = [];
+    for await (const event of response) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: "start", partial: partialMessage },
+      { type: "error", reason: "error", error: errorMessage },
+    ]);
+    await expect(response.result()).resolves.toEqual(errorMessage);
+    expect(callCount).toBe(1);
   });
 
   it("does not retry when the stream fails after yielding a chunk", async () => {

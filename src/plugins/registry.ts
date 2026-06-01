@@ -1,5 +1,4 @@
 import path from "node:path";
-import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,12 +8,14 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   normalizeCommandDescriptorName,
@@ -662,7 +663,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       entry?.hook.name ?? opts?.name?.trim(),
       "hook registration missing name",
     );
-    const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === hookName);
+    const existingHook = registry.hooks.find(
+      (entryLocal) => entryLocal.entry.hook.name === hookName,
+    );
     if (existingHook) {
       pushDiagnostic({
         level: "error",
@@ -924,6 +927,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
   ) => {
+    if (record.origin === "workspace" && !record.enabled) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel registration rejected for disabled workspace plugin: ${record.id}`,
+      });
+      return;
+    }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
@@ -2627,6 +2639,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               assertPluginStateAllowed();
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
+            openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+              options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+            ) => {
+              assertPluginStateAllowed();
+              const stateDir = options?.stateDir ?? baseState.resolveStateDir();
+              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
+                ...options,
+                channelId: pluginId,
+                stateDir,
+              });
+            },
           } satisfies PluginRuntime["state"];
         }
         if (prop === "config") {
@@ -2931,7 +2954,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   ? setPluginRunContext({ pluginId: record.id, patch })
                   : false,
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
-              clearRunContext: (params) => {
+              clearRunContext: (paramsLocal) => {
                 if (
                   registryParams.activateGlobalSideEffects === false ||
                   !shouldCommitWorkflowSideEffect()
@@ -2940,8 +2963,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
                 clearPluginRunContext({
                   pluginId: record.id,
-                  runId: params.runId,
-                  namespace: params.namespace,
+                  runId: paramsLocal.runId,
+                  namespace: paramsLocal.namespace,
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),

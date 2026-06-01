@@ -71,8 +71,8 @@ export async function prepareRestartScript(
   const timestamp = Date.now();
   const platform = process.platform;
 
-  let scriptContent = "";
-  let filename = "";
+  let scriptContent;
+  let filename;
 
   try {
     if (platform === "linux") {

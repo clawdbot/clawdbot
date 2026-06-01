@@ -165,7 +165,7 @@ function createLazyStream<
         const inner = module.stream(model, context, options);
         forwardStream(outer, inner);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         const message = createLazyLoadErrorMessage(model, error);
         outer.push({ type: "error", reason: "error", error: message });
         outer.end(message);
@@ -190,7 +190,7 @@ function createLazySimpleStream<
         const inner = module.streamSimple(model, context, options);
         forwardStream(outer, inner);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         const message = createLazyLoadErrorMessage(model, error);
         outer.push({ type: "error", reason: "error", error: message });
         outer.end(message);

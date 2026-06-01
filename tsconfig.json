@@ -88,6 +88,28 @@
         "./packages/media-generation-core/src/normalization.ts"
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
+      "@openclaw/media-core": ["./packages/media-core/src/index.ts"],
+      "@openclaw/media-core/base64": ["./packages/media-core/src/base64.ts"],
+      "@openclaw/media-core/constants": ["./packages/media-core/src/constants.ts"],
+      "@openclaw/media-core/content-length": ["./packages/media-core/src/content-length.ts"],
+      "@openclaw/media-core/file-name": ["./packages/media-core/src/file-name.ts"],
+      "@openclaw/media-core/inbound-path-policy": [
+        "./packages/media-core/src/inbound-path-policy.ts"
+      ],
+      "@openclaw/media-core/inline-image-data-url": [
+        "./packages/media-core/src/inline-image-data-url.ts"
+      ],
+      "@openclaw/media-core/media-source-url": [
+        "./packages/media-core/src/media-source-url.ts"
+      ],
+      "@openclaw/media-core/mime": ["./packages/media-core/src/mime.ts"],
+      "@openclaw/media-core/read-byte-stream-with-limit": [
+        "./packages/media-core/src/read-byte-stream-with-limit.ts"
+      ],
+      "@openclaw/media-core/read-response-with-limit": [
+        "./packages/media-core/src/read-response-with-limit.ts"
+      ],
+      "@openclaw/media-core/*": ["./packages/media-core/src/*"],
       "@openclaw/media-understanding-common": [
         "./packages/media-understanding-common/src/index.ts"
       ],
@@ -120,6 +142,31 @@
         "./packages/normalization-core/src/string-normalization.ts"
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
+      "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],
+      "@openclaw/acp-core/meta": ["./packages/acp-core/src/meta.ts"],
+      "@openclaw/acp-core/numeric-options": ["./packages/acp-core/src/numeric-options.ts"],
+      "@openclaw/acp-core/normalize-text": ["./packages/acp-core/src/normalize-text.ts"],
+      "@openclaw/acp-core/record-shared": ["./packages/acp-core/src/record-shared.ts"],
+      "@openclaw/acp-core/session": ["./packages/acp-core/src/session.ts"],
+      "@openclaw/acp-core/session-interaction-mode": [
+        "./packages/acp-core/src/session-interaction-mode.ts"
+      ],
+      "@openclaw/acp-core/session-lineage-meta": [
+        "./packages/acp-core/src/session-lineage-meta.ts"
+      ],
+      "@openclaw/acp-core/types": ["./packages/acp-core/src/types.ts"],
+      "@openclaw/acp-core/runtime/error-text": [
+        "./packages/acp-core/src/runtime/error-text.ts"
+      ],
+      "@openclaw/acp-core/runtime/errors": ["./packages/acp-core/src/runtime/errors.ts"],
+      "@openclaw/acp-core/runtime/session-identifiers": [
+        "./packages/acp-core/src/runtime/session-identifiers.ts"
+      ],
+      "@openclaw/acp-core/runtime/session-identity": [
+        "./packages/acp-core/src/runtime/session-identity.ts"
+      ],
+      "@openclaw/acp-core/runtime/types": ["./packages/acp-core/src/runtime/types.ts"],
+      "@openclaw/acp-core/*": ["./packages/acp-core/src/*"],
       "@openclaw/terminal-core": ["./packages/terminal-core/src/index.ts"],
       "@openclaw/terminal-core/ansi": ["./packages/terminal-core/src/ansi.ts"],
       "@openclaw/terminal-core/decorative-emoji": [

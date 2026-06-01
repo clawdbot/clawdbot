@@ -70,6 +70,11 @@ const GatewayRemoteSchemaShape = {
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
 
+const TailscaleServiceNameSchema = z.string().regex(/^svc:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
+  message:
+    'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
+});
+
 const LegacyCanvasHostSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -1028,12 +1033,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        webchat: z
-          .object({
-            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
-          })
-          .strict()
-          .optional(),
         handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
@@ -1042,6 +1041,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            serviceName: TailscaleServiceNameSchema.optional(),
             preserveFunnel: z.boolean().optional(),
           })
           .strict()

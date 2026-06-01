@@ -371,17 +371,25 @@ async function executeSend(params: {
   toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
   toolCallId?: string;
 }) {
+  return (await executeSendWithResult(params)).call;
+}
+
+async function executeSendWithResult(params: {
+  action: Record<string, unknown>;
+  toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
+  toolCallId?: string;
+}) {
   const { config, getRuntimeConfig, ...toolOptions } = params.toolOptions ?? {};
   const tool = createMessageTool({
     getRuntimeConfig: getRuntimeConfig ?? (config ? () => config : mocks.getRuntimeConfig),
     runMessageAction: mocks.runMessageAction as never,
     ...toolOptions,
   });
-  await tool.execute(params.toolCallId ?? "1", {
+  const result = await tool.execute(params.toolCallId ?? "1", {
     action: "send",
     ...params.action,
   });
-  return lastRunMessageActionInput();
+  return { call: lastRunMessageActionInput(), result };
 }
 
 describe("message tool gateway timeout", () => {
@@ -1208,8 +1216,11 @@ describe("message tool schema scoping", () => {
       });
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
+      const presentationSchemaJson = JSON.stringify(properties.presentation);
 
       expect(properties).toHaveProperty("presentation");
+      expect(presentationSchemaJson).toContain('"action"');
+      expect(presentationSchemaJson).toContain('"command"');
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -1937,6 +1948,7 @@ describe("message tool reasoning tag sanitization", () => {
               buttons: [
                 {
                   label: "<think>button rationale</think>Approve",
+                  action: { type: "command", command: "/codex approve" },
                   value: "approve",
                 },
               ],
@@ -1962,7 +1974,13 @@ describe("message tool reasoning tag sanitization", () => {
         { type: "text", text: "Ship it" },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve" }],
+          buttons: [
+            {
+              label: "Approve",
+              action: { type: "command", command: "/codex approve" },
+              value: "approve",
+            },
+          ],
         },
         {
           type: "select",
@@ -1971,6 +1989,459 @@ describe("message tool reasoning tag sanitization", () => {
         },
       ],
     });
+  });
+
+  it("strips internal runtime context from visible presentation fields before sending (#53732)", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: `Deploy ready\n${internalContext}`,
+          blocks: [
+            { type: "text", text: `Ship it\n${internalContext}` },
+            {
+              type: "input",
+              placeholder: `Pick a lane\n${internalContext}`,
+            },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: `Approve\n${internalContext}`,
+                  value: "approve",
+                },
+              ],
+            },
+            {
+              type: "select",
+              options: [
+                {
+                  label: `Main\n${internalContext}`,
+                  value: "main",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Deploy ready",
+      blocks: [
+        { type: "text", text: "Ship it" },
+        { type: "input", placeholder: "Pick a lane" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+        {
+          type: "select",
+          options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
+});
+
+describe("message tool boot-echo guard", () => {
+  const longBootPrompt = [
+    "You are running a boot check. Follow BOOT.md instructions exactly.",
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "This context is runtime-generated, not user-authored. Keep internal details private.",
+    "",
+    "BOOT.md:",
+    "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel and report the active project status with three concrete bullet points.",
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "If BOOT.md asks you to send a message, use the message tool (action=send with channel + target).",
+  ].join("\n");
+
+  let setBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").setBootEchoContextForSession;
+  let resetBootEchoContextForTests: typeof import("../../gateway/boot-echo-guard.js").resetBootEchoContextForTests;
+
+  beforeAll(async () => {
+    ({ setBootEchoContextForSession, resetBootEchoContextForTests } =
+      await import("../../gateway/boot-echo-guard.js"));
+  });
+
+  afterEach(() => {
+    resetBootEchoContextForTests();
+  });
+
+  it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+
+    // The model is paraphrasing out the wrapper but copying the BOOT.md
+    // sentence verbatim — exactly the leak vector clawsweeper called out
+    // on #75128 that the marker-only strip would miss.
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const { call, result } = await executeSendWithResult({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "internal_runtime_context_echo",
+    });
+    expect(JSON.stringify(result)).not.toContain("thoughtful greeting");
+  });
+
+  it("sanitizes boot echo text and still sends when media content remains", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+        mediaUrl: "file:///tmp/status.png",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
+  });
+
+  it("sanitizes boot echo text and still sends when snake_case media content remains", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+        media_url: "file:///tmp/status.png",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.media_url).toBe("file:///tmp/status.png");
+  });
+
+  it("sanitizes boot echo text and still sends when snake_case media arrays remain", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+        media_urls: ["file:///tmp/one.png", "file:///tmp/two.png"],
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.media_urls).toEqual(["file:///tmp/one.png", "file:///tmp/two.png"]);
+  });
+
+  it("sanitizes boot echo text and still sends when structured attachments remain", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: echoedText,
+        attachments: [{ media: "file:///tmp/status.png" }],
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.message).toBe("");
+    expect(call?.params?.attachments).toEqual([{ media: "file:///tmp/status.png" }]);
+  });
+
+  it("sanitizes boot echo text and still sends when structured attachment aliases remain", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: echoedText,
+        attachments: [{ file_path: "/tmp/status.png" }],
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.message).toBe("");
+    expect(call?.params?.attachments).toEqual([{ file_path: "/tmp/status.png" }]);
+  });
+
+  it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: "Good morning! Project status looks healthy today.",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
+  });
+
+  it("does not affect outbound text when no boot prompt is registered for the session", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: "Any message goes through unchanged.",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("Any message goes through unchanged.");
+  });
+
+  it("collapses presentation fields that echo a substantial chunk of the registered boot prompt (#53732)", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const echoedBootText =
+      "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        mediaUrl: "file:///tmp/proof.png",
+        presentation: {
+          title: echoedBootText,
+          blocks: [
+            { type: "text", text: echoedBootText },
+            {
+              type: "buttons",
+              buttons: [{ label: echoedBootText, value: "approve" }],
+            },
+            {
+              type: "select",
+              placeholder: echoedBootText,
+              options: [{ label: echoedBootText, value: "main" }],
+            },
+          ],
+        },
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "",
+      blocks: [
+        { type: "text", text: "" },
+        {
+          type: "buttons",
+          buttons: [{ label: "", value: "approve" }],
+        },
+        {
+          type: "select",
+          placeholder: "",
+          options: [{ label: "", value: "main" }],
+        },
+      ],
+    });
+  });
+
+  it("sanitizes boot echo text from presentation button links before dispatch", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const echoedText =
+      "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel and report the active project status";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: "Visible",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Status", url: echoedText },
+                { label: "App", webApp: { url: echoedText }, web_app: { url: echoedText } },
+              ],
+            },
+          ],
+        },
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+
+    expect(call?.params?.message).toBe("Visible");
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Status" }, { label: "App" }],
+        },
+      ],
+    });
+  });
+});
+
+describe("message tool internal-runtime-context sanitization", () => {
+  it.each([
+    {
+      field: "text",
+      input:
+        "Here is the boot info:\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
+      expected: "Here is the boot info:\n\nDone.",
+      target: "signal:+15551234567",
+      channel: "signal",
+    },
+    {
+      field: "content",
+      input:
+        "Before\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nleaked\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nAfter",
+      expected: "Before\n\nAfter",
+      target: "discord:123",
+      channel: "discord",
+    },
+    {
+      field: "message",
+      input:
+        "Here is the boot info:\\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\\nBOOT.md:\\nWake up and report.\\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\\nDone.",
+      expected: "Here is the boot info:\n\nDone.",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "SendMessage",
+      input:
+        "Alias\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
+      expected: "Alias\n\nDone.",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+  ])(
+    "strips internal-runtime-context blocks in $field before sending so verbatim boot-prompt echoes do not leak (#53732)",
+    async ({ channel, target, field, input, expected }) => {
+      mockSendResult({ channel, to: target });
+
+      const call = await executeSend({
+        action: {
+          target,
+          [field]: input,
+        },
+      });
+      expect(call?.params?.[field]).toBe(expected);
+    },
+  );
+
+  it("strips internal-runtime-context blocks from poll creation text before dispatch", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        action: "poll",
+        target: "telegram:123",
+        pollQuestion: `Choose one\n${internalContext}`,
+        pollOption: [`Yes\n${internalContext}`, "No"],
+      },
+    });
+
+    expect(call?.params?.pollQuestion).toBe("Choose one");
+    expect(call?.params?.pollOption).toEqual(["Yes", "No"]);
+  });
+
+  it("strips internal-runtime-context blocks from quote text before dispatch", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: "Visible",
+        quoteText: `Quoted\n${internalContext}`,
+      },
+    });
+
+    expect(call?.params?.quoteText).toBe("Quoted");
+  });
+
+  it("parses and sanitizes stringified presentation and interactive payloads before dispatch", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: "Visible",
+        presentation: JSON.stringify({
+          title: `Presentation\n${internalContext}`,
+          blocks: [{ type: "text", text: `Block\n${internalContext}` }],
+        }),
+        interactive: JSON.stringify({
+          blocks: [{ type: "text", text: `Legacy\n${internalContext}` }],
+        }),
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Presentation",
+      blocks: [{ type: "text", text: "Block" }],
+    });
+    expect(call?.params?.interactive).toEqual({
+      blocks: [{ type: "text", text: "Legacy" }],
+    });
+  });
+
+  it("suppresses pure internal-runtime-context sends before generic raw-params logging can see original args", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        target: "discord:123",
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "internal_runtime_context_echo",
+    });
+    expect(JSON.stringify(result)).not.toContain("BOOT.md");
+    expect(JSON.stringify(result)).not.toContain("Wake up and report");
+  });
+
+  it("sanitizes every visible text alias even after an earlier field is fully suppressed", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const internalOnly =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: internalOnly,
+        message: `Visible\n${internalOnly}`,
+        mediaUrl: "file:///tmp/status.png",
+      },
+    });
+
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.message).toBe("Visible");
   });
 });
 

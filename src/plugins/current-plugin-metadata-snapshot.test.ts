@@ -16,12 +16,14 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 function createSnapshot(
   params: {
     config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+    pluginIds?: readonly string[];
     registrySource?: PluginMetadataSnapshot["registrySource"];
     workspaceDir?: string;
   } = {},
 ): PluginMetadataSnapshot {
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
     ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index: {
@@ -141,6 +143,52 @@ describe("current plugin metadata snapshot", () => {
         requireDefaultDiscoveryContext: true,
       }),
     ).toBe(snapshot);
+  });
+
+  it("rejects configless default-discovery reuse for scoped snapshots", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, pluginIds: ["demo"] });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("requires exact plugin scope when the caller requests scoped reuse", () => {
+    const config = { plugins: { allow: ["demo", "other"] } };
+    const unscoped = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(unscoped, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, pluginIds: ["demo"] })).toBeUndefined();
+
+    const scoped = createSnapshot({ config, pluginIds: ["other", "demo"] });
+    setCurrentPluginMetadataSnapshot(scoped, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    expect(getCurrentPluginMetadataSnapshot({ config, allowScopedSnapshot: true })).toBe(scoped);
+    expect(getCurrentPluginMetadataSnapshot({ config, pluginIds: ["demo", "other"] })).toBe(scoped);
+    expect(getCurrentPluginMetadataSnapshot({ config, pluginIds: ["demo"] })).toBeUndefined();
+  });
+
+  it("requires exact plugin scope when the caller derives scope from the current index", () => {
+    const config = { plugins: { allow: ["demo", "other"] } };
+    const pluginIdScope = {
+      key: "test-scope",
+      resolve: () => ["demo", "other"],
+    };
+    const unscoped = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(unscoped, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, pluginIdScope })).toBeUndefined();
+
+    const scoped = createSnapshot({ config, pluginIds: ["other", "demo"] });
+    setCurrentPluginMetadataSnapshot(scoped, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, pluginIdScope })).toBe(scoped);
   });
 
   it("reuses exact cached config when env-resolved plugin load paths change before reload", () => {

@@ -1739,7 +1739,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
-            reject(init.signal?.reason ?? new Error("aborted"));
+            reject(
+              toLintErrorObject(init.signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
+            );
           });
         }),
     );
@@ -2108,3 +2110,17 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

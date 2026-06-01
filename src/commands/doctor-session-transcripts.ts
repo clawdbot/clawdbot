@@ -23,9 +23,15 @@ type TranscriptRepairResult = {
   repaired: boolean;
   originalEntries: number;
   activeEntries: number;
+  legacyOpenAICodexEntries: number;
   backupPath?: string;
   reason?: string;
 };
+
+const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_PROVIDER_ID = "openai";
+const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
@@ -57,6 +63,29 @@ function getMessage(entry: TranscriptEntry): Record<string, unknown> | null {
   return entry.message && typeof entry.message === "object" && !Array.isArray(entry.message)
     ? (entry.message as Record<string, unknown>)
     : null;
+}
+
+function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]): number {
+  let changed = 0;
+  for (const entry of entries) {
+    const message = getMessage(entry);
+    if (!message) {
+      continue;
+    }
+    let touched = false;
+    if (message.provider === LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+      message.provider = OPENAI_PROVIDER_ID;
+      touched = true;
+    }
+    if (message.api === LEGACY_OPENAI_CODEX_RESPONSES_API) {
+      message.api = OPENAI_CHATGPT_RESPONSES_API;
+      touched = true;
+    }
+    if (touched) {
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 function textFromContent(content: unknown): string | null {
@@ -166,6 +195,19 @@ async function writeActiveTranscript(params: {
   return backupPath;
 }
 
+async function writeTranscriptEntries(params: {
+  filePath: string;
+  entries: TranscriptEntry[];
+}): Promise<string> {
+  const backupPath = `${params.filePath}.pre-doctor-openai-codex-repair-${new Date()
+    .toISOString()
+    .replace(/[:.]/g, "-")}.bak`;
+  await fs.copyFile(params.filePath, backupPath);
+  const next = params.entries.map((entry) => JSON.stringify(entry)).join("\n");
+  await fs.writeFile(params.filePath, `${next}\n`, "utf-8");
+  return backupPath;
+}
+
 export async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
@@ -173,25 +215,41 @@ export async function repairBrokenSessionTranscriptFile(params: {
   try {
     const raw = await fs.readFile(params.filePath, "utf-8");
     const entries = parseTranscriptEntries(raw);
+    const legacyOpenAICodexEntries = normalizeLegacyOpenAICodexTranscriptMetadata(entries);
     const activePath = selectActivePath(entries);
     if (!activePath) {
+      if (legacyOpenAICodexEntries > 0 && params.shouldRepair) {
+        const backupPath = await writeTranscriptEntries({ filePath: params.filePath, entries });
+        return {
+          filePath: params.filePath,
+          broken: true,
+          repaired: true,
+          originalEntries: entries.length,
+          activeEntries: 0,
+          legacyOpenAICodexEntries,
+          backupPath,
+          reason: "no active branch",
+        };
+      }
       return {
         filePath: params.filePath,
-        broken: false,
+        broken: legacyOpenAICodexEntries > 0,
         repaired: false,
         originalEntries: entries.length,
         activeEntries: 0,
+        legacyOpenAICodexEntries,
         reason: "no active branch",
       };
     }
     const broken = hasBrokenPromptRewriteBranch(entries, activePath);
-    if (!broken) {
+    if (!broken && legacyOpenAICodexEntries === 0) {
       return {
         filePath: params.filePath,
         broken: false,
         repaired: false,
         originalEntries: entries.length,
         activeEntries: activePath.length,
+        legacyOpenAICodexEntries,
       };
     }
     if (!params.shouldRepair) {
@@ -201,19 +259,23 @@ export async function repairBrokenSessionTranscriptFile(params: {
         repaired: false,
         originalEntries: entries.length,
         activeEntries: activePath.length,
+        legacyOpenAICodexEntries,
       };
     }
-    const backupPath = await writeActiveTranscript({
-      filePath: params.filePath,
-      entries,
-      activePath,
-    });
+    const backupPath = broken
+      ? await writeActiveTranscript({
+          filePath: params.filePath,
+          entries,
+          activePath,
+        })
+      : await writeTranscriptEntries({ filePath: params.filePath, entries });
     return {
       filePath: params.filePath,
       broken: true,
       repaired: true,
       originalEntries: entries.length,
       activeEntries: activePath.length,
+      legacyOpenAICodexEntries,
       backupPath,
     };
   } catch (err) {
@@ -223,6 +285,7 @@ export async function repairBrokenSessionTranscriptFile(params: {
       repaired: false,
       originalEntries: 0,
       activeEntries: 0,
+      legacyOpenAICodexEntries: 0,
       reason: String(err),
     };
   }
@@ -231,7 +294,7 @@ export async function repairBrokenSessionTranscriptFile(params: {
 async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string[]> {
   const files: string[] = [];
   for (const sessionsDir of sessionDirs) {
-    let entries: Dirent[] = [];
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     } catch {
@@ -275,11 +338,15 @@ export async function noteSessionTranscriptHealth(params?: {
 
   const repairedCount = broken.filter((result) => result.repaired).length;
   const lines = [
-    `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with duplicated prompt-rewrite branches.`,
+    `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
     ...broken.slice(0, 20).map((result) => {
       const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
       const status = result.repaired ? "repaired" : "needs repair";
-      return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${backup}`;
+      const metadata =
+        result.legacyOpenAICodexEntries > 0
+          ? ` openai-codex=${result.legacyOpenAICodexEntries}`
+          : "";
+      return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
     }),
   ];
   if (broken.length > 20) {

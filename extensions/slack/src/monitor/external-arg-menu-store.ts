@@ -39,7 +39,7 @@ function pruneSlackExternalArgMenuStore(
 }
 
 function createSlackExternalArgMenuToken(store: Map<string, SlackExternalArgMenuEntry>): string {
-  let token = "";
+  let token;
   do {
     token = generateSecureToken(SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES);
   } while (store.has(token));

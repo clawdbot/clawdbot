@@ -289,6 +289,23 @@ function isAsyncStartedToolResult(result: unknown): boolean {
   return details?.async === true && details.status === "started";
 }
 
+function readAsyncStartedTaskIds(result: unknown): {
+  asyncTaskRunId?: string;
+  asyncTaskId?: string;
+} {
+  const details = readToolResultDetailsRecord(result);
+  if (!details) {
+    return {};
+  }
+  const nestedTask = readRecordField(details.task);
+  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
+  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
+  return {
+    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
+    ...(asyncTaskId ? { asyncTaskId } : {}),
+  };
+}
+
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
   const details = readToolResultDetailsRecord(result);
   if (!details || typeof details.status !== "string") {
@@ -1152,10 +1169,11 @@ export async function handleToolExecutionEnd(
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
-    ...(asyncStarted ? { asyncStarted: true } : {}),
+    ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
@@ -1536,7 +1554,7 @@ export async function handleToolExecutionEnd(
         runId,
         toolCallId,
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }

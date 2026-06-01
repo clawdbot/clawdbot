@@ -8,7 +8,6 @@ export function resolveEmbedSandbox(mode: EmbedSandboxMode | null | undefined): 
       return "";
     case "trusted":
       return "allow-scripts allow-same-origin";
-    case "scripts":
     default:
       return "allow-scripts";
   }

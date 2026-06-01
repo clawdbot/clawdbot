@@ -57,11 +57,11 @@ describe("buildOutboundResultEnvelope", () => {
   });
 
   it("normalizes reply payloads and keeps wrapped delivery when flattening is disabled", () => {
-    const payloads: ReplyPayload[] = [{ text: "hello" }];
+    const payloadsLocal: ReplyPayload[] = [{ text: "hello" }];
 
     expect(
       buildOutboundResultEnvelope({
-        payloads,
+        payloads: payloadsLocal,
         delivery,
         flattenDelivery: false,
       }),

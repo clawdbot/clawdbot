@@ -163,6 +163,41 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("does not replay completed one-shot jobs restored with lastRunStatus only", async () => {
+    const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
+
+    await withRestartedCron(
+      [
+        {
+          id: "restart-one-shot-last-run-status",
+          name: "finished one shot",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: dueAt,
+          schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not replay one shot" },
+          state: {
+            nextRunAtMs: dueAt,
+            lastRunAtMs: dueAt,
+            lastRunStatus: "ok",
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-one-shot-last-run-status");
+        expect(updated?.state.nextRunAtMs).toBeUndefined();
+        expect(updated?.state.lastRunStatus).toBe("ok");
+        expect(updated?.state.lastStatus).toBeUndefined();
+      },
+    );
+  });
+
   it("defers overdue isolated agent-turn jobs during gateway startup", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
@@ -465,6 +500,46 @@ describe("CronService restart catch-up", () => {
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-long-run-due-retry");
         expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
+  it("keeps past-due retries paused when restored with lastRunStatus only", async () => {
+    vi.setSystemTime(new Date("2025-12-13T17:00:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-backoff-last-run-status",
+          name: "lastRunStatus backoff pending",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-13T16:50:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T16:59:45.000Z"),
+          schedule: {
+            kind: "every",
+            everyMs: 60_000,
+            anchorMs: Date.parse("2025-12-13T16:50:00.000Z"),
+          },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not run during lastRunStatus backoff" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T16:59:50.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T16:59:45.000Z"),
+            lastDurationMs: 0,
+            lastRunStatus: "error",
+            consecutiveErrors: 1,
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-backoff-last-run-status");
+        expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
+        expect(updated?.state.lastRunStatus).toBe("error");
+        expect(updated?.state.lastStatus).toBeUndefined();
       },
     );
   });

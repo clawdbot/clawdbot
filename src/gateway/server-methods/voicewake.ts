@@ -24,6 +24,8 @@ export const voicewakeHandlers: GatewayRequestHandlers = {
     }
     try {
       const triggers = normalizeVoiceWakeTriggers(params.triggers);
+      // Persist the normalized trigger list before broadcasting so connected
+      // nodes and future gateway starts observe the same wake phrases.
       const cfg = await setVoiceWakeTriggers(triggers);
       context.broadcastVoiceWakeChanged(cfg.triggers);
       respond(true, { triggers: cfg.triggers });

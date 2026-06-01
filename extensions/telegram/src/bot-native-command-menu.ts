@@ -586,7 +586,7 @@ export function syncTelegramMenuCommands(params: {
     writeCachedCommandHash(accountId, botIdentity, currentHash);
   };
 
-  void sync().catch((err) => {
+  void sync().catch((err: unknown) => {
     runtime.error?.(`Telegram command sync failed: ${String(err)}`);
   });
 }

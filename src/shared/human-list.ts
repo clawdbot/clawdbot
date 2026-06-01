@@ -1,3 +1,4 @@
+/** Formats a short human-readable disjunction such as "A, B, or C". */
 export function formatHumanList(values: readonly string[]): string {
   if (values.length === 0) {
     return "";

@@ -1,6 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
 
 describe("qa-otel-smoke receiver bounds", () => {
@@ -112,5 +115,69 @@ describe("qa-otel-smoke receiver bounds", () => {
 
     expect(captured.traces?.join("\n")).toContain("OTEL-QA-SECRET");
     expect(captured.traces?.join("\n")).toContain("[captured body text truncated");
+  });
+
+  it("times out and kills a wedged QA suite child with a detached gateway", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-child-"));
+    const markerPath = path.join(tempDir, "marker.txt");
+    try {
+      const gatewayScript = [
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+      ].join("\n");
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "import childProcess from 'node:child_process';",
+            `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+              gatewayScript,
+            )}], { detached: true, stdio: "ignore" });`,
+            "setInterval(() => {}, 1000);",
+          ].join("\n"),
+        ],
+        {
+          detached: true,
+          stdio: "ignore",
+        },
+      );
+
+      await expect(testing.waitForChild(child, 100, 100)).rejects.toThrow(
+        "openclaw qa suite timed out after 100ms",
+      );
+      const sizeAfterReturn = existsSync(markerPath) ? statSync(markerPath).size : 0;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      const sizeAfterWait = existsSync(markerPath) ? statSync(markerPath).size : 0;
+      expect(sizeAfterWait).toBe(sizeAfterReturn);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses taskkill for Windows QA suite timeout cleanup", () => {
+    const kill = vi.fn();
+    const runTaskkill = vi.fn(() => ({ status: 0 }));
+
+    testing.terminateChildTree(
+      { kill, pid: 1234 } as never,
+      "SIGTERM",
+      [],
+      "win32",
+      runTaskkill as never,
+    );
+
+    expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "1234", "/T", "/F"], {
+      stdio: "ignore",
+    });
+    expect(kill).not.toHaveBeenCalled();
   });
 });

@@ -9,11 +9,136 @@ import type {
   PluginHookToolKind,
 } from "./hook-types.js";
 import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
-import type { PluginJsonValue } from "./host-hooks.js";
+import type { PluginJsonValue, PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
+import type {
+  PluginRegistry,
+  PluginTrustedToolPolicyRegistryRegistration,
+} from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
+type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
+
+export type TrustedToolPolicyDiagnosticEntry = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+};
+
 export function hasTrustedToolPolicies(): boolean {
-  return (getActivePluginRegistry()?.trustedToolPolicies?.length ?? 0) > 0;
+  return copyTrustedPolicyRegistrations(getActivePluginRegistry()).length > 0;
+}
+
+function unreadableTrustedPolicyRegistration(): TrustedPolicyRegistration {
+  return {
+    pluginId: "unknown-plugin",
+    source: "runtime",
+    get policy(): PluginTrustedToolPolicyRegistration {
+      throw new Error("trusted policy registration is unreadable");
+    },
+  };
+}
+
+function copyTrustedPolicyRegistrations(
+  registry: PluginRegistry | null | undefined,
+): TrustedPolicyRegistration[] {
+  let policies: unknown;
+  try {
+    policies = registry?.trustedToolPolicies;
+  } catch {
+    return [unreadableTrustedPolicyRegistration()];
+  }
+  if (!policies) {
+    return [];
+  }
+
+  try {
+    if (!Array.isArray(policies)) {
+      return [unreadableTrustedPolicyRegistration()];
+    }
+    return policies.map((policy) => policy);
+  } catch {
+    return [unreadableTrustedPolicyRegistration()];
+  }
+}
+
+function readTrustedPolicyPluginId(registration: TrustedPolicyRegistration): string | undefined {
+  try {
+    const pluginId = registration.pluginId;
+    return typeof pluginId === "string" && pluginId.trim() ? pluginId.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function trustedPolicyDiagnosticPluginId(registration: TrustedPolicyRegistration): string {
+  return readTrustedPolicyPluginId(registration) ?? "unknown-plugin";
+}
+
+function readTrustedPolicyPluginName(registration: TrustedPolicyRegistration): string | undefined {
+  try {
+    const pluginName = registration.pluginName;
+    return typeof pluginName === "string" && pluginName.trim() ? pluginName.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTrustedPolicy(registration: TrustedPolicyRegistration):
+  | {
+      ok: true;
+      policy: PluginTrustedToolPolicyRegistration;
+    }
+  | {
+      ok: false;
+    } {
+  try {
+    const policy = registration.policy;
+    return policy && typeof policy.evaluate === "function" ? { ok: true, policy } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readTrustedPolicyId(registration: TrustedPolicyRegistration): string {
+  const fallback = trustedPolicyDiagnosticPluginId(registration);
+  const policy = readTrustedPolicy(registration);
+  if (!policy.ok) {
+    return fallback;
+  }
+  try {
+    const id = policy.policy.id;
+    return typeof id === "string" && id.trim() ? id.trim() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function trustedPolicyDefaultBlockReason(registration: TrustedPolicyRegistration): string {
+  return `blocked by ${readTrustedPolicyId(registration)}`;
+}
+
+function trustedPolicyFailureResult(
+  registration: TrustedPolicyRegistration,
+  detail: string,
+): PluginHookBeforeToolCallResult {
+  return {
+    block: true,
+    blockReason: `${trustedPolicyDefaultBlockReason(registration)}: ${detail}`,
+  };
+}
+
+export function getTrustedToolPolicyDiagnosticEntries(): TrustedToolPolicyDiagnosticEntry[] {
+  return copyTrustedPolicyRegistrations(getActivePluginRegistry()).map((registration) => {
+    const entry: TrustedToolPolicyDiagnosticEntry = {
+      id: readTrustedPolicyId(registration),
+      pluginId: trustedPolicyDiagnosticPluginId(registration),
+    };
+    const pluginName = readTrustedPolicyPluginName(registration);
+    if (pluginName) {
+      entry.pluginName = pluginName;
+    }
+    return entry;
+  });
 }
 
 function normalizeDerivedEventFields(
@@ -56,7 +181,7 @@ export async function runTrustedToolPolicies(
       | undefined;
   },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
-  const policies = getActivePluginRegistry()?.trustedToolPolicies ?? [];
+  const policies = copyTrustedPolicyRegistrations(getActivePluginRegistry());
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
@@ -91,13 +216,17 @@ export async function runTrustedToolPolicies(
     };
   };
   for (const registration of policies) {
+    const pluginId = readTrustedPolicyPluginId(registration);
+    if (!pluginId) {
+      return trustedPolicyFailureResult(registration, "policy owner is unreadable");
+    }
     const policyCtx: PluginHookToolContext = {
       ...ctxWithoutToolIdentity,
       ...currentContextToolIdentity,
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
-        const cacheKey = registration.pluginId;
+        const cacheKey = pluginId;
         if (!sessionExtensionStateCache.has(cacheKey)) {
           const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
           sessionExtensionStateCache.set(
@@ -105,7 +234,7 @@ export async function runTrustedToolPolicies(
             config
               ? getPluginSessionExtensionStateSync({
                   cfg: config,
-                  pluginId: registration.pluginId,
+                  pluginId,
                   sessionKey: ctx.sessionKey,
                 })
               : undefined,
@@ -118,52 +247,66 @@ export async function runTrustedToolPolicies(
         return pluginState[normalizedNamespace] as T | undefined;
       },
     };
-    const decision = await registration.policy.evaluate(buildEvent(), policyCtx);
+    const policy = readTrustedPolicy(registration);
+    if (!policy.ok) {
+      return trustedPolicyFailureResult(registration, "policy is unreadable");
+    }
+
+    let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;
+    try {
+      decision = await policy.policy.evaluate(buildEvent(), policyCtx);
+    } catch {
+      return trustedPolicyFailureResult(registration, "policy evaluation failed");
+    }
     if (!decision) {
       continue;
     }
-    if ("allow" in decision && decision.allow === false) {
-      return {
-        block: true,
-        blockReason: decision.reason ?? `blocked by ${registration.policy.id}`,
-      };
-    }
-    // `block: true` is terminal; normalize a missing blockReason to a deterministic
-    // reason so downstream diagnostics match the `{ allow: false }` path above.
-    if ("block" in decision && decision.block === true) {
-      return {
-        ...decision,
-        blockReason: decision.blockReason ?? `blocked by ${registration.policy.id}`,
-      };
-    }
-    // `block: false` is a no-op (matches the regular `before_tool_call` hook
-    // pipeline) — it does NOT short-circuit the policy chain. Params and
-    // approvals are remembered so later trusted policies can still inspect or
-    // block the final call.
-    if ("params" in decision && isPlainObject(decision.params)) {
-      const normalized = options?.normalizeEvent?.(
-        {
-          ...eventWithoutDerivedPaths,
-          params: decision.params,
-          ...currentEventToolIdentity,
-          ...currentDerivedEvent,
-        },
-        policyCtx,
-      );
-      adjustedParams = normalized?.params ?? decision.params;
-      if (normalized?.event) {
-        currentEventToolIdentity = normalizeToolIdentity(normalized.event);
+    try {
+      if ("allow" in decision && decision.allow === false) {
+        return {
+          block: true,
+          blockReason: decision.reason ?? trustedPolicyDefaultBlockReason(registration),
+        };
       }
-      if (normalized?.ctx) {
-        currentContextToolIdentity = normalizeToolIdentity(normalized.ctx);
-      } else if (normalized?.event) {
-        currentContextToolIdentity = normalizeToolIdentity(normalized.event);
+      // `block: true` is terminal; normalize a missing blockReason to a deterministic
+      // reason so downstream diagnostics match the `{ allow: false }` path above.
+      if ("block" in decision && decision.block === true) {
+        return {
+          ...decision,
+          blockReason: decision.blockReason ?? trustedPolicyDefaultBlockReason(registration),
+        };
       }
-      hasAdjustedParams = true;
-      currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
-    }
-    if ("requireApproval" in decision && decision.requireApproval && !approval) {
-      approval = decision.requireApproval;
+      // `block: false` is a no-op (matches the regular `before_tool_call` hook
+      // pipeline) — it does NOT short-circuit the policy chain. Params and
+      // approvals are remembered so later trusted policies can still inspect or
+      // block the final call.
+      if ("params" in decision && isPlainObject(decision.params)) {
+        const normalized = options?.normalizeEvent?.(
+          {
+            ...eventWithoutDerivedPaths,
+            params: decision.params,
+            ...currentEventToolIdentity,
+            ...currentDerivedEvent,
+          },
+          policyCtx,
+        );
+        adjustedParams = normalized?.params ?? decision.params;
+        if (normalized?.event) {
+          currentEventToolIdentity = normalizeToolIdentity(normalized.event);
+        }
+        if (normalized?.ctx) {
+          currentContextToolIdentity = normalizeToolIdentity(normalized.ctx);
+        } else if (normalized?.event) {
+          currentContextToolIdentity = normalizeToolIdentity(normalized.event);
+        }
+        hasAdjustedParams = true;
+        currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
+      }
+      if ("requireApproval" in decision && decision.requireApproval && !approval) {
+        approval = decision.requireApproval;
+      }
+    } catch {
+      return trustedPolicyFailureResult(registration, "policy decision is unreadable");
     }
   }
   if (!hasAdjustedParams && !approval) {

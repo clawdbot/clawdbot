@@ -46,16 +46,16 @@ const {
   httpsAgentSpy,
   wsProxyAgentSpy,
 } = vi.hoisted(() => {
-  const wsProxyAgentSpy = vi.fn();
-  const httpsAgentSpy = vi.fn();
-  const globalFetchMock = vi.fn();
-  const baseRegisterClientSpy = vi.fn();
-  const webSocketSpy = vi.fn();
-  const captureHttpExchangeSpy = vi.fn();
-  const captureWsEventSpy = vi.fn();
-  const resolveDebugProxySettingsMock = vi.fn(() => ({ enabled: false }));
-  const fetchWithSsrFGuardMock = vi.fn(async (params: { url: string; init?: RequestInit }) => {
-    const source = (await globalFetchMock(params.url, params.init)) as Response;
+  const wsProxyAgentSpyLocal = vi.fn();
+  const httpsAgentSpyLocal = vi.fn();
+  const globalFetchMockLocal = vi.fn();
+  const baseRegisterClientSpyLocal = vi.fn();
+  const webSocketSpyLocal = vi.fn();
+  const captureHttpExchangeSpyLocal = vi.fn();
+  const captureWsEventSpyLocal = vi.fn();
+  const resolveDebugProxySettingsMockLocal = vi.fn(() => ({ enabled: false }));
+  const fetchWithSsrFGuardMockLocal = vi.fn(async (params: { url: string; init?: RequestInit }) => {
+    const source = (await globalFetchMockLocal(params.url, params.init)) as Response;
     const body = await source.text();
     return {
       response: new Response(body, {
@@ -67,7 +67,7 @@ const {
     };
   });
 
-  const GatewayIntents = {
+  const GatewayIntentsLocal = {
     Guilds: 1 << 0,
     GuildMessages: 1 << 1,
     MessageContent: 1 << 2,
@@ -79,7 +79,7 @@ const {
     GuildVoiceStates: 1 << 8,
   } as const;
 
-  class GatewayPlugin {
+  class GatewayPluginLocal {
     options: unknown;
     gatewayInfo: unknown;
     client: unknown;
@@ -93,53 +93,53 @@ const {
       this.isConnecting = false;
     }
     async registerClient(client: unknown) {
-      baseRegisterClientSpy(client);
+      baseRegisterClientSpyLocal(client);
     }
   }
 
-  class HttpsAgent {
-    static lastCreated: HttpsAgent | undefined;
+  class HttpsAgentLocal {
+    static lastCreated: HttpsAgentLocal | undefined;
     options: unknown;
     constructor(options?: unknown) {
       this.options = options;
-      HttpsAgent.lastCreated = this;
-      httpsAgentSpy(options);
+      HttpsAgentLocal.lastCreated = this;
+      httpsAgentSpyLocal(options);
     }
   }
 
-  class HttpsProxyAgent {
-    static lastCreated: HttpsProxyAgent | undefined;
+  class HttpsProxyAgentLocal {
+    static lastCreated: HttpsProxyAgentLocal | undefined;
     proxyUrl: string;
     constructor(proxyUrl: string) {
       if (proxyUrl === "bad-proxy") {
         throw new Error("bad proxy");
       }
       this.proxyUrl = proxyUrl;
-      HttpsProxyAgent.lastCreated = this;
-      wsProxyAgentSpy(proxyUrl);
+      HttpsProxyAgentLocal.lastCreated = this;
+      wsProxyAgentSpyLocal(proxyUrl);
     }
   }
 
   return {
-    baseRegisterClientSpy,
-    GatewayIntents,
-    GatewayPlugin,
-    globalFetchMock,
-    HttpsAgent,
-    HttpsProxyAgent,
-    fetchWithSsrFGuardMock,
-    getLastAgent: () => HttpsAgent.lastCreated,
-    getLastProxyAgent: () => HttpsProxyAgent.lastCreated,
-    captureHttpExchangeSpy,
-    captureWsEventSpy,
-    httpsAgentSpy,
-    resolveDebugProxySettingsMock,
+    baseRegisterClientSpy: baseRegisterClientSpyLocal,
+    GatewayIntents: GatewayIntentsLocal,
+    GatewayPlugin: GatewayPluginLocal,
+    globalFetchMock: globalFetchMockLocal,
+    HttpsAgent: HttpsAgentLocal,
+    HttpsProxyAgent: HttpsProxyAgentLocal,
+    fetchWithSsrFGuardMock: fetchWithSsrFGuardMockLocal,
+    getLastAgent: () => HttpsAgentLocal.lastCreated,
+    getLastProxyAgent: () => HttpsProxyAgentLocal.lastCreated,
+    captureHttpExchangeSpy: captureHttpExchangeSpyLocal,
+    captureWsEventSpy: captureWsEventSpyLocal,
+    httpsAgentSpy: httpsAgentSpyLocal,
+    resolveDebugProxySettingsMock: resolveDebugProxySettingsMockLocal,
     resetLastAgent: () => {
-      HttpsAgent.lastCreated = undefined;
-      HttpsProxyAgent.lastCreated = undefined;
+      HttpsAgentLocal.lastCreated = undefined;
+      HttpsProxyAgentLocal.lastCreated = undefined;
     },
-    webSocketSpy,
-    wsProxyAgentSpy,
+    webSocketSpy: webSocketSpyLocal,
+    wsProxyAgentSpy: wsProxyAgentSpyLocal,
   };
 });
 
@@ -440,7 +440,9 @@ describe("createDiscordGatewayPlugin", () => {
     process.on("unhandledRejection", onUnhandledRejection);
     try {
       startIgnoredGatewayRegistration(plugin);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(unhandledReasons).toHaveLength(0);
       const registration = waitForDiscordGatewayPluginRegistration(plugin);

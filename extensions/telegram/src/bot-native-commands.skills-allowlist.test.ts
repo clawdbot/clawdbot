@@ -60,8 +60,8 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
       ],
     };
     listSkillCommandsForAgents.mockImplementation(
-      ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
-        listActualSkillCommandsForAgents({ cfg, agentIds }),
+      ({ cfg: cfgLocal, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
+        listActualSkillCommandsForAgents({ cfg: cfgLocal, agentIds }),
     );
 
     registerTelegramNativeCommands({

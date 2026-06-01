@@ -32,6 +32,7 @@ fun friendlySessionName(key: String): String {
   return result.ifBlank { key }
 }
 
+/** Builds the selectable recent-session list while preserving the active session. */
 fun resolveSessionChoices(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,
@@ -46,6 +47,7 @@ fun resolveSessionChoices(
   val recent = mutableListOf<ChatSessionEntry>()
   val seen = mutableSetOf<String>()
   for (entry in sorted) {
+    // Hide the legacy main alias when the gateway has supplied a canonical main session key.
     if (aliasKey != null && entry.key == aliasKey) continue
     if (!seen.add(entry.key)) continue
     if ((entry.updatedAtMs ?: 0L) < cutoff) continue
@@ -70,6 +72,7 @@ fun resolveSessionChoices(
   }
 
   if (current.isNotEmpty() && !included.contains(current)) {
+    // Keep the active session selectable even if it is old or missing from the recent list.
     result.add(ChatSessionEntry(key = current, updatedAtMs = null))
   }
 

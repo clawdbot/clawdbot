@@ -146,7 +146,7 @@ export function installQaParentWatchdog(
             }
           }
           for (const cleanupRoot of qaCleanupRoots) {
-            await rm(cleanupRoot).catch((cleanupError) => {
+            await rm(cleanupRoot).catch((cleanupError: unknown) => {
               logger.warn(
                 `QA gateway parent pid ${parentPid} exited; failed to clean runtime root ${cleanupRoot}: ${
                   cleanupError instanceof Error ? cleanupError.message : String(cleanupError)

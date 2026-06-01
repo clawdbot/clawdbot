@@ -4,7 +4,7 @@ import { extractToolCallLocations } from "./event-mapper.js";
 describe("extractToolCallLocations", () => {
   it("enforces the global node visit cap across nested structures", () => {
     const nested = Array.from({ length: 20 }, (_, outer) =>
-      Array.from({ length: 20 }, (_, inner) =>
+      Array.from({ length: 20 }, (_Local, inner) =>
         inner === 19 ? { path: `/tmp/file-${outer}.txt` } : { note: `${outer}-${inner}` },
       ),
     );

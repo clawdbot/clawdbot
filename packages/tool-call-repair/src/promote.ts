@@ -1,15 +1,18 @@
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
+/** Resolves model-emitted tool names to the exact names allowed by the provider request. */
 export type ToolCallRepairNameResolver = (
   rawName: string,
   allowedToolNames: Set<string>,
 ) => string | null;
 
+/** Builds a provider-native tool-call block from a repaired plain-text payload. */
 export type PromotedPlainTextToolCallBlockFactory = (
   block: PlainTextToolCallBlock,
   resolvedName: string,
 ) => Record<string, unknown>;
 
+/** Controls when standalone assistant text may be rewritten as tool-call content. */
 export type PlainTextToolCallPromotionOptions = {
   allowedStopReasons?: ReadonlySet<unknown>;
   allowedToolNames: Set<string>;
@@ -70,6 +73,8 @@ function createTextPartPromotionCandidates(
   textParts: readonly string[],
   exactText: string,
 ): string[] {
+  // Some providers split structural markers across text parts; try repaired and exact joins
+  // before falling back to newline joins so valid payloads promote without changing content.
   const repairedText = joinTextPartsWithStructuralLineBreaks(textParts).trim();
   const newlineJoinedText = textParts.join("\n").trim();
   return [...new Set([repairedText, exactText, newlineJoinedText].filter(Boolean))];
@@ -111,6 +116,7 @@ function shouldPromoteMessage(options: PlainTextToolCallPromotionOptions): boole
   return !options.allowedStopReasons || options.allowedStopReasons.has(messageRecord.stopReason);
 }
 
+/** Extracts candidate standalone tool-call text while rejecting mixed unsafe content. */
 export function extractStandalonePlainTextToolCallText(params: {
   allowOtherNonTextBlocks?: boolean;
   allowedStopReasons?: ReadonlySet<unknown>;
@@ -163,6 +169,7 @@ export function extractStandalonePlainTextToolCallText(params: {
   return text || undefined;
 }
 
+/** Promotes standalone plain-text tool-call messages into provider-native content blocks. */
 export function promoteStandalonePlainTextToolCallMessage(
   options: PlainTextToolCallPromotionOptions,
 ): Record<string, unknown> | undefined {

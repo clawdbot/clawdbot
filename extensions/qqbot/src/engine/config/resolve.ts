@@ -142,8 +142,8 @@ export function resolveAccountBase(
   const resolvedAccountId = accountId ?? resolveDefaultAccountId(cfg);
   const qqbot = readQQBotSection(cfg);
 
-  let accountConfig: Record<string, unknown> = {};
-  let appId = "";
+  let accountConfig: Record<string, unknown>;
+  let appId;
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     accountConfig = normalizeAccountConfig(asRecord(qqbot));

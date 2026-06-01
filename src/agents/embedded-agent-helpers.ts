@@ -18,6 +18,8 @@ export {
   classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
+  GENERIC_ASSISTANT_ERROR_TEXT,
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,

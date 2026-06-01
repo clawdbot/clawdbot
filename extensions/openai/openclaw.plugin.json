@@ -1,6 +1,5 @@
 {
   "id": "openai",
-  "legacyPluginIds": ["openai-codex"],
   "activation": {
     "onStartup": false
   },
@@ -48,6 +47,8 @@
           {
             "id": "gpt-5.3-codex",
             "name": "GPT-5.3 Codex",
+            "api": "openai-chatgpt-responses",
+            "baseUrl": "https://chatgpt.com/backend-api",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 400000,

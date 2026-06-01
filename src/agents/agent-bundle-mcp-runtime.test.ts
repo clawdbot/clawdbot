@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -201,7 +202,9 @@ async function waitForFileText(
     } catch {
       // The server may not have written the log file yet.
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(
     `Timed out waiting for ${expectedText} in ${filePath}; saw ${JSON.stringify(lastText)}`,
@@ -218,7 +221,9 @@ async function waitForPredicate(
     if (predicate()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`Timed out waiting for ${description}`);
 }
@@ -725,7 +730,12 @@ describe("session MCP runtime", () => {
       }
     } finally {
       await runtime.dispose();
-      await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await Promise.race([
+        catalogResult,
+        new Promise((resolve) => {
+          setTimeout(resolve, 1000);
+        }),
+      ]);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -747,7 +757,7 @@ describe("session MCP runtime", () => {
       cfg: {
         mcp: {
           servers: {
-            dofbot: {
+            fuzzplugin: {
               command: process.execPath,
               args: [serverPath],
             },
@@ -761,7 +771,7 @@ describe("session MCP runtime", () => {
 
       expect(catalog.servers).toEqual({});
       expect(catalog.tools).toEqual([]);
-      expect(catalog.diagnostics?.[0]?.serverName).toBe("dofbot");
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
       expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
       expect(catalog.diagnostics?.[0]?.message).toContain("object");
     } finally {
@@ -852,7 +862,7 @@ describe("session MCP runtime", () => {
       expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["legacy_tool"]);
       expect(catalog.servers.legacy?.toolCount).toBe(1);
       expect(catalog.servers.legacy?.tools).toBeUndefined();
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("recv tools/list");
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -1644,4 +1654,295 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
     expect(disposed).toStrictEqual([]);
   });
+});
+
+describe("disposeSession timeout", () => {
+  it(
+    "force-closes transport and client when terminateSession hangs past the timeout",
+    { timeout: 15_000 },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-force-close-"));
+      const serverPath = path.join(tempDir, "hanging-terminate.mjs");
+      const logPath = path.join(tempDir, "server.log");
+
+      await writeExecutable(
+        serverPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) return;
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+            capabilities: { tools: {} },
+            serverInfo: { name: "hanging-terminate-server", version: "1.0.0" },
+          },
+        });
+      } else if (message.method === "tools/list") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }] },
+        });
+      } else {
+        log("recv " + String(message.method ?? "response"));
+      }
+    }
+  }
+});
+
+// Keep process alive forever and ignore all shutdown signals
+process.on("SIGTERM", () => { log("ignored SIGTERM"); });
+process.on("SIGINT", () => { log("ignored SIGINT"); });
+process.stdin.on("end", () => {
+  log("stdin-end");
+  setInterval(() => {}, 60_000);
+});`,
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-force-close-timeout",
+        sessionKey: "agent:test:session-force-close-timeout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              hangingTerminate: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toHaveLength(1);
+
+      const start = Date.now();
+      await runtime.dispose();
+      const elapsed = Date.now() - start;
+
+      // The timeout fires at 5s and force-closes transport + client,
+      // so disposal must complete well before 8s even when the process
+      // ignores shutdown signals.
+      expect(elapsed).toBeLessThan(8_000);
+
+      await retireSessionMcpRuntime({
+        sessionId: "session-force-close-timeout",
+        reason: "test cleanup",
+      });
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  );
+
+  it(
+    "completes disposal even when the MCP server process ignores shutdown",
+    { timeout: 15_000 },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-dispose-timeout-"));
+      const serverPath = path.join(tempDir, "hanging-close.mjs");
+      const logPath = path.join(tempDir, "server.log");
+
+      await writeExecutable(
+        serverPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) return;
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+            capabilities: { tools: {} },
+            serverInfo: { name: "hanging-close-server", version: "1.0.0" },
+          },
+        });
+      } else if (message.method === "tools/list") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }] },
+        });
+      }
+    }
+  }
+});
+
+// Ignore all shutdown signals — simulate a stuck process
+process.on("SIGTERM", () => { log("ignored SIGTERM"); });
+process.on("SIGINT", () => { log("ignored SIGINT"); });
+process.stdin.on("end", () => {
+  log("stdin closed but staying alive");
+  // Keep the process alive indefinitely
+  setInterval(() => {}, 60_000);
+});`,
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-dispose-timeout",
+        sessionKey: "agent:test:session-dispose-timeout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              hangingClose: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toHaveLength(1);
+
+      const start = Date.now();
+      await runtime.dispose();
+      const elapsed = Date.now() - start;
+
+      // Dispose should complete within DISPOSE_TIMEOUT_MS (5s) + a small buffer,
+      // not hang indefinitely.
+      expect(elapsed).toBeLessThan(8_000);
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  );
+
+  it(
+    "force-closes streamable-http transport when DELETE hangs past the timeout",
+    { timeout: 15_000 },
+    async () => {
+      const sessionId = "test-session-" + Date.now();
+      const server = http.createServer((req, res) => {
+        if (req.method === "GET") {
+          res.writeHead(405).end();
+          return;
+        }
+        if (req.method === "DELETE") {
+          // Never respond — simulates a hung terminateSession() DELETE.
+          return;
+        }
+        if (req.method !== "POST") {
+          res.writeHead(405).end();
+          return;
+        }
+        let body = "";
+        req.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const message = JSON.parse(body);
+          res.setHeader("content-type", "application/json");
+          res.setHeader("mcp-session-id", sessionId);
+          if (message.method === "initialize") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "hanging-delete-server", version: "1.0.0" },
+                },
+              }),
+            );
+          } else if (message.method === "notifications/initialized") {
+            res.writeHead(202).end();
+          } else if (message.method === "tools/list") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+                },
+              }),
+            );
+          } else {
+            res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+          }
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const addr = server.address() as { port: number };
+
+      try {
+        const runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: "session-streamable-http-dispose",
+          sessionKey: "agent:test:session-streamable-http-dispose",
+          workspaceDir: "/workspace",
+          cfg: {
+            mcp: {
+              servers: {
+                hangingDelete: {
+                  url: `http://127.0.0.1:${addr.port}/mcp`,
+                  transport: "streamable-http",
+                },
+              },
+            },
+          },
+        });
+
+        const catalog = await runtime.getCatalog();
+        expect(catalog.tools).toHaveLength(1);
+
+        const start = Date.now();
+        await runtime.dispose();
+        const elapsed = Date.now() - start;
+
+        // The timeout fires at 5s and force-closes transport + client,
+        // so disposal must complete well before 8s even when the DELETE
+        // request never receives a response.
+        expect(elapsed).toBeLessThan(8_000);
+      } finally {
+        server.close();
+      }
+    },
+  );
 });

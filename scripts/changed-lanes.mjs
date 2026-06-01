@@ -4,6 +4,8 @@ import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
+const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
+const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 
 const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
@@ -236,18 +238,38 @@ export function listChangedPathsFromGit(params) {
   if (!base) {
     return [];
   }
-  const rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+  let rangePaths;
+  let noMergeBase = false;
+  try {
+    rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+  } catch (error) {
+    if (!isGitNoMergeBaseError(error)) {
+      throw error;
+    }
+    noMergeBase = true;
+    rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);
+  }
   if (params.includeWorktree === false) {
     return rangePaths;
   }
-  return [
-    ...new Set([
-      ...rangePaths,
-      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
-      ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
-      ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const worktreePaths = [
+    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
+    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
+    ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
+  ];
+  // Raw Crabbox syncs can have unrelated synthetic refs; prefer the synced
+  // worktree delta instead of turning that into an accidental whole-repo gate.
+  if (
+    noMergeBase &&
+    process.env[RAW_SYNC_CHANGED_LANES_ENV] === "1" &&
+    worktreePaths.length > 0 &&
+    rangePaths.length > IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS
+  ) {
+    rangePaths = [];
+  }
+  return [...new Set([...rangePaths, ...worktreePaths])].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
@@ -260,6 +282,17 @@ function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
+function isGitNoMergeBaseError(error) {
+  const text = [
+    error?.message,
+    error?.stderr?.toString?.("utf8"),
+    Array.isArray(error?.output)
+      ? error.output.map((value) => value?.toString?.("utf8")).join("\n")
+      : "",
+  ].join("\n");
+  return text.includes("no merge base");
+}
+
 function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   const output = execFileSync("git", ["ls-files", ...extraArgs], {
     cwd,
@@ -270,8 +303,9 @@ function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
-export function listStagedChangedPaths() {
+export function listStagedChangedPaths(cwd = process.cwd()) {
   const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,

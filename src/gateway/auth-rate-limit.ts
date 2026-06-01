@@ -39,6 +39,13 @@ export interface RateLimitConfig {
 export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
 export const AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET = "shared-secret";
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
+// Per-IP gate for the pre-auth bootstrap-token verify path.
+// `verifyDeviceBootstrapToken` is `withLock`-serialized in
+// `device-bootstrap.ts` and runs fs read + fs write on every attempt;
+// without a scope-specific limiter, attackers presenting a valid
+// device signature can queue the bootstrap-pairing flow behind their
+// requests, blocking legitimate node onboarding during the attack.
+export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 

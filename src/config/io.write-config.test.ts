@@ -495,7 +495,7 @@ describe("config io write", () => {
         homedir: () => home,
         logger: { warn, error: vi.fn() },
       });
-      await fs.writeFile(path.join(unwritableStatePath, "plugins"), "not a directory", "utf-8");
+      await fs.writeFile(path.join(unwritableStatePath, "state"), "not a directory", "utf-8");
 
       const loadedConfig = io.loadConfig();
       expectInstallRecord(loadedConfig.plugins?.installs?.demo, {
@@ -522,7 +522,7 @@ describe("config io write", () => {
     });
   });
 
-  it("rolls back shipped plugin install index migration when config write fails", async () => {
+  it("keeps shipped plugin install index migration when config write fails", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const pluginDir = path.join(home, ".openclaw", "plugins", "demo");
@@ -553,11 +553,14 @@ describe("config io write", () => {
         spec: "demo@1.0.0",
         installPath: pluginDir,
       });
-      await expect(
-        readPersistedInstalledPluginIndex({
-          stateDir: path.join(home, ".openclaw"),
-        }),
-      ).resolves.toBeNull();
+      const persistedIndex = await readPersistedInstalledPluginIndex({
+        stateDir: path.join(home, ".openclaw"),
+      });
+      expectInstallRecord(persistedIndex?.installRecords.demo, {
+        source: "npm",
+        spec: "demo@1.0.0",
+        installPath: pluginDir,
+      });
     });
   });
 
@@ -769,9 +772,7 @@ describe("config io write", () => {
         gateway: { mode: "local", port: 18790 },
       });
 
-      expect(warn.mock.calls).toContainEqual([
-        expect.stringContaining("Config write anomaly:"),
-      ]);
+      expect(warn.mock.calls).toContainEqual([expect.stringContaining("Config write anomaly:")]);
       expect(warn.mock.calls).toContainEqual([
         expect.stringContaining("missing-meta-before-write"),
       ]);
@@ -1669,7 +1670,7 @@ describe("config io write", () => {
     });
   });
 
-  it("rolls back plugin install index migration when runtime refresh fails", async () => {
+  it("keeps plugin install index migration when runtime refresh fails", async () => {
     await withSuiteHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -1706,7 +1707,12 @@ describe("config io write", () => {
         ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
 
         await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-        await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+        const persistedIndex = await readPersistedInstalledPluginIndex({ stateDir });
+        expectInstallRecord(persistedIndex?.installRecords.demo, {
+          source: "npm",
+          spec: "demo@1.0.0",
+          installPath: pluginDir,
+        });
       } finally {
         setRuntimeConfigSnapshotRefreshHandler(null);
         if (previousConfigPath === undefined) {

@@ -521,8 +521,8 @@ export async function startCommandAgentAudioBridge(params: {
     { onEvent: recordTalkObservabilityEvent },
   );
   const recentTalkEvents: TalkEvent[] = [];
-  const emitTalkEvent = (input: TalkEventInput) =>
-    pushGoogleMeetTalkEvent(recentTalkEvents, talk.emit(input));
+  const emitTalkEvent = (inputResult: TalkEventInput) =>
+    pushGoogleMeetTalkEvent(recentTalkEvents, talk.emit(inputResult));
   const ensureTalkTurn = () => {
     const turn = talk.ensureTurn({
       payload: { meetingSessionId: params.meetingSessionId },
@@ -696,7 +696,7 @@ export async function startCommandAgentAudioBridge(params: {
         });
         endTalkTurn();
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         params.logger.warn(`[google-meet] agent TTS failed: ${formatErrorMessage(error)}`);
       });
   };
@@ -1081,8 +1081,8 @@ export async function startCommandRealtimeAudioBridge(params: {
       pushGoogleMeetTalkEvent(recentTalkEvents, event);
     }
   };
-  const emitTalkEvent = (input: TalkEventInput): void => {
-    rememberTalkEvent(talk.emit(input));
+  const emitTalkEvent = (inputValue: TalkEventInput): void => {
+    rememberTalkEvent(talk.emit(inputValue));
   };
   const ensureTalkTurn = (): string => {
     const turn = talk.ensureTurn({
@@ -1270,7 +1270,8 @@ export async function startCommandRealtimeAudioBridge(params: {
         meetingSessionId: params.meetingSessionId,
         requesterSessionKey: params.requesterSessionKey,
         transcript,
-        onTalkEvent: (input) => emitTalkEvent({ ...input, turnId: input.turnId ?? turnId }),
+        onTalkEvent: (inputLocal) =>
+          emitTalkEvent({ ...inputLocal, turnId: inputLocal.turnId ?? turnId }),
       });
     },
     onError: (error) => {

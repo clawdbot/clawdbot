@@ -12,7 +12,7 @@ import {
   updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -78,7 +78,7 @@ async function loadTaskCancelConfig() {
 function configureTaskMaintenanceFromConfig(): void {
   const cfg = getRuntimeConfig();
   configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
 }
 
@@ -108,9 +108,9 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
 
 function readRunningCronJobIds(): Set<string> {
   try {
-    const cronStorePath = resolveCronStorePath(getRuntimeConfig().cron?.store);
+    const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
     return new Set(
-      loadCronStoreSync(cronStorePath)
+      loadCronJobsStoreSync(cronStorePath)
         .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
         // Cron session keys are matched case-insensitively against job ids.
         .map((job) => job.id.toLowerCase()),

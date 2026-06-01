@@ -207,7 +207,7 @@ export async function handleIrcInbound(params: {
     providerKey: "irc",
     accountId: account.accountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.channel,
-    log: (message) => runtime.log?.(message),
+    log: (messageLocal) => runtime.log?.(messageLocal),
   });
 
   const groupMatch = resolveIrcGroupMatch({

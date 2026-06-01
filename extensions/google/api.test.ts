@@ -88,6 +88,16 @@ describe("google generative ai helpers", () => {
   it("normalizes transport baseUrls only for Google Generative AI", () => {
     expect(
       resolveGoogleGenerativeAiTransport({
+        provider: "google",
+        api: undefined,
+        baseUrl: "https://generativelanguage.googleapis.com",
+      }),
+    ).toEqual({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+    expect(
+      resolveGoogleGenerativeAiTransport({
         api: "google-generative-ai",
         baseUrl: "https://generativelanguage.googleapis.com",
       }),

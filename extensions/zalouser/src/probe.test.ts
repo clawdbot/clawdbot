@@ -48,7 +48,7 @@ describe("probeZalouser", () => {
 
   it("times out when lookup takes too long", async () => {
     vi.useFakeTimers();
-    mockGetUserInfo.mockReturnValueOnce(new Promise(() => undefined));
+    mockGetUserInfo.mockReturnValueOnce(new Promise(() => {}));
 
     const pending = probeZalouser("default", 10);
     await vi.advanceTimersByTimeAsync(1000);
@@ -61,7 +61,7 @@ describe("probeZalouser", () => {
 
   it("caps oversized lookup timeout before scheduling", async () => {
     vi.useFakeTimers();
-    mockGetUserInfo.mockReturnValueOnce(new Promise(() => undefined));
+    mockGetUserInfo.mockReturnValueOnce(new Promise(() => {}));
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     void probeZalouser("default", Number.MAX_SAFE_INTEGER);

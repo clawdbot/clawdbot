@@ -84,7 +84,9 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
     headers: { origin: `http://127.0.0.1:${getHarness().port}` },
   });
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   await connectOk(ws, {
     client: {
       id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
@@ -179,7 +181,9 @@ test("session:patch hook does not fire for webchat clients", async () => {
     headers: { origin: `http://127.0.0.1:${getHarness().port}` },
   });
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   await connectOk(ws, {
     client: {
       id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
@@ -326,7 +330,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
     headers: { origin: `http://127.0.0.1:${getHarness().port}` },
   });
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   await connectOk(ws, {
     client: {
       id: GATEWAY_CLIENT_IDS.CONTROL_UI,

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diffs-language-pack",
-  "version": "2026.5.30",
+  "version": "2026.6.1",
   "description": "OpenClaw diffs viewer syntax highlighting language pack",
   "repository": {
     "type": "git",
@@ -22,13 +22,13 @@
       "minHostVersion": ">=2026.5.27"
     },
     "compat": {
-      "pluginApi": ">=2026.5.30"
+      "pluginApi": ">=2026.6.1"
     },
     "assetScripts": {
       "build": "node ../../scripts/build-diffs-viewer-runtime.mjs full"
     },
     "build": {
-      "openclawVersion": "2026.5.30",
+      "openclawVersion": "2026.6.1",
       "staticAssets": [
         {
           "source": "./assets/viewer-runtime.js",

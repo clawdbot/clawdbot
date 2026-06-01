@@ -38,7 +38,7 @@ describe("memory-wiki config compatibility", () => {
     ]);
     expect(
       (
-        migration?.config.plugins?.entries?.["memory-wiki"] as {
+        migration!.config.plugins!.entries!["memory-wiki"] as {
           config?: { bridge?: Record<string, unknown> };
         }
       ).config?.bridge,
@@ -71,7 +71,7 @@ describe("memory-wiki config compatibility", () => {
     ]);
     expect(
       (
-        migration.config.plugins?.entries?.["memory-wiki"] as {
+        migration.config.plugins!.entries!["memory-wiki"] as {
           config?: { bridge?: Record<string, unknown> };
         }
       ).config?.bridge,

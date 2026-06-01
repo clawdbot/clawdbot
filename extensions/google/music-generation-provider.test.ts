@@ -1,15 +1,18 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, generateContentMock } = vi.hoisted(() => {
-  const generateContentMock = vi.fn();
-  const createGoogleGenAIMock = vi.fn(() => {
+  const generateContentMockLocal = vi.fn();
+  const createGoogleGenAIMockLocal = vi.fn(() => {
     return {
       models: {
-        generateContent: generateContentMock,
+        generateContent: generateContentMockLocal,
       },
     };
   });
-  return { createGoogleGenAIMock, generateContentMock };
+  return {
+    createGoogleGenAIMock: createGoogleGenAIMockLocal,
+    generateContentMock: generateContentMockLocal,
+  };
 });
 
 vi.mock("./google-genai-runtime.js", () => ({

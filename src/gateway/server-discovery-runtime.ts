@@ -101,7 +101,7 @@ export async function startGatewayDiscovery(params: {
               }
               return started;
             },
-            (err) => {
+            (err: unknown) => {
               params.logDiscovery.warn(
                 `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
               );

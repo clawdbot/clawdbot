@@ -84,6 +84,65 @@ jobs:
             "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Prepare trusted workflow audit configs
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
+          trusted_zizmor_config="$RUNNER_TEMP/zizmor-base.yml"
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            timeout --signal=TERM --kill-after=10s 30s git fetch --no-tags --depth=1 origin \
+              "+${BASE_SHA}:refs/remotes/origin/security-base" ||
+              timeout --signal=TERM --kill-after=10s 30s git fetch --no-tags --depth=1 origin \
+                "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+
+          if git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
+            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          elif git show "refs/remotes/origin/${BASE_REF}:.pre-commit-config.yaml" \
+            > "$trusted_config" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} does not expose .pre-commit-config.yaml; using origin/${BASE_REF} instead."
+          else
+            echo "::error title=trusted pre-commit config unavailable::Could not read .pre-commit-config.yaml from ${BASE_SHA} or origin/${BASE_REF}."
+            exit 1
+          fi
+
+          if git cat-file -e "${BASE_SHA}:.github/zizmor.yml" 2>/dev/null; then
+            git show "${BASE_SHA}:.github/zizmor.yml" > "$trusted_zizmor_config"
+          elif git show "refs/remotes/origin/${BASE_REF}:.github/zizmor.yml" \
+            > "$trusted_zizmor_config" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} does not expose .github/zizmor.yml; using origin/${BASE_REF} instead."
+          else
+            echo "::error title=trusted zizmor config unavailable::Could not read .github/zizmor.yml from ${BASE_SHA} or origin/${BASE_REF}."
+            exit 1
+          fi
+
+          python3 - "$trusted_config" "$trusted_zizmor_config" <<'PY'
+          from pathlib import Path
+          import sys
+
+          config_path = Path(sys.argv[1])
+          zizmor_config_path = sys.argv[2]
+          text = config_path.read_text()
+          if ".github/zizmor.yml" not in text:
+            raise SystemExit("trusted pre-commit config does not reference .github/zizmor.yml")
+          config_path.write_text(text.replace(".github/zizmor.yml", zizmor_config_path))
+          PY
+
+          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+
+      - name: Install pre-commit
+        run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
+
       - name: Install actionlint
         shell: bash
         run: |
@@ -102,6 +161,15 @@ jobs:
 
       - name: Lint workflows
         run: actionlint
+
+      - name: Audit all workflows with zizmor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t workflow_files < <(
+            find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | sort
+          )
+          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py

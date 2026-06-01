@@ -7,6 +7,7 @@ export function createActiveRun(
   params: {
     sessionId?: string;
     agentId?: string;
+    controlUiVisible?: boolean;
     owner?: { connId?: string; deviceId?: string };
   } = {},
 ) {
@@ -18,6 +19,7 @@ export function createActiveRun(
     agentId: params.agentId,
     startedAtMs: now,
     expiresAtMs: now + 30_000,
+    controlUiVisible: params.controlUiVisible,
     ownerConnId: params.owner?.connId,
     ownerDeviceId: params.owner?.deviceId,
   };

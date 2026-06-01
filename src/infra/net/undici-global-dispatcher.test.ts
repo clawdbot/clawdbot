@@ -18,20 +18,20 @@ const {
   createHttp1EnvHttpProxyAgent,
   loadUndiciGlobalDispatcherDeps,
 } = vi.hoisted(() => {
-  class Agent {
+  class AgentLocal {
     constructor(public readonly options?: Record<string, unknown>) {}
   }
 
-  class EnvHttpProxyAgent {
+  class EnvHttpProxyAgentLocal {
     public readonly capturedHttpProxy = process.env.HTTP_PROXY;
     constructor(public readonly options?: Record<string, unknown>) {}
   }
 
-  class ProxyAgent {
+  class ProxyAgentLocal {
     constructor(public readonly url: string) {}
   }
 
-  class ManagedUndiciDispatcher {
+  class ManagedUndiciDispatcherLocal {
     #closed = false;
     #destroyed = false;
     public readonly dispatchCalls: Array<Record<string, unknown>> = [];
@@ -61,61 +61,64 @@ const {
       this.#destroyed = true;
     }
   }
+  Object.defineProperty(ManagedUndiciDispatcherLocal, "name", {
+    value: "ManagedUndiciDispatcher",
+  });
 
-  let currentDispatcher: unknown = new Agent();
+  let currentDispatcher: unknown = new AgentLocal();
 
   const getGlobalDispatcher = vi.fn(() => currentDispatcher);
-  const setGlobalDispatcher = vi.fn((next: unknown) => {
+  const setGlobalDispatcherLocal = vi.fn((next: unknown) => {
     currentDispatcher = next;
   });
-  const setCurrentDispatcher = (next: unknown) => {
+  const setCurrentDispatcherLocal = (next: unknown) => {
     currentDispatcher = next;
   };
-  const getCurrentDispatcher = () => currentDispatcher;
-  const getDefaultAutoSelectFamily = vi.fn(() => undefined as boolean | undefined);
-  const setDefaultAutoSelectFamily = vi.fn();
-  const isProxylineDispatcher = vi.fn(
-    (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcher,
+  const getCurrentDispatcherLocal = () => currentDispatcher;
+  const getDefaultAutoSelectFamilyLocal = vi.fn(() => undefined as boolean | undefined);
+  const setDefaultAutoSelectFamilyLocal = vi.fn();
+  const isProxylineDispatcherLocal = vi.fn(
+    (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcherLocal,
   );
-  const createHttp1Agent = vi.fn(
+  const createHttp1AgentLocal = vi.fn(
     (options?: Record<string, unknown>, timeoutMs?: number) =>
-      new Agent({
+      new AgentLocal({
         ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
       }),
   );
-  const createHttp1EnvHttpProxyAgent = vi.fn(
+  const createHttp1EnvHttpProxyAgentLocal = vi.fn(
     (options?: Record<string, unknown>, timeoutMs?: number) =>
-      new EnvHttpProxyAgent({
+      new EnvHttpProxyAgentLocal({
         ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
         clientFactory: "ip-safe-test-client-factory",
       }),
   );
-  const loadUndiciGlobalDispatcherDeps = vi.fn(() => ({
-    Agent,
-    EnvHttpProxyAgent,
+  const loadUndiciGlobalDispatcherDepsLocal = vi.fn(() => ({
+    Agent: AgentLocal,
+    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
     getGlobalDispatcher,
-    setGlobalDispatcher,
+    setGlobalDispatcher: setGlobalDispatcherLocal,
   }));
 
   return {
-    Agent,
-    EnvHttpProxyAgent,
-    ManagedUndiciDispatcher,
-    ProxyAgent,
+    Agent: AgentLocal,
+    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
+    ManagedUndiciDispatcher: ManagedUndiciDispatcherLocal,
+    ProxyAgent: ProxyAgentLocal,
     getGlobalDispatcher,
-    setGlobalDispatcher,
-    setCurrentDispatcher,
-    getCurrentDispatcher,
-    getDefaultAutoSelectFamily,
-    isProxylineDispatcher,
-    createHttp1Agent,
-    createHttp1EnvHttpProxyAgent,
-    setDefaultAutoSelectFamily,
-    loadUndiciGlobalDispatcherDeps,
+    setGlobalDispatcher: setGlobalDispatcherLocal,
+    setCurrentDispatcher: setCurrentDispatcherLocal,
+    getCurrentDispatcher: getCurrentDispatcherLocal,
+    getDefaultAutoSelectFamily: getDefaultAutoSelectFamilyLocal,
+    isProxylineDispatcher: isProxylineDispatcherLocal,
+    createHttp1Agent: createHttp1AgentLocal,
+    createHttp1EnvHttpProxyAgent: createHttp1EnvHttpProxyAgentLocal,
+    setDefaultAutoSelectFamily: setDefaultAutoSelectFamilyLocal,
+    loadUndiciGlobalDispatcherDeps: loadUndiciGlobalDispatcherDepsLocal,
   };
 });
 

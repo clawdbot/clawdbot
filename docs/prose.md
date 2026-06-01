@@ -1,43 +1,64 @@
 ---
-summary: "OpenProse: .prose workflows, slash commands, and state in OpenClaw"
-read_when:
-  - You want to run or write .prose workflows
-  - You want to enable the OpenProse plugin
-  - You need to understand state storage
 title: "OpenProse"
+sidebarTitle: "OpenProse"
+summary: "OpenProse is a markdown-first workflow format for multi-agent AI sessions. In OpenClaw it ships as a plugin with a /prose slash command and a skill pack."
+read_when:
+  - You want to run or write .prose workflow files
+  - You want to enable the OpenProse plugin
+  - You need to understand how OpenProse maps to OpenClaw primitives
 ---
 
-OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
+OpenProse is a portable, markdown-first workflow format for orchestrating AI
+sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill
+pack and a `/prose` slash command. Programs live in `.prose` files and can
+spawn multiple sub-agents with explicit control flow.
 
-Official site: [https://www.prose.md](https://www.prose.md)
+<CardGroup cols={3}>
+  <Card title="Install" icon="download" href="#install">
+    Enable the OpenProse plugin and restart the Gateway.
+  </Card>
+  <Card title="Run a program" icon="play" href="#slash-command">
+    Use `/prose run` to execute a `.prose` file or remote program.
+  </Card>
+  <Card title="Write programs" icon="pencil" href="#example">
+    Author multi-agent workflows with parallel and sequential steps.
+  </Card>
+</CardGroup>
 
-## What it can do
+## Install
 
-- Multi-agent research + synthesis with explicit parallelism.
-- Repeatable approval-safe workflows (code review, incident triage, content pipelines).
-- Reusable `.prose` programs you can run across supported agent runtimes.
+<Steps>
+  <Step title="Enable the plugin">
+    Bundled plugins are disabled by default. Enable OpenProse:
 
-## Install + enable
+    ```bash
+    openclaw plugins enable open-prose
+    ```
 
-Bundled plugins are disabled by default. Enable OpenProse:
+  </Step>
+  <Step title="Restart the Gateway">
+    ```bash
+    openclaw gateway restart
+    ```
+  </Step>
+  <Step title="Verify">
+    ```bash
+    openclaw plugins list | grep prose
+    ```
 
-```bash
-openclaw plugins enable open-prose
-```
+    You should see `open-prose` as enabled. The `/prose` skill command is now
+    available in chat.
 
-Restart the Gateway after enabling the plugin.
+  </Step>
+</Steps>
 
-Dev/local checkout: `openclaw plugins install ./path/to/local/open-prose-plugin`
-
-Related docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
+For a local checkout: `openclaw plugins install ./path/to/local/open-prose-plugin`
 
 ## Slash command
 
-OpenProse registers `/prose` as a user-invocable skill command. It routes to the OpenProse VM instructions and uses OpenClaw tools under the hood.
+OpenProse registers `/prose` as a user-invocable skill command:
 
-Common commands:
-
-```
+```text
 /prose help
 /prose run <file.prose>
 /prose run <handle/slug>
@@ -47,7 +68,16 @@ Common commands:
 /prose update
 ```
 
-## Example: a simple `.prose` file
+`/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
+Direct URLs are fetched as-is using the `web_fetch` tool.
+
+## What it can do
+
+- Multi-agent research and synthesis with explicit parallelism.
+- Repeatable, approval-safe workflows (code review, incident triage, content pipelines).
+- Reusable `.prose` programs you can run across supported agent runtimes.
+
+## Example: parallel research and synthesis
 
 ```prose
 # Research + synthesis with two agents running in parallel.
@@ -72,11 +102,27 @@ session "Merge the findings + draft into a final answer."
 context: { findings, draft }
 ```
 
+## OpenClaw runtime mapping
+
+OpenProse programs map to OpenClaw primitives:
+
+| OpenProse concept         | OpenClaw tool    |
+| ------------------------- | ---------------- |
+| Spawn session / Task tool | `sessions_spawn` |
+| File read / write         | `read` / `write` |
+| Web fetch                 | `web_fetch`      |
+
+<Warning>
+  If your tool allowlist blocks `sessions_spawn`, `read`, `write`, or
+  `web_fetch`, OpenProse programs will fail. Check your
+  [tools allowlist config](/gateway/config-tools).
+</Warning>
+
 ## File locations
 
 OpenProse keeps state under `.prose/` in your workspace:
 
-```
+```text
 .prose/
 ├── .env
 ├── runs/
@@ -90,48 +136,56 @@ OpenProse keeps state under `.prose/` in your workspace:
 
 User-level persistent agents live at:
 
-```
+```text
 ~/.prose/agents/
 ```
 
-## State modes
+## State backends
 
-OpenProse supports multiple state backends:
+<AccordionGroup>
+  <Accordion title="filesystem (default)">
+    State is written to `.prose/runs/...` in the workspace. No extra
+    dependencies required.
+  </Accordion>
+  <Accordion title="in-context">
+    Transient state kept in the context window. Suitable for small, short-lived
+    programs.
+  </Accordion>
+  <Accordion title="sqlite (experimental)">
+    Requires the `sqlite3` binary on `PATH`.
+  </Accordion>
+  <Accordion title="postgres (experimental)">
+    Requires `psql` and a connection string.
 
-- **filesystem** (default): `.prose/runs/...`
-- **in-context**: transient, for small programs
-- **sqlite** (experimental): requires `sqlite3` binary
-- **postgres** (experimental): requires `psql` and a connection string
+    <Warning>
+      Postgres credentials flow into sub-agent logs. Use a dedicated,
+      least-privileged database.
+    </Warning>
 
-Notes:
+  </Accordion>
+</AccordionGroup>
 
-- sqlite/postgres are opt-in and experimental.
-- postgres credentials flow into subagent logs; use a dedicated, least-privileged DB.
+## Security
 
-## Remote programs
-
-`/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
-Direct URLs are fetched as-is. This uses the `web_fetch` tool (or `exec` for POST).
-
-## OpenClaw runtime mapping
-
-OpenProse programs map to OpenClaw primitives:
-
-| OpenProse concept         | OpenClaw tool    |
-| ------------------------- | ---------------- |
-| Spawn session / Task tool | `sessions_spawn` |
-| File read/write           | `read` / `write` |
-| Web fetch                 | `web_fetch`      |
-
-If your tool allowlist blocks these tools, OpenProse programs will fail. See [Skills config](/tools/skills-config).
-
-## Security + approvals
-
-Treat `.prose` files like code. Review before running. Use OpenClaw tool allowlists and approval gates to control side effects.
-
-For deterministic, approval-gated workflows, compare with [Lobster](/tools/lobster).
+Treat `.prose` files like code. Review them before running. Use OpenClaw tool
+allowlists and approval gates to control side effects. For deterministic,
+approval-gated workflows, compare with [Lobster](/tools/lobster).
 
 ## Related
 
-- [Text-to-speech](/tools/tts)
-- [Markdown formatting](/concepts/markdown-formatting)
+<CardGroup cols={2}>
+  <Card title="Skills reference" href="/tools/skills" icon="puzzle-piece">
+    How OpenProse's skill pack loads and what gates apply.
+  </Card>
+  <Card title="Subagents" href="/tools/subagents" icon="users">
+    OpenClaw's native multi-agent coordination layer.
+  </Card>
+  <Card title="Text-to-speech" href="/tools/tts" icon="volume-high">
+    Add audio output to your workflows.
+  </Card>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    All available chat commands including /prose.
+  </Card>
+</CardGroup>
+
+Official site: [https://www.prose.md](https://www.prose.md)

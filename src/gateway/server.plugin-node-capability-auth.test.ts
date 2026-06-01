@@ -82,7 +82,9 @@ async function listen(
       sockets.delete(socket);
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, host, resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, host, resolve);
+  });
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
@@ -93,9 +95,9 @@ async function listen(
         socket.destroy();
       }
       await withTimeout(
-        new Promise<void>((resolve, reject) =>
-          server.close((err) => (err ? reject(err) : resolve())),
-        ),
+        new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        }),
         SERVER_CLOSE_TIMEOUT_MS,
         "gateway test server close",
       );
@@ -202,7 +204,7 @@ async function sendRawHttpRequest(params: {
       });
     });
     socket.on("data", (chunk) => {
-      response += chunk;
+      response += chunk.toString();
     });
     socket.once("end", () => {
       finish(() => resolve(response));
@@ -335,8 +337,12 @@ async function withCanvasGatewayHarness(params: {
     for (const ws of wss.clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => canvasWss.close(() => resolve()));
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      canvasWss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
     await listener.close();
     params.rateLimiter?.dispose();
   }

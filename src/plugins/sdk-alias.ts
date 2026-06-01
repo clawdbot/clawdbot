@@ -34,6 +34,14 @@ type PluginSdkPackageJson = {
   version?: string;
 };
 
+type WorkspacePackageAliasEntry = {
+  packageName: string;
+  packageDir: string;
+  subpath: string;
+  srcFile: string;
+  distFile: string;
+};
+
 const STARTUP_ARGV1 = process.argv[1];
 const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
 
@@ -508,7 +516,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
 // workspace package import reachable from plugin SDK barrels needs an explicit
 // source/dist alias here to keep source checkouts and packaged builds aligned.
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/gateway-client",
     packageDir: "gateway-client",
@@ -669,6 +677,118 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     subpath: "normalization",
     srcFile: "normalization.ts",
     distFile: "normalization.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "base64",
+    srcFile: "base64.ts",
+    distFile: "base64.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "constants",
+    srcFile: "constants.ts",
+    distFile: "constants.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "content-length",
+    srcFile: "content-length.ts",
+    distFile: "content-length.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "file-name",
+    srcFile: "file-name.ts",
+    distFile: "file-name.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "inbound-path-policy",
+    srcFile: "inbound-path-policy.ts",
+    distFile: "inbound-path-policy.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "inline-image-data-url",
+    srcFile: "inline-image-data-url.ts",
+    distFile: "inline-image-data-url.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "media-source-url",
+    srcFile: "media-source-url.ts",
+    distFile: "media-source-url.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "mime",
+    srcFile: "mime.ts",
+    distFile: "mime.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "read-byte-stream-with-limit",
+    srcFile: "read-byte-stream-with-limit.ts",
+    distFile: "read-byte-stream-with-limit.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "read-response-with-limit",
+    srcFile: "read-response-with-limit.ts",
+    distFile: "read-response-with-limit.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "number-coercion",
+    srcFile: "number-coercion.ts",
+    distFile: "number-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "record-coerce",
+    srcFile: "record-coerce.ts",
+    distFile: "record-coerce.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "string-coerce",
+    srcFile: "string-coerce.ts",
+    distFile: "string-coerce.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "string-normalization",
+    srcFile: "string-normalization.ts",
+    distFile: "string-normalization.mjs",
   },
   {
     packageName: "@openclaw/terminal-core",
@@ -888,6 +1008,123 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     distFile: "provider-model-id-normalize.mjs",
   },
 ] as const;
+const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
+  "acp-core",
+  "media-core",
+  "normalization-core",
+  "terminal-core",
+]);
+
+function normalizePackageExportSubpath(exportKey: string): string | null {
+  if (exportKey === ".") {
+    return "";
+  }
+  if (!exportKey.startsWith("./")) {
+    return null;
+  }
+  const subpath = exportKey.slice(2);
+  return subpath && !subpath.includes("..") ? subpath : null;
+}
+
+function resolvePackageExportImportPath(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.import === "string"
+    ? record.import
+    : typeof record.default === "string"
+      ? record.default
+      : null;
+}
+
+function listRootPackagedWorkspacePackageAliasEntries(params: {
+  packageRoot: string;
+  packageName: string;
+  packageDir: string;
+}): WorkspacePackageAliasEntry[] {
+  const distRoot = path.join(params.packageRoot, "dist", params.packageDir);
+  if (!fs.existsSync(distRoot)) {
+    return [];
+  }
+  const entries: WorkspacePackageAliasEntry[] = [];
+  const visit = (dir: string, prefix = "") => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relativePath = prefix ? path.join(prefix, entry.name) : entry.name;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !relativePath.endsWith(".js")) {
+        continue;
+      }
+      const normalizedRelativePath = relativePath.split(path.sep).join("/");
+      const subpath =
+        normalizedRelativePath === "index.js" ? "" : normalizedRelativePath.slice(0, -".js".length);
+      if (subpath.includes("..")) {
+        continue;
+      }
+      entries.push({
+        packageName: params.packageName,
+        packageDir: params.packageDir,
+        subpath,
+        srcFile: `${subpath || "index"}.ts`,
+        distFile: relativePath,
+      });
+    }
+  };
+  visit(distRoot);
+  return entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath));
+}
+
+export function listWorkspacePackageExportAliasEntries(params: {
+  packageRoot: string;
+  packageName: string;
+  packageDir: string;
+}): WorkspacePackageAliasEntry[] {
+  const packageJsonPath = path.join(
+    params.packageRoot,
+    "packages",
+    params.packageDir,
+    "package.json",
+  );
+  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+  const packageJson =
+    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
+    (fallbackPackageRoot
+      ? tryReadJsonSync<PluginSdkPackageJson>(
+          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
+        )
+      : null);
+  const exports = packageJson?.exports;
+  if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
+    return listRootPackagedWorkspacePackageAliasEntries(params);
+  }
+  const entries: WorkspacePackageAliasEntry[] = [];
+  for (const [exportKey, value] of Object.entries(exports)) {
+    const subpath = normalizePackageExportSubpath(exportKey);
+    const importPath = resolvePackageExportImportPath(value);
+    if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+      continue;
+    }
+    const distFile = importPath.slice("./dist/".length);
+    const srcFile = distFile.replace(/\.mjs$/u, ".ts");
+    entries.push({
+      packageName: params.packageName,
+      packageDir: params.packageDir,
+      subpath,
+      srcFile,
+      distFile,
+    });
+  }
+  return entries.length > 0
+    ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
+    : listRootPackagedWorkspacePackageAliasEntries(params);
+}
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
   if (!fs.existsSync(candidate)) {
@@ -1092,18 +1329,26 @@ function resolveWorkspacePackageAliasMap(params: {
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const aliasMap: Record<string, string> = {};
-  for (const entry of WORKSPACE_PACKAGE_ALIAS_ENTRIES) {
+  const workspacePackageAliasEntries = [
+    ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
+    ...listWorkspacePackageExportAliasEntries({
+      packageRoot,
+      packageName: "@openclaw/acp-core",
+      packageDir: "acp-core",
+    }),
+  ];
+  for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
       const candidates =
         kind === "dist"
           ? [
-              ...(entry.packageName === "@openclaw/terminal-core"
+              ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
                 ? [
                     path.join(
                       packageRoot,
                       "dist",
-                      "terminal-core",
+                      entry.packageDir,
                       entry.distFile.replace(/\.mjs$/u, ".js"),
                     ),
                   ]

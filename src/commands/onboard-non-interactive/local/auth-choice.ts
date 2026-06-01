@@ -81,18 +81,19 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...input,
       secretInputMode: requestedSecretInputMode,
     });
-  const toApiKeyCredential = (params: {
+  const toApiKeyCredential = (paramsLocal: {
     provider: string;
     resolved: ResolvedNonInteractiveApiKey;
     email?: string;
     metadata?: Record<string, string>;
   }): ApiKeyCredential | null => {
-    const storeSecretRef = requestedSecretInputMode === "ref" && params.resolved.source === "env"; // pragma: allowlist secret
+    const storeSecretRef =
+      requestedSecretInputMode === "ref" && paramsLocal.resolved.source === "env"; // pragma: allowlist secret
     if (storeSecretRef) {
-      if (!params.resolved.envVarName) {
+      if (!paramsLocal.resolved.envVarName) {
         runtime.error(
           [
-            `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+            `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
             "Set the provider API key env var and retry, or use --secret-input-mode plaintext.",
           ].join("\n"),
         );
@@ -101,24 +102,24 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
       return {
         type: "api_key",
-        provider: params.provider,
+        provider: paramsLocal.provider,
         keyRef: {
           source: "env",
           provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
             preferFirstProviderForSource: true,
           }),
-          id: params.resolved.envVarName,
+          id: paramsLocal.resolved.envVarName,
         },
-        ...(params.email ? { email: params.email } : {}),
-        ...(params.metadata ? { metadata: params.metadata } : {}),
+        ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
+        ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
       };
     }
     return {
       type: "api_key",
-      provider: params.provider,
-      key: params.resolved.key,
-      ...(params.email ? { email: params.email } : {}),
-      ...(params.metadata ? { metadata: params.metadata } : {}),
+      provider: paramsLocal.provider,
+      key: paramsLocal.resolved.key,
+      ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
+      ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
   if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {

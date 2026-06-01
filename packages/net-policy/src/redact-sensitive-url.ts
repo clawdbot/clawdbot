@@ -6,6 +6,7 @@ function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+/** Config UI hint tag for URL-like values that may embed credentials or tokens. */
 export const SENSITIVE_URL_HINT_TAG = "url-secret";
 
 const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
@@ -26,11 +27,13 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "signature",
 ]);
 
+/** True for auth-like URL query parameter names that should be redacted. */
 export function isSensitiveUrlQueryParamName(name: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(name).replaceAll("-", "_");
   return SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized);
 }
 
+/** True for config paths whose URL values may contain credentials or secret query params. */
 export function isSensitiveUrlConfigPath(path: string): boolean {
   if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
     return true;
@@ -44,10 +47,12 @@ export function isSensitiveUrlConfigPath(path: string): boolean {
   return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
 }
 
+/** True when a config UI hint explicitly marks a URL-like value as secret-bearing. */
 export function hasSensitiveUrlHintTag(hint: ConfigUiHintTags | undefined): boolean {
   return hint?.tags?.includes(SENSITIVE_URL_HINT_TAG) === true;
 }
 
+/** Redacts credentials and sensitive query params from parseable URLs. */
 export function redactSensitiveUrl(value: string): string {
   try {
     const parsed = new URL(value);
@@ -69,6 +74,7 @@ export function redactSensitiveUrl(value: string): string {
   }
 }
 
+/** Redacts sensitive URL-looking substrings even when the full value is not a valid URL. */
 export function redactSensitiveUrlLikeString(value: string): string {
   const redactedUrl = redactSensitiveUrl(value);
   if (redactedUrl !== value) {

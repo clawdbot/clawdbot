@@ -333,20 +333,6 @@ describe("collectBundledExtensionManifestErrors", () => {
 });
 
 describe("bundled plugin package dependency checks", () => {
-  function makeBundledSpecs() {
-    return new Map([
-      ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
-      [
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        { conflicts: [], pluginIds: ["matrix"], spec: "^0.4.0" },
-      ],
-      [
-        "@matrix-org/matrix-sdk-crypto-wasm",
-        { conflicts: [], pluginIds: ["matrix"], spec: "18.0.0" },
-      ],
-    ]);
-  }
-
   it("maps package names from import specifiers", () => {
     expect(packageNameFromSpecifier("@larksuiteoapi/node-sdk/subpath")).toBe(
       "@larksuiteoapi/node-sdk",

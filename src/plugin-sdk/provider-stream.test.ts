@@ -370,7 +370,9 @@ describe("createPlainTextToolCallCompatWrapper", () => {
 
     const firstResult = await Promise.race([
       first,
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 20)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 20);
+      }),
     ]);
     expect(firstResult).not.toBe("timeout");
     expect(firstResult).toMatchObject({

@@ -1758,9 +1758,9 @@ export async function startZaloListener(params: {
     );
   }
 
-  const { api, ownUserId } = await withZaloApi(profile, async (api) => ({
-    api,
-    ownUserId: await resolveOwnUserId(api),
+  const { api, ownUserId } = await withZaloApi(profile, async (apiLocal) => ({
+    api: apiLocal,
+    ownUserId: await resolveOwnUserId(apiLocal),
   }));
   let stopped = false;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;

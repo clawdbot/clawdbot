@@ -169,7 +169,9 @@ while (Date.now() - startedAt <= timeoutMs) {
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
   }
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 500);
+  });
 }
 
 const suffix = lastResult ? ` (last HTTP ${lastResult.status}: ${lastResult.text})` : "";

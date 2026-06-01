@@ -19,3 +19,12 @@ export function resolveFirstContextText(
   }
   return "";
 }
+
+export function resolveCommandContextText(ctx: FinalizedMsgContext): string {
+  return resolveFirstContextText(ctx, ["BodyForCommands", "CommandBody", "RawBody", "Body"]).trim();
+}
+
+export function hasExplicitCommandContextText(ctx: FinalizedMsgContext): boolean {
+  const text = resolveCommandContextText(ctx);
+  return text.startsWith("/") || text.startsWith("!");
+}

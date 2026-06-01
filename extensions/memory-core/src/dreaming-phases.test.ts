@@ -400,7 +400,8 @@ describe("memory-core dreaming phases", () => {
     ).resolves.toBeUndefined();
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreams).toContain("Move backups to S3 Glacier.");
+    expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(dreams).not.toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
     expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
     expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
@@ -884,7 +885,7 @@ describe("memory-core dreaming phases", () => {
     );
 
     const readSpy = vi.spyOn(fs, "readFile");
-    let transcriptReadCount = 0;
+    let transcriptReadCount;
     try {
       await withDreamingTestClock(async () => {
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);

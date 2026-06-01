@@ -5,6 +5,7 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -174,9 +175,7 @@ function assertPluginUninstalled() {
   const pluginId = process.argv[3];
   const cliRoot = process.argv[4];
   const cfg = readJson(configPath());
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  const installRecords = records.installRecords ?? records.records ?? {};
+  const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
   assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
   const managedRoot = path.join(
@@ -188,7 +187,7 @@ function assertPluginUninstalled() {
   );
   assert(!fs.existsSync(managedRoot), `managed plugin directory still present: ${managedRoot}`);
   if (cliRoot) {
-    const list = JSON.stringify(records);
+    const list = JSON.stringify(installRecords);
     assert(!list.includes(cliRoot), `install records still mention CLI root ${cliRoot}`);
   }
 }

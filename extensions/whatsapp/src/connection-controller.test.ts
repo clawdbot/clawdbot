@@ -312,7 +312,7 @@ describe("WhatsAppConnectionController", () => {
 
   it("tracks real websocket frame activity in the connection snapshot", async () => {
     vi.useFakeTimers();
-    const controller = new WhatsAppConnectionController({
+    const controllerValue = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
       verbose: false,
@@ -336,7 +336,7 @@ describe("WhatsAppConnectionController", () => {
       waitForWaConnectionMock.mockResolvedValueOnce(undefined);
 
       const snapshots: Array<{ lastTransportActivityAt: number }> = [];
-      await controller.openConnection({
+      await controllerValue.openConnection({
         connectionId: "conn-frame-activity",
         createListener: async () => createListenerStub() as never,
         onHeartbeat: (snapshot) => snapshots.push(snapshot),
@@ -354,14 +354,14 @@ describe("WhatsAppConnectionController", () => {
       const lastSnapshot = snapshots.at(-1);
       expect(lastSnapshot?.lastTransportActivityAt).toBeGreaterThan(firstTransportAt);
     } finally {
-      await controller.shutdown();
+      await controllerValue.shutdown();
       vi.useRealTimers();
     }
   });
 
   it("forces reconnect on transport stall before the long app-silence window", async () => {
     vi.useFakeTimers();
-    const controller = new WhatsAppConnectionController({
+    const controllerLocal = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
       verbose: false,
@@ -385,7 +385,7 @@ describe("WhatsAppConnectionController", () => {
       waitForWaConnectionMock.mockResolvedValueOnce(undefined);
 
       const timeouts: string[] = [];
-      await controller.openConnection({
+      await controllerLocal.openConnection({
         connectionId: "conn-transport-timeout",
         createListener: async () => createListenerStub() as never,
         onWatchdogTimeout: () => timeouts.push("timeout"),
@@ -395,7 +395,7 @@ describe("WhatsAppConnectionController", () => {
 
       expect(timeouts.length).toBeGreaterThanOrEqual(1);
     } finally {
-      await controller.shutdown();
+      await controllerLocal.shutdown();
       vi.useRealTimers();
     }
   });

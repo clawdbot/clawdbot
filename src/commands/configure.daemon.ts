@@ -22,7 +22,7 @@ export async function maybeInstallDaemon(params: {
   daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (error) {
@@ -143,7 +143,7 @@ export async function maybeInstallDaemon(params: {
       },
     );
     if (installError) {
-      note("Gateway service install failed: " + installError, "Gateway");
+      note("Gateway service install failed: ".concat(installError), "Gateway");
       note(gatewayInstallErrorHint(), "Gateway");
       return;
     }

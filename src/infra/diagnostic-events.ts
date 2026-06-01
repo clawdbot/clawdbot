@@ -1027,7 +1027,9 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
 export async function waitForDiagnosticEventsDrained(): Promise<void> {
   const state = getDiagnosticEventsState();
   while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 
@@ -1097,6 +1099,10 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
 
 export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false, { internal: true });
+}
+
+export function getInternalDiagnosticEventSequence(): number {
+  return getDiagnosticEventsState().seq;
 }
 
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {

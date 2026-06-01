@@ -256,12 +256,14 @@ export function createDiscordDraftPreviewController(params: {
         );
       }
       const alreadyStarted = progressDraftGate.hasStarted;
+      let progressActive;
       if (shouldStartDiscordProgressDraftNow(line)) {
         await progressDraftGate.startNow();
+        progressActive = progressDraftGate.hasStarted;
       } else {
-        await progressDraftGate.noteWork();
+        progressActive = await progressDraftGate.noteWork();
       }
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
         await renderProgressDraft();
       }
     },
@@ -294,9 +296,8 @@ export function createDiscordDraftPreviewController(params: {
         }
         lastReasoningProgressLine = normalized;
       }
-      const alreadyStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      const progressActive = await progressDraftGate.noteWork();
+      if (progressActive && progressDraftGate.hasStarted) {
         await renderProgressDraft();
       }
     },

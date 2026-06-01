@@ -396,13 +396,13 @@ export function createApprovalNativeRouteReporter(params: {
       });
       registered = true;
     },
-    async reportSkipped(params: {
+    async reportSkipped(paramsValue: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
     }): Promise<void> {
       await report({
-        approvalKind: params.approvalKind,
-        request: params.request,
+        approvalKind: paramsValue.approvalKind,
+        request: paramsValue.request,
         deliveryPlan: {
           targets: [],
           originTarget: null,
@@ -411,13 +411,13 @@ export function createApprovalNativeRouteReporter(params: {
         deliveredTargets: [],
       });
     },
-    async reportDelivery(params: {
+    async reportDelivery(paramsLocal: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
       deliveryPlan: ChannelApprovalNativeDeliveryPlan;
       deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
     }): Promise<void> {
-      await report(params);
+      await report(paramsLocal);
     },
     async stop(): Promise<void> {
       if (!registered) {

@@ -9,6 +9,7 @@ export type {
 export {
   fetchClaudeUsage,
   fetchCodexUsage,
+  fetchDeepSeekUsage,
   fetchGeminiUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,

@@ -82,6 +82,7 @@ function createIndex(
           plugin.startupDeferConfiguredChannelFullLoadUntilAfterListen,
         ),
         agentHarnesses: [],
+        configPaths: plugin.activation?.onConfigPaths ?? [],
       },
       compat: [],
     })),
@@ -263,6 +264,341 @@ describe("loadPluginLookUpTable", () => {
     expect(table.startup.pluginIds).toEqual(["telegram"]);
   });
 
+  it("scopes metadata manifest reconstruction for restrictive startup allowlists", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai"],
+        activation: {
+          onStartup: true,
+        },
+      }),
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+      createManifestRecord({
+        id: "discord",
+        origin: "bundled",
+        channels: ["discord"],
+      }),
+    ];
+    const index = createIndex(plugins);
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const table = loadPluginLookUpTable({
+      config: {
+        plugins: {
+          allow: ["openai"],
+          slots: { memory: "none" },
+        },
+      } as OpenClawConfig,
+      env: {},
+      index,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      index,
+      config: {
+        plugins: {
+          allow: ["openai"],
+          slots: { memory: "none" },
+        },
+      },
+      env: {},
+      includeDisabled: true,
+      pluginIds: ["openai"],
+    });
+    expect(table.pluginIds).toEqual(["openai"]);
+    expect(table.metrics.indexPluginCount).toBe(3);
+    expect(table.metrics.manifestPluginCount).toBe(1);
+    expect(table.byPluginId.has("telegram")).toBe(false);
+    expect(table.startup.pluginIds).toEqual(["openai"]);
+  });
+
+  it("keeps config-path startup activation owners in scoped manifest reconstruction", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai"],
+        activation: {
+          onStartup: true,
+        },
+      }),
+      createManifestRecord({
+        id: "browser",
+        origin: "bundled",
+        enabledByDefault: true,
+        activation: {
+          onStartup: true,
+          onConfigPaths: ["browser"],
+        },
+      }),
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const index = createIndex(plugins);
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const table = loadPluginLookUpTable({
+      config: {
+        browser: {
+          enabled: true,
+        },
+        plugins: {
+          allow: ["openai"],
+          slots: { memory: "none" },
+        },
+      } as OpenClawConfig,
+      env: {},
+      index,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: ["browser", "openai"],
+    });
+    expect(table.pluginIds).toEqual(["browser", "openai"]);
+    expect(table.metrics.indexPluginCount).toBe(3);
+    expect(table.metrics.manifestPluginCount).toBe(2);
+    expect(table.byPluginId.has("telegram")).toBe(false);
+    expect(table.startup.pluginIds).toEqual(["openai", "browser"]);
+  });
+
+  it("rebuilds an unscoped provided snapshot for restrictive startup scopes", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai"],
+        activation: {
+          onStartup: true,
+        },
+      }),
+      createManifestRecord({
+        id: "browser",
+        origin: "bundled",
+        enabledByDefault: true,
+        activation: {
+          onStartup: true,
+          onConfigPaths: ["browser"],
+        },
+      }),
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      browser: {
+        enabled: true,
+      },
+      plugins: {
+        allow: ["openai"],
+        slots: { memory: "none" },
+      },
+    } as OpenClawConfig;
+    const index = createIndex(plugins, {
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index,
+    });
+    expect(metadataSnapshot.pluginIds).toBeUndefined();
+    expect(metadataSnapshot.metrics.manifestPluginCount).toBe(3);
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    const table = loadPluginLookUpTable({
+      config,
+      env: {},
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: ["browser", "openai"],
+    });
+    expect(table.pluginIds).toEqual(["browser", "openai"]);
+    expect(table.metrics.indexPluginCount).toBe(3);
+    expect(table.metrics.manifestPluginCount).toBe(2);
+    expect(table.byPluginId.has("telegram")).toBe(false);
+    expect(table.startup.pluginIds).toEqual(["openai", "browser"]);
+  });
+
+  it("reuses a scoped provided metadata snapshot when it covers the startup scope", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai"],
+        activation: {
+          onStartup: true,
+        },
+      }),
+      createManifestRecord({
+        id: "browser",
+        origin: "bundled",
+        enabledByDefault: true,
+        activation: {
+          onStartup: true,
+          onConfigPaths: ["browser"],
+        },
+      }),
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      browser: {
+        enabled: false,
+      },
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          browser: { enabled: false },
+          openai: { enabled: true },
+        },
+        slots: { memory: "none" },
+      },
+    } as OpenClawConfig;
+    const index = createIndex(plugins, {
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index,
+      pluginIds: ["browser", "openai"],
+    });
+    expect(metadataSnapshot.pluginIds).toEqual(["browser", "openai"]);
+    expect(metadataSnapshot.metrics.manifestPluginCount).toBe(2);
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    const table = loadPluginLookUpTable({
+      config,
+      env: {},
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(table.pluginIds).toEqual(["browser", "openai"]);
+    expect(table.metrics.indexPluginCount).toBe(3);
+    expect(table.metrics.manifestPluginCount).toBe(2);
+    expect(table.byPluginId.has("telegram")).toBe(false);
+    expect(table.startup.pluginIds).toEqual(["openai"]);
+  });
+
+  it("rebuilds a non-empty scoped provided snapshot for an empty startup scope", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai"],
+        activation: {
+          onStartup: true,
+        },
+      }),
+    ];
+    const config = {
+      plugins: {
+        enabled: false,
+      },
+    } as OpenClawConfig;
+    const index = createIndex(plugins, {
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index,
+      pluginIds: ["openai"],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    const table = loadPluginLookUpTable({
+      config,
+      env: {},
+      index,
+      metadataSnapshot,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: [],
+    });
+    expect(table.pluginIds).toEqual([]);
+    expect(table.metrics.manifestPluginCount).toBe(0);
+    expect(table.startup.pluginIds).toEqual([]);
+  });
+
   it("derives startup ids from a provided metadata snapshot without reloading manifests", async () => {
     const plugins = [
       createManifestRecord({
@@ -344,6 +680,7 @@ describe("loadPluginLookUpTable", () => {
       env: {},
       index,
     });
+    const manifestRegistryLoadCount = loadPluginManifestRegistryForInstalledIndex.mock.calls.length;
     listPotentialConfiguredChannelIds.mockClear();
 
     const first = loadPluginLookUpTable({
@@ -358,7 +695,9 @@ describe("loadPluginLookUpTable", () => {
     });
 
     expect(second).toBe(first);
-    expect(listPotentialConfiguredChannelIds).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(
+      manifestRegistryLoadCount,
+    );
   });
 
   it("rebuilds when a provided metadata snapshot has a stale plugin policy", async () => {

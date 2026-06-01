@@ -358,6 +358,33 @@ describe("resolveFailureDestination", () => {
     });
   });
 
+  it("keeps inherited announce targets when a job clears only failure destination mode", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: undefined,
+          },
+        },
+      }),
+      {
+        channel: "signal",
+        to: "group-abc",
+        accountId: "global-account",
+        mode: "announce",
+      },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "signal",
+      to: "group-abc",
+      accountId: "global-account",
+    });
+  });
+
   it("uses a provider-prefixed failure destination as the announce channel", () => {
     const plan = resolveFailureDestination(
       makeCronJob({

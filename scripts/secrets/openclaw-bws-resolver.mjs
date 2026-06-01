@@ -6,7 +6,7 @@ const readStdin = () =>
     let input = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
-      input += chunk;
+      input += chunk.toString();
     });
     process.stdin.on("end", () => resolve(input));
     process.stdin.on("error", reject);
@@ -88,7 +88,9 @@ const main = async () => {
   process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
 };
 
-main().catch((error) => {
-  process.stderr.write(`${error.message}\n`);
-  process.exit(1);
-});
+main().catch(
+  /** @param {unknown} error */ (error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  },
+);

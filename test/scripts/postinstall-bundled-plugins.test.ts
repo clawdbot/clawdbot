@@ -19,14 +19,6 @@ import { writePackageDistInventory } from "../../src/infra/package-dist-inventor
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
-
-async function createExtensionsDir() {
-  const root = await createTempDirAsync("openclaw-postinstall-");
-  const extensionsDir = path.join(root, "dist", "extensions");
-  await fs.mkdir(extensionsDir, { recursive: true });
-  return extensionsDir;
-}
-
 async function expectPathExists(filePath: string) {
   await expect(fs.access(filePath)).resolves.toBeUndefined();
 }

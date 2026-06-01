@@ -18,7 +18,6 @@ function resolveFeishuParentConversationCandidates(rawId: string): string[] {
     case "group_topic":
     case "group_sender":
       return [parsed.chatId];
-    case "group":
     default:
       return [];
   }

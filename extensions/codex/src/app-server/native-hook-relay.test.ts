@@ -185,6 +185,41 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("keeps selected no-policy PreToolUse installed with an unavailable no-op marker", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
+        events: ["pre_tool_use"],
+      }),
+    ).toEqual({
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop",
+              timeout: 5,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
+    });
+  });
+
   it("clears omitted hook events when requested", () => {
     expect(
       buildCodexNativeHookRelayConfig({
@@ -276,7 +311,11 @@ function createRelay(options?: {
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event) =>
-      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}`,
+      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
+        event === "pre_tool_use" && inactiveEvents.has(event)
+          ? " --pre-tool-use-unavailable noop"
+          : ""
+      }`,
     renew: () => undefined,
     unregister: () => undefined,
   };

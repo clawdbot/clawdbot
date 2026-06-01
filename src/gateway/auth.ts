@@ -33,6 +33,7 @@ export {
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
+/** Normalized outcome for gateway shared-secret, Tailscale, device, and proxy auth. */
 export type GatewayAuthResult = {
   ok: boolean;
   method?:
@@ -58,6 +59,7 @@ type ConnectAuth = {
 
 export type GatewayAuthSurface = "http" | "ws-control-ui";
 
+/** Inputs needed to authorize one HTTP or websocket gateway connection. */
 export type AuthorizeGatewayConnectParams = {
   auth: ResolvedGatewayAuth;
   connectAuth?: ConnectAuth | null;
@@ -121,6 +123,7 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   });
 }
 
+/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
 export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
   if (!req) {
     return false;
@@ -136,6 +139,7 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
   );
 }
 
+/** Return whether a request is a clean loopback request without forwarded identity headers. */
 export function isLocalDirectRequest(
   req?: IncomingMessage,
   _trustedProxies?: string[],
@@ -219,6 +223,7 @@ async function resolveVerifiedTailscaleUser(params: {
   };
 }
 
+/** Validate that the selected gateway auth mode has the required resolved credentials/config. */
 export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
@@ -397,6 +402,7 @@ function authorizePasswordAuth(params: {
   return { ok: true, method: "password" };
 }
 
+/** Authorize a gateway connection, including rate-limit handling around shared-secret failures. */
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
@@ -561,6 +567,7 @@ async function authorizeGatewayConnectCore(
   return { ok: false, reason: "unauthorized" };
 }
 
+/** Authorize an HTTP gateway request with Tailscale forwarded-header auth disabled. */
 export async function authorizeHttpGatewayConnect(
   params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
 ): Promise<GatewayAuthResult> {
@@ -570,6 +577,7 @@ export async function authorizeHttpGatewayConnect(
   });
 }
 
+/** Authorize a Control UI websocket request with the WS-specific auth surface. */
 export async function authorizeWsControlUiGatewayConnect(
   params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
 ): Promise<GatewayAuthResult> {

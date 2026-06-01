@@ -265,9 +265,9 @@ async function handleSystemWhich(params: SystemWhichParams, env?: Record<string,
   const bins = normalizeStringEntries(params.bins);
   const found: Record<string, string> = {};
   for (const bin of bins) {
-    const path = resolveExecutable(bin, env);
-    if (path) {
-      found[bin] = path;
+    const pathLocal = resolveExecutable(bin, env);
+    if (pathLocal) {
+      found[bin] = pathLocal;
     }
   }
   return { bins: found };

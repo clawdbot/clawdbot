@@ -411,7 +411,9 @@ describe("agents tools panel (browser)", () => {
     expect(tool.open).toBe(false);
 
     chip.click();
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => {
+      requestAnimationFrame(resolve);
+    });
 
     expect(group.open).toBe(true);
     expect(tool.open).toBe(true);

@@ -129,7 +129,11 @@ function buildPreparedContext(params?: {
   runId?: string;
   lane?: string;
   openClawHistoryPrompt?: string;
+  provider?: string;
+  model?: string;
 }): PreparedCliRunContext {
+  const provider = params?.provider ?? "codex-cli";
+  const model = params?.model ?? "gpt-5.4";
   const backend = {
     command: "codex",
     args: ["exec", "--json"],
@@ -146,8 +150,8 @@ function buildPreparedContext(params?: {
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.4",
+      provider,
+      model,
       thinkLevel: "low",
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
@@ -156,10 +160,10 @@ function buildPreparedContext(params?: {
     started: Date.now(),
     workspaceDir: "/tmp",
     backendResolved: {
-      id: "codex-cli",
+      id: provider,
       config: backend,
       bundleMcp: false,
-      pluginId: "openai",
+      pluginId: provider === "claude-cli" ? "anthropic" : "openai",
     },
     preparedBackend: {
       backend,
@@ -168,8 +172,8 @@ function buildPreparedContext(params?: {
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
     hadSessionFile: false,
     contextEngineConfig: {},
-    modelId: "gpt-5.4",
-    normalizedModel: "gpt-5.4",
+    modelId: model,
+    normalizedModel: model,
     contextWindowInfo: {
       tokens: 150_000,
       referenceTokens: 200_000,
@@ -252,6 +256,9 @@ function readTranscriptMessages(sessionFile: string): unknown[] {
     .map((entry) => entry.message)
     .filter(Boolean);
 }
+
+const CLI_RESEED_PROMPT =
+  "Continue this conversation using the OpenClaw transcript below as prior session history.\n\n<conversation_history>\nUser: earlier context\n</conversation_history>\n\n<next_user_message>\nhi\n</next_user_message>";
 
 describe("runCliAgent reliability", () => {
   afterEach(() => {
@@ -370,6 +377,420 @@ describe("runCliAgent reliability", () => {
     ).rejects.toThrow("exceeded timeout");
   });
 
+  it("does not retry recoverable failover when no reusable CLI session was used", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    await expect(
+      runPreparedCliAgent(
+        buildPreparedContext({
+          sessionKey: "agent:main:fresh",
+          runId: "run-fresh-timeout",
+          provider: "claude-cli",
+          model: "opus",
+        }),
+      ),
+    ).rejects.toThrow("produced no output");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a resumed CLI session after the hard overall timeout", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => false);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:overall-timeout",
+      runId: "run-overall-timeout",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("exceeded timeout");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a resumed recoverable failover without a reseed prompt", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => false);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:no-reseed",
+      runId: "run-no-reseed",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("produced no output");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "session expired",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from fresh cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:direct",
+      runId: "run-direct-retry",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an unclassified CLI failure with diagnostic output", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "worker crashed without details",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:unknown-output",
+      runId: "run-unknown-output",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("worker crashed without details");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it("does not fresh retry when the run timeout budget is exhausted", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:expired-budget",
+      runId: "run-expired-budget",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    const expiredBudgetContext = {
+      ...context,
+      started: Date.now() - context.params.timeoutMs - 1,
+    };
+
+    await expect(
+      runPreparedCliAgent({
+        ...expiredBudgetContext,
+        params: {
+          ...expiredBudgetContext.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("produced no output");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
+    supervisorSpawnMock.mockClear();
+    enqueueSystemEventMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 500,
+        stdout: "partial progress before the stall",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:timeout-after-output",
+      runId: "run-timeout-after-output",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("produced no output");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fresh retry an empty supervisor cancellation", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:manual-cancel",
+      runId: "run-manual-cancel",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("CLI failed");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it.each(["timeout", "unknown"] as const)(
+    "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
+    async (reason) => {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) =>
+          ["llm_input", "llm_output", "agent_end"].includes(hookName),
+        ),
+        runLlmInput: vi.fn(async () => undefined),
+        runLlmOutput: vi.fn(async () => undefined),
+        runAgentEnd: vi.fn(async () => undefined),
+      };
+      setHookRunnerForTest(hookRunner);
+      supervisorSpawnMock.mockClear();
+      enqueueSystemEventMock.mockClear();
+      requestHeartbeatMock.mockClear();
+      const events: string[] = [];
+      let spawnCount = 0;
+      supervisorSpawnMock.mockImplementation(async () => {
+        spawnCount += 1;
+        events.push(`spawn-${spawnCount}`);
+        if (spawnCount === 1 && reason === "timeout") {
+          return createManagedRun({
+            reason: "no-output-timeout",
+            exitCode: null,
+            exitSignal: "SIGKILL",
+            durationMs: 200,
+            stdout: "",
+            stderr: "",
+            timedOut: true,
+            noOutputTimedOut: true,
+          });
+        }
+        if (spawnCount === 1) {
+          return createManagedRun({
+            reason: "exit",
+            exitCode: 1,
+            exitSignal: null,
+            durationMs: 150,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          });
+        }
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "hello from fresh cli",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+      const { dir, sessionFile } = createSessionFile({
+        history: [{ role: "user", content: "earlier context" }],
+      });
+      const clearBeforeRetry = vi.fn(async () => {
+        events.push(`clear-${reason}`);
+        return true;
+      });
+
+      try {
+        const context = buildPreparedContext({
+          sessionKey: "agent:main:subagent:retry",
+          runId: `run-retry-${reason}`,
+          cliSessionId: "stale-cli-session",
+          provider: "claude-cli",
+          model: "opus",
+          openClawHistoryPrompt: CLI_RESEED_PROMPT,
+        });
+        const result = await runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+            onBeforeFreshCliSessionRetry: clearBeforeRetry,
+          },
+        });
+
+        expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
+        expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+        expect(events).toEqual(["spawn-1", `clear-${reason}`, "spawn-2"]);
+        if (reason === "timeout") {
+          expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+          expect(requestHeartbeatMock).not.toHaveBeenCalled();
+        }
+        expect(clearBeforeRetry).toHaveBeenCalledWith({
+          provider: "claude-cli",
+          reason,
+          sessionId: "stale-cli-session",
+        });
+        await vi.waitFor(() => {
+          expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+          expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
+          expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+        });
+        const agentEndEvent = requireRecord(
+          callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
+          "agent_end event",
+        );
+        expect(agentEndEvent.success).toBe(true);
+        expect(agentEndEvent.error).toBeUndefined();
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("rethrows the retry failure when session-expired recovery retry also fails", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
@@ -406,24 +827,24 @@ describe("runCliAgent reliability", () => {
     const { dir, sessionFile } = createSessionFile({
       history: [{ role: "user", content: "earlier context" }],
     });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:subagent:retry",
+      runId: "run-retry-failure",
+      cliSessionId: "thread-123",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    const clearBeforeRetry = vi.fn(async () => true);
 
     try {
       await expect(
         runPreparedCliAgent({
-          ...buildPreparedContext({
-            sessionKey: "agent:main:subagent:retry",
-            runId: "run-retry-failure",
-            cliSessionId: "thread-123",
-          }),
+          ...context,
           params: {
-            ...buildPreparedContext({
-              sessionKey: "agent:main:subagent:retry",
-              runId: "run-retry-failure",
-              cliSessionId: "thread-123",
-            }).params,
+            ...context.params,
             agentId: "main",
             sessionFile,
             workspaceDir: dir,
+            onBeforeFreshCliSessionRetry: clearBeforeRetry,
           },
         }),
       ).rejects.toThrow("rate limit exceeded");
@@ -1388,24 +1809,22 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:main",
+      runId: "run-retry-success",
+      cliSessionId: "thread-123",
+      openClawHistoryPrompt:
+        "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
+    });
+    const clearBeforeRetry = vi.fn(async () => true);
+
     try {
       const result = await runPreparedCliAgent({
-        ...buildPreparedContext({
-          sessionKey: "agent:main:main",
-          runId: "run-retry-success",
-          cliSessionId: "thread-123",
-          openClawHistoryPrompt:
-            "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
-        }),
+        ...context,
         params: {
-          ...buildPreparedContext({
-            sessionKey: "agent:main:main",
-            runId: "run-retry-success",
-            cliSessionId: "thread-123",
-            openClawHistoryPrompt:
-              "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
-          }).params,
+          ...context.params,
           agentId: "main",
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
           sessionFile,
           workspaceDir: dir,
         },
@@ -1413,6 +1832,11 @@ describe("runCliAgent reliability", () => {
 
       expect(result.payloads).toEqual([{ text: "recovered output" }]);
       expect(result.meta.finalPromptText).toContain("User: recovered history");
+      expect(clearBeforeRetry).toHaveBeenCalledWith({
+        provider: "codex-cli",
+        reason: "session_expired",
+        sessionId: "thread-123",
+      });
 
       await vi.waitFor(() => {
         expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);

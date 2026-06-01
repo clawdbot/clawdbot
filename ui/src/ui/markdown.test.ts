@@ -1,7 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { md, toSanitizedMarkdownHtml } from "./markdown.ts";
+import {
+  md,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  toStreamingPlainTextHtml,
+} from "./markdown.ts";
 import { renderMarkdownSidebar } from "./views/markdown-sidebar.ts";
 
 function htmlFragment(html: string): HTMLElement {
@@ -500,7 +505,7 @@ PY
     });
 
     it("renders tables surrounded by text", () => {
-      const md = [
+      const mdLocal = [
         "Text before.",
         "",
         "| A | B |",
@@ -509,7 +514,7 @@ PY
         "",
         "Text after.",
       ].join("\n");
-      const html = toSanitizedMarkdownHtml(md);
+      const html = toSanitizedMarkdownHtml(mdLocal);
       expect(html).toBe(
         "<p>Text before.</p>\n<table>\n<thead>\n<tr>\n<th>A</th>\n<th>B</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n<p>Text after.</p>\n",
       );
@@ -685,6 +690,96 @@ PY
   });
 });
 
+describe("toStreamingPlainTextHtml", () => {
+  it("strips unsupported citation control markers before escaping streaming text", () => {
+    const html = toStreamingPlainTextHtml(
+      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
+    );
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">v2026.5.20 release note\n\nStill readable.</div>',
+    );
+    expect(html).not.toContain("cite");
+    expect(html).not.toContain("turn2view0");
+  });
+});
+
+describe("toStreamingMarkdownHtml", () => {
+  it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
+    const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
+
+    expect(html).toBe(
+      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
+    );
+  });
+
+  it("keeps a single open paragraph as escaped text", () => {
+    const html = toStreamingMarkdownHtml("**still streaming");
+
+    expect(html).toBe('<div class="markdown-plain-text-fallback">**still streaming</div>');
+  });
+
+  it("does not invoke the markdown parser before a stable block boundary exists", () => {
+    const renderSpy = vi.spyOn(md, "render");
+    try {
+      const html = toStreamingMarkdownHtml("**still streaming parser sentinel");
+
+      expect(html).toBe(
+        '<div class="markdown-plain-text-fallback">**still streaming parser sentinel</div>',
+      );
+      expect(renderSpy).not.toHaveBeenCalled();
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  it("reuses the rendered stable prefix while only the streaming tail changes", () => {
+    const renderSpy = vi.spyOn(md, "render");
+    try {
+      const first = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nfirst **tail");
+      const second = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nsecond **tail");
+
+      expect(first).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(second).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(renderSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  it("does not parse an open code fence while streaming", () => {
+    const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
+
+    expect(html).toBe(
+      '<p>Intro</p>\n<div class="markdown-plain-text-fallback">```ts\nconst x = 1 &lt; 2</div>',
+    );
+  });
+
+  it("keeps an open list code fence streaming through blank lines", () => {
+    const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">- ```ts\n  const x = 1;\n\n  const y = 2;</div>',
+    );
+  });
+
+  it("keeps an open blockquote code fence streaming through blank lines", () => {
+    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">&gt; ```ts\n&gt; const x = 1;\n&gt;\n&gt; const y = 2;</div>',
+    );
+  });
+
+  it("renders a completed code fence once the closing fence arrives", () => {
+    const html = toStreamingMarkdownHtml("```ts\nconst x = 1;\n```");
+
+    expect(html).toContain('<code class="hljs language-ts"');
+    expect(html).toContain("const x = 1;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
+  });
+});
+
 describe("renderMarkdownSidebar", () => {
   it("renders sanitized markdown content", () => {
     const container = document.createElement("div");
@@ -707,5 +802,24 @@ describe("renderMarkdownSidebar", () => {
     expect(
       Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
     ).toEqual(["", "View Raw Text"]);
+  });
+
+  it("renders a quiet empty state for blank markdown previews", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: { kind: "markdown", content: "   " },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-markdown-reader")).toBeNull();
+    expect(container.querySelector(".sidebar-markdown-empty")?.textContent?.trim()).toBe(
+      "No previewable markdown content.",
+    );
   });
 });

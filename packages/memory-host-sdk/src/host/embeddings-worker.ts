@@ -252,7 +252,12 @@ class LocalEmbeddingWorkerClient {
         const abort = () => {
           this.pending.delete(id);
           this.shutdownChild();
-          reject(options.signal?.reason ?? new Error("Local embedding request aborted"));
+          reject(
+            toLintErrorObject(
+              options.signal?.reason ?? new Error("Local embedding request aborted"),
+              "Non-Error rejection",
+            ),
+          );
         };
         options.signal.addEventListener("abort", abort, { once: true });
         pending.abort = () => options.signal?.removeEventListener("abort", abort);
@@ -361,4 +366,18 @@ export async function createLocalEmbeddingWorkerProvider(
       await client.close();
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

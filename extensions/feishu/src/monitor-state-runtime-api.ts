@@ -1,4 +1,4 @@
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+export type { RuntimeEnv } from "../runtime-api.js";
 export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,

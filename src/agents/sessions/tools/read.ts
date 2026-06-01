@@ -375,7 +375,7 @@ export function createReadToolDefinition(
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
-              reject(error);
+              reject(toLintErrorObject(error, "Non-Error rejection"));
             }
           }
         })();
@@ -393,13 +393,13 @@ export function createReadToolDefinition(
       );
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       text.setText(
         formatReadResult(
           context.args,
           result,
-          options,
+          optionsLocal,
           theme,
           context.showImages,
           context.cwd,
@@ -416,4 +416,18 @@ export function createReadTool(
   options?: ReadToolOptions,
 ): AgentTool<typeof readSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

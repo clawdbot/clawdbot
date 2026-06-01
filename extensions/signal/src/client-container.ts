@@ -298,7 +298,7 @@ export async function streamContainerEvents(params: {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
       );
-      reject(err);
+      reject(toLintErrorObject(err, "Non-Error rejection"));
       return;
     }
 
@@ -716,4 +716,18 @@ export async function containerRpcRequest<T = unknown>(
     default:
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

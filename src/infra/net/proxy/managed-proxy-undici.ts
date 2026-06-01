@@ -67,9 +67,12 @@ function resolveManagedProxyUrl(env: ManagedProxyTlsEnv = process.env): string |
   if (env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
     return undefined;
   }
+  // Child processes inherit only env, so recover the managed proxy URL from
+  // HTTPS proxy settings when the active in-process registration is absent.
   return normalizeProxyUrl(resolveEnvHttpProxyUrl("https", env));
 }
 
+/** Resolves managed proxy TLS trust only when the target proxy is OpenClaw's active proxy. */
 export function resolveActiveManagedProxyTlsOptions(
   params?: ResolveActiveManagedProxyTlsOptionsParams,
 ): ManagedProxyTlsOptions | undefined {
@@ -92,14 +95,17 @@ export function resolveActiveManagedProxyTlsOptions(
   try {
     return loadManagedProxyTlsOptionsSync(proxyCaFile);
   } catch {
+    // Missing inherited CA files should not break non-managed or caller-owned proxies.
     return undefined;
   }
 }
 
+/** Adds active managed proxy TLS options to env proxy agent options. */
 export function addActiveManagedProxyTlsOptions(
   options: undefined,
   params?: AddActiveManagedProxyTlsOptionsParams,
 ): { proxyTls: ManagedProxyTlsOptions } | undefined;
+/** Adds active managed proxy TLS options to explicit proxy agent options. */
 export function addActiveManagedProxyTlsOptions<TOptions extends object>(
   options: TOptions,
   params?: AddActiveManagedProxyTlsOptionsParams,
@@ -130,6 +136,8 @@ export function addActiveManagedProxyTlsOptions<TOptions extends object>(
     return options;
   }
   const existingProxyTls = readProxyTlsRecord(options);
+  // Caller-supplied proxyTls wins over managed defaults so explicit TLS policy
+  // is not overwritten while still inheriting missing managed CA fields.
   return {
     ...options,
     proxyTls: {
@@ -139,6 +147,7 @@ export function addActiveManagedProxyTlsOptions<TOptions extends object>(
   };
 }
 
+/** Resolves env proxy options with managed proxy TLS attached when applicable. */
 export function resolveManagedEnvHttpProxyAgentOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): ManagedEnvHttpProxyAgentOptions | undefined {

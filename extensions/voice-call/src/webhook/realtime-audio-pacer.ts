@@ -124,7 +124,7 @@ export class RealtimeAudioPacer {
     }
 
     let delayMs = 0;
-    let sent = true;
+    let sent;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
       sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));

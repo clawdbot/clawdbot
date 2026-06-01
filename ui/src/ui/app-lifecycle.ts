@@ -26,6 +26,14 @@ import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap
 import type { Tab } from "./navigation.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
+const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
+
+type PendingChatComposerPersistSnapshot = {
+  sessionKey: string;
+  chatMessage: string;
+  chatQueue: ChatQueueItem[];
+};
+
 type LifecycleHost = {
   basePath: string;
   client?: { stop: () => void } | null;
@@ -48,6 +56,8 @@ type LifecycleHost = {
   sessionKey: string;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
+  chatComposerPersistTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatComposerPersistSnapshot?: PendingChatComposerPersistSnapshot | null;
   pendingGatewayUrl?: string | null;
   realtimeTalkSession?: { stop: () => void } | null;
   realtimeTalkActive?: boolean;
@@ -134,9 +144,46 @@ function clearHostGlobalTimeout(
   }
 }
 
+function clearPendingChatComposerPersistence(host: LifecycleHost) {
+  clearHostGlobalTimeout(host.chatComposerPersistTimer);
+  host.chatComposerPersistTimer = null;
+  host.chatComposerPersistSnapshot = null;
+}
+
+function flushPendingChatComposerPersistence(host: LifecycleHost) {
+  const snapshot = host.chatComposerPersistSnapshot;
+  if (host.chatComposerPersistTimer == null || !snapshot) {
+    clearPendingChatComposerPersistence(host);
+    return;
+  }
+  clearPendingChatComposerPersistence(host);
+  persistChatComposerState(
+    {
+      ...host,
+      sessionKey: snapshot.sessionKey,
+      chatMessage: snapshot.chatMessage,
+      chatQueue: snapshot.chatQueue,
+    },
+    snapshot.sessionKey,
+  );
+}
+
+function scheduleChatComposerDraftPersistence(host: LifecycleHost) {
+  clearPendingChatComposerPersistence(host);
+  host.chatComposerPersistSnapshot = {
+    sessionKey: host.sessionKey,
+    chatMessage: host.chatMessage,
+    chatQueue: [...host.chatQueue],
+  };
+  host.chatComposerPersistTimer = globalThis.setTimeout(() => {
+    flushPendingChatComposerPersistence(host);
+  }, CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS);
+}
+
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   host.controlUiTabPaintSeq = (host.controlUiTabPaintSeq ?? 0) + 1;
+  flushPendingChatComposerPersistence(host);
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
@@ -169,8 +216,16 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
-  if (changed.has("chatMessage") || changed.has("chatQueue")) {
+  if (changed.has("chatQueue")) {
+    clearPendingChatComposerPersistence(host);
     persistChatComposerState(host);
+  } else if (changed.has("sessionKey")) {
+    flushPendingChatComposerPersistence(host);
+    if (changed.has("chatMessage")) {
+      persistChatComposerState(host);
+    }
+  } else if (changed.has("chatMessage")) {
+    scheduleChatComposerDraftPersistence(host);
   }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;

@@ -578,7 +578,9 @@ describe("prepared provider auth state", () => {
       await Promise.resolve();
       cancelled = true;
       await warmPromise;
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
 
       await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

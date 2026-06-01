@@ -92,7 +92,7 @@ describe("discord exec approval monitor helpers", () => {
 
     await button.run(interaction, { id: "", action: "" });
 
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction["reply"]).toHaveBeenCalledWith({
       content: "This approval is no longer valid.",
       ephemeral: true,
     });
@@ -107,7 +107,7 @@ describe("discord exec approval monitor helpers", () => {
 
     await button.run(interaction, { id: "abc", action: "allow-once" });
 
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction["reply"]).toHaveBeenCalledWith({
       content: "⛔ You are not authorized to approve exec requests.",
       ephemeral: true,
     });
@@ -123,9 +123,9 @@ describe("discord exec approval monitor helpers", () => {
 
     await button.run(interaction, { id: "abc", action: "allow-once" });
 
-    expect(interaction.acknowledge).toHaveBeenCalled();
+    expect(interaction["acknowledge"]).toHaveBeenCalled();
     expect(resolveApproval).toHaveBeenCalledWith("abc", "allow-once");
-    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction["followUp"]).not.toHaveBeenCalled();
   });
 
   it("shows a follow-up when gateway resolution fails", async () => {
@@ -137,7 +137,7 @@ describe("discord exec approval monitor helpers", () => {
 
     await button.run(interaction, { id: "abc", action: "deny" });
 
-    expect(interaction.followUp).toHaveBeenCalledWith({
+    expect(interaction["followUp"]).toHaveBeenCalledWith({
       content:
         "Failed to submit approval decision for **Denied**. The request may have expired or already been resolved.",
       ephemeral: true,
@@ -153,8 +153,8 @@ describe("discord exec approval monitor helpers", () => {
 
     await button.run(interaction, { id: "abc", action: "allow-once" });
 
-    expect(interaction.acknowledge).toHaveBeenCalled();
-    expect(interaction.followUp).toHaveBeenCalledWith({
+    expect(interaction["acknowledge"]).toHaveBeenCalled();
+    expect(interaction["followUp"]).toHaveBeenCalledWith({
       content:
         "That approval request is no longer pending. It may have expired or already been resolved.",
       ephemeral: true,

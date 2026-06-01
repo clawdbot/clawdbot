@@ -64,7 +64,7 @@ async function resolvePendingMigrationStatePath(params: {
   }
 
   const accountStorageDir = path.dirname(rootDir);
-  let siblingEntries: string[] = [];
+  let siblingEntries: string[];
   try {
     siblingEntries = (await fs.readdir(accountStorageDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())

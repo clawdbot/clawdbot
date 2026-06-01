@@ -116,7 +116,9 @@ function setCachedTranscriptMessageCount(filePath: string, stat: fs.Stats, count
 }
 
 async function yieldTranscriptScan(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 export function attachOpenClawTranscriptMeta(
@@ -577,7 +579,7 @@ export async function readSessionMessagesAsync(
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
   if (opts.mode === "recent") {
-    const { mode: modeValue, ...recentOpts } = opts;
+    const { mode: _modeValue, ...recentOpts } = opts;
     return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
   }
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);

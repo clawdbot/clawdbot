@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const platformMock = await vi.hoisted(async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs");
+  const pathLocal = await import("node:path");
   return {
-    fs,
+    fs: fsLocal,
     homeDir: "",
-    path,
+    path: pathLocal,
   };
 });
 

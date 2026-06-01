@@ -26,7 +26,7 @@ export function classifyCompactionReason(reason?: string): string {
   if (!text) {
     return "unknown";
   }
-  if (text.includes("nothing to compact")) {
+  if (text.includes("nothing to compact") || text.includes("no real conversation messages")) {
     return "no_compactable_entries";
   }
   // Backends use both phrases for the same harmless state: the transcript is

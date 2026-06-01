@@ -5,6 +5,7 @@ import { spawn } from "@lydell/node-pty";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const [logPath, command, ...args] = process.argv.slice(2);
+const OUTPUT_MAX_BYTES = readPositiveIntEnv("OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES", 16 * 1024 * 1024);
 
 if (!logPath || !command) {
   console.error("usage: run-with-pty.mjs <log-path> <command> [args...]");
@@ -21,10 +22,37 @@ const pty = spawn(command, args, {
 });
 
 let exiting = false;
+const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
+const outputState = {
+  bytes: 0,
+  truncated: false,
+};
+
+function writeCappedOutput(data) {
+  if (outputState.truncated) {
+    return;
+  }
+  const buffer = Buffer.from(data);
+  const remainingBytes = OUTPUT_MAX_BYTES - outputState.bytes;
+  if (buffer.byteLength <= remainingBytes) {
+    outputState.bytes += buffer.byteLength;
+    log.write(buffer);
+    process.stdout.write(buffer);
+    return;
+  }
+  if (remainingBytes > 0) {
+    const head = buffer.subarray(0, remainingBytes);
+    log.write(head);
+    process.stdout.write(head);
+  }
+  outputState.bytes = OUTPUT_MAX_BYTES;
+  outputState.truncated = true;
+  log.write(outputLimitMarker);
+  process.stdout.write(outputLimitMarker);
+}
 
 pty.onData((data) => {
-  log.write(data);
-  process.stdout.write(data);
+  writeCappedOutput(data);
 });
 
 pty.onExit(({ exitCode, signal }) => {

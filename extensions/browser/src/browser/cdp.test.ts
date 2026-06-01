@@ -27,7 +27,9 @@ describe("cdp", () => {
 
   const startWsServer = async () => {
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      wsServer?.once("listening", resolve);
+    });
     return (wsServer.address() as { port: number }).port;
   };
 
@@ -77,7 +79,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     return (httpServer.address() as { port: number }).port;
   };
 
@@ -85,14 +89,16 @@ describe("cdp", () => {
     vi.unstubAllEnvs();
     await new Promise<void>((resolve) => {
       if (!httpServer) {
-        return resolve();
+        resolve();
+        return;
       }
       httpServer.close(() => resolve());
       httpServer = null;
     });
     await new Promise<void>((resolve) => {
       if (!wsServer) {
-        return resolve();
+        resolve();
+        return;
       }
       wsServer.close(() => resolve());
       wsServer = null;
@@ -190,7 +196,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const httpPort = (httpServer.address() as AddressInfo).port;
 
     await expect(
@@ -210,7 +218,9 @@ describe("cdp", () => {
       heldSockets.push(socket);
       // Hold the TCP connection open without completing the WebSocket handshake.
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const port = (httpServer.address() as AddressInfo).port;
 
     try {
@@ -507,7 +517,9 @@ describe("cdp", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const addr = server.address() as AddressInfo;
       const created = await createTargetViaCdp({
@@ -516,8 +528,12 @@ describe("cdp", () => {
       });
       expect(created.targetId).toBe("ROOT_FALLBACK");
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 

@@ -9,26 +9,31 @@ import {
 } from "./api.js";
 import mistralPlugin from "./index.js";
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe provider compat shape.
-function readCompat<T>(model: unknown): T | undefined {
-  return (model as { compat?: T }).compat;
+type MistralCompatShape = {
+  maxTokensField?: "max_completion_tokens" | "max_tokens";
+  reasoningEffortMap?: Record<string, string>;
+  supportsReasoningEffort?: boolean;
+  supportsStore?: boolean;
+};
+
+function readCompat(model: unknown): MistralCompatShape | undefined {
+  return (model as { compat?: MistralCompatShape }).compat;
 }
 
 function supportsStore(model: unknown): boolean | undefined {
-  return readCompat<{ supportsStore?: boolean }>(model)?.supportsStore;
+  return readCompat(model)?.supportsStore;
 }
 
 function supportsReasoningEffort(model: unknown): boolean | undefined {
-  return readCompat<{ supportsReasoningEffort?: boolean }>(model)?.supportsReasoningEffort;
+  return readCompat(model)?.supportsReasoningEffort;
 }
 
 function maxTokensField(model: unknown): "max_completion_tokens" | "max_tokens" | undefined {
-  return readCompat<{ maxTokensField?: "max_completion_tokens" | "max_tokens" }>(model)
-    ?.maxTokensField;
+  return readCompat(model)?.maxTokensField;
 }
 
 function reasoningEffortMap(model: unknown): Record<string, string> | undefined {
-  return readCompat<{ reasoningEffortMap?: Record<string, string> }>(model)?.reasoningEffortMap;
+  return readCompat(model)?.reasoningEffortMap;
 }
 
 const MISTRAL_REASONING_EFFORT_MAP = {

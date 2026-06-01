@@ -958,28 +958,29 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
-      ?.addEventListener("click", async () => {
-        if (state.selectedCaptureSessionIds.length === 0) {
-          return;
-        }
-        const confirmed = window.confirm(
-          `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
-            state.selectedCaptureSessionIds.length === 1 ? "" : "s"
-          }?`,
-        );
-        if (!confirmed) {
-          return;
-        }
-        await postJson("/api/capture/delete-sessions", {
-          sessionIds: state.selectedCaptureSessionIds,
-        });
-        state.selectedCaptureSessionIds = [];
-        state.selectedCaptureEventKey = null;
-        await refresh();
+      ?.addEventListener("click", () => {
+        void (async () => {
+          if (state.selectedCaptureSessionIds.length === 0) {
+            return;
+          }
+          const confirmed = window.confirm(
+            `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
+              state.selectedCaptureSessionIds.length === 1 ? "" : "s"
+            }?`,
+          );
+          if (!confirmed) {
+            return;
+          }
+          await postJson("/api/capture/delete-sessions", {
+            sessionIds: state.selectedCaptureSessionIds,
+          });
+          state.selectedCaptureSessionIds = [];
+          state.selectedCaptureEventKey = null;
+          await refresh();
+        })();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-purge-all")
-      ?.addEventListener("click", async () => {
+    root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
+      void (async () => {
         const confirmed = window.confirm("Purge all captured sessions, events, and blobs?");
         if (!confirmed) {
           return;
@@ -988,7 +989,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedCaptureSessionIds = [];
         state.selectedCaptureEventKey = null;
         await refresh();
-      });
+      })();
+    });
     root.querySelector<HTMLSelectElement>("#capture-preset")?.addEventListener("change", (e) => {
       state.captureQueryPreset = (e.currentTarget as HTMLSelectElement)
         .value as UiState["captureQueryPreset"];
@@ -1327,12 +1329,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
     root.querySelectorAll<HTMLButtonElement>("[data-copy-text]").forEach((node) => {
-      node.addEventListener("click", async () => {
+      node.addEventListener("click", () => {
         const text = node.dataset.copyText ?? "";
         if (!text) {
           return;
         }
-        await navigator.clipboard.writeText(text).catch(() => undefined);
+        void navigator.clipboard.writeText(text).catch(() => undefined);
       });
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -724,5 +725,30 @@ describe("gateway tool", () => {
     const schema = (result.details as { result?: { schema?: { properties?: unknown } } }).result
       ?.schema;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("returns an in-band schema lookup miss for unknown paths", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "config schema path not found",
+      }),
+    );
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call6", {
+      action: "config.schema.lookup",
+      path: "agents.main.authorizedSenders",
+    });
+
+    expect(gatewayCall("config.schema.lookup")[2]).toEqual({
+      path: "agents.main.authorizedSenders",
+    });
+    expect(result.details).toEqual({
+      ok: false,
+      code: "schema_path_not_found",
+      path: "agents.main.authorizedSenders",
+      message: "config schema path not found",
+    });
   });
 });

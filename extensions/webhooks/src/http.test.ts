@@ -6,6 +6,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
 
+type BoundTaskFlow = TaskFlowWebhookTarget["taskFlow"];
+type ManagedFlow = NonNullable<ReturnType<BoundTaskFlow["createManaged"]>>;
+
+function createManagedFlow(
+  target: TaskFlowWebhookTarget,
+  params: Parameters<BoundTaskFlow["createManaged"]>[0],
+): ManagedFlow {
+  const flow = target.taskFlow.createManaged(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
 const hoisted = vi.hoisted(() => {
   const resolveConfiguredSecretInputStringMock = vi.fn();
   return {
@@ -220,7 +234,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("runs child tasks and scrubs task ownership fields from responses", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
     });
@@ -275,7 +289,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("returns 409 for revision conflicts", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
     });
@@ -302,7 +316,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("rejects internal runtimes and running-only metadata from external callers", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
     });
@@ -346,7 +360,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("reuses the same task record when retried with the same runId", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
     });
@@ -388,7 +402,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("returns 409 when cancellation targets a terminal flow", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
     });

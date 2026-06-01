@@ -81,11 +81,11 @@ export default definePluginEntry({
         }
         return baseUrlNormalized !== model ? baseUrlNormalized : undefined;
       },
-      normalizeTransport: ({ api, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api, baseUrl });
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api: apiLocal, baseUrl });
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;

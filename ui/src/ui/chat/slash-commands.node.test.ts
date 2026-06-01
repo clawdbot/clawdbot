@@ -130,10 +130,6 @@ describe("parseSlashCommand", () => {
     expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
-  it("keeps focus as a local slash command", () => {
-    expectParsedSlash("/focus", { key: "focus", executeLocal: true }, "");
-  });
-
   it("refreshes runtime commands from commands.list so docks, plugins, and direct skills appear", async () => {
     const request = async (method: string) => {
       expect(method).toBe("commands.list");
@@ -264,7 +260,7 @@ describe("parseSlashCommand", () => {
         name: `${longName}-${argIndex}`,
         description: longDescription,
         type: "string" as const,
-        choices: Array.from({ length: 55 }, (_, choiceIndex) => ({
+        choices: Array.from({ length: 55 }, (_Local, choiceIndex) => ({
           value: `${longName}-${choiceIndex}`,
           label: `${longName}-${choiceIndex}`,
         })),
@@ -383,15 +379,42 @@ describe("parseSlashCommand", () => {
     });
   });
 
-  it("ignores stale refresh responses and keeps the latest command set", async () => {
+  it("keeps local fallback commands after repeated gateway failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("offline"));
+    const client = { request } as never;
+
+    await refreshSlashCommands({ client, agentId: "main" });
+    expectRecordFields(requireCommandByName("help"), "first fallback help command", {
+      key: "help",
+      executeLocal: true,
+    });
+
+    await refreshSlashCommands({ client, agentId: "main" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expectRecordFields(requireCommandByName("help"), "second fallback help command", {
+      key: "help",
+      executeLocal: true,
+    });
+  });
+
+  it("coalesces duplicate refreshes for the same agent", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     const first = new Promise((resolve) => {
       resolveFirst = resolve;
     });
-    const request = vi
-      .fn()
-      .mockImplementationOnce(async () => await first)
-      .mockImplementationOnce(async () => ({
+    const request = vi.fn().mockImplementationOnce(async () => await first);
+    const client = { request } as never;
+
+    const pending = refreshSlashCommands({
+      client,
+      agentId: "main",
+    });
+    const duplicate = refreshSlashCommands({
+      client,
+      agentId: "main",
+    });
+    if (resolveFirst) {
+      resolveFirst({
         commands: [
           {
             name: "pair",
@@ -402,38 +425,89 @@ describe("parseSlashCommand", () => {
             acceptsArgs: true,
           },
         ],
-      }));
-
-    const pending = refreshSlashCommands({
-      client: { request } as never,
-      agentId: "main",
-    });
-    await refreshSlashCommands({
-      client: { request } as never,
-      agentId: "main",
-    });
-    if (resolveFirst) {
-      resolveFirst({
-        commands: [
-          {
-            name: "dreaming",
-            textAliases: ["/dreaming"],
-            description: "Enable or disable memory dreaming.",
-            source: "plugin",
-            scope: "both",
-            acceptsArgs: true,
-          },
-        ],
       });
     }
     await pending;
+    await duplicate;
 
+    expect(request).toHaveBeenCalledTimes(1);
     expectRecordFields(requireCommandByName("pair"), "pair command", {
       name: "pair",
       description: "Generate setup codes.",
       executeLocal: false,
       tier: "standard",
     });
+  });
+
+  it("ignores stale refresh responses after switching agents", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const request = vi.fn((_: string, params: { agentId?: string }) => {
+      if (params.agentId === "main") {
+        return first;
+      }
+      return Promise.resolve({
+        commands: [
+          {
+            name: "pair",
+            textAliases: ["/pair"],
+            description: "Generate setup codes.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+          },
+        ],
+      });
+    });
+    const client = { request } as never;
+
+    const pending = refreshSlashCommands({ client, agentId: "main" });
+    await refreshSlashCommands({ client, agentId: "other" });
+    resolveFirst?.({
+      commands: [
+        {
+          name: "dreaming",
+          textAliases: ["/dreaming"],
+          description: "Enable or disable memory dreaming.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+    await pending;
+
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+    });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
+  });
+
+  it("uses the fresh remote command cache for repeated refreshes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      commands: [
+        {
+          name: "pair",
+          textAliases: ["/pair"],
+          description: "Generate setup codes.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+    const client = { request } as never;
+
+    await refreshSlashCommands({ client, agentId: "main" });
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+    });
   });
 });

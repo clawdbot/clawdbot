@@ -779,6 +779,33 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes MCP Docker E2E script targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/mcp-channels-docker.sh",
+      "scripts/e2e/mcp-channels-docker-client.ts",
+      "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+      "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+      "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+      "scripts/mcp-code-mode-gateway-e2e.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-observability.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "test/scripts/session-log-mentions.test.ts",
+        "src/agents/agent-bundle-mcp-runtime.test.ts",
+        "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+      ],
+    });
+  });
+
   it("includes the isolated tooling shard for broad shell helper targets", () => {
     expect(buildVitestRunPlans(["test/scripts"], process.cwd())).toEqual([
       {
@@ -2069,7 +2096,14 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-codex.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-runtime.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-support.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-tools.config.ts",
+      "test/vitest/vitest.extension-codex-surface.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",

@@ -281,7 +281,7 @@ export async function createMatrixInboundEventDeduper(params: {
           },
           ttlMs > 0 ? { ttlMs } : undefined,
         )
-        .catch((err) => {
+        .catch((err: unknown) => {
           LogService.warn(
             "MatrixInboundDedupe",
             "Failed persisting Matrix inbound dedupe entry:",

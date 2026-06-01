@@ -12,6 +12,25 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 import { webHandlers } from "./web.js";
 
+function createRunningWhatsappSnapshot(): ChannelRuntimeSnapshot {
+  return {
+    channels: {
+      whatsapp: {
+        accountId: "default",
+        running: true,
+      },
+    },
+    channelAccounts: {
+      whatsapp: {
+        default: {
+          accountId: "default",
+          running: true,
+        },
+      },
+    },
+  };
+}
+
 function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
@@ -25,24 +44,7 @@ function createOptions(
     context: {
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
-      getRuntimeSnapshot: vi.fn(
-        (): ChannelRuntimeSnapshot => ({
-          channels: {
-            whatsapp: {
-              accountId: "default",
-              running: true,
-            },
-          },
-          channelAccounts: {
-            whatsapp: {
-              default: {
-                accountId: "default",
-                running: true,
-              },
-            },
-          },
-        }),
-      ),
+      getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
@@ -57,24 +59,7 @@ function createRunningWhatsappContext() {
     context: {
       stopChannel,
       startChannel,
-      getRuntimeSnapshot: vi.fn(
-        (): ChannelRuntimeSnapshot => ({
-          channels: {
-            whatsapp: {
-              accountId: "default",
-              running: true,
-            },
-          },
-          channelAccounts: {
-            whatsapp: {
-              default: {
-                accountId: "default",
-                running: true,
-              },
-            },
-          },
-        }),
-      ),
+      getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
     } as unknown as GatewayRequestHandlerOptions["context"],
   };
 }

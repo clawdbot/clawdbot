@@ -8,20 +8,46 @@ const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
+  process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
-  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=4096`.trim();
+  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
+
+function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "packages", packageDir, "package.json"), "utf8"),
+  );
+  return Object.entries(packageJson.exports ?? {})
+    .flatMap(([exportKey, value]) => {
+      const entry =
+        exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
+      const importPath =
+        value && typeof value === "object" && !Array.isArray(value) ? value.import : value;
+      if (!entry || entry.includes("..") || typeof importPath !== "string") {
+        return [];
+      }
+      if (!importPath.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+        return [];
+      }
+      return [`${outputPrefix}/${entry}.d.ts`];
+    })
+    .toSorted((a, b) => a.localeCompare(b));
+}
 
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/plugins/types.ts",
   "src/auto-reply",
   "packages/llm-core/src",
   "packages/markdown-core/src",
+  "packages/media-core/src",
   "packages/model-catalog-core/src",
   "packages/memory-host-sdk/src",
   "packages/media-generation-core/src",
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
+  "packages/acp-core/src",
   "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
@@ -29,6 +55,10 @@ const PLUGIN_SDK_TYPE_INPUTS = [
 ];
 const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
+const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
+  packageDir: "acp-core",
+  outputPrefix: "dist/plugin-sdk/packages/acp-core/src",
+});
 const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
@@ -52,6 +82,17 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
   "dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
   "dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/base64.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/constants.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/content-length.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/file-name.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/mime.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
+  ...ACP_CORE_REQUIRED_DTS_OUTPUTS,
   "dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts",
   "dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts",
   "dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts",
@@ -84,6 +125,10 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
 ];
 const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
+const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
+  packageDir: "acp-core",
+  outputPrefix: "packages/plugin-sdk/dist/packages/acp-core/src",
+});
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts",
   "packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts",
@@ -99,6 +144,17 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/media-generation-core/src/index.d.ts",
   "packages/plugin-sdk/dist/packages/media-generation-core/src/model-ref.d.ts",
   "packages/plugin-sdk/dist/packages/media-generation-core/src/normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/base64.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/constants.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/content-length.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/file-name.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/inbound-path-policy.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/inline-image-data-url.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/media-source-url.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/mime.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/read-response-with-limit.d.ts",
+  ...ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS,
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/configured-model-refs.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-refs.d.ts",

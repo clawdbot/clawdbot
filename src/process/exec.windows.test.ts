@@ -10,16 +10,16 @@ import {
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 
 const { spawnMock, spawnSyncMock, execFileMock, execFilePromisifyMock } = vi.hoisted(() => {
-  const execFilePromisifyMock = vi.fn();
-  const execFileMock = Object.assign(vi.fn(), {
-    [Symbol.for("nodejs.util.promisify.custom")]: execFilePromisifyMock,
-    __promisify__: execFilePromisifyMock,
+  const execFilePromisifyMockLocal = vi.fn();
+  const execFileMockLocal = Object.assign(vi.fn(), {
+    [Symbol.for("nodejs.util.promisify.custom")]: execFilePromisifyMockLocal,
+    __promisify__: execFilePromisifyMockLocal,
   });
   return {
     spawnMock: vi.fn(),
     spawnSyncMock: vi.fn(),
-    execFileMock,
-    execFilePromisifyMock,
+    execFileMock: execFileMockLocal,
+    execFilePromisifyMock: execFilePromisifyMockLocal,
   };
 });
 

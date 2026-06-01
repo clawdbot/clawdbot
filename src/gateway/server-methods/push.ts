@@ -65,6 +65,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       const result =
         registration.transport === "direct"
           ? await (async () => {
+              // Direct registrations require local APNs signing material at
+              // send time; relay registrations must not touch those secrets.
               const auth = await resolveApnsAuthConfigFromEnv(process.env);
               if (!auth.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
@@ -82,6 +84,8 @@ export const pushHandlers: GatewayRequestHandlers = {
               });
             })()
           : await (async () => {
+              // Relay registrations carry a grant from the node, so the gateway
+              // only needs relay config plus the origin bound at registration.
               const relay = resolveApnsRelayConfigFromEnv(
                 process.env,
                 context.getRuntimeConfig().gateway,
@@ -109,6 +113,8 @@ export const pushHandlers: GatewayRequestHandlers = {
           overrideEnvironment,
         })
       ) {
+        // Clear only the exact registration we tested; a reconnect may have
+        // written a newer token while the push request was in flight.
         await clearApnsRegistrationIfCurrent({
           nodeId,
           registration,

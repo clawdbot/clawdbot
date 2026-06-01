@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Settings screen for gateway dreaming state and recent dream diary entries. */
 @Composable
 internal fun DreamingSettingsScreen(
   viewModel: MainViewModel,
@@ -187,6 +188,7 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
   }
 }
 
+/** Formats the next dreaming cycle as a compact relative label. */
 private fun formatDreamingNextRun(nextRunAtMs: Long?): String {
   val next = nextRunAtMs ?: return "Not scheduled"
   val deltaMinutes = ((next - System.currentTimeMillis()) / 60_000L).coerceAtLeast(0L)

@@ -54,6 +54,16 @@ describe("generateSlugViaLLM", () => {
     expect(options.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("marks the run lane-local so internal-helper failures do not poison shared profile health (#71709)", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(requireFirstRunOptions().authProfileFailurePolicy).toBe("local");
+  });
+
   it("honors configured agent timeoutSeconds for slow local providers", async () => {
     await generateSlugViaLLM({
       sessionContent: "hello",

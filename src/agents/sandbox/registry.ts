@@ -218,7 +218,7 @@ async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise
 
 async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
   const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
-  await fs.rename(registryPath, quarantinePath).catch(async (error) => {
+  await fs.rename(registryPath, quarantinePath).catch(async (error: unknown) => {
     const code = (error as { code?: string } | null)?.code;
     if (code !== "ENOENT") {
       await fs.rm(registryPath, { force: true });

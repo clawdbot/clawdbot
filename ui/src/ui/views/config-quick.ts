@@ -327,7 +327,7 @@ type ProfileSettings = {
 };
 
 const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
-  bootstrapMaxChars: 12_000,
+  bootstrapMaxChars: 20_000,
   bootstrapTotalMaxChars: 60_000,
   contextInjection: "always",
 };

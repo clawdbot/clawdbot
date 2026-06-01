@@ -322,7 +322,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
       const pending = Promise.resolve(
         registration.subscription.handle(structuredClone(params.event), ctx),
       )
-        .catch((error) => {
+        .catch((error: unknown) => {
           logAgentEventSubscriptionFailure({
             pluginId,
             subscriptionId: registration.subscription.id,

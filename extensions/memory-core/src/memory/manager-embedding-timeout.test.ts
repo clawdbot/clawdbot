@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
@@ -96,6 +96,11 @@ describe("local embedding worker failure detection", () => {
 });
 
 describe("memory embedding timeout abort", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("aborts the provider operation when the timeout fires", async () => {
     let signalSeen: AbortSignal | undefined;
 
@@ -106,7 +111,11 @@ describe("memory embedding timeout abort", () => {
         run: async (signal) => {
           signalSeen = signal;
           return await new Promise<number[]>((resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+              { once: true },
+            );
           });
         },
       }),
@@ -198,3 +207,17 @@ describe("memory index concurrency resolution", () => {
     ).toBe(3);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

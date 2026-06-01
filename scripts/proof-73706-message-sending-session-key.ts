@@ -187,7 +187,7 @@ async function main() {
   console.log("\n[proof-73706] All runtime assertions passed.");
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("[proof-73706] FAILED:", err);
   process.exitCode = 1;
 });

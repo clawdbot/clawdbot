@@ -116,21 +116,6 @@ function catalogEntryDedupeKey(provider: string, id: string): string {
   return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));
 }
 
-function appendCatalogEntriesIfAbsent(
-  models: ModelCatalogEntry[],
-  entries: ModelCatalogEntry[],
-): void {
-  const seen = new Set(models.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)));
-  for (const entry of entries) {
-    const key = catalogEntryDedupeKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      continue;
-    }
-    models.push(entry);
-    seen.add(key);
-  }
-}
-
 function mergeCatalogCompat(
   base: ModelCatalogEntry["compat"] | undefined,
   override: ModelCatalogEntry["compat"] | undefined,
@@ -144,24 +129,21 @@ function mergeCatalogCompat(
   return { ...base, ...override };
 }
 
-function overlayConfiguredCatalogMetadata(
+function overlayCatalogMetadata(
   base: ModelCatalogEntry,
-  configured: ModelCatalogEntry,
+  overlay: ModelCatalogEntry,
 ): ModelCatalogEntry {
   return {
     ...base,
-    ...(configured.contextWindow !== undefined ? { contextWindow: configured.contextWindow } : {}),
-    ...(configured.contextTokens !== undefined ? { contextTokens: configured.contextTokens } : {}),
-    ...(configured.reasoning !== undefined ? { reasoning: configured.reasoning } : {}),
-    ...(configured.input !== undefined ? { input: configured.input } : {}),
-    compat: mergeCatalogCompat(base.compat, configured.compat),
+    ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
+    ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
+    ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
+    ...(overlay.input !== undefined ? { input: overlay.input } : {}),
+    compat: mergeCatalogCompat(base.compat, overlay.compat),
   };
 }
 
-function mergeConfiguredCatalogEntries(
-  models: ModelCatalogEntry[],
-  entries: ModelCatalogEntry[],
-): void {
+function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogEntry[]): void {
   const indexByKey = new Map(
     models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id), index]),
   );
@@ -173,7 +155,7 @@ function mergeConfiguredCatalogEntries(
       indexByKey.set(key, models.length - 1);
       continue;
     }
-    models[existingIndex] = overlayConfiguredCatalogMetadata(models[existingIndex], entry);
+    models[existingIndex] = overlayCatalogMetadata(models[existingIndex], entry);
   }
 }
 
@@ -408,12 +390,25 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   if (models.length === 0) {
     throw new Error("persisted model catalog has no usable model rows");
   }
+  try {
+    mergeCatalogEntries(
+      models,
+      loadManifestModelCatalog({
+        config: cfg,
+        env: process.env,
+        fallbackToMetadataScan: false,
+        metadataSnapshot: getMetadataSnapshot(),
+      }),
+    );
+  } catch {
+    // Persisted rows are still valid when manifest metadata is temporarily unavailable.
+  }
   const configuredModels = buildConfiguredModelCatalog({
     cfg,
     manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
   });
   if (configuredModels.length > 0) {
-    mergeConfiguredCatalogEntries(models, configuredModels);
+    mergeCatalogEntries(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
@@ -436,7 +431,7 @@ function loadReadOnlyStaticModelCatalog(params?: {
   const cfg = params?.config ?? getRuntimeConfig();
   const models: ModelCatalogEntry[] = [];
   try {
-    appendCatalogEntriesIfAbsent(
+    mergeCatalogEntries(
       models,
       loadManifestModelCatalog({
         config: cfg,
@@ -465,7 +460,7 @@ function loadReadOnlyStaticModelCatalog(params?: {
     manifestPlugins: configuredManifestPlugins,
   });
   if (configuredModels.length > 0) {
-    mergeConfiguredCatalogEntries(models, configuredModels);
+    mergeCatalogEntries(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
@@ -590,7 +585,7 @@ export async function loadModelCatalog(params?: {
           compat,
         });
       }
-      appendCatalogEntriesIfAbsent(
+      mergeCatalogEntries(
         models,
         loadManifestModelCatalog({
           config: cfg,
@@ -635,7 +630,7 @@ export async function loadModelCatalog(params?: {
               }),
             });
           }
-          appendCatalogEntriesIfAbsent(models, normalizedSupplemental);
+          mergeCatalogEntries(models, normalizedSupplemental);
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
@@ -645,7 +640,7 @@ export async function loadModelCatalog(params?: {
         manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
       });
       if (configuredModels.length > 0) {
-        mergeConfiguredCatalogEntries(models, configuredModels);
+        mergeCatalogEntries(models, configuredModels);
       }
       logStage("configured-models-merged", `entries=${models.length}`);
 

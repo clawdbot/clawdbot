@@ -51,7 +51,8 @@ jobs:
   # so this source workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
-    runs-on: ubuntu-latest
+    # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -256,7 +257,8 @@ jobs:
             return -1;
           }
 
-          for (let start = input.indexOf("["); start !== -1; start = input.indexOf("[", start + 1)) {
+          for (const match of input.matchAll(/\[/g)) {
+            const start = match.index;
             const end = arrayEndFrom(start);
             if (end === -1) {
               continue;

@@ -140,7 +140,7 @@ describe("evaluateRuntimeRequires", () => {
       hasRemoteBin: (bin) => bin === "node",
       hasAnyRemoteBin: (bins) => bins.includes("deno"),
       hasEnv: (name) => name === "OPENAI_API_KEY",
-      isConfigPathTruthy: (path) => path === "browser.enabled",
+      isConfigPathTruthy: (pathValue) => pathValue === "browser.enabled",
     });
 
     expect(result).toBe(true);
@@ -213,7 +213,7 @@ describe("evaluateRuntimeEligibility", () => {
       hasBin: (bin) => bin === "node",
       hasAnyRemoteBin: () => false,
       hasEnv: (name) => name === "OPENAI_API_KEY",
-      isConfigPathTruthy: (path) => path === "browser.enabled",
+      isConfigPathTruthy: (pathLocal) => pathLocal === "browser.enabled",
     });
     expect(result).toBe(true);
   });

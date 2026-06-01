@@ -12,6 +12,7 @@ interface FileInfoDiagnostics {
   push(diagnostic: FileInfoDiagnostic): unknown;
 }
 
+/** Parse optional YAML frontmatter and return the normalized Markdown body. */
 export function parseFrontmatter(
   content: string,
 ): Result<{ frontmatter: Record<string, unknown>; body: string }, Error> {
@@ -35,6 +36,7 @@ export function parseFrontmatter(
   }
 }
 
+/** Resolve symlink or unknown file info into the concrete loadable file kind. */
 export async function resolveFileInfoKind(
   env: ExecutionEnv,
   info: FileInfo,
@@ -72,22 +74,26 @@ export async function resolveFileInfoKind(
     : undefined;
 }
 
+/** Join harness environment paths without requiring Node path semantics. */
 export function joinEnvPath(base: string, child: string): string {
   return `${base.replace(/\/+$/, "")}/${child.replace(/^\/+/, "")}`;
 }
 
+/** Return the parent path for slash-separated harness environment paths. */
 export function dirnameEnvPath(path: string): string {
   const normalized = path.replace(/\/+$/, "");
   const slashIndex = normalized.lastIndexOf("/");
   return slashIndex <= 0 ? "/" : normalized.slice(0, slashIndex);
 }
 
+/** Return the leaf name for slash-separated harness environment paths. */
 export function basenameEnvPath(path: string): string {
   const normalized = path.replace(/\/+$/, "");
   const slashIndex = normalized.lastIndexOf("/");
   return slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
 }
 
+/** Return a root-relative path when possible, otherwise a display-safe non-absolute path. */
 export function relativeEnvPath(root: string, path: string): string {
   const normalizedRoot = root.replace(/\/+$/, "");
   const normalizedPath = path.replace(/\/+$/, "");

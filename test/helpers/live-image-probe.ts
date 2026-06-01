@@ -102,7 +102,7 @@ export function renderBitmapTextPngBase64(
   if (!normalized) {
     throw new Error("bitmap text image requires non-empty text");
   }
-  const unsupported = [...normalized].filter((ch) => !(ch in GLYPH_ROWS_5X7));
+  const unsupported = Array.from(normalized).filter((ch) => !(ch in GLYPH_ROWS_5X7));
   if (unsupported.length > 0) {
     throw new Error(`bitmap text image contains unsupported glyphs: ${unsupported.join(",")}`);
   }

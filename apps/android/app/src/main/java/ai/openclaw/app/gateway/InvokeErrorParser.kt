@@ -5,10 +5,15 @@ data class ParsedInvokeError(
   val message: String,
   val hadExplicitCode: Boolean,
 ) {
+  /** Gateway-facing form expected by UI and retry copy. */
   val prefixedMessage: String
     get() = "$code: $message"
 }
 
+/**
+ * Parses gateway invoke errors encoded as CODE: message while preserving legacy
+ * plain-text errors as UNAVAILABLE.
+ */
 fun parseInvokeErrorMessage(raw: String): ParsedInvokeError {
   val trimmed = raw.trim()
   if (trimmed.isEmpty()) {
@@ -30,6 +35,7 @@ fun parseInvokeErrorMessage(raw: String): ParsedInvokeError {
   return ParsedInvokeError(code = "UNAVAILABLE", message = trimmed, hadExplicitCode = false)
 }
 
+/** Extracts an invoke error from a throwable without exposing blank messages. */
 fun parseInvokeErrorFromThrowable(
   err: Throwable,
   fallbackMessage: String = "error",

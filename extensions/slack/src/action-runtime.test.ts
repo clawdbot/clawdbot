@@ -234,7 +234,7 @@ describe("handleSlackAction", () => {
       cfg,
     );
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
-    expect(JSON.parse((result.content?.[0] as { type: "text"; text: string }).text)).toEqual({
+    expect(JSON.parse((result.content[0] as { type: "text"; text: string }).text)).toEqual({
       ok: true,
       added: "✅",
     });

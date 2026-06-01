@@ -132,7 +132,7 @@ describe("send", () => {
     });
 
     it("should strip markdown when enabled", async () => {
-      const { stripMarkdownForTwitch } = await mockSuccessfulSend({
+      const { stripMarkdownForTwitch: stripMarkdownForTwitchLocal } = await mockSuccessfulSend({
         messageId: "twitch-msg-456",
         stripMarkdown: (text) => text.replace(/\*\*/g, ""),
       });
@@ -146,7 +146,7 @@ describe("send", () => {
         mockLogger as unknown as Console,
       );
 
-      expect(stripMarkdownForTwitch).toHaveBeenCalledWith("**Bold** text");
+      expect(stripMarkdownForTwitchLocal).toHaveBeenCalledWith("**Bold** text");
     });
 
     it("should return error when account not found", async () => {

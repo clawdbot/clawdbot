@@ -1,9 +1,11 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig, saveIMessageCatchupCursor } from "./catchup.js";
+import {
+  resetIMessageCatchupCursorStoreForTest,
+  resolveCatchupConfig,
+  saveIMessageCatchupCursor,
+} from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
 type RpcCall = {
@@ -51,17 +53,14 @@ function makeRow(opts: {
 }
 
 describe("runIMessageCatchup", () => {
-  let tempDir: string;
-
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-catchup-bridge-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    installIMessageStateRuntimeForTest();
+    resetIMessageCatchupCursorStoreForTest();
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    resetIMessageCatchupCursorStoreForTest();
     vi.useRealTimers();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("fetches chats then per-chat history and dispatches each row in rowid order", async () => {

@@ -367,7 +367,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>> | null = null;
+  let command: Awaited<ReturnType<typeof service.readCommand>> | null;
   try {
     command = await service.readCommand(process.env);
   } catch {

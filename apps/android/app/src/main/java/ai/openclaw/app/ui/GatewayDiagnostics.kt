@@ -7,6 +7,7 @@ import android.content.Context
 import android.os.Build
 import android.widget.Toast
 
+/** App version label shared by diagnostics and gateway-facing Android metadata. */
 internal fun openClawAndroidVersionLabel(): String {
   val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
   return if (BuildConfig.DEBUG && !versionName.contains("dev", ignoreCase = true)) {
@@ -16,18 +17,22 @@ internal fun openClawAndroidVersionLabel(): String {
   }
 }
 
+/** Normalizes blank gateway status text for display and diagnostics copy. */
 internal fun gatewayStatusForDisplay(statusText: String): String = statusText.trim().ifEmpty { "Offline" }
 
+/** Returns true when the status has enough signal to show diagnostics affordances. */
 internal fun gatewayStatusHasDiagnostics(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
   return lower != "offline" && !lower.contains("connecting")
 }
 
+/** Detects pairing/approval status text so UI can offer pairing-specific actions. */
 internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
   return lower.contains("pair") || lower.contains("approve")
 }
 
+/** Builds the copyable support prompt with device, endpoint, and exact status context. */
 internal fun buildGatewayDiagnosticsReport(
   screen: String,
   gatewayAddress: String,
@@ -67,6 +72,7 @@ internal fun buildGatewayDiagnosticsReport(
     """.trimIndent()
 }
 
+/** Copies the diagnostics report to Android clipboard and shows a short confirmation toast. */
 internal fun copyGatewayDiagnosticsReport(
   context: Context,
   screen: String,

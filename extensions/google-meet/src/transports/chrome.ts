@@ -766,7 +766,9 @@ async function openMeetWithBrowserRequest(params: {
     }
     const remainingWaitMs = deadline - Date.now();
     if (remainingWaitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(750, remainingWaitMs)));
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(750, remainingWaitMs));
+      });
     }
   } while (Date.now() < deadline);
   return { launched: true, browser };

@@ -242,7 +242,7 @@ function isCliEntrypoint() {
 }
 
 if (isCliEntrypoint()) {
-  await main().catch((err) => {
+  await main().catch((err: unknown) => {
     console.error(err);
     process.exit(1);
   });

@@ -188,7 +188,9 @@ describe("dispatchOutbound", () => {
     try {
       const runtime = makeRuntime({
         onDeliver: async (deliver) => {
-          await new Promise<void>((resolve) => setTimeout(resolve, 301_000));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 301_000);
+          });
           await deliver({ text: "late answer" }, { kind: "block" });
         },
       });

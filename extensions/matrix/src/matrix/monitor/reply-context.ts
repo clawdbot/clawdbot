@@ -56,12 +56,14 @@ export function createMatrixReplyContextResolver(params: {
       return cached;
     }
 
-    const event = await params.client.getEvent(input.roomId, input.eventId).catch((err) => {
-      params.logVerboseMessage(
-        `matrix: failed resolving reply context room=${input.roomId} id=${input.eventId}: ${String(err)}`,
-      );
-      return null;
-    });
+    const event = await params.client
+      .getEvent(input.roomId, input.eventId)
+      .catch((err: unknown) => {
+        params.logVerboseMessage(
+          `matrix: failed resolving reply context room=${input.roomId} id=${input.eventId}: ${String(err)}`,
+        );
+        return null;
+      });
     if (!event) {
       // Do not cache failures so transient errors can be retried on the next
       // message that references the same event.

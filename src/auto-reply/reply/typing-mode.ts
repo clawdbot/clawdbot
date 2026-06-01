@@ -137,8 +137,12 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    // Start typing as soon as tools begin executing, even before the first text delta.
     if (!typing.isActive()) {
+      // In message mode, only start typing on tool calls after renderable text
+      // has been confirmed.
+      if (shouldStartOnMessageStart && !hasRenderableText) {
+        return;
+      }
       await typing.startTypingLoop();
       typing.refreshTypingTtl();
       return;

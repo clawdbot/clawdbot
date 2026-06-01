@@ -92,7 +92,7 @@ export async function deliverDiscordInteractionReply(params: {
     components?: TopLevelComponents[],
   ) => {
     const contentPayload = content ? { content } : {};
-    const payload =
+    const payloadLocal =
       files && files.length > 0
         ? {
             ...contentPayload,
@@ -117,12 +117,12 @@ export async function deliverDiscordInteractionReply(params: {
           };
     await safeDiscordInteractionCall("interaction send", async () => {
       if (!preferFollowUp && !hasReplied) {
-        await interaction.reply(payload);
+        await interaction.reply(payloadLocal);
         hasReplied = true;
         firstMessageComponents = undefined;
         return;
       }
-      await interaction.followUp(payload);
+      await interaction.followUp(payloadLocal);
       hasReplied = true;
       firstMessageComponents = undefined;
     });

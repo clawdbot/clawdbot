@@ -52,6 +52,10 @@ import {
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  loadSkillWorkshopProposals,
+  type SkillWorkshopState,
+} from "./controllers/skill-workshop.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
 import { loadWorkboard } from "./controllers/workboard.ts";
@@ -152,6 +156,7 @@ type SettingsAppHost = SettingsHost &
   PresenceState &
   SessionsState &
   SkillsState &
+  SkillWorkshopState &
   ModelAuthStatusState &
   UsageState & {
     overviewLogCursor: number | null;
@@ -465,6 +470,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "skills":
         await loadSkills(app);
         break;
+      case "skillWorkshop":
+        await loadSkillWorkshopProposals(app, { force: true });
+        break;
       case "agents":
         await refreshAgentsTab(host, app);
         break;
@@ -483,13 +491,15 @@ export async function refreshActiveTab(host: SettingsHost) {
         ]);
         break;
       case "chat": {
-        const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
-        await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
-        scheduleChatScroll(
-          host as unknown as Parameters<typeof scheduleChatScroll>[0],
-          !host.chatHasAutoScrolled,
-        );
-        void modelAuthRefresh;
+        try {
+          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
+          scheduleChatScroll(
+            host as unknown as Parameters<typeof scheduleChatScroll>[0],
+            !host.chatHasAutoScrolled,
+          );
+        } finally {
+          void loadModelAuthStatusState(app).catch(() => undefined);
+        }
         break;
       }
       case "debug":
@@ -812,6 +822,19 @@ export function hasOperatorWriteAccess(
   return roleScopesAllow({
     role: auth.role ?? "operator",
     requestedScopes: ["operator.write"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorAdminAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.admin"],
     allowedScopes: auth.scopes,
   });
 }

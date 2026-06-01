@@ -83,6 +83,34 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.lastAnnounceRetryAt).toBeUndefined();
   });
 
+  it("migrates in-progress handoff leases to steering leases", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        cleanupHandled: true,
+        delivery: {
+          status: "in_progress",
+          payload: {
+            requesterSessionKey: "agent:main:parent",
+            requesterDisplayKey: "agent:main:parent",
+            childSessionKey: "agent:main:subagent:child",
+            childRunId: "run-1",
+            task: "inspect",
+          },
+          handoffLeaseId: "lease-1",
+          handoffLeasedAt: 300,
+        },
+      } as Partial<LegacySubagentRunRecord>),
+    ) as SubagentRunRecord & { delivery?: { handoffLeaseId?: string } };
+
+    expect(entry.delivery).toMatchObject({
+      status: "in_progress",
+      steeringLeaseId: "lease-1",
+      steeringLeasedAt: 300,
+    });
+    expect(entry.delivery?.handoffLeaseId).toBeUndefined();
+    expect(entry.cleanupHandled).toBe(false);
+  });
+
   it("clears stale cleanupHandled locks for unfinished restored cleanup", () => {
     const entry = normalizeSubagentRunState(baseRun({ cleanupHandled: true }));
 

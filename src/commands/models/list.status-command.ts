@@ -442,7 +442,7 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolved = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
         context: {
@@ -451,15 +451,15 @@ export async function modelsStatusCommand(
           providerConfig: resolveProviderConfigForStatus(cfg, normalized),
         },
       });
-      if (!resolved) {
+      if (!resolvedLocal) {
         continue;
       }
       const syntheticAuth: StatusSyntheticAuth = {
         value: "plugin-owned",
-        source: resolved.source,
-        credential: resolved.apiKey,
-        mode: resolved.mode,
-        expiresAt: resolved.expiresAt,
+        source: resolvedLocal.source,
+        credential: resolvedLocal.apiKey,
+        mode: resolvedLocal.mode,
+        expiresAt: resolvedLocal.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
       if (normalized === "codex" || normalized === codexProviderAlias) {
@@ -1145,7 +1145,7 @@ export async function modelsStatusCommand(
         runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
         for (const profile of profiles) {
           const labelText = profile.label || profile.profileId;
-          const label = colorize(rich, theme.accent, labelText);
+          const labelLocal = colorize(rich, theme.accent, labelText);
           const status = formatStatus(profile.status);
           const expiry =
             profile.status === "static"
@@ -1153,7 +1153,7 @@ export async function modelsStatusCommand(
               : profile.expiresAt
                 ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
                 : " expires unknown";
-          runtime.log(`  - ${label} ${status}${expiry}`);
+          runtime.log(`  - ${labelLocal} ${status}${expiry}`);
         }
       }
     }

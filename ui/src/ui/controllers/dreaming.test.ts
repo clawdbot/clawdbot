@@ -15,8 +15,10 @@ import {
   type DreamingState,
 } from "./dreaming.ts";
 
-function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn();
+type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
+  const request = vi.fn<TestRequest>();
   const state: DreamingState = {
     client: {
       request,
@@ -61,7 +63,9 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<string, unknown> {
+function getConfigPatchRawPayload(
+  request: ReturnType<typeof vi.fn<TestRequest>>,
+): Record<string, unknown> {
   const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
   if (!patchCall) {
     throw new Error("Expected config.patch request");
@@ -71,7 +75,7 @@ function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<str
 }
 
 function getRequestPayload(
-  request: ReturnType<typeof vi.fn>,
+  request: ReturnType<typeof vi.fn<TestRequest>>,
   method: string,
 ): Record<string, unknown> {
   const call = request.mock.calls.find((entry) => entry[0] === method);
@@ -246,8 +250,12 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     const agentA = createDeferred<unknown>();
     const agentB = createDeferred<unknown>();
-    request.mockImplementation(async (_method: string, payload?: { agentId?: string }) => {
-      return payload?.agentId === "agent-b" ? agentB.promise : agentA.promise;
+    request.mockImplementation(async (_method: string, payload?: unknown) => {
+      const agentId =
+        typeof payload === "object" && payload !== null && "agentId" in payload
+          ? payload.agentId
+          : undefined;
+      return agentId === "agent-b" ? agentB.promise : agentA.promise;
     });
 
     state.selectedAgentId = "agent-a";
@@ -967,8 +975,12 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     const agentA = createDeferred<unknown>();
     const agentB = createDeferred<unknown>();
-    request.mockImplementation(async (_method: string, payload?: { agentId?: string }) => {
-      return payload?.agentId === "agent-b" ? agentB.promise : agentA.promise;
+    request.mockImplementation(async (_method: string, payload?: unknown) => {
+      const agentId =
+        typeof payload === "object" && payload !== null && "agentId" in payload
+          ? payload.agentId
+          : undefined;
+      return agentId === "agent-b" ? agentB.promise : agentA.promise;
     });
 
     state.selectedAgentId = "agent-a";

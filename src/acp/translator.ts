@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
-import path from "node:path";
 import type {
   Agent,
   AgentSideConnection,
@@ -21,10 +20,7 @@ import type {
   PromptResponse,
   ResumeSessionRequest,
   ResumeSessionResponse,
-  SessionConfigOption,
   SessionInfo,
-  SessionModeState,
-  SessionUpdate,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
   SetSessionModeRequest,
@@ -33,10 +29,12 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
+import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
+import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
@@ -58,7 +56,6 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -68,29 +65,44 @@ import {
   type GatewayExecApprovalDetails,
   type GatewayExecApprovalEvent,
 } from "./permission-relay.js";
-import { toAcpSessionLineageMeta, type AcpSessionLineageMeta } from "./session-lineage-meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
-import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
+import {
+  ACP_ELEVATED_LEVEL_CONFIG_ID,
+  ACP_FAST_MODE_CONFIG_ID,
+  ACP_REASONING_LEVEL_CONFIG_ID,
+  ACP_RESPONSE_USAGE_CONFIG_ID,
+  ACP_THOUGHT_LEVEL_CONFIG_ID,
+  ACP_TIMEOUT_CONFIG_ID,
+  ACP_TIMEOUT_SECONDS_CONFIG_ID,
+  ACP_TRACE_LEVEL_CONFIG_ID,
+  ACP_VERBOSE_LEVEL_CONFIG_ID,
+  buildSessionMetadata,
+  buildSessionPresentation,
+  buildSessionUsageSnapshot,
+  normalizeClientCapabilities,
+  type ClientCapabilityState,
+  type GatewaySessionPresentationRow,
+  type SessionSnapshot,
+} from "./translator.presentation.js";
+import {
+  extractReplayChunks,
+  type GatewayChatContentBlock,
+  type GatewayTranscriptMessage,
+} from "./translator.replay.js";
+import {
+  ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,
+  assertAbsoluteCwd,
+  decodeListSessionsCursor,
+  encodeListSessionsCursor,
+  resolveListSessionsPageSize,
+} from "./translator.session-list.js";
+import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
-const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
-const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
-const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
-const ACP_TRACE_LEVEL_CONFIG_ID = "trace_level";
-const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
-const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
-const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
-const ACP_TIMEOUT_CONFIG_ID = "timeout";
-const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
-const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
-const ACP_LIST_SESSIONS_MAX_PAGE_SIZE = 100;
-const ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET = 10_000;
-const ACP_LIST_SESSIONS_MAX_FETCH_LIMIT =
-  ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET + ACP_LIST_SESSIONS_MAX_PAGE_SIZE + 1;
 
 let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
 let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
@@ -128,12 +140,6 @@ type PendingPrompt = {
   toolCalls?: Map<string, PendingToolCall>;
 };
 
-type ClientCapabilityState = {
-  readTextFile: boolean;
-  writeTextFile: boolean;
-  terminal: boolean;
-};
-
 type PendingApprovalRelay = {
   approvalId: string;
   runId: string;
@@ -154,63 +160,6 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
   sessionStore?: AcpSessionStore;
 };
 
-type GatewaySessionPresentationRow = Pick<
-  GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "channel"
-  | "parentSessionKey"
-  | "spawnedBy"
-  | "spawnDepth"
-  | "subagentRole"
-  | "subagentControlScope"
-  | "spawnedWorkspaceDir"
-  | "spawnedCwd"
-  | "displayName"
-  | "label"
-  | "derivedTitle"
-  | "updatedAt"
-  | "thinkingLevel"
-  | "fastMode"
-  | "modelProvider"
-  | "model"
-  | "thinkingLevels"
-  | "verboseLevel"
-  | "traceLevel"
-  | "reasoningLevel"
-  | "responseUsage"
-  | "elevatedLevel"
-  | "totalTokens"
-  | "totalTokensFresh"
-  | "contextTokens"
->;
-
-type SessionPresentation = {
-  configOptions: SessionConfigOption[];
-  modes: SessionModeState;
-};
-
-type SessionMetadata = {
-  title?: string | null;
-  updatedAt?: string | null;
-  _meta?: AcpSessionLineageMeta;
-};
-
-type SessionUsageSnapshot = {
-  size: number;
-  used: number;
-};
-
-function normalizeClientCapabilities(
-  capabilities: InitializeRequest["clientCapabilities"] | undefined,
-): ClientCapabilityState {
-  return {
-    readTextFile: capabilities?.fs?.readTextFile === true,
-    writeTextFile: capabilities?.fs?.writeTextFile === true,
-    terminal: capabilities?.terminal === true,
-  };
-}
-
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
@@ -230,311 +179,13 @@ function isGatewayCloseError(err: unknown): boolean {
   return err instanceof Error && err.message.startsWith("gateway closed (");
 }
 
-type SessionSnapshot = SessionPresentation & {
-  metadata?: SessionMetadata;
-  usage?: SessionUsageSnapshot;
-};
-
 type AgentWaitResult = {
   status?: "ok" | "error" | "timeout";
   error?: string;
 };
 
-type GatewayTranscriptMessage = {
-  role?: unknown;
-  content?: unknown;
-};
-
-type GatewayChatContentBlock = {
-  type?: string;
-  text?: string;
-  thinking?: string;
-};
-
-type ReplayChunk = {
-  sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
-  text: string;
-};
-
-type ListSessionsCursor = {
-  offset: number;
-  cwd?: string;
-};
-
-function encodeListSessionsCursor(cursor: ListSessionsCursor): string {
-  return Buffer.from(JSON.stringify({ v: 1, ...cursor }), "utf8").toString("base64url");
-}
-
-function decodeListSessionsCursor(value: string | null | undefined): ListSessionsCursor {
-  if (!value) {
-    return { offset: 0 };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-  } catch {
-    throw new Error("Invalid ACP session list cursor.");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Invalid ACP session list cursor.");
-  }
-  const record = parsed as Record<string, unknown>;
-  if (record.v !== 1) {
-    throw new Error("Unsupported ACP session list cursor.");
-  }
-  if (
-    typeof record.offset !== "number" ||
-    !Number.isInteger(record.offset) ||
-    record.offset < 0 ||
-    record.offset > ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET
-  ) {
-    throw new Error("Invalid ACP session list cursor offset.");
-  }
-  const cwd = normalizeOptionalString(record.cwd);
-  return {
-    offset: record.offset,
-    ...(cwd ? { cwd } : {}),
-  };
-}
-
-function assertAbsoluteCwd(cwd: string, method: string): void {
-  if (!path.isAbsolute(cwd)) {
-    throw new Error(`ACP ${method} requires an absolute cwd.`);
-  }
-}
-
-function resolveListSessionsPageSize(meta: Record<string, unknown> | null | undefined): number {
-  const requested = readNumber(meta, ["limit", "pageSize"]);
-  if (requested === undefined) {
-    return ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE;
-  }
-  return Math.min(ACP_LIST_SESSIONS_MAX_PAGE_SIZE, Math.max(1, Math.floor(requested)));
-}
-
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
-
-function formatThinkingLevelName(level: string): string {
-  switch (level) {
-    case "xhigh":
-      return "Extra High";
-    case "adaptive":
-      return "Adaptive";
-    default:
-      return level.length > 0 ? `${level[0].toUpperCase()}${level.slice(1)}` : "Unknown";
-  }
-}
-
-function buildThinkingModeDescription(level: string): string | undefined {
-  if (level === "adaptive") {
-    return "Use the Gateway session default thought level.";
-  }
-  return undefined;
-}
-
-function formatConfigValueName(value: string): string {
-  switch (value) {
-    case "xhigh":
-      return "Extra High";
-    default:
-      return value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : "Unknown";
-  }
-}
-
-function buildSelectConfigOption(params: {
-  id: string;
-  name: string;
-  description: string;
-  currentValue: string;
-  values: readonly string[];
-  category?: string;
-}): SessionConfigOption {
-  return {
-    type: "select",
-    id: params.id,
-    name: params.name,
-    category: params.category,
-    description: params.description,
-    currentValue: params.currentValue,
-    options: params.values.map((value) => ({
-      value,
-      name: formatConfigValueName(value),
-    })),
-  };
-}
-
-function buildSessionPresentation(params: {
-  row?: GatewaySessionPresentationRow;
-  overrides?: Partial<GatewaySessionPresentationRow>;
-}): SessionPresentation {
-  const row = {
-    ...params.row,
-    ...params.overrides,
-  };
-  const availableLevelIds: string[] = row.thinkingLevels?.map((level) => level.id) ?? [
-    ...BASE_THINKING_LEVELS,
-  ];
-  const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
-  if (!availableLevelIds.includes(currentModeId)) {
-    availableLevelIds.push(currentModeId);
-  }
-
-  const modes: SessionModeState = {
-    currentModeId,
-    availableModes: availableLevelIds.map((level) => ({
-      id: level,
-      name: formatThinkingLevelName(level),
-      description: buildThinkingModeDescription(level),
-    })),
-  };
-
-  const configOptions: SessionConfigOption[] = [
-    buildSelectConfigOption({
-      id: ACP_THOUGHT_LEVEL_CONFIG_ID,
-      name: "Thought level",
-      category: "thought_level",
-      description:
-        "Controls how much deliberate reasoning OpenClaw requests from the Gateway model.",
-      currentValue: currentModeId,
-      values: availableLevelIds,
-    }),
-    buildSelectConfigOption({
-      id: ACP_FAST_MODE_CONFIG_ID,
-      name: "Fast mode",
-      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
-      currentValue: row.fastMode ? "on" : "off",
-      values: ["off", "on"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_VERBOSE_LEVEL_CONFIG_ID,
-      name: "Tool verbosity",
-      description:
-        "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
-      currentValue: normalizeOptionalString(row.verboseLevel) || "off",
-      values: ["off", "on", "full"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_TRACE_LEVEL_CONFIG_ID,
-      name: "Plugin trace",
-      description: "Controls whether plugin-owned trace lines are shown for the session.",
-      currentValue: normalizeOptionalString(row.traceLevel) || "off",
-      values: ["off", "on"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_REASONING_LEVEL_CONFIG_ID,
-      name: "Reasoning stream",
-      description: "Controls whether reasoning-capable models emit reasoning text for the session.",
-      currentValue: normalizeOptionalString(row.reasoningLevel) || "off",
-      values: ["off", "on", "stream"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_RESPONSE_USAGE_CONFIG_ID,
-      name: "Usage detail",
-      description:
-        "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: normalizeOptionalString(row.responseUsage) || "off",
-      values: ["off", "tokens", "full"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_ELEVATED_LEVEL_CONFIG_ID,
-      name: "Elevated actions",
-      description: "Controls how aggressively the session allows elevated execution behavior.",
-      currentValue: normalizeOptionalString(row.elevatedLevel) || "off",
-      values: ["off", "on", "ask", "full"],
-    }),
-  ];
-
-  return { configOptions, modes };
-}
-
-function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
-  const role = typeof message.role === "string" ? message.role : "";
-  if (role !== "user" && role !== "assistant") {
-    return [];
-  }
-  if (typeof message.content === "string") {
-    return message.content.length > 0
-      ? [
-          {
-            sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-            text: message.content,
-          },
-        ]
-      : [];
-  }
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-
-  const replayChunks: ReplayChunk[] = [];
-  for (const block of message.content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
-      continue;
-    }
-    const typedBlock = block as GatewayChatContentBlock;
-    if (typedBlock.type === "text" && typeof typedBlock.text === "string" && typedBlock.text) {
-      replayChunks.push({
-        sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-        text: typedBlock.text,
-      });
-      continue;
-    }
-    if (
-      role === "assistant" &&
-      typedBlock.type === "thinking" &&
-      typeof typedBlock.thinking === "string" &&
-      typedBlock.thinking
-    ) {
-      replayChunks.push({
-        sessionUpdate: "agent_thought_chunk",
-        text: typedBlock.thinking,
-      });
-    }
-  }
-  return replayChunks;
-}
-
-function buildSessionMetadata(params: {
-  row?: GatewaySessionPresentationRow;
-  sessionKey: string;
-}): SessionMetadata {
-  const title =
-    normalizeOptionalString(params.row?.derivedTitle) ||
-    normalizeOptionalString(params.row?.displayName) ||
-    normalizeOptionalString(params.row?.label) ||
-    params.sessionKey;
-  const updatedAt = timestampMsToIsoString(params.row?.updatedAt) ?? null;
-  return {
-    title,
-    updatedAt,
-    _meta: toAcpSessionLineageMeta(
-      params.row ?? {
-        key: params.sessionKey,
-        kind: "unknown",
-      },
-    ),
-  };
-}
-
-function buildSessionUsageSnapshot(
-  row?: GatewaySessionPresentationRow,
-): SessionUsageSnapshot | undefined {
-  const totalTokens = row?.totalTokens;
-  const contextTokens = row?.contextTokens;
-  if (
-    row?.totalTokensFresh !== true ||
-    typeof totalTokens !== "number" ||
-    !Number.isFinite(totalTokens) ||
-    typeof contextTokens !== "number" ||
-    !Number.isFinite(contextTokens) ||
-    contextTokens <= 0
-  ) {
-    return undefined;
-  }
-  const size = Math.max(0, Math.floor(contextTokens));
-  const used = Math.max(0, Math.min(Math.floor(totalTokens), size));
-  return { size, used };
-}
 
 function buildSystemInputProvenance(originSessionId: string) {
   return {
@@ -571,17 +222,13 @@ function hasExplicitSessionRouting(
   );
 }
 
-function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: string }): string {
-  return session.ledgerSessionId ?? session.sessionId;
-}
-
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;
   private opts: AcpGatewayAgentOptions;
   private log: (msg: string) => void;
   private sessionStore: AcpSessionStore;
-  private eventLedger: AcpEventLedger;
+  private sessionUpdates: AcpTranslatorSessionUpdates;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
   private approvalRelays = new Map<string, PendingApprovalRelay>();
@@ -609,7 +256,12 @@ export class AcpGatewayAgent implements Agent {
     this.opts = opts;
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
-    this.eventLedger = opts.eventLedger ?? createInMemoryAcpEventLedger();
+    this.sessionUpdates = new AcpTranslatorSessionUpdates({
+      connection,
+      eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
+      getAvailableCommands: getAvailableCommandsForAcp,
+      log: this.log,
+    });
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
       maxRequests: resolveFixedWindowRateLimitInteger(
         opts.sessionCreateRateLimit?.maxRequests,
@@ -728,14 +380,14 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
-    await this.startLedgerSession(session, { complete: true, reset: true });
+    await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey);
     await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
       record: true,
     });
-    await this.sendAvailableCommands(session, { record: true });
+    await this.sessionUpdates.sendAvailableCommands(session, { record: true });
     const { configOptions, modes } = sessionSnapshot;
     return {
       sessionId: session.sessionId,
@@ -754,10 +406,10 @@ export class AcpGatewayAgent implements Agent {
     const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
     const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
       ? { complete: false, events: [] }
-      : await this.readLedgerReplayBySessionId(params.sessionId);
+      : await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId);
     const listedLedgerReplay: AcpEventLedgerReplay =
       !hasExplicitRouting && !exactLedgerReplay.complete
-        ? await this.readLedgerReplayBySessionKey(params.sessionId)
+        ? await this.sessionUpdates.readLedgerReplayBySessionKey(params.sessionId)
         : { complete: false, events: [] };
     const routedLedgerReplay = exactLedgerReplay.complete ? exactLedgerReplay : listedLedgerReplay;
     const sessionKey = await this.resolveSessionKeyFromMeta({
@@ -769,7 +421,7 @@ export class AcpGatewayAgent implements Agent {
         ? exactLedgerReplay
         : listedLedgerReplay.complete && listedLedgerReplay.sessionKey === sessionKey
           ? listedLedgerReplay
-          : await this.readLedgerReplay({
+          : await this.sessionUpdates.readLedgerReplay({
               sessionId: params.sessionId,
               sessionKey,
             });
@@ -780,13 +432,13 @@ export class AcpGatewayAgent implements Agent {
       ...(ledgerReplay.sessionId ? { ledgerSessionId: ledgerReplay.sessionId } : {}),
       cwd: params.cwd,
     });
-    await this.startLedgerSession(session, { complete: ledgerReplay.complete });
+    await this.sessionUpdates.startLedgerSession(session, { complete: ledgerReplay.complete });
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
     const [sessionSnapshot, transcript] = await Promise.all([
       this.getSessionSnapshot(session.sessionKey),
       ledgerReplay.complete
         ? Promise.resolve([])
-        : this.getSessionTranscript(session.sessionKey).catch((err) => {
+        : this.getSessionTranscript(session.sessionKey).catch((err: unknown) => {
             this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
             return [];
           }),
@@ -800,7 +452,7 @@ export class AcpGatewayAgent implements Agent {
       includeControls: false,
       record: false,
     });
-    await this.sendAvailableCommands(session, { record: false });
+    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
     const { configOptions, modes } = sessionSnapshot;
     return { configOptions, modes };
   }
@@ -889,13 +541,13 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
-    await this.startLedgerSession(session, { complete: false });
+    await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
     await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
       record: false,
     });
-    await this.sendAvailableCommands(session, { record: false });
+    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
     const { configOptions, modes } = sessionSnapshot;
     return { configOptions, modes };
   }
@@ -1059,7 +711,7 @@ export class AcpGatewayAgent implements Agent {
             { timeoutMs: null },
           );
           markSendAccepted();
-          await this.recordUserPrompt(session, runId, params.prompt);
+          await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
@@ -1067,14 +719,14 @@ export class AcpGatewayAgent implements Agent {
           ) {
             await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
             markSendAccepted();
-            await this.recordUserPrompt(session, runId, params.prompt);
+            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
             return;
           }
           throw err;
         }
       };
 
-      void sendWithProvenanceFallback().catch((err) => {
+      void sendWithProvenanceFallback().catch((err: unknown) => {
         if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
           return;
         }
@@ -1166,7 +818,7 @@ export class AcpGatewayAgent implements Agent {
         rawInput: args,
         locations,
       });
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
         sessionKey: pending.sessionKey,
         ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
@@ -1188,7 +840,7 @@ export class AcpGatewayAgent implements Agent {
     if (phase === "update") {
       const toolState = pending.toolCalls?.get(toolCallId);
       const partialResult = data.partialResult;
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
         sessionKey: pending.sessionKey,
         ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
@@ -1210,7 +862,7 @@ export class AcpGatewayAgent implements Agent {
       const isError = Boolean(data.isError);
       const toolState = pending.toolCalls?.get(toolCallId);
       pending.toolCalls?.delete(toolCallId);
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
         sessionKey: pending.sessionKey,
         ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
@@ -1452,7 +1104,7 @@ export class AcpGatewayAgent implements Agent {
       const newThought = fullThought.slice(sentThoughtSoFar);
       pending.sentThoughtLength = fullThought.length;
       pending.sentThought = fullThought;
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId,
         sessionKey: pending.sessionKey,
         ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
@@ -1478,7 +1130,7 @@ export class AcpGatewayAgent implements Agent {
     const newText = fullText.slice(sentSoFar);
     pending.sentTextLength = fullText.length;
     pending.sentText = fullText;
-    await this.emitSessionUpdate({
+    await this.sessionUpdates.emit({
       sessionId,
       sessionKey: pending.sessionKey,
       ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
@@ -1725,149 +1377,6 @@ export class AcpGatewayAgent implements Agent {
     return true;
   }
 
-  private async startLedgerSession(
-    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string; cwd: string },
-    options: { complete: boolean; reset?: boolean },
-  ): Promise<void> {
-    try {
-      await this.eventLedger.startSession({
-        sessionId: resolveLedgerSessionId(session),
-        sessionKey: session.sessionKey,
-        cwd: session.cwd,
-        complete: options.complete,
-        ...(options.reset ? { reset: true } : {}),
-      });
-    } catch (err) {
-      this.log(`event ledger session start failed for ${session.sessionId}: ${String(err)}`);
-    }
-  }
-
-  private async readLedgerReplay(params: {
-    sessionId: string;
-    sessionKey: string;
-  }): Promise<AcpEventLedgerReplay> {
-    try {
-      return await this.eventLedger.readReplay(params);
-    } catch (err) {
-      this.log(`event ledger replay fallback for ${params.sessionId}: ${String(err)}`);
-      return { complete: false, events: [] };
-    }
-  }
-
-  private async readLedgerReplayBySessionId(sessionId: string): Promise<AcpEventLedgerReplay> {
-    try {
-      return await this.eventLedger.readReplayBySessionId({ sessionId });
-    } catch (err) {
-      this.log(`event ledger exact replay fallback for ${sessionId}: ${String(err)}`);
-      return { complete: false, events: [] };
-    }
-  }
-
-  private async readLedgerReplayBySessionKey(sessionKey: string): Promise<AcpEventLedgerReplay> {
-    try {
-      return await this.eventLedger.readReplayBySessionKey({ sessionKey });
-    } catch (err) {
-      this.log(`event ledger session-key replay fallback for ${sessionKey}: ${String(err)}`);
-      return { complete: false, events: [] };
-    }
-  }
-
-  private async recordUserPrompt(
-    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
-    runId: string,
-    prompt: PromptRequest["prompt"],
-  ): Promise<void> {
-    try {
-      await this.eventLedger.recordUserPrompt({
-        sessionId: resolveLedgerSessionId(session),
-        sessionKey: session.sessionKey,
-        runId,
-        prompt,
-      });
-    } catch (err) {
-      this.log(`event ledger prompt record failed for ${session.sessionId}: ${String(err)}`);
-      await this.markLedgerIncomplete(session);
-    }
-  }
-
-  private async recordLedgerUpdate(params: {
-    sessionId: string;
-    sessionKey: string;
-    ledgerSessionId?: string;
-    runId?: string;
-    update: SessionUpdate;
-  }): Promise<void> {
-    try {
-      await this.eventLedger.recordUpdate({
-        sessionId: params.ledgerSessionId ?? params.sessionId,
-        sessionKey: params.sessionKey,
-        ...(params.runId ? { runId: params.runId } : {}),
-        update: params.update,
-      });
-    } catch (err) {
-      this.log(`event ledger update record failed for ${params.sessionId}: ${String(err)}`);
-      await this.markLedgerIncomplete({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-      });
-    }
-  }
-
-  private async markLedgerIncomplete(session: {
-    sessionId: string;
-    sessionKey: string;
-    ledgerSessionId?: string;
-  }): Promise<void> {
-    try {
-      await this.eventLedger.markIncomplete({
-        sessionId: resolveLedgerSessionId(session),
-        sessionKey: session.sessionKey,
-      });
-    } catch (err) {
-      this.log(`event ledger incomplete mark failed for ${session.sessionId}: ${String(err)}`);
-    }
-  }
-
-  private async emitSessionUpdate(params: {
-    sessionId: string;
-    sessionKey?: string;
-    ledgerSessionId?: string;
-    runId?: string;
-    update: SessionUpdate;
-    record?: boolean;
-  }): Promise<void> {
-    await this.connection.sessionUpdate({
-      sessionId: params.sessionId,
-      update: params.update,
-    });
-    if (params.record && params.sessionKey) {
-      await this.recordLedgerUpdate({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
-        update: params.update,
-      });
-    }
-  }
-
-  private async sendAvailableCommands(
-    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
-    options: { record: boolean },
-  ): Promise<void> {
-    await this.emitSessionUpdate({
-      sessionId: session.sessionId,
-      sessionKey: session.sessionKey,
-      ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
-      record: options.record,
-      update: {
-        sessionUpdate: "available_commands_update",
-        availableCommands: await getAvailableCommandsForAcp(),
-      },
-    });
-  }
-
   private async getSessionSnapshot(
     sessionKey: string,
     overrides?: Partial<GatewaySessionPresentationRow>,
@@ -2071,7 +1580,7 @@ export class AcpGatewayAgent implements Agent {
     for (const message of transcript) {
       const replayChunks = extractReplayChunks(message);
       for (const chunk of replayChunks) {
-        await this.emitSessionUpdate({
+        await this.sessionUpdates.emit({
           sessionId,
           update: {
             sessionUpdate: chunk.sessionUpdate,
@@ -2087,7 +1596,7 @@ export class AcpGatewayAgent implements Agent {
     ledgerReplay: AcpEventLedgerReplay,
   ): Promise<void> {
     for (const event of ledgerReplay.events) {
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId,
         update: event.update,
         record: false,
@@ -2101,7 +1610,7 @@ export class AcpGatewayAgent implements Agent {
     options: { includeControls: boolean; record: boolean; runId?: string },
   ): Promise<void> {
     if (options.includeControls) {
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: session.sessionId,
         sessionKey: session.sessionKey,
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
@@ -2112,7 +1621,7 @@ export class AcpGatewayAgent implements Agent {
           currentModeId: sessionSnapshot.modes.currentModeId,
         },
       });
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: session.sessionId,
         sessionKey: session.sessionKey,
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
@@ -2125,7 +1634,7 @@ export class AcpGatewayAgent implements Agent {
       });
     }
     if (sessionSnapshot.metadata) {
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: session.sessionId,
         sessionKey: session.sessionKey,
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
@@ -2138,7 +1647,7 @@ export class AcpGatewayAgent implements Agent {
       });
     }
     if (sessionSnapshot.usage) {
-      await this.emitSessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: session.sessionId,
         sessionKey: session.sessionKey,
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),

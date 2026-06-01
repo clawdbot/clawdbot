@@ -77,17 +77,17 @@ export function normalizeCodexMcpServerConfig(
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
     const envHeaders: Record<string, string> = {};
-    for (const [name, value] of Object.entries(httpHeaders)) {
+    for (const [nameLocal, value] of Object.entries(httpHeaders)) {
       const decoded = decodeHeaderEnvPlaceholder(value);
       if (!decoded) {
-        staticHeaders[name] = value;
+        staticHeaders[nameLocal] = value;
         continue;
       }
-      if (decoded.bearer && normalizeOptionalLowercaseString(name) === "authorization") {
+      if (decoded.bearer && normalizeOptionalLowercaseString(nameLocal) === "authorization") {
         next.bearer_token_env_var = decoded.envVar;
         continue;
       }
-      envHeaders[name] = decoded.envVar;
+      envHeaders[nameLocal] = decoded.envVar;
     }
     if (Object.keys(staticHeaders).length > 0) {
       next.http_headers = staticHeaders;

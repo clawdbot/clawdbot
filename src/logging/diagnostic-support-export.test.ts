@@ -478,6 +478,94 @@ describe("diagnostic support export", () => {
     }
   });
 
+  it("includes mDNS config state and recent Bonjour log summary", async () => {
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-bonjour.zip");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        discovery: {
+          mdns: {
+            mode: "minimal",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-04-22T12:00:01.000Z"),
+      readLogTail: async () => ({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.000Z",
+            level: "warn",
+            subsystem: "gateway/discovery/bonjour",
+            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
+          }),
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.500Z",
+            level: "warn",
+            msg: "bonjour: disabling advertiser after 3 failed restarts",
+          }),
+        ],
+      }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
+      discovery?: {
+        mdnsMode?: string;
+        bonjourEnvOverride?: string;
+      };
+    };
+    expect(configShape.discovery).toEqual({
+      mdnsMode: "minimal",
+      bonjourEnvOverride: "force-disabled",
+    });
+
+    const diagnostics = JSON.parse(entries["diagnostics.json"] ?? "{}") as {
+      bonjour?: {
+        count?: number;
+        warnings?: number;
+        last?: { kind?: string };
+        flags?: {
+          disabled?: boolean;
+          restarted?: boolean;
+          ciaoSuppressed?: boolean;
+        };
+      };
+    };
+    expect(diagnostics.bonjour).toEqual({
+      count: 2,
+      warnings: 2,
+      last: {
+        time: "2026-04-22T12:00:00.500Z",
+        level: "warn",
+        kind: "disabled",
+      },
+      flags: {
+        disabled: true,
+        restarted: false,
+        ciaoSuppressed: true,
+      },
+    });
+  });
+
   it("redacts numeric private fields in support snapshots and config", () => {
     const redaction = {
       env: {

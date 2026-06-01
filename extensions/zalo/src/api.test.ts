@@ -59,7 +59,7 @@ describe("Zalo API request methods", () => {
     try {
       const fetcher = vi.fn<ZaloFetch>(
         (_, init) =>
-          new Promise<Response>((_, reject) => {
+          new Promise<Response>((_Local, reject) => {
             init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
               once: true,
             });

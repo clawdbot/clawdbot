@@ -11,7 +11,7 @@ type ChannelConfigWithAccounts = {
 };
 
 type ConfigWritePolicyConfig = {
-  channels?: Record<string, ChannelConfigWithAccounts>;
+  channels?: Record<string, unknown>;
 };
 
 export type ConfigWriteScopeLike<TChannelId extends string = string> = {
@@ -55,7 +55,10 @@ function resolveChannelConfig(
   if (!channelId) {
     return undefined;
   }
-  return cfg.channels?.[channelId];
+  const channelConfig = cfg.channels?.[channelId];
+  return channelConfig != null && typeof channelConfig === "object" && !Array.isArray(channelConfig)
+    ? (channelConfig as ChannelConfigWithAccounts)
+    : undefined;
 }
 
 function resolveChannelAccountConfig(

@@ -23,13 +23,15 @@ async function withListeningServer(cb: (address: net.AddressInfo) => Promise<voi
   try {
     await cb(address);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
 describe("tryListenOnPort", () => {
   it("can bind and release an ephemeral loopback port", async () => {
-    let listened = false;
+    let listened;
     try {
       await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
       listened = true;

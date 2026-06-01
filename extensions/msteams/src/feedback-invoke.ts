@@ -191,7 +191,7 @@ export async function runMSTeamsFeedbackInvokeHandler(
       feedbackMessageId: messageId,
       userComment,
       log: deps.log,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       deps.log.error("feedback reflection failed", { error: formatUnknownError(err) });
     });
   }

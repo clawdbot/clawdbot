@@ -269,8 +269,20 @@ function expectedPluginIndexRecord(params: {
     startup: {
       sidecar: false,
       memory: false,
+      configPaths: [],
       deferConfiguredChannelFullLoadUntilAfterListen: false,
       agentHarnesses: [],
+    },
+    contributions: {
+      channels: [],
+      channelConfigs: [],
+      providers: [params.pluginId],
+      modelCatalogProviders: [],
+      modelSupportPrefixes: [],
+      modelSupportPatterns: [],
+      autoEnableProviderIds: [],
+      commandAliases: [],
+      contracts: {},
     },
     compat: [],
   };

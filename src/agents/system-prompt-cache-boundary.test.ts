@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ensureSystemPromptCacheBoundary,
   prependSystemPromptAdditionAfterCacheBoundary,
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -40,5 +41,48 @@ describe("system prompt cache boundary helpers", () => {
     ).toBe(
       `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn lab context\nSecond line\n\nDynamic suffix\n\nMore detail`,
     );
+  });
+});
+
+describe("ensureSystemPromptCacheBoundary", () => {
+  it("returns a marker-bearing prompt unchanged", () => {
+    const prompt = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`;
+    expect(ensureSystemPromptCacheBoundary(prompt)).toBe(prompt);
+  });
+
+  it("appends the boundary to a marker-free prompt", () => {
+    expect(ensureSystemPromptCacheBoundary("Marker-free override")).toBe(
+      `Marker-free override${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+    );
+  });
+
+  it("does not add a boundary for an empty prompt", () => {
+    expect(ensureSystemPromptCacheBoundary("")).toBe("");
+    expect(ensureSystemPromptCacheBoundary(" \n\t ")).toBe(" \n\t ");
+  });
+
+  it("uses a per-turn addition directly when the base prompt is empty", () => {
+    expect(
+      prependSystemPromptAdditionAfterCacheBoundary({
+        systemPrompt: ensureSystemPromptCacheBoundary(""),
+        systemPromptAddition: "Per-turn media task hint",
+      }),
+    ).toBe("Per-turn media task hint");
+  });
+
+  it("is idempotent for a marker-free prompt", () => {
+    const once = ensureSystemPromptCacheBoundary("Marker-free override");
+    expect(ensureSystemPromptCacheBoundary(once)).toBe(once);
+  });
+
+  it("lets a per-turn addition split into the uncached suffix for a marker-free prompt", () => {
+    const result = prependSystemPromptAdditionAfterCacheBoundary({
+      systemPrompt: ensureSystemPromptCacheBoundary("Marker-free override"),
+      systemPromptAddition: "Per-turn media task hint",
+    });
+    expect(splitSystemPromptCacheBoundary(result)).toEqual({
+      stablePrefix: "Marker-free override",
+      dynamicSuffix: "Per-turn media task hint",
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { WAMessage } from "baileys";
-import { createDurableInboundReceiveJournal } from "openclaw/plugin-sdk/channel-outbound";
+import { createDurableInboundReceiveJournalFromQueue } from "openclaw/plugin-sdk/channel-outbound";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { getWhatsAppRuntime } from "../runtime.js";
 import { BufferJSON } from "../session.runtime.js";
@@ -56,24 +56,25 @@ export function deserializeWhatsAppDurableInboundMessage(
 }
 
 export function createWhatsAppDurableInboundReceiveJournal(accountId: string) {
-  const runtime = getWhatsAppRuntime();
   const accountPart = hashNamespacePart(accountId);
-  return createDurableInboundReceiveJournal<
+  const runtime = getWhatsAppRuntime();
+  const queue = runtime.state.openChannelIngressQueue<
     WhatsAppDurableInboundPayload,
     WhatsAppDurableInboundMetadata,
     WhatsAppDurableInboundCompletedMetadata
   >({
-    pendingStore: runtime.state.openKeyedStore({
-      namespace: `inbound.v1.pending.${accountPart}`,
-      maxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
-      defaultTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
-    }),
-    completedStore: runtime.state.openKeyedStore({
-      namespace: `inbound.v1.completed.${accountPart}`,
-      maxEntries: WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES,
-      defaultTtlMs: WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS,
-    }),
-    pendingTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
-    completedTtlMs: WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS,
+    accountId: accountPart,
+    stateDir: runtime.state.resolveStateDir(),
+  });
+  return createDurableInboundReceiveJournalFromQueue({
+    queue,
+    retention: {
+      pendingTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
+      completedTtlMs: WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS,
+      failedTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
+      pendingMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
+      completedMaxEntries: WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES,
+      failedMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
+    },
   });
 }

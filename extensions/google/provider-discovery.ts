@@ -1,5 +1,8 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
+import {
+  buildGoogleStaticCatalogProvider,
+  buildGoogleVertexStaticCatalogProvider,
+} from "./provider-catalog.js";
 
 const googleProviderDiscovery: ProviderPlugin = {
   id: "google",
@@ -8,7 +11,12 @@ const googleProviderDiscovery: ProviderPlugin = {
   auth: [],
   staticCatalog: {
     order: "simple",
-    run: async () => ({ providers: { google: buildGoogleStaticCatalogProvider() } }),
+    run: async () => ({
+      providers: {
+        google: buildGoogleStaticCatalogProvider(),
+        "google-vertex": buildGoogleVertexStaticCatalogProvider(),
+      },
+    }),
   },
 };
 

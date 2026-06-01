@@ -11,7 +11,11 @@ import {
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotPluginIdScope,
+} from "./plugin-metadata-snapshot.types.js";
+import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
 let currentPluginMetadataConfigIdentityCache = new WeakSet<OpenClawConfig>();
@@ -158,6 +162,9 @@ export function getCurrentPluginMetadataSnapshot(
   params: {
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
+    allowScopedSnapshot?: boolean;
+    pluginIds?: readonly string[];
+    pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
     workspaceDir?: string;
     allowWorkspaceScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
@@ -174,6 +181,23 @@ export function getCurrentPluginMetadataSnapshot(
     return undefined;
   }
   const env = params.env ?? process.env;
+  const requestedPluginIds = normalizePluginIdScope(
+    params.pluginIds ?? params.pluginIdScope?.resolve({ index: snapshot.index }),
+  );
+  const snapshotPluginIds = normalizePluginIdScope(snapshot.pluginIds);
+  if (
+    requestedPluginIds !== undefined &&
+    serializePluginIdScope(snapshotPluginIds) !== serializePluginIdScope(requestedPluginIds)
+  ) {
+    return undefined;
+  }
+  if (
+    snapshotPluginIds !== undefined &&
+    requestedPluginIds === undefined &&
+    params.allowScopedSnapshot !== true
+  ) {
+    return undefined;
+  }
   const requestedWorkspaceDir =
     params.workspaceDir ??
     (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);

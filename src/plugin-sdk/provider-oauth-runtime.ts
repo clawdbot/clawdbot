@@ -311,9 +311,9 @@ export function withOAuthLoginAbort<T>(
         cleanup();
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         cleanup();
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -328,4 +328,18 @@ export function buildOAuthRequestSignal(options: {
     return timeoutSignal;
   }
   return AbortSignal.any([options.signal, timeoutSignal]);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

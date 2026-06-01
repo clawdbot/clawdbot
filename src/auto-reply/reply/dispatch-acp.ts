@@ -1,16 +1,16 @@
+import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
+import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
+import {
+  isSessionIdentityPending,
+  resolveSessionIdentityFromMeta,
+} from "@openclaw/acp-core/runtime/session-identity";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
-import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { type AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
-import { resolveAcpThreadSessionDetailLines } from "../../acp/runtime/session-identifiers.js";
-import {
-  isSessionIdentityPending,
-  resolveSessionIdentityFromMeta,
-} from "../../acp/runtime/session-identity.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -371,6 +371,8 @@ export async function tryDispatchAcpReply(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
   bypassForCommand: boolean;
@@ -427,6 +429,8 @@ export async function tryDispatchAcpReply(params: {
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+    originatingThreadId: params.originatingThreadId,
     onReplyStart: params.onReplyStart,
     abortSignal: params.abortSignal,
     runId: params.runId,

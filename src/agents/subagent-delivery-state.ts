@@ -31,11 +31,20 @@ export type LegacySubagentRunRecord = SubagentRunRecord & {
   lastAnnounceDropReason?: SubagentCompletionDeliveryState["lastDropReason"];
 };
 
+type LegacyDeliveryState = SubagentCompletionDeliveryState & {
+  handoffLeaseId?: string;
+  handoffLeasedAt?: number;
+  handoffInjectedAt?: number;
+};
+
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const legacy = entry as LegacySubagentRunRecord;
   entry.execution = mergeExecutionState(entry.execution, buildExecutionState(entry));
   entry.completion = mergeCompletionState(entry.completion, buildCompletionState(entry, legacy));
   entry.delivery = mergeDeliveryState(entry, entry.delivery, buildDeliveryState(entry, legacy));
+  delete (entry.delivery as LegacyDeliveryState | undefined)?.handoffLeaseId;
+  delete (entry.delivery as LegacyDeliveryState | undefined)?.handoffLeasedAt;
+  delete (entry.delivery as LegacyDeliveryState | undefined)?.handoffInjectedAt;
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must retry.
   if (
     entry.cleanupHandled === true &&
@@ -116,6 +125,18 @@ function mergeDeliveryState(
     lastAttemptAt: current.lastAttemptAt ?? restored.lastAttemptAt,
     attemptCount: current.attemptCount ?? restored.attemptCount,
     lastError: current.lastError ?? restored.lastError,
+    steeringLeaseId:
+      current.steeringLeaseId ??
+      (current as LegacyDeliveryState).handoffLeaseId ??
+      restored.steeringLeaseId,
+    steeringLeasedAt:
+      current.steeringLeasedAt ??
+      (current as LegacyDeliveryState).handoffLeasedAt ??
+      restored.steeringLeasedAt,
+    steeringInjectedAt:
+      current.steeringInjectedAt ??
+      (current as LegacyDeliveryState).handoffInjectedAt ??
+      restored.steeringInjectedAt,
     suspendedAt: current.suspendedAt ?? restored.suspendedAt,
     suspendedReason: current.suspendedReason ?? restored.suspendedReason,
     discardedAt: current.discardedAt ?? restored.discardedAt,

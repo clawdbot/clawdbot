@@ -12,6 +12,7 @@ const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
+const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
@@ -128,11 +129,13 @@ export function shouldRunOxlintShardsSerial({
     return false;
   }
   const localCheckMode = env.OPENCLAW_LOCAL_CHECK_MODE?.trim().toLowerCase();
-  if (localCheckMode === "full" || localCheckMode === "fast") {
-    return false;
-  }
-  if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
-    return true;
+  if (!isRemoteChangedGateEnv(env)) {
+    if (localCheckMode === "full" || localCheckMode === "fast") {
+      return false;
+    }
+    if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
+      return true;
+    }
   }
   const resources = resolveHostResources(hostResources);
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
@@ -144,6 +147,13 @@ export function shouldRunOxlintShardsSerial({
   return (
     resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+  );
+}
+
+function isRemoteChangedGateEnv(env) {
+  return (
+    env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD === "1" ||
+    env.OPENCLAW_CHANGED_LANES_RAW_SYNC === "1"
   );
 }
 
@@ -241,24 +251,25 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
     if ((prepareResult.status ?? 1) !== 0) {
       process.exitCode = prepareResult.status ?? 1;
     } else {
-      const runSerial =
-        shardArgs.splitCore ||
-        shouldRunOxlintShardsSerial({
-          env,
-          platform: process.platform,
-        });
-      const results = runSerial
+      const shardConcurrency = resolveOxlintShardConcurrency({
+        env,
+        platform: process.platform,
+        splitCore: shardArgs.splitCore,
+      });
+      const results = shardConcurrency <= 1
         ? await runShardsSerial({
             entries: selectedShards,
             env,
             extraArgs: shardArgs.oxlintArgs,
             runner,
           })
-        : await Promise.all(
-            selectedShards.map((shard) =>
-              runShard({ env, extraArgs: shardArgs.oxlintArgs, runner, shard }),
-            ),
-          );
+        : await runShardsParallel({
+            concurrency: Math.min(shardConcurrency, selectedShards.length),
+            entries: selectedShards,
+            env,
+            extraArgs: shardArgs.oxlintArgs,
+            runner,
+          });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
     }
   } finally {
@@ -322,6 +333,32 @@ export function filterOxlintShards(shards, only) {
   return shards.filter((shard) => only.has(shard.name) || only.has(shard.name.split(":")[0]));
 }
 
+export function resolveOxlintShardConcurrency({
+  env = process.env,
+  platform = process.platform,
+  hostResources,
+  splitCore = false,
+} = {}) {
+  if (shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
+    return 1;
+  }
+
+  const explicitConcurrency = resolvePositiveEnvInt(env, "OPENCLAW_OXLINT_SHARD_CONCURRENCY");
+  if (explicitConcurrency !== null) {
+    return explicitConcurrency;
+  }
+
+  if (!splitCore) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const resources = resolveHostResources(hostResources);
+  return Math.max(
+    1,
+    Math.min(DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY, Math.floor(resources.logicalCpuCount / 4)),
+  );
+}
+
 async function runShardsSerial({ entries, env, extraArgs, runner }) {
   const results = [];
   for (const shard of entries) {
@@ -331,6 +368,30 @@ async function runShardsSerial({ entries, env, extraArgs, runner }) {
     }
   }
   return results;
+}
+
+async function runShardsParallel({ concurrency, entries, env, extraArgs, runner }) {
+  const results = [];
+  results.length = entries.length;
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      if (isParentTerminationRequested()) {
+        return;
+      }
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      const shard = entries[currentIndex];
+      if (!shard) {
+        return;
+      }
+      results[currentIndex] = await runShard({ env, extraArgs, runner, shard });
+    }
+  });
+
+  await Promise.all(workers);
+  return results.filter((status) => status !== undefined);
 }
 
 export async function runShard({ env, extraArgs, runner, shard }) {
@@ -450,6 +511,16 @@ function resolveNonNegativeEnvInt(env, key, defaultValue) {
 
   const parsedValue = Number.parseInt(rawValue, 10);
   return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : defaultValue;
+}
+
+function resolvePositiveEnvInt(env, key) {
+  const rawValue = env[key];
+  if (rawValue === undefined) {
+    return null;
+  }
+
+  const parsedValue = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null;
 }
 
 function signalChildProcess({ child, signal, useProcessGroup }) {

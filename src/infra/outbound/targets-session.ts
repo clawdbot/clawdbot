@@ -18,6 +18,9 @@ import type {
 } from "../../utils/message-channel-normalize.js";
 import { resolveTargetPrefixedChannel } from "./channel-target-prefix.js";
 
+/**
+ * Resolved delivery destination derived from session history, turn source, or explicit input.
+ */
 export type SessionDeliveryTarget = {
   channel?: DeliverableMessageChannel;
   to?: string;
@@ -56,6 +59,9 @@ function resolveParsedRouteTarget(params: {
   };
 }
 
+/**
+ * Resolves the effective outbound target for a session-scoped delivery request.
+ */
 export function resolveSessionDeliveryTarget(params: {
   entry?: SessionEntry;
   requestedChannel?: GatewayMessageChannel;
@@ -109,6 +115,8 @@ export function resolveSessionDeliveryTarget(params: {
         left: parsedTurnSourceTarget,
         right: parsedSessionTarget,
       }));
+  // Shared sessions can receive cross-channel updates mid-turn; only inherit session threads
+  // when the turn source still identifies the same conversation.
   const lastThreadId = hasTurnSourceThreadId
     ? parsedTurnSourceTarget?.threadId
     : hasTurnSourceChannel &&

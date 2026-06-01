@@ -1,4 +1,4 @@
-import type { AcpSessionUpdateTag } from "../../acp/runtime/types.js";
+import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clampPositiveInteger, resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 

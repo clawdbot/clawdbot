@@ -134,7 +134,7 @@ describe("proxy cli runtime", () => {
       apnsAuthority: "https://api.sandbox.push.apple.com",
       timeoutMs: 1234,
     });
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation passed\n\n" +
         "Proxy\n" +
         "  Source: config\n" +
@@ -160,7 +160,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation passed\n\n" +
         "Proxy\n" +
         "  Source: config\n" +
@@ -183,7 +183,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({ json: true });
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
         {
           ok: true,
@@ -216,7 +216,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
         "Proxy\n" +
         "  Source: config\n" +
@@ -244,7 +244,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
         "Proxy\n" +
         "  Source: disabled\n" +
@@ -272,7 +272,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
         "Proxy\n" +
         "  Source: env\n" +
@@ -299,7 +299,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
         "Proxy\n" +
         "  Source: config\n" +
@@ -326,7 +326,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({ json: true });
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
         {
           ok: false,
@@ -366,7 +366,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation passed\n\n" +
         "Proxy\n" +
         "  Source: config\n" +
@@ -395,7 +395,7 @@ describe("proxy cli runtime", () => {
 
       await runProxyValidateCommand({});
 
-      const output = String(vi.mocked(process.stdout.write).mock.calls.at(0)?.[0] ?? "");
+      const output = String(vi.mocked(process.stdout["write"]).mock.calls.at(0)?.[0] ?? "");
       expect(output).toContain("<success>Proxy validation passed</success>");
       expect(output).toContain("<heading>Checks</heading>");
       expect(output).toContain("<success>✓</success>");
@@ -433,7 +433,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({});
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
         "Proxy\n" +
         "  Source: config\n" +
@@ -461,7 +461,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({ json: true });
 
-    expect(process.stdout.write).toHaveBeenCalledWith(
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
         {
           ok: false,

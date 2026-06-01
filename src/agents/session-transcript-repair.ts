@@ -142,6 +142,10 @@ function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
   return false;
 }
 
+const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolResult";
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -159,14 +163,38 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text:
-          params.text ??
-          "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: params.text ?? DEFAULT_MISSING_TOOL_RESULT_TEXT,
       },
     ],
+    details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
     isError: true,
     timestamp: Date.now(),
   } as Extract<AgentMessage, { role: "toolResult" }>;
+}
+
+function isSyntheticMissingToolResult(msg: Extract<AgentMessage, { role: "toolResult" }>): boolean {
+  if (!(msg as { isError?: unknown }).isError) {
+    return false;
+  }
+  const details = (msg as { details?: unknown }).details;
+  if (
+    details &&
+    typeof details === "object" &&
+    (details as Record<string, unknown>)[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true
+  ) {
+    return true;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block: unknown) =>
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: string }).type === "text" &&
+      (block as { text?: string }).text === DEFAULT_MISSING_TOOL_RESULT_TEXT,
+  );
 }
 
 function normalizeToolResultName(
@@ -209,7 +237,7 @@ function normalizeLegacyToolResultId(
   return { ...message, toolCallId: toolCall.id, isError: true };
 }
 
-export { makeMissingToolResult };
+export { DEFAULT_MISSING_TOOL_RESULT_TEXT, makeMissingToolResult };
 
 type ToolCallInputRepairReport = {
   messages: AgentMessage[];
@@ -445,6 +473,29 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
   return extractToolCallsFromAssistant(message).length > 0;
 }
 
+function findLaterMatchingToolResult(params: {
+  messages: AgentMessage[];
+  startIndex: number;
+  toolCallId: string;
+  toolName?: string;
+  toolCalls: Array<{ id: string; name?: string }>;
+  seenToolResultIds: Set<string>;
+}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
+  for (let index = params.startIndex; index < params.messages.length; index += 1) {
+    const candidate = params.messages[index];
+    if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
+      continue;
+    }
+    const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
+    const id = extractToolResultId(normalizedLegacyResult);
+    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
+      continue;
+    }
+    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
+  }
+  return undefined;
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
@@ -458,6 +509,7 @@ export function repairToolUseResultPairing(
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
+  const toolResultPositions = new Map<string, number>();
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
   let moved = false;
@@ -466,12 +518,31 @@ export function repairToolUseResultPairing(
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
     if (id && seenToolResultIds.has(id)) {
+      const existingIdx = toolResultPositions.get(id);
+      if (existingIdx !== undefined) {
+        const existing = out[existingIdx];
+        if (
+          existing &&
+          isSyntheticMissingToolResult(existing as Extract<AgentMessage, { role: "toolResult" }>) &&
+          !isSyntheticMissingToolResult(msg)
+        ) {
+          out[existingIdx] = msg;
+          const addedIdx = added.findIndex((a) => extractToolResultId(a) === id);
+          if (addedIdx !== -1) {
+            added.splice(addedIdx, 1);
+          }
+          droppedDuplicateCount += 1;
+          changed = true;
+          return;
+        }
+      }
       droppedDuplicateCount += 1;
       changed = true;
       return;
     }
     if (id) {
       seenToolResultIds.add(id);
+      toolResultPositions.set(id, out.length);
     }
     out.push(msg);
   };
@@ -540,12 +611,11 @@ export function repairToolUseResultPairing(
           toolCalls,
         );
         const id = extractToolResultId(toolResult);
+        if (id && seenToolResultIds.has(id)) {
+          pushToolResult(normalizeToolResultName(toolResult, toolCallNamesById.get(id)));
+          continue;
+        }
         if (id && toolCallIds.has(id)) {
-          if (seenToolResultIds.has(id)) {
-            droppedDuplicateCount += 1;
-            changed = true;
-            continue;
-          }
           if (toolResult !== next) {
             changed = true;
           }
@@ -556,8 +626,19 @@ export function repairToolUseResultPairing(
           if (normalizedToolResult !== toolResult) {
             changed = true;
           }
-          if (!spanResultsById.has(id)) {
+          const existingSpan = spanResultsById.get(id);
+          if (!existingSpan) {
             spanResultsById.set(id, normalizedToolResult);
+          } else if (
+            isSyntheticMissingToolResult(existingSpan) &&
+            !isSyntheticMissingToolResult(normalizedToolResult)
+          ) {
+            spanResultsById.set(id, normalizedToolResult);
+            droppedDuplicateCount += 1;
+            changed = true;
+          } else {
+            droppedDuplicateCount += 1;
+            changed = true;
           }
           continue;
         }
@@ -612,14 +693,28 @@ export function repairToolUseResultPairing(
       if (existing) {
         pushToolResult(existing);
       } else {
-        const missing = makeMissingToolResult({
+        const laterResult = findLaterMatchingToolResult({
+          messages,
+          startIndex: j,
           toolCallId: call.id,
           toolName: call.name,
-          text: options?.missingToolResultText,
+          toolCalls,
+          seenToolResultIds,
         });
-        added.push(missing);
-        changed = true;
-        pushToolResult(missing);
+        if (laterResult) {
+          moved = true;
+          changed = true;
+          pushToolResult(laterResult);
+        } else {
+          const missing = makeMissingToolResult({
+            toolCallId: call.id,
+            toolName: call.name,
+            text: options?.missingToolResultText,
+          });
+          added.push(missing);
+          changed = true;
+          pushToolResult(missing);
+        }
       }
     }
 

@@ -13,7 +13,9 @@ export type StopChildResult = ChildExit & {
 };
 
 export function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export async function stopChild(
@@ -40,7 +42,9 @@ export async function stopChild(
   const waitForExit = async (ms: number): Promise<ChildExit | null> =>
     await Promise.race([exited, delay(ms).then(() => null)]);
 
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   const queuedExit = observedExit ?? currentExit();
   if (queuedExit != null) {
     return { ...queuedExit, exitedBeforeTeardown: true };

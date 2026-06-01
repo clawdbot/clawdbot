@@ -12,6 +12,20 @@ const updateSessionGoalStatusMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
+const buildGatewaySessionInfoMock = vi.fn(
+  (params: { key: string; entry?: { sessionId?: string; thinkingLevel?: string } }) => ({
+    key: params.key,
+    kind: "direct",
+    updatedAt: null,
+    sessionId: params.entry?.sessionId,
+    thinkingLevel: params.entry?.thinkingLevel,
+  }),
+);
+const getSessionDefaultsMock = vi.fn(() => ({
+  modelProvider: null,
+  model: null,
+  contextTokens: null,
+}));
 const loadCombinedSessionStoreForGatewayMock = vi.fn((_options?: unknown) => ({
   storePath: "/tmp/openclaw-sessions.json",
   store: {},
@@ -24,12 +38,15 @@ type LoadSessionEntryMockResult = {
   cfg: Record<string, unknown>;
   canonicalKey: string;
   storePath?: string;
+  store?: Record<string, unknown>;
   entry?: Record<string, unknown>;
 };
 const loadSessionEntryMock = vi.fn(
   (sessionKey: string, _opts?: { agentId?: string }): LoadSessionEntryMockResult => ({
     cfg: {},
     canonicalKey: sessionKey,
+    storePath: "/tmp/openclaw-sessions.json",
+    store: {},
     entry: {},
   }),
 );
@@ -122,6 +139,9 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
+  buildGatewaySessionInfo: (params: Parameters<typeof buildGatewaySessionInfoMock>[0]) =>
+    buildGatewaySessionInfoMock(params),
+  getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
   loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
@@ -225,8 +245,12 @@ describe("EmbeddedTuiBackend", () => {
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: {},
       canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
       entry: {},
     }));
+    buildGatewaySessionInfoMock.mockClear();
+    getSessionDefaultsMock.mockClear();
     registeredListener = undefined;
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;

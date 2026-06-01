@@ -7,8 +7,10 @@ import {
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 beforeEach(() => {
+  installIMessageStateRuntimeForTest();
   resetIMessageShortIdState();
 });
 

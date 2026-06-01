@@ -126,7 +126,7 @@ function run(command, args, cwd, options = {}) {
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve(value);
@@ -262,7 +262,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
   console.error("==> Packing OpenClaw package");
   await prepareChangelog(sourceDir);
-  let packOutput = "";
+  let packOutput;
   try {
     packOutput = await runCaptureImpl(
       "npm",
@@ -346,8 +346,24 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+    },
+  );
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

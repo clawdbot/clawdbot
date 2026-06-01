@@ -9,7 +9,7 @@ const mocks = {
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAgentHarnesses: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
-  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (eventValue) => undefined),
+  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -326,11 +326,15 @@ describe("createGatewayCloseHandler", () => {
     process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
 
     startGatewayRestartTrace("restart.signal.received", [["reason", "test restart"]]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     recordGatewayRestartTraceSpan("restart.ready.runtime.post-attach", 12, 40, [
       ["eventLoopMax", "1.0ms"],
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     finishGatewayRestartTrace("restart.ready");
 
     const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
@@ -355,7 +359,7 @@ describe("createGatewayCloseHandler", () => {
     vi.useFakeTimers();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {
       if (event.action === "shutdown") {
-        return new Promise<void>(() => undefined);
+        return new Promise<void>(() => {});
       }
       return Promise.resolve(undefined);
     });
@@ -666,7 +670,7 @@ describe("createGatewayCloseHandler", () => {
     vi.useFakeTimers();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {
       if (event.action === "pre-restart") {
-        return new Promise<void>(() => undefined);
+        return new Promise<void>(() => {});
       }
       return Promise.resolve(undefined);
     });
@@ -783,7 +787,7 @@ describe("createGatewayCloseHandler", () => {
 
   it("continues shutdown and records a warning when bundle MCP runtime disposal hangs", async () => {
     vi.useFakeTimers();
-    mocks.disposeAllSessionMcpRuntimes.mockReturnValue(new Promise(() => undefined));
+    mocks.disposeAllSessionMcpRuntimes.mockReturnValue(new Promise(() => {}));
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 
     const closePromise = close({ reason: "test shutdown" });
@@ -800,7 +804,7 @@ describe("createGatewayCloseHandler", () => {
 
   it("continues shutdown and records a warning when bundle LSP runtime disposal hangs", async () => {
     vi.useFakeTimers();
-    mocks.disposeAllBundleLspRuntimes.mockReturnValue(new Promise(() => undefined));
+    mocks.disposeAllBundleLspRuntimes.mockReturnValue(new Promise(() => {}));
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 
     const closePromise = close({ reason: "test shutdown" });

@@ -147,6 +147,7 @@ describe("doctor health contributions", () => {
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
       { id: "core/doctor/shell-completion" },
+      { id: "core/doctor/ui-protocol-freshness" },
       { id: "core/doctor/unrelated" },
     ]);
     mocks.getHealthCheck.mockReset();
@@ -319,7 +320,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("keeps legacy positional shell completion out of the broad structured repair pass", async () => {
+  it("keeps legacy positional repairs out of the broad structured repair pass", async () => {
     const contribution = requireDoctorContribution("doctor:structured-health-repairs");
     const ctx = {
       cfg: {},
@@ -349,10 +350,10 @@ describe("doctor health contributions", () => {
           checkId: "core/doctor/runtime-tool-schemas",
           severity: "error",
           message:
-            "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
-          path: "plugins.entries.dofbot",
-          target: "dofbot_move_angles",
-          requirement: 'dofbot_move_angles.parameters.type must be "object"',
+            "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
+          path: "plugins.entries.fuzzplugin",
+          target: "fuzzplugin_move_angles",
+          requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
           fixHint:
             "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
         },
@@ -374,11 +375,54 @@ describe("doctor health contributions", () => {
 
     expect(ctx.healthOk).toBe(false);
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tool dofbot_move_angles from plugin dofbot"),
+      expect.stringContaining("Tool fuzzplugin_move_angles from plugin fuzzplugin"),
       "Doctor warnings",
     );
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining('issue: dofbot_move_angles.parameters.type must be "object"'),
+      expect.stringContaining('issue: fuzzplugin_move_angles.parameters.type must be "object"'),
+      "Doctor warnings",
+    );
+  });
+
+  it("reports provider catalog projection blockers during normal doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:provider-catalog-projection");
+    mocks.getHealthCheck.mockReturnValue({
+      id: "core/doctor/provider-catalog-projection",
+      detect: vi.fn(async () => [
+        {
+          checkId: "core/doctor/provider-catalog-projection",
+          severity: "error",
+          message:
+            "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
+          path: "plugins.entries.mockplugin",
+          target: "mockplugin",
+          requirement: "provider catalog entry read failed",
+          fixHint:
+            "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
+        },
+      ]),
+    });
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.healthOk).toBe(false);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Provider catalog mockplugin cannot be projected"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("issue: provider catalog entry read failed"),
       "Doctor warnings",
     );
   });

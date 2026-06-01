@@ -30,8 +30,8 @@ function toInterfaceName(tableName) {
     .join("");
 }
 
-function columnBaseType(columnType) {
-  const normalized = columnType.toUpperCase();
+function columnBaseType(columnTypeLocal) {
+  const normalized = columnTypeLocal.toUpperCase();
   if (normalized.includes("BLOB")) {
     return "Uint8Array";
   }

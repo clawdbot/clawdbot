@@ -158,3 +158,13 @@ docker_e2e_run_logged_with_harness() {
   shift
   run_logged "$label" docker_e2e_run_with_harness "$@"
 }
+
+docker_e2e_run_logged_print_with_harness() {
+  local label="$1"
+  shift
+  run_logged_print_heartbeat \
+    "$label" \
+    "${OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS:-30}" \
+    docker_e2e_run_with_harness \
+    "$@"
+}

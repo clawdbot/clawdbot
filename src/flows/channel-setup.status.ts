@@ -2,7 +2,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
+import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
@@ -30,8 +30,8 @@ import type { FlowContribution } from "./types.js";
 
 type ChannelStatusSummary = {
   installedPlugins: ChannelSetupPlugin[];
-  catalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
-  installedCatalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
+  catalogEntries: ChannelPluginCatalogEntry[];
+  installedCatalogEntries: ChannelPluginCatalogEntry[];
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
 };

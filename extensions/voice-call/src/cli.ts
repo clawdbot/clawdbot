@@ -18,6 +18,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
+import { getCallHistoryFromStore } from "./manager/store.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
@@ -426,9 +428,15 @@ export function registerVoiceCallCli(params: {
   program: Command;
   config: VoiceCallConfig;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
+  stateRuntime?: VoiceCallStateRuntime["state"];
   logger: Logger;
 }) {
-  const { program, config, ensureRuntime, logger } = params;
+  const { program, config, ensureRuntime, stateRuntime } = params;
+  const ensureHistoryStateRuntime = (): void => {
+    if (stateRuntime) {
+      setVoiceCallStateRuntime({ state: stateRuntime });
+    }
+  };
   const root = program
     .command("voicecall")
     .description("Voice call utilities")
@@ -745,43 +753,68 @@ export function registerVoiceCallCli(params: {
       const since = parseVoiceCallIntOption(options.since, "--since", { min: 0 });
       const pollMs = parseVoiceCallIntOption(options.poll, "--poll", { min: 50 });
 
-      if (!fs.existsSync(file)) {
-        logger.error(`No log file at ${file}`);
-        process.exit(1);
-      }
-
-      const initial = fs.readFileSync(file, "utf8");
-      const lines = initial.split("\n").filter(Boolean);
-      for (const line of lines.slice(Math.max(0, lines.length - since))) {
-        writeStdoutLine(line);
-      }
-
-      let offset = Buffer.byteLength(initial, "utf8");
-
-      for (;;) {
-        try {
-          const stat = fs.statSync(file);
-          if (stat.size < offset) {
-            offset = 0;
+      const tailSqliteHistory = async (initialLimit: number): Promise<never> => {
+        ensureHistoryStateRuntime();
+        const seen = new Set<string>();
+        const printCall = (call: unknown): void => {
+          const line = JSON.stringify(call);
+          if (!seen.has(line)) {
+            seen.add(line);
+            writeStdoutLine(line);
           }
-          if (stat.size > offset) {
-            const fd = fs.openSync(file, "r");
-            try {
-              const buf = Buffer.alloc(stat.size - offset);
-              fs.readSync(fd, buf, 0, buf.length, offset);
-              offset = stat.size;
-              const text = buf.toString("utf8");
-              for (const line of text.split("\n").filter(Boolean)) {
-                writeStdoutLine(line);
-              }
-            } finally {
-              fs.closeSync(fd);
-            }
+        };
+        if (initialLimit > 0) {
+          for (const call of await getCallHistoryFromStore(path.dirname(file), initialLimit)) {
+            printCall(call);
           }
-        } catch {
-          // ignore and retry
         }
-        await sleep(pollMs);
+        for (;;) {
+          try {
+            for (const call of await getCallHistoryFromStore(path.dirname(file), 1000)) {
+              printCall(call);
+            }
+          } catch {
+            // ignore and retry
+          }
+          await sleep(pollMs);
+        }
+      };
+
+      if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
+        const initial = fs.readFileSync(file, "utf8");
+        const lines = initial.split("\n").filter(Boolean);
+        for (const line of lines.slice(Math.max(0, lines.length - since))) {
+          writeStdoutLine(line);
+        }
+
+        let offset = Buffer.byteLength(initial, "utf8");
+        for (;;) {
+          try {
+            const stat = fs.statSync(file);
+            if (stat.size < offset) {
+              offset = 0;
+            }
+            if (stat.size > offset) {
+              const fd = fs.openSync(file, "r");
+              try {
+                const buf = Buffer.alloc(stat.size - offset);
+                fs.readSync(fd, buf, 0, buf.length, offset);
+                offset = stat.size;
+                const text = buf.toString("utf8");
+                for (const line of text.split("\n").filter(Boolean)) {
+                  writeStdoutLine(line);
+                }
+              } finally {
+                fs.closeSync(fd);
+              }
+            }
+          } catch {
+            // ignore and retry
+          }
+          await sleep(pollMs);
+        }
+      } else {
+        await tailSqliteHistory(since);
       }
     });
 
@@ -794,40 +827,49 @@ export function registerVoiceCallCli(params: {
       const file = options.file;
       const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
 
-      if (!fs.existsSync(file)) {
-        throw new Error("No log file at " + file);
+      if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
+        const content = fs.readFileSync(file, "utf8");
+        const calls = content
+          .split("\n")
+          .filter(Boolean)
+          .slice(-last)
+          .map((line) => {
+            try {
+              const parsed = JSON.parse(line) as { call?: unknown };
+              return (parsed.call ?? parsed) as { metadata?: Record<string, unknown> };
+            } catch {
+              return null;
+            }
+          })
+          .filter((call): call is { metadata?: Record<string, unknown> } => call !== null);
+        writeVoiceCallLatencySummary(calls);
+      } else {
+        ensureHistoryStateRuntime();
+        writeVoiceCallLatencySummary(await getCallHistoryFromStore(path.dirname(file), last));
       }
-
-      const content = fs.readFileSync(file, "utf8");
-      const lines = content.split("\n").filter(Boolean).slice(-last);
-
-      const turnLatencyMs: number[] = [];
-      const listenWaitMs: number[] = [];
-
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line) as {
-            metadata?: { lastTurnLatencyMs?: unknown; lastTurnListenWaitMs?: unknown };
-          };
-          const latency = parsed.metadata?.lastTurnLatencyMs;
-          const listenWait = parsed.metadata?.lastTurnListenWaitMs;
-          if (typeof latency === "number" && Number.isFinite(latency)) {
-            turnLatencyMs.push(latency);
-          }
-          if (typeof listenWait === "number" && Number.isFinite(listenWait)) {
-            listenWaitMs.push(listenWait);
-          }
-        } catch {
-          // ignore malformed JSON lines
-        }
-      }
-
-      writeStdoutJson({
-        recordsScanned: lines.length,
-        turnLatency: summarizeSeries(turnLatencyMs),
-        listenWait: summarizeSeries(listenWaitMs),
-      });
     });
+
+  function writeVoiceCallLatencySummary(calls: Array<{ metadata?: Record<string, unknown> }>) {
+    const turnLatencyMs: number[] = [];
+    const listenWaitMs: number[] = [];
+
+    for (const call of calls) {
+      const latency = call.metadata?.lastTurnLatencyMs;
+      const listenWait = call.metadata?.lastTurnListenWaitMs;
+      if (typeof latency === "number" && Number.isFinite(latency)) {
+        turnLatencyMs.push(latency);
+      }
+      if (typeof listenWait === "number" && Number.isFinite(listenWait)) {
+        listenWaitMs.push(listenWait);
+      }
+    }
+
+    writeStdoutJson({
+      recordsScanned: calls.length,
+      turnLatency: summarizeSeries(turnLatencyMs),
+      listenWait: summarizeSeries(listenWaitMs),
+    });
+  }
 
   root
     .command("expose")

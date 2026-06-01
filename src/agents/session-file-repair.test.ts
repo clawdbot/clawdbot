@@ -106,9 +106,9 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.backupPath).toMatch(/session\.jsonl\.bak-/);
-    expect(debug.mock.calls.some(([message]) => String(message).includes("cleanup failed"))).toBe(
-      true,
-    );
+    expect(
+      debug.mock.calls.some(([messageLocal]) => String(messageLocal).includes("cleanup failed")),
+    ).toBe(true);
     const siblings = await fs.readdir(path.dirname(file));
     expect(siblings.filter((name) => name.includes(".bak-"))).toHaveLength(1);
   });
@@ -581,37 +581,6 @@ describe("repairSessionFileIfNeeded", () => {
     expect(inserted.message.isError).toBe(true);
     expect(inserted.message.content[0].text).toBe("aborted");
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
-  });
-
-  it("repairs missing tool results in legacy OpenAI ChatGPT transcripts", async () => {
-    const { file } = await createTempSessionPath();
-    const { header, message } = buildSessionHeaderAndMessage();
-    const legacyProvider = ["openai", "codex"].join("-");
-    const toolCallAssistant = {
-      type: "message",
-      id: "msg-asst-legacy-process",
-      parentId: "msg-1",
-      timestamp: new Date().toISOString(),
-      message: {
-        role: "assistant",
-        provider: legacyProvider,
-        model: "gpt-5.5",
-        api: `${legacyProvider}-responses`,
-        content: [{ type: "toolCall", id: "call_process|fc_1", name: "process", arguments: {} }],
-        stopReason: "toolUse",
-      },
-    };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n`;
-    await fs.writeFile(file, original, "utf-8");
-
-    const result = await repairSessionFileIfNeeded({ sessionFile: file });
-
-    expect(result.repaired).toBe(true);
-    expect(result.insertedToolResults).toBe(1);
-    const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
-    const inserted = JSON.parse(lines[3]);
-    expect(inserted.message.role).toBe("toolResult");
-    expect(inserted.message.toolCallId).toBe("call_process|fc_1");
   });
 
   it("does not duplicate code-mode tool results that are already persisted", async () => {

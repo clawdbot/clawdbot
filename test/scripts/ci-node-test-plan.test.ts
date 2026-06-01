@@ -505,7 +505,18 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "agentic-control-plane-http-models",
       "agentic-control-plane-http-plugin-ws",
       "agentic-control-plane-runtime",
-      "agentic-control-plane-startup-runtime",
+      "agentic-control-plane-runtime-config",
+      "agentic-control-plane-runtime-cron",
+      "agentic-control-plane-runtime-events",
+      "agentic-control-plane-runtime-network",
+      "agentic-control-plane-runtime-server",
+      "agentic-control-plane-runtime-shared-token",
+      "agentic-control-plane-runtime-state",
+      "agentic-control-plane-runtime-ui-tools",
+      "agentic-control-plane-startup-config",
+      "agentic-control-plane-startup-core",
+      "agentic-control-plane-startup-health-runtime",
+      "agentic-control-plane-startup-restart-close",
     ]);
     expect(controlPlaneShards).toEqual(
       controlPlaneShards.map((shard) => ({
@@ -583,11 +594,52 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(new Set(commandShardFiles).size).toBe(commandShardFiles.length);
     expect(agentShards).toEqual([
       {
-        checkName: "checks-node-agentic-agents-core",
+        checkName: "checks-node-agentic-agents-core-auth",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[0]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-core",
+        shardName: "agentic-agents-core-auth",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-models",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[1]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-models",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-tools",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[2]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-tools",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-subagents",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[3]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-subagents",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[4]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runtime",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[5]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runtime",
       },
       {
         checkName: "checks-node-agentic-agents-embedded",
@@ -665,6 +717,19 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
       PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST,
     );
+  });
+
+  it("covers every flat agents-core test exactly once across split shards", () => {
+    const actual = createNodeTestShards()
+      .filter((shard) => shard.shardName.startsWith("agentic-agents-core-"))
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+    const expected = listTestFiles("src/agents")
+      .filter((file) => !relative("src/agents", file).includes("/"))
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(actual).toEqual(expected);
+    expect(new Set(actual).size).toBe(actual.length);
   });
 
   it("keeps expensive plugin shards release-only when normal CI asks for the cheaper plan", () => {

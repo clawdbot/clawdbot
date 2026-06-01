@@ -2,13 +2,19 @@
 
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { ChatProps } from "./views/chat.ts";
 import type { QuickSettingsProps } from "./views/config-quick.ts";
 
 const quickSettingsProps = vi.hoisted(() => ({
   current: null as QuickSettingsProps | null,
 }));
+const chatProps = vi.hoisted(() => ({
+  current: null as ChatProps | null,
+}));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const renderChatControlsMock = vi.hoisted(() => vi.fn(() => "chat-controls"));
 
 vi.mock("../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -27,8 +33,19 @@ vi.mock("./views/config-quick.ts", () => ({
 }));
 
 vi.mock("./views/chat.ts", () => ({
-  renderChat: () => html`<div data-testid="chat"></div>`,
+  renderChat: (props: ChatProps) => {
+    chatProps.current = props;
+    return html`<div data-testid="chat">${props.composerControls}</div>`;
+  },
 }));
+
+vi.mock("./app-render.helpers.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./app-render.helpers.ts")>();
+  return {
+    ...actual,
+    renderChatControls: renderChatControlsMock,
+  };
+});
 
 vi.mock("./icons.ts", () => ({
   icons: {},
@@ -53,7 +70,6 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
       navGroupsCollapsed: {},
       borderRadius: 50,
       textScale: 100,
-      chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
     },
@@ -76,6 +92,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     hello: null,
     lastError: null,
     lastErrorCode: null,
+    chatError: null,
     eventLog: [],
     assistantName: "Nova",
     assistantAvatar: "/avatar/main",
@@ -211,9 +228,12 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   } as unknown as AppViewState;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.setLocale("en");
   localStorageValues.clear();
   quickSettingsProps.current = null;
+  chatProps.current = null;
+  renderChatControlsMock.mockClear();
 });
 
 describe("renderApp assistant avatar routing", () => {
@@ -251,6 +271,106 @@ describe("renderApp assistant avatar routing", () => {
     const content = container.querySelector<HTMLElement>("main.content");
     expect(content?.classList.contains("content--logs")).toBe(true);
     expect(content?.classList.contains("content--chat")).toBe(false);
+  });
+
+  it("does not render chat errors in non-chat page headers", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "sessions",
+          lastError: "transient tool failure",
+          chatError: "transient tool failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBeUndefined();
+  });
+
+  it("keeps non-chat global errors visible in non-chat page headers", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "nodes",
+          lastError: "node list failed",
+          chatError: "previous chat failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBe(
+      "node list failed",
+    );
+  });
+
+  it("routes chat errors through the chat view instead of the shared header", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          lastError: "transient tool failure",
+          chatError: "transient tool failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBeUndefined();
+    expect(chatProps.current?.error).toBe("transient tool failure");
+  });
+
+  it("routes newer global errors through the chat view ahead of stale chat errors", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          lastError: "gateway disconnected",
+          chatError: "previous chat failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(chatProps.current?.error).toBe("gateway disconnected");
+  });
+
+  it("does not rebuild chat composer controls for draft-only rerenders", () => {
+    const container = document.createElement("div");
+    const state = createState({ tab: "chat", chatMessage: "" });
+
+    render(renderApp(state), container);
+    state.chatMessage = "h";
+    render(renderApp(state), container);
+    state.chatMessage = "hello";
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(1);
+
+    state.chatSending = true;
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds chat composer controls after locale changes", async () => {
+    const container = document.createElement("div");
+    const state = createState({ tab: "chat", chatMessage: "" });
+
+    render(renderApp(state), container);
+    await i18n.setLocale("zh-CN");
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(2);
   });
 
   it("passes security quick setting fields to Quick Settings", () => {

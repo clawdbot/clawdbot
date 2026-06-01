@@ -58,25 +58,18 @@ beforeAll(async () => {
   privateKey = priv;
   publicPem = await exportSPKI(publicKey);
 
-  // Patch `JwksClient.prototype.getSigningKey` so every JWKS lookup the SDK
+  // Patch `JwksClient.prototype.getSigningKeys` so every JWKS lookup the SDK
   // performs returns our in-memory test key instead of fetching from
-  // `login.botframework.com` / `login.microsoftonline.com`. We patch the
-  // prototype here (rather than mocking the `jwks-rsa` module) because
-  // `jwks-rsa`'s constructor captures the prototype method reference into a
-  // cache wrapper at construction time — patching the prototype before any
-  // `JwksClient` is constructed in the tests is sufficient and avoids the
-  // CJS `__importDefault` shaping headaches of mocking the package itself.
-  vi.spyOn(JwksClient.prototype, "getSigningKey").mockImplementation((async (
-    kid?: string | null,
-  ) => {
-    const key: SigningKey = {
-      kid: kid ?? TEST_KID,
+  // `login.botframework.com` / `login.microsoftonline.com` while preserving
+  // the package's callback/promise getSigningKey wrapper behavior.
+  vi.spyOn(JwksClient.prototype, "getSigningKeys").mockResolvedValue([
+    {
+      kid: TEST_KID,
       alg: "RS256",
       getPublicKey: () => publicPem,
       rsaPublicKey: publicPem,
-    };
-    return key;
-  }) as JwksClient["getSigningKey"]);
+    } as SigningKey,
+  ]);
 });
 
 // Logger that surfaces SDK validation failures so we can see *why* a token

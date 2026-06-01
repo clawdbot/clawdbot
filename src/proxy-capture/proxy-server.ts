@@ -121,116 +121,118 @@ export async function startDebugProxyServer(params: {
   const recordProxyEvent = createProxyCaptureRecorder({ store, settings: params.settings });
   const host = params.host?.trim() || "127.0.0.1";
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const flowId = randomUUID();
-    let target: URL;
-    try {
-      target = normalizeTargetUrl(req);
-    } catch (error) {
-      const message = "Invalid proxy target URL";
-      recordProxyEvent({
-        protocol: "http",
-        direction: "local",
-        kind: "error",
-        flowId,
-        method: req.method,
-        host: req.headers.host,
-        path: req.url ?? "",
-        errorText: error instanceof Error ? error.message : String(error),
-      });
-      const responseBody = `${message}\n`;
-      res.writeHead(400, {
-        Connection: "close",
-        "Content-Type": "text/plain; charset=utf-8",
-        "Content-Length": Buffer.byteLength(responseBody),
-      });
-      res.end(responseBody);
-      return;
-    }
-    const targetProtocol = target.protocol === "https:" ? "https" : "http";
-    const targetPath = `${target.pathname}${target.search}`;
-    const recordTargetEvent = (
-      event: Omit<ProxyCaptureEventInput, "protocol" | "flowId" | "method" | "host" | "path">,
-    ) =>
-      recordProxyEvent({
-        protocol: targetProtocol,
-        flowId,
-        method: req.method,
-        host: target.host,
-        path: targetPath,
-        ...event,
-      });
-    try {
-      assertDebugProxyDirectUpstreamAllowed();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      recordTargetEvent({
-        direction: "local",
-        kind: "error",
-        errorText: message,
-      });
-      const responseBody = `${message}\n`;
-      res.writeHead(403, {
-        Connection: "close",
-        "Content-Type": "text/plain; charset=utf-8",
-        "Content-Length": Buffer.byteLength(responseBody),
-      });
-      res.end(responseBody);
-      return;
-    }
-    const body = await readBody(req);
-    recordTargetEvent({
-      direction: "outbound",
-      kind: "request",
-      headersJson: JSON.stringify(req.headers),
-      dataText: body.subarray(0, 8192).toString("utf8"),
-    });
-    const upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(
-      target,
-      {
-        method: req.method,
-        headers: req.headers,
-      },
-      (upstreamRes) => {
-        const chunks: Buffer[] = [];
-        upstreamRes.on("data", (chunk) => {
-          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          chunks.push(buffer);
-          res.write(buffer);
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      const flowId = randomUUID();
+      let target: URL;
+      try {
+        target = normalizeTargetUrl(req);
+      } catch (error) {
+        const message = "Invalid proxy target URL";
+        recordProxyEvent({
+          protocol: "http",
+          direction: "local",
+          kind: "error",
+          flowId,
+          method: req.method,
+          host: req.headers.host,
+          path: req.url ?? "",
+          errorText: error instanceof Error ? error.message : String(error),
         });
-        upstreamRes.on("end", () => {
-          const responseBody = Buffer.concat(chunks);
-          recordTargetEvent({
-            direction: "inbound",
-            kind: "response",
-            status: upstreamRes.statusCode ?? undefined,
-            headersJson: JSON.stringify(upstreamRes.headers),
-            dataText: responseBody.subarray(0, 8192).toString("utf8"),
+        const responseBody = `${message}\n`;
+        res.writeHead(400, {
+          Connection: "close",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Content-Length": Buffer.byteLength(responseBody),
+        });
+        res.end(responseBody);
+        return;
+      }
+      const targetProtocol = target.protocol === "https:" ? "https" : "http";
+      const targetPath = `${target.pathname}${target.search}`;
+      const recordTargetEvent = (
+        event: Omit<ProxyCaptureEventInput, "protocol" | "flowId" | "method" | "host" | "path">,
+      ) =>
+        recordProxyEvent({
+          protocol: targetProtocol,
+          flowId,
+          method: req.method,
+          host: target.host,
+          path: targetPath,
+          ...event,
+        });
+      try {
+        assertDebugProxyDirectUpstreamAllowed();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        recordTargetEvent({
+          direction: "local",
+          kind: "error",
+          errorText: message,
+        });
+        const responseBody = `${message}\n`;
+        res.writeHead(403, {
+          Connection: "close",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Content-Length": Buffer.byteLength(responseBody),
+        });
+        res.end(responseBody);
+        return;
+      }
+      const body = await readBody(req);
+      recordTargetEvent({
+        direction: "outbound",
+        kind: "request",
+        headersJson: JSON.stringify(req.headers),
+        dataText: body.subarray(0, 8192).toString("utf8"),
+      });
+      const upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(
+        target,
+        {
+          method: req.method,
+          headers: req.headers,
+        },
+        (upstreamRes) => {
+          const chunks: Buffer[] = [];
+          upstreamRes.on("data", (chunk) => {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            chunks.push(buffer);
+            res.write(buffer);
           });
-          res.end();
+          upstreamRes.on("end", () => {
+            const responseBody = Buffer.concat(chunks);
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "response",
+              status: upstreamRes.statusCode ?? undefined,
+              headersJson: JSON.stringify(upstreamRes.headers),
+              dataText: responseBody.subarray(0, 8192).toString("utf8"),
+            });
+            res.end();
+          });
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+        },
+      );
+      upstream.on("error", (error) => {
+        recordTargetEvent({
+          direction: "local",
+          kind: "error",
+          errorText: error.message,
         });
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-      },
-    );
-    upstream.on("error", (error) => {
-      recordTargetEvent({
-        direction: "local",
-        kind: "error",
-        errorText: error.message,
+        res.statusCode = 502;
+        res.end(error.message);
       });
-      res.statusCode = 502;
-      res.end(error.message);
-    });
-    if (body.byteLength > 0) {
-      upstream.write(body);
-    }
-    upstream.end();
+      if (body.byteLength > 0) {
+        upstream.write(body);
+      }
+      upstream.end();
+    })();
   });
 
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
     let hostname = "127.0.0.1";
-    let port = 443;
+    let port;
     try {
       const parsed = parseConnectTarget(req.url);
       hostname = parsed.hostname;

@@ -45,7 +45,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
       // Use Promise.race with runExec to implement timeout
       await Promise.race([
         runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("timeout")), 3000);
+        }),
       ]);
       return true;
     } catch {
@@ -149,7 +151,10 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
     }
   }
 
-  throw lastError ?? new Error("Could not determine Tailscale DNS or IP");
+  throw toLintErrorObject(
+    lastError ?? new Error("Could not determine Tailscale DNS or IP"),
+    "Non-Error thrown",
+  );
 }
 
 /**
@@ -399,12 +404,21 @@ export async function ensureFunnel(
   }
 }
 
-export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
+export async function enableTailscaleServe(
+  port: number,
+  exec: typeof runExec = runExec,
+  serviceName?: string,
+) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["serve", ...(serviceName ? [`--service=${serviceName}`] : []), "--bg", "--yes", `${port}`],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function hasTailscaleFunnelRouteForPort(
@@ -498,12 +512,17 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
   return backends;
 }
 
-export async function disableTailscaleServe(exec: typeof runExec = runExec) {
+export async function disableTailscaleServe(exec: typeof runExec = runExec, serviceName?: string) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "reset"], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    serviceName ? ["serve", "clear", serviceName] : ["serve", "reset"],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
@@ -598,4 +617,18 @@ export async function readTailscaleWhoisIdentity(
     writeCachedWhois(normalized, null, errorTtlMs);
     return null;
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveConfiguredSubagentSpawnModelSelection } from "./model-selection.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -96,6 +97,23 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe(defaultModelRef);
     expect(plan.initialSessionPatch.model).toBe(defaultModelRef);
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+  });
+
+  it("can resolve only explicit or configured subagent model selections", () => {
+    expect(
+      resolveConfiguredSubagentSpawnModelSelection({
+        cfg: createConfig(),
+        agentId: "research",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveConfiguredSubagentSpawnModelSelection({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        agentId: "research",
+      }),
+    ).toBe("minimax/MiniMax-M2.7");
   });
 
   it("prefers per-agent subagent model over defaults", () => {

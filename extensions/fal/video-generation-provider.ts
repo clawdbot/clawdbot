@@ -207,9 +207,9 @@ async function downloadFalVideo(
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes }) => {
+        onOverflow: ({ maxBytes: maxBytesLocal }) => {
           exceededMaxBytes = true;
-          return new Error(`fal generated video download exceeds ${maxBytes} bytes`);
+          return new Error(`fal generated video download exceeds ${maxBytesLocal} bytes`);
         },
       });
     } catch (error) {
@@ -538,7 +538,9 @@ async function waitForFalQueueResult(params: {
       throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
     }
     const pollDelayMs = resolveFalQueueRemainingMs(params.deadline, lastStatus, POLL_INTERVAL_MS);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 

@@ -64,7 +64,7 @@ describe("github-copilot connection-bound response IDs", () => {
     expect(input.map((item) => item.id)).toEqual([withEncrypted, withoutEncrypted]);
   });
 
-  it("drops unsafe reasoning replay items instead of stripping their IDs", () => {
+  it("drops unsafe reasoning replay item IDs while keeping idless reasoning replay", () => {
     const overlongId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
     const input = [
       {
@@ -80,6 +80,7 @@ describe("github-copilot connection-bound response IDs", () => {
 
     expect(sanitizeCopilotReplayResponseIds(input)).toBe(true);
     expect(input).toEqual([
+      { type: "reasoning", encrypted_content: "missing-id", summary: [] },
       { id: "rs_valid", type: "reasoning", encrypted_content: "valid", summary: [] },
     ]);
   });

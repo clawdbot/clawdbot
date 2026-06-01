@@ -202,10 +202,17 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/grouped-render.ts",
-      "text": "Context"
+      "text": "Activity"
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Context"
+    },
+    {
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/grouped-render.ts",
@@ -245,6 +252,48 @@
       "name": "title",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Unknown date"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Model"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Reasoning"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Speed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Default"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Fast"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Standard"
     },
     {
       "count": 1,
@@ -364,6 +413,34 @@
       "name": "text",
       "path": "ui/src/ui/components/dashboard-header.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/components/file-preview-modal.ts",
+      "text": "Close"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/components/file-preview-modal.ts",
+      "text": "esc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/components/file-preview-modal.ts",
+      "text": "navigate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/components/file-preview-modal.ts",
+      "text": "No files match."
     },
     {
       "count": 1,
@@ -1406,14 +1483,14 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Exit focus mode"
+      "text": "Loading chat"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Loading chat"
+      "text": "Refresh files"
     },
     {
       "count": 1,
@@ -1437,11 +1514,25 @@
       "text": "Slash commands"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Talk options"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Talk settings"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Workspace files"
     },
     {
       "count": 1,
@@ -1469,14 +1560,14 @@
       "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Exit focus mode"
+      "text": "Refresh files"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Talk options"
+      "text": "Talk settings"
     },
     {
       "count": 1,
@@ -1504,28 +1595,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "close"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Custom"
-    },
-    {
-      "count": 3,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Default"
     },
     {
       "count": 2,
@@ -1549,32 +1619,18 @@
       "text": "Exact VAD"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "fill"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Gateway relay"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Google"
+      "text": "Files"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "High"
+      "text": "fill"
     },
     {
       "count": 1,
@@ -1591,25 +1647,18 @@
       "text": "Lead-in"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Low"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Medium"
+      "text": "Loading files..."
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Minimal"
+      "text": "Missing"
     },
     {
       "count": 1,
@@ -1637,7 +1686,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "OpenAI"
+      "text": "No workspace files"
     },
     {
       "count": 1,
@@ -1645,27 +1694,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Pause before send"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Provider"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Provider WebSocket"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Reasoning"
     },
     {
       "count": 1,
@@ -1682,13 +1710,6 @@
       "text": "select"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Sensitivity"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -1700,19 +1721,201 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Transport"
+      "text": "Talk settings"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Workspace"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Alloy"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Ash"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Auto"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Ballad"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Cedar"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Coral"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Custom"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Default"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Echo"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Gateway relay"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Google"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "High"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Low"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Marin"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Medium"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Minimal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "OpenAI"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Provider"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Provider WebSocket"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Reasoning"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Sage"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Sensitivity"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Shimmer"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Transport"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Verse"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Voice"
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/ui/views/chat.ts",
       "text": "WebRTC"
     },
@@ -2904,7 +3107,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Push Notifications"
+      "text": "Push notifications"
     },
     {
       "count": 1,
@@ -2932,14 +3135,14 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Roundness"
+      "text": "Receive browser push notifications from your gateway."
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Send test"
+      "text": "Roundness"
     },
     {
       "count": 2,
@@ -2947,13 +3150,6 @@
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
       "text": "Status"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/config.ts",
-      "text": "Subscribe to receive browser push notifications from your gateway."
     },
     {
       "count": 1,
@@ -2988,7 +3184,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Unsubscribe"
+      "text": "Unavailable"
     },
     {
       "count": 1,
@@ -3269,6 +3465,13 @@
       "name": "label",
       "path": "ui/src/ui/views/config.ts",
       "text": "NodeHost"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config.ts",
+      "text": "Notifications"
     },
     {
       "count": 1,
@@ -3857,6 +4060,13 @@
       "name": "text",
       "path": "ui/src/ui/views/markdown-sidebar.ts",
       "text": "No content available"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/markdown-sidebar.ts",
+      "text": "No previewable markdown content."
     },
     {
       "count": 1,
@@ -4452,6 +4662,244 @@
       "name": "text",
       "path": "ui/src/ui/views/sessions.ts",
       "text": "Previous"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Close"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No Skill Workshop proposals"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Resize proposal list"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Example: Make this use Gmail labels instead of unread search, and add a safer dry-run step."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Search proposals…"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Close"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Next"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Previous"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "· click to preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "0 support files"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Add to your skills"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Ask the agent to change something"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Browse what's already applied."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Cancel"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Drafted by"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Loading proposal…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Manage →"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "New proposals will appear here for review."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No proposals yet"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Not for me"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Nothing waiting today"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Preparing revision handoff"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "See all proposals →"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Skill Workshop"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Support files"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Tell the agent what should change. The proposal stays pending and the workshop will create a revised version."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Your agent hasn't drafted anything new. Switch to Board to browse history."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No matching proposals"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No pending proposals"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No proposals here"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No rejected proposals"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "No stale proposals"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Nothing applied yet"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/skill-workshop.ts",
+      "text": "Nothing quarantined"
     },
     {
       "count": 1,

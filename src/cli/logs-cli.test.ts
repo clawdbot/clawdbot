@@ -78,7 +78,7 @@ vi.mock("./logs-cli.runtime.js", () => ({
     ...args: Parameters<typeof import("./logs-cli.runtime.js").execFileUtf8Tail>
   ) => execFileUtf8Tail(...args),
   resolveGatewaySystemdServiceName: (
-    ...args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
+    ..._args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
   ) => "openclaw-gateway",
 }));
 

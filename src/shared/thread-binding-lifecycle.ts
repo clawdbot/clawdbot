@@ -5,6 +5,7 @@ export type ThreadBindingLifecycleRecord = {
   maxAgeMs?: number;
 };
 
+/** Resolves the next expiration for a channel thread binding from idle and max-age limits. */
 export function resolveThreadBindingLifecycle(params: {
   record: ThreadBindingLifecycleRecord;
   defaultIdleTimeoutMs: number;
@@ -22,12 +23,14 @@ export function resolveThreadBindingLifecycle(params: {
       ? Math.max(0, Math.floor(params.record.maxAgeMs))
       : params.defaultMaxAgeMs;
 
+  // Activity imported from older stores may predate the binding; never expire before bind time.
   const inactivityExpiresAt =
     idleTimeoutMs > 0
       ? Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
       : undefined;
   const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
 
+  // The lifecycle reports the first real reason so callers can prune or surface it accurately.
   if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
     return inactivityExpiresAt <= maxAgeExpiresAt
       ? { expiresAt: inactivityExpiresAt, reason: "idle-expired" }

@@ -6,7 +6,7 @@ read_when:
 title: "MiniMax"
 ---
 
-OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
+OpenClaw's MiniMax provider defaults to **MiniMax M3**.
 
 MiniMax also provides:
 
@@ -26,7 +26,8 @@ Provider split:
 
 | Model                    | Type             | Description                              |
 | ------------------------ | ---------------- | ---------------------------------------- |
-| `MiniMax-M2.7`           | Chat (reasoning) | Default hosted reasoning model           |
+| `MiniMax-M3`             | Chat (reasoning) | Default hosted reasoning model           |
+| `MiniMax-M2.7`           | Chat (reasoning) | Previous hosted reasoning model          |
 | `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
 | `MiniMax-VL-01`          | Vision           | Image understanding model                |
 | `image-01`               | Image generation | Text-to-image and image-to-image editing |
@@ -79,7 +80,7 @@ Choose your preferred auth method and follow the setup steps.
     </Tabs>
 
     <Note>
-    OAuth setups use the `minimax-portal` provider id. Model refs follow the form `minimax-portal/MiniMax-M2.7`.
+    OAuth setups use the `minimax-portal` provider id. Model refs follow the form `minimax-portal/MiniMax-M3`.
     </Note>
 
     <Tip>
@@ -131,7 +132,7 @@ Choose your preferred auth method and follow the setup steps.
     ```json5
     {
       env: { MINIMAX_API_KEY: "sk-..." },
-      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
+      agents: { defaults: { model: { primary: "minimax/MiniMax-M3" } } },
       models: {
         mode: "merge",
         providers: {
@@ -140,6 +141,15 @@ Choose your preferred auth method and follow the setup steps.
             apiKey: "${MINIMAX_API_KEY}",
             api: "anthropic-messages",
             models: [
+              {
+                id: "MiniMax-M3",
+                name: "MiniMax M3",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+                contextWindow: 1000000,
+                maxTokens: 131072,
+              },
               {
                 id: "MiniMax-M2.7",
                 name: "MiniMax M2.7",
@@ -170,7 +180,7 @@ Choose your preferred auth method and follow the setup steps.
     </Warning>
 
     <Note>
-    API-key setups use the `minimax` provider id. Model refs follow the form `minimax/MiniMax-M2.7`.
+    API-key setups use the `minimax` provider id. Model refs follow the form `minimax/MiniMax-M3`.
     </Note>
 
   </Tab>
@@ -243,9 +253,10 @@ through the CN endpoint; the default global endpoint is
 `https://api.minimax.io`.
 
 When onboarding or API-key setup writes explicit `models.providers.minimax`
-entries, OpenClaw materializes `MiniMax-M2.7` and
-`MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
-exposed separately through the plugin-owned `MiniMax-VL-01` media provider.
+entries, OpenClaw materializes `MiniMax-M3`, `MiniMax-M2.7`, and
+`MiniMax-M2.7-highspeed` as chat models. M3 advertises text and image input;
+image understanding remains exposed separately through the plugin-owned
+`MiniMax-VL-01` media provider.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
@@ -353,7 +364,7 @@ catalog:
 | `minimax-portal` | `MiniMax-VL-01`     |
 
 That is why automatic media routing can use MiniMax image understanding even
-when the bundled text-provider catalog still shows text-only M2.7 chat refs.
+when the bundled text-provider catalog also includes M3 image-capable chat refs.
 
 ### Web search
 
@@ -437,12 +448,12 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 - Model refs follow the auth path:
   - API-key setup: `minimax/<model>`
   - OAuth setup: `minimax-portal/<model>`
-- Default chat model: `MiniMax-M2.7`
-- Alternate chat model: `MiniMax-M2.7-highspeed`
-- Onboarding and direct API-key setup write text-only model definitions for both M2.7 variants
+- Default chat model: `MiniMax-M3`
+- Alternate chat models: `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
+- Onboarding and direct API-key setup write model definitions for M3 and both M2.7 variants
 - Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking
-- Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M2.7` or `openclaw models set minimax-portal/MiniMax-M2.7`
+- Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M3` or `openclaw models set minimax-portal/MiniMax-M3`
 
 <Tip>
 Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
@@ -455,7 +466,7 @@ See [Model providers](/concepts/model-providers) for provider rules.
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title='"Unknown model: minimax/MiniMax-M2.7"'>
+  <Accordion title='"Unknown model: minimax/MiniMax-M3"'>
     This usually means the **MiniMax provider is not configured** (no matching provider entry and no MiniMax auth profile/env key found). A fix for this detection is in **2026.1.12**. Fix by:
 
     - Upgrading to **2026.1.12** (or run from source `main`), then restarting the gateway.
@@ -465,8 +476,8 @@ See [Model providers](/concepts/model-providers) for provider rules.
 
     Make sure the model id is **case-sensitive**:
 
-    - API-key path: `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed`
-    - OAuth path: `minimax-portal/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7-highspeed`
+    - API-key path: `minimax/MiniMax-M3`, `minimax/MiniMax-M2.7`, or `minimax/MiniMax-M2.7-highspeed`
+    - OAuth path: `minimax-portal/MiniMax-M3`, `minimax-portal/MiniMax-M2.7`, or `minimax-portal/MiniMax-M2.7-highspeed`
 
     Then recheck with:
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
   ignorePatterns?: string[];
+  overrides?: Array<{ files?: string[]; rules?: Record<string, unknown> }>;
   rules?: Record<string, unknown>;
 };
 
@@ -134,15 +135,49 @@ describe("oxlint config", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const ignorePatterns = config.ignorePatterns ?? [];
 
-    expect(ignorePatterns).toContain("**/node_modules/**");
-    expect(ignorePatterns).toContain("**/dist/**");
-    expect(ignorePatterns).toContain("**/build/**");
-    expect(ignorePatterns).toContain("**/coverage/**");
-    expect(ignorePatterns).toContain("**/.cache/**");
-    expect(ignorePatterns).toContain("**/.openclaw-runtime-deps-copy-*/**");
-    expect(ignorePatterns).toContain("extensions/diffs/assets/viewer-runtime.js");
-    expect(ignorePatterns).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
-    expect(ignorePatterns).toContain("extensions/canvas/src/host/a2ui/a2ui.bundle.js");
+    expect(ignorePatterns).toEqual([
+      "dist/",
+      "dist-runtime/",
+      "docs/_layouts/",
+      "extensions/diffs/assets/viewer-runtime.js",
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+      "node_modules/",
+      "patches/",
+      "pnpm-lock.yaml",
+      "skills/**",
+      "src/auto-reply/reply/export-html/template.js",
+      "src/canvas-host/a2ui/a2ui.bundle.js",
+      "vendor/",
+      "**/.cache/**",
+      "**/.openclaw-runtime-deps-copy-*/**",
+      "**/build/**",
+      "**/coverage/**",
+      "**/dist/**",
+      "**/dist-runtime/**",
+      "**/node_modules/**",
+    ]);
+  });
+
+  it("keeps lint overrides limited to the explicit test-file carve-out", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.overrides).toEqual([
+      {
+        files: [
+          "**/*.test.ts",
+          "**/*.test.tsx",
+          "**/*.e2e.test.ts",
+          "**/*.live.test.ts",
+          "**/*test-harness.ts",
+          "**/*test-helpers.ts",
+          "**/*test-support.ts",
+        ],
+        rules: {
+          "typescript/no-explicit-any": "off",
+        },
+      },
+    ]);
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

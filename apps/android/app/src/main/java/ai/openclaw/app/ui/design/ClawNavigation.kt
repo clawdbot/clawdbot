@@ -27,6 +27,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/**
+ * Stable bottom-navigation destination descriptor.
+ */
 @Immutable
 internal data class ClawNavItem(
   val key: String,
@@ -34,6 +37,9 @@ internal data class ClawNavItem(
   val icon: ImageVector,
 )
 
+/**
+ * Compact app bar that keeps title, optional subtitle, navigation, and actions aligned.
+ */
 @Composable
 internal fun ClawTopBar(
   title: String,
@@ -73,6 +79,9 @@ internal fun ClawTopBar(
   }
 }
 
+/**
+ * Bottom navigation shell that applies navigation-bar insets before laying out destinations.
+ */
 @Composable
 internal fun ClawBottomNav(
   items: List<ClawNavItem>,
@@ -133,6 +142,9 @@ private fun ClawBottomNavItem(
   }
 }
 
+/**
+ * Two-character identity mark for users, agents, or nodes in compact UI rows.
+ */
 @Composable
 internal fun ClawAvatarMark(
   text: String,

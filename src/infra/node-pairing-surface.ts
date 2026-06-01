@@ -1,9 +1,11 @@
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
+/** Normalize capability/command lists for node approval-surface comparison. */
 export function normalizeNodeApprovalSurfaceList(value: readonly string[] | undefined): string[] {
   return normalizeArrayBackedTrimmedStringList(value) ?? [];
 }
 
+/** Compare capability/command surfaces as normalized sets, ignoring order and duplicates. */
 export function sameNodeApprovalSurfaceSet(
   left: readonly string[] | undefined,
   right: readonly string[] | undefined,
@@ -21,6 +23,7 @@ export function sameNodeApprovalSurfaceSet(
   return true;
 }
 
+/** Compare node permission maps deterministically so key order cannot trigger repairs. */
 export function sameNodePermissionSurface(
   left: Record<string, boolean> | undefined,
   right: Record<string, boolean> | undefined,

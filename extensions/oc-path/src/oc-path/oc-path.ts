@@ -652,7 +652,7 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
 /** First top-level occurrence of `ch` in `s`; -1 when absent. */
 export function indexOfTopLevel(s: string, ch: string): number {
   let result = -1;
-  const fail = (): never => {
+  const failLocal = (): never => {
     throw new OcPathError(`Unbalanced bracket/brace in oc:// path: ${s}`, s, "OC_PATH_UNBALANCED");
   };
   scanBracketAware(
@@ -664,7 +664,7 @@ export function indexOfTopLevel(s: string, ch: string): number {
       }
       return undefined;
     },
-    fail,
+    failLocal,
   );
   return result;
 }

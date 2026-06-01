@@ -72,7 +72,7 @@ async function readBundleProbeText(mcpConfigPath) {
           .join("\\n")
       : "";
   } finally {
-    await transport.close();
+    await client.close();
   }
 }
 
@@ -180,7 +180,7 @@ const result = await (async () => {
     }
     return await client.callTool({ name: "bundle_probe", arguments: {} });
   } finally {
-    await transport.close();
+    await client.close();
   }
 })();
 

@@ -176,6 +176,52 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 
+  it("matches runtime slash aliases across command list surfaces", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const payload = {
+      commands: [{ name: "voicecall" }, { nativeName: "phone" }, { textAliases: ["/pair"] }],
+    };
+
+    expect(runtimeSmoke.isCommandVisible(payload, "/voicecall")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/phone")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/pair")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/missing")).toBe(false);
+  });
+
+  it("fails runtime smoke when declared channels are absent from status", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+
+    expect(() =>
+      runtimeSmoke.assertChannelVisible(
+        { channelMeta: [{ id: "qa-channel" }] },
+        "qa-channel",
+        "qa-channel",
+      ),
+    ).not.toThrow();
+    expect(() => runtimeSmoke.assertChannelVisible({}, "qa-channel", "qa-channel")).toThrow(
+      "Runtime channel status missing manifest channel qa-channel for qa-channel",
+    );
+  });
+
+  it("activates channel config for channel plugin runtime smoke", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+
+    expect(
+      runtimeSmoke.activateSmokePlugin(
+        { plugins: { allow: ["browser"] }, channels: { telegram: { dmPolicy: "open" } } },
+        "telegram",
+        ["telegram"],
+      ),
+    ).toMatchObject({
+      channels: { telegram: { dmPolicy: "open", enabled: true } },
+      plugins: {
+        allow: ["browser", "telegram"],
+        enabled: true,
+        entries: { telegram: { enabled: true } },
+      },
+    });
+  });
+
   it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
@@ -315,6 +361,39 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_500);
   });
 
+  it("cleans per-call RPC state directories", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const statePath = path.join(root, "rpc-state.txt");
+    const entrypoint = path.join(root, "dist", "rpc-entry.js");
+    fs.writeFileSync(
+      entrypoint,
+      [
+        "import fs from 'node:fs';",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_RPC_STATE_PATH, process.env.OPENCLAW_STATE_DIR);",
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      runtimeSmoke.rpcCall(
+        "health",
+        {},
+        {
+          entrypoint,
+          env: { OPENCLAW_TEST_RPC_STATE_PATH: statePath },
+          port: 19001,
+        },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+
+    const rpcStateDir = fs.readFileSync(statePath, "utf8");
+    expect(path.basename(rpcStateDir)).toMatch(/^openclaw-plugin-runtime-rpc-/u);
+    expect(fs.existsSync(rpcStateDir)).toBe(false);
+  });
+
   it("accepts successful runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const server = createHttpServer((_request, response) => {
@@ -396,12 +475,16 @@ describe("bundled plugin install/uninstall probe", () => {
   it("creates runtime smoke state with OPENCLAW_HOME at the test home", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const env = runtimeSmoke.createIsolatedStateEnv("runtime-env");
-    tempDirs.push(path.dirname(env.HOME));
 
     expect(env.USERPROFILE).toBe(env.HOME);
     expect(env.OPENCLAW_HOME).toBe(env.HOME);
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join(env.HOME, ".openclaw"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"));
+    expect(fs.existsSync(path.dirname(env.HOME))).toBe(true);
+
+    runtimeSmoke.cleanupIsolatedStateEnv(env);
+
+    expect(fs.existsSync(path.dirname(env.HOME))).toBe(false);
   });
 
   it("selects packaged installable bundled sources instead of raw dist extension dirs", () => {

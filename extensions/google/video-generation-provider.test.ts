@@ -3,23 +3,28 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
-    const generateVideosMock = vi.fn();
-    const getVideosOperationMock = vi.fn();
-    const downloadMock = vi.fn();
-    const createGoogleGenAIMock = vi.fn(() => {
+    const generateVideosMockLocal = vi.fn();
+    const getVideosOperationMockLocal = vi.fn();
+    const downloadMockLocal = vi.fn();
+    const createGoogleGenAIMockLocal = vi.fn(() => {
       return {
         models: {
-          generateVideos: generateVideosMock,
+          generateVideos: generateVideosMockLocal,
         },
         operations: {
-          getVideosOperation: getVideosOperationMock,
+          getVideosOperation: getVideosOperationMockLocal,
         },
         files: {
-          download: downloadMock,
+          download: downloadMockLocal,
         },
       };
     });
-    return { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock };
+    return {
+      createGoogleGenAIMock: createGoogleGenAIMockLocal,
+      downloadMock: downloadMockLocal,
+      generateVideosMock: generateVideosMockLocal,
+      getVideosOperationMock: getVideosOperationMockLocal,
+    };
   });
 
 vi.mock("./google-genai-runtime.js", () => ({

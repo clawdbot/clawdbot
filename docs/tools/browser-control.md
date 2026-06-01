@@ -34,6 +34,11 @@ one-shot headless launch for local managed profiles without changing persisted
 browser config; attach-only, remote CDP, and existing-session profiles reject
 that override because OpenClaw does not launch those browser processes.
 
+For tab endpoints, `targetId` is the compatibility field name. Prefer passing
+`suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
+handles such as `t1` are also accepted. Raw CDP target ids and unique raw
+target-id prefixes still work, but they are volatile diagnostic handles.
+
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`

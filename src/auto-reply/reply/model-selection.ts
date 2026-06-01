@@ -1,4 +1,7 @@
-import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import {
+  hasLegacyAutoFallbackWithoutOrigin,
+  resolveAgentConfig,
+} from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -7,6 +10,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   buildConfiguredModelCatalog,
+  legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
@@ -214,8 +218,23 @@ export async function createModelSelectionState(params: {
     primaryHarnessPolicy.runtime === "codex" &&
     normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, directStoredModelOverride.model).model ===
       normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, primaryModel).model;
+  const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
+  const normalizedDirectOverride = directStoredModelOverride
+    ? normalizeRuntimeModelRef(directStoredModelOverride.provider, directStoredModelOverride.model)
+    : null;
+  // Only treat the legacy auto pin as stale when the current selection differs from the stored
+  // override. The current==stored case is the turn that deliberately re-applies the pin (e.g. an
+  // explicit run override); clearing there would fight that intent, so the guard must stay.
+  const staleLegacyAutoFallbackWithoutOrigin =
+    directStoredModelOverride?.source === "session" &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry) &&
+    normalizedDirectOverride !== null &&
+    modelKey(normalizedCurrentSelection.provider, normalizedCurrentSelection.model) !==
+      modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
   const staleDirectStoredOverride =
-    staleHeartbeatAutoFallbackOverride || staleLegacyOpenAICodexAutoOverride;
+    staleHeartbeatAutoFallbackOverride ||
+    staleLegacyOpenAICodexAutoOverride ||
+    staleLegacyAutoFallbackWithoutOrigin;
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -282,14 +301,10 @@ export async function createModelSelectionState(params: {
     }
   }
   if (staleDirectStoredOverride) {
-    const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
     const currentSelectionKey = modelKey(
       normalizedCurrentSelection.provider,
       normalizedCurrentSelection.model,
     );
-    const normalizedDirectOverride = directStoredOverride
-      ? normalizeRuntimeModelRef(directStoredOverride.provider, directStoredOverride.model)
-      : null;
     const directStoredOverrideKey = normalizedDirectOverride
       ? modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model)
       : undefined;
@@ -458,10 +473,40 @@ export async function createModelSelectionState(params: {
       return defaultThinkingLevel;
     }
     const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    if (agentThinkingDefault) {
+      defaultThinkingLevel = agentThinkingDefault;
+      return defaultThinkingLevel;
+    }
+    const configuredModels = cfg.agents?.defaults?.models;
+    const canonicalKey = modelKey(provider, model);
+    const legacyKey = legacyModelKey(provider, model);
+    const configuredModelThinkingDefault =
+      configuredModels?.[canonicalKey]?.params?.thinking ??
+      (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+    if (
+      configuredModelThinkingDefault === false ||
+      configuredModelThinkingDefault === "disabled" ||
+      configuredModelThinkingDefault === "none"
+    ) {
+      defaultThinkingLevel = "off";
+      return defaultThinkingLevel;
+    }
+    if (
+      configuredModelThinkingDefault === "off" ||
+      configuredModelThinkingDefault === "minimal" ||
+      configuredModelThinkingDefault === "low" ||
+      configuredModelThinkingDefault === "medium" ||
+      configuredModelThinkingDefault === "high" ||
+      configuredModelThinkingDefault === "xhigh" ||
+      configuredModelThinkingDefault === "adaptive" ||
+      configuredModelThinkingDefault === "max"
+    ) {
+      defaultThinkingLevel = configuredModelThinkingDefault;
+      return defaultThinkingLevel;
+    }
     const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
-    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
-    if (explicitThinkingDefault) {
-      defaultThinkingLevel = explicitThinkingDefault;
+    if (configuredThinkingDefault) {
+      defaultThinkingLevel = configuredThinkingDefault;
       return defaultThinkingLevel;
     }
     const catalogForThinking = await resolveThinkingCatalog();

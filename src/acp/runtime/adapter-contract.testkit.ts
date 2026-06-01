@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { AcpRuntime, AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect } from "vitest";
 import { toAcpRuntimeError } from "./errors.js";
-import type { AcpRuntime, AcpRuntimeEvent } from "./types.js";
 
 export type AcpRuntimeAdapterContractParams = {
   createRuntime: () => Promise<AcpRuntime> | AcpRuntime;

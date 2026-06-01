@@ -2,9 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   deriveGatewaySessionLifecycleSnapshot,
   derivePersistedSessionLifecyclePatch,
+  isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
 
 describe("session lifecycle state", () => {
+  it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: "old-id", currentSessionId: "new-id" }),
+    ).toBe(true);
+  });
+
+  it("applies lifecycle events whose owning sessionId matches the current row", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: "same-id", currentSessionId: "same-id" }),
+    ).toBe(false);
+  });
+
+  it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: undefined, currentSessionId: "new-id" }),
+    ).toBe(false);
+  });
+
   it("reactivates completed sessions on lifecycle start", () => {
     expect(
       deriveGatewaySessionLifecycleSnapshot({

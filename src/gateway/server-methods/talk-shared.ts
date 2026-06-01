@@ -72,54 +72,46 @@ function singleRecordKey(record: Record<string, unknown> | undefined): string | 
   return keys.length === 1 ? keys[0] : undefined;
 }
 
-function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
+function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
+  config: OpenClawConfig,
+  sectionName: "realtime" | "streaming",
+): {
   provider?: string;
-  providers?: Record<string, RealtimeVoiceProviderConfig>;
+  providers?: Record<string, TConfig>;
 } {
   const plugins = getRecord(config.plugins);
   const entries = getRecord(plugins?.entries);
   const voiceCall = getRecord(entries?.["voice-call"]);
   const pluginConfig = getRecord(voiceCall?.config);
-  const realtime = getRecord(pluginConfig?.realtime);
-  const providersRaw = getRecord(realtime?.providers);
-  const providers: Record<string, RealtimeVoiceProviderConfig> = {};
+  const section = getRecord(pluginConfig?.[sectionName]);
+  const providersRaw = getRecord(section?.providers);
+  const providers: Record<string, TConfig> = {};
   if (providersRaw) {
     for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
       const record = getRecord(providerConfig);
       if (record) {
-        providers[providerId] = record;
+        providers[providerId] = record as TConfig;
       }
     }
   }
   return {
-    provider: normalizeOptionalString(realtime?.provider),
+    provider: normalizeOptionalString(section?.provider),
     providers: Object.keys(providers).length > 0 ? providers : undefined,
   };
+}
+
+function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
+  provider?: string;
+  providers?: Record<string, RealtimeVoiceProviderConfig>;
+} {
+  return getVoiceCallProviderConfig(config, "realtime");
 }
 
 export function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   provider?: string;
   providers?: Record<string, RealtimeTranscriptionProviderConfig>;
 } {
-  const plugins = getRecord(config.plugins);
-  const entries = getRecord(plugins?.entries);
-  const voiceCall = getRecord(entries?.["voice-call"]);
-  const pluginConfig = getRecord(voiceCall?.config);
-  const streaming = getRecord(pluginConfig?.streaming);
-  const providersRaw = getRecord(streaming?.providers);
-  const providers: Record<string, RealtimeTranscriptionProviderConfig> = {};
-  if (providersRaw) {
-    for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
-      const record = getRecord(providerConfig);
-      if (record) {
-        providers[providerId] = record;
-      }
-    }
-  }
-  return {
-    provider: normalizeOptionalString(streaming?.provider),
-    providers: Object.keys(providers).length > 0 ? providers : undefined,
-  };
+  return getVoiceCallProviderConfig(config, "streaming");
 }
 
 type RealtimeProviderWithConfig<TConfig extends Record<string, unknown>> = VoiceModelProvider & {
@@ -179,6 +171,8 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
   const configuredProvider =
     explicitProvider ?? singleConfiguredProvider ?? voiceCallRealtime.provider;
   const selectedProvider = configuredProvider ?? singleConfiguredProvider;
+  // Talk-local realtime config wins over the legacy voice-call plugin config,
+  // while the legacy config remains a bridge for existing installations.
   const providerConfigs = {
     ...voiceCallRealtime.providers,
     ...talkRealtimeProviderConfigs,
@@ -240,6 +234,8 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
 }) {
   const providers = listRealtimeTranscriptionProviders(params.config);
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
+  // An explicit provider is authoritative; automatic selection is stable by
+  // provider order so the same config picks the same transcription backend.
   const orderedProviders = normalizedConfigured
     ? providers.filter(
         (provider) =>
@@ -288,6 +284,8 @@ export function buildRealtimeInstructions(configuredInstructions?: string): stri
   if (!extra) {
     return DEFAULT_REALTIME_INSTRUCTIONS;
   }
+  // Keep the tool-use contract first, then append operator customization so
+  // provider sessions preserve the same control-tool behavior.
   return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
 }
 
@@ -314,6 +312,8 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   defaults: RealtimeVoiceLaunchOptions;
 }): RealtimeVoiceLaunchOptions {
   const options = pickRealtimeVoiceLaunchOptions(params.defaults);
+  // Per-request browser controls override config defaults, but only when they
+  // are valid primitive values the realtime provider can consume.
   return {
     ...options,
     ...pickRealtimeVoiceLaunchOptions(params.requested),
@@ -380,5 +380,7 @@ function pickRealtimeVoiceLaunchOptions(
 export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
   const provider = normalizeLowercaseStringOrEmpty(session.provider);
   const transport = (session as { transport?: string }).transport ?? "webrtc";
+  // Google browser WebRTC sessions are exposed in provider types but not usable
+  // through the current client-owned Talk flow.
   return provider === "google" && transport === "webrtc";
 }

@@ -26,6 +26,7 @@ private val decodedBitmapCache =
     ): Int = value.byteCount.coerceAtLeast(1)
   }
 
+/** Loads a picked image URI into the bounded JPEG attachment shape sent to chat. */
 internal fun loadSizedImageAttachment(
   resolver: ContentResolver,
   uri: Uri,
@@ -36,6 +37,8 @@ internal fun loadSizedImageAttachment(
     throw IllegalStateException("unsupported attachment")
   }
   val maxBytes = (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3
+  // Reuse the node JPEG limiter so chat attachments and node photo payloads
+  // stay within the same gateway frame budget.
   val encoded =
     JpegSizeLimiter.compressToLimit(
       initialWidth = bitmap.width,
@@ -72,6 +75,7 @@ internal fun loadSizedImageAttachment(
   )
 }
 
+/** Decodes chat image payloads into display-sized bitmaps with an LRU cache. */
 internal fun decodeBase64Bitmap(
   base64: String,
   maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
@@ -101,6 +105,7 @@ internal fun decodeBase64Bitmap(
   return bitmap
 }
 
+/** Computes Android's power-of-two bitmap sampling size for bounded decode. */
 internal fun computeInSampleSize(
   width: Int,
   height: Int,
@@ -117,6 +122,7 @@ internal fun computeInSampleSize(
   return sample.coerceAtLeast(1)
 }
 
+/** Normalizes arbitrary picked-image names to the JPEG file name sent upstream. */
 internal fun normalizeAttachmentFileName(raw: String): String {
   val trimmed = raw.trim()
   if (trimmed.isEmpty()) return "image.jpg"

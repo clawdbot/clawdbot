@@ -10,14 +10,14 @@ const {
   googleAuthGetAccessTokenMock,
   googleAuthMock,
 } = vi.hoisted(() => {
-  const googleAuthGetAccessTokenMock = vi.fn();
+  const googleAuthGetAccessTokenMockLocal = vi.fn();
   return {
     buildGuardedModelFetchMock: vi.fn(),
     guardedFetchMock: vi.fn(),
-    googleAuthGetAccessTokenMock,
+    googleAuthGetAccessTokenMock: googleAuthGetAccessTokenMockLocal,
     googleAuthMock: vi.fn(function GoogleAuthMock() {
       return {
-        getAccessToken: googleAuthGetAccessTokenMock,
+        getAccessToken: googleAuthGetAccessTokenMockLocal,
       };
     }),
   };
@@ -102,6 +102,22 @@ function buildRawSseResponse(sse: string): Response {
     start(controller) {
       controller.enqueue(encoder.encode(sse));
       controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function buildOpenRawSseResponse(params: { sse: string; onCancel: () => void }): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(params.sse));
+    },
+    cancel() {
+      params.onCancel();
     },
   });
   return new Response(body, {
@@ -583,6 +599,37 @@ describe("google transport stream", () => {
     expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
   });
 
+  it("cancels open Gemini SSE bodies when parsing fails", async () => {
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: "data: {not json\n\n",
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
+    expect(cancelCalled).toBe(true);
+  });
+
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
@@ -590,7 +637,12 @@ describe("google transport stream", () => {
         (_url: string, init?: RequestInit) =>
           new Promise<Response>((_resolve, reject) => {
             init?.signal?.addEventListener("abort", () => {
-              reject(init.signal?.reason ?? new Error("aborted"));
+              reject(
+                toLintErrorObject(
+                  init.signal?.reason ?? new Error("aborted"),
+                  "Non-Error rejection",
+                ),
+              );
             });
           }),
       )
@@ -1937,3 +1989,17 @@ describe("google transport stream", () => {
     ]);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

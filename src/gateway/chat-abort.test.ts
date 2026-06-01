@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
+  boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
   resolveChatRunExpiresAtMs,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
+  resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "./chat-abort.js";
 
@@ -176,6 +178,25 @@ describe("registerChatAbortController", () => {
     expect(resolveChatRunExpiresAtMs({ now: 8_640_000_000_000_000, timeoutMs: 60_000 })).toBe(0);
     expect(resolveAgentRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
   });
+
+  it("records hidden/internal visibility for agent registrations", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-internal-agent",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      controlUiVisible: false,
+      kind: "agent",
+    });
+
+    expect(registration.entry).toMatchObject({
+      controlUiVisible: false,
+      kind: "agent",
+    });
+    expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
+  });
 });
 
 describe("abortChatRunById", () => {
@@ -234,6 +255,21 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("aborts hidden internal runs without broadcasting chat events", () => {
+    const runId = "run-hidden";
+    const sessionKey = "main";
+    const entry = { ...createActiveEntry(sessionKey), controlUiVisible: false };
+    const ops = createOps({ runId, entry, buffer: "hidden partial" });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
+
+    expect(result).toEqual({ aborted: true });
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(ops.chatAbortControllers.has(runId)).toBe(false);
+    expect(ops.broadcast).not.toHaveBeenCalled();
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("fans out default-agent global aborts to scoped and legacy global subscribers", () => {
@@ -347,5 +383,267 @@ describe("abortChatRunsForProvider", () => {
         stopReason: "auth-revoked",
       }),
     );
+  });
+});
+
+describe("resolveInFlightRunSnapshot", () => {
+  const inFlightEntry = (
+    sessionKey: string,
+    opts?: {
+      agentId?: string;
+      aborted?: boolean;
+      controlUiVisible?: boolean;
+      projectSessionActive?: boolean;
+      startedAtMs?: number;
+      kind?: ChatAbortControllerEntry["kind"];
+    },
+  ): ChatAbortControllerEntry => {
+    const now = Date.now();
+    const controller = new AbortController();
+    if (opts?.aborted) {
+      controller.abort();
+    }
+    const startedAtMs = opts?.startedAtMs ?? now;
+    return {
+      controller,
+      sessionId: "sess-1",
+      sessionKey,
+      agentId: opts?.agentId,
+      startedAtMs,
+      expiresAtMs: startedAtMs + 10_000,
+      controlUiVisible: opts?.controlUiVisible,
+      projectSessionActive: opts?.projectSessionActive ?? true,
+      kind: opts?.kind,
+    };
+  };
+
+  // Most cases request with requestedKey === canonicalKey; default canonical to
+  // the requested key unless a case exercises the requested/canonical split.
+  const snap = (p: {
+    chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+    chatRunBuffers: Map<string, string>;
+    sessionKey: string;
+    canonicalSessionKey?: string;
+    agentId?: string;
+    defaultAgentId?: string;
+  }) =>
+    resolveInFlightRunSnapshot({
+      chatAbortControllers: p.chatAbortControllers,
+      chatRunBuffers: p.chatRunBuffers,
+      requestedSessionKey: p.sessionKey,
+      canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
+      agentId: p.agentId,
+      defaultAgentId: p.defaultAgentId,
+    });
+
+  it("returns the live assistant text of a matching active run", () => {
+    const result = snap({
+      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:tui-x")]]),
+      chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
+      sessionKey: "agent:main:tui-x",
+    });
+    expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+  });
+
+  it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
+    expect(
+      snap({
+        chatAbortControllers: undefined as never,
+        chatRunBuffers: undefined as never,
+        sessionKey: "agent:main:s",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("matches a run stored under the canonical key when requested with a different key", () => {
+    // Abort entry holds the canonical store key; the client requests history with
+    // a different (requested) key for the same logical session.
+    const result = snap({
+      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:main")]]),
+      chatRunBuffers: new Map([["run-1", "partial"]]),
+      sessionKey: "main",
+      canonicalSessionKey: "agent:main:main",
+    });
+    expect(result).toEqual({ runId: "run-1", text: "partial" });
+  });
+
+  it("ignores aborted, completed (not projected active), and other-session runs", () => {
+    const variants: ChatAbortControllerEntry[] = [
+      inFlightEntry("agent:main:s", { aborted: true }),
+      inFlightEntry("agent:main:s", { projectSessionActive: false }),
+      inFlightEntry("agent:main:s", { controlUiVisible: false }),
+      inFlightEntry("agent:main:other"),
+    ];
+    for (const entry of variants) {
+      expect(
+        snap({
+          chatAbortControllers: new Map([["run", entry]]),
+          chatRunBuffers: new Map([["run", "text"]]),
+          sessionKey: "agent:main:s",
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("ignores hidden agent runs that are not visible chat sends", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([
+          ["run-agent", inFlightEntry("agent:main:s", { kind: "agent" })],
+        ]),
+        chatRunBuffers: new Map([["run-agent", "hidden partial"]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("treats an entry with undefined projectSessionActive as active (sessions.list contract)", () => {
+    const entry = inFlightEntry("agent:main:s");
+    delete (entry as { projectSessionActive?: boolean }).projectSessionActive;
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run", entry]]),
+        chatRunBuffers: new Map([["run", "live partial"]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run", text: "live partial" });
+  });
+
+  it("returns an active run with empty text (Codex streams no incremental text mid-run)", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map(),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run", text: "" });
+  });
+
+  it("does not surface suppressed control-token lead fragments from the live buffer", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map([["run", "NO_"]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run", text: "" });
+  });
+
+  it("scopes the shared global session by agent so one agent's run is not restored into another", () => {
+    const controllers = new Map<string, ChatAbortControllerEntry>([
+      ["run-a", inFlightEntry("global", { agentId: "main" })],
+      ["run-b", inFlightEntry("global", { agentId: "work" })],
+    ]);
+    const buffers = new Map([
+      ["run-a", "main agent global text"],
+      ["run-b", "work agent global text"],
+    ]);
+    expect(
+      snap({
+        chatAbortControllers: controllers,
+        chatRunBuffers: buffers,
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    ).toEqual({ runId: "run-b", text: "work agent global text" });
+    expect(
+      snap({
+        chatAbortControllers: controllers,
+        chatRunBuffers: buffers,
+        sessionKey: "global",
+        agentId: "main",
+      }),
+    ).toEqual({ runId: "run-a", text: "main agent global text" });
+  });
+
+  it("resolves bare global history snapshots to the default agent", () => {
+    const controllers = new Map<string, ChatAbortControllerEntry>([
+      ["run-main", inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
+      ["run-work", inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
+    ]);
+    const buffers = new Map([
+      ["run-main", "main default text"],
+      ["run-work", "work global text"],
+    ]);
+
+    expect(
+      snap({
+        chatAbortControllers: controllers,
+        chatRunBuffers: buffers,
+        sessionKey: "global",
+        defaultAgentId: "main",
+      }),
+    ).toEqual({ runId: "run-main", text: "main default text" });
+  });
+
+  it("prefers the newest startedAtMs when several runs match the same session+agent", () => {
+    // A fast restart/retry/stale-controller race can leave two active entries for
+    // the same key; selection must not depend on Map insertion order. Insert the
+    // older run first so a first-match selector would return the wrong one.
+    const controllers = new Map<string, ChatAbortControllerEntry>([
+      ["run-old", inFlightEntry("agent:main:s", { startedAtMs: 1_000 })],
+      ["run-new", inFlightEntry("agent:main:s", { startedAtMs: 2_000 })],
+    ]);
+    const buffers = new Map([
+      ["run-old", "stale partial"],
+      ["run-new", "current partial"],
+    ]);
+    expect(
+      snap({
+        chatAbortControllers: controllers,
+        chatRunBuffers: buffers,
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-new", text: "current partial" });
+  });
+
+  it("breaks startedAtMs ties deterministically by runId regardless of insertion order", () => {
+    const buffers = new Map([
+      ["run-a", "a"],
+      ["run-b", "b"],
+    ]);
+    const ascending = new Map<string, ChatAbortControllerEntry>([
+      ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
+      ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
+    ]);
+    const descending = new Map<string, ChatAbortControllerEntry>([
+      ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
+      ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
+    ]);
+    // Same winner ("run-b" > "run-a") no matter which order the map was built in.
+    expect(
+      snap({
+        chatAbortControllers: ascending,
+        chatRunBuffers: buffers,
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-b", text: "b" });
+    expect(
+      snap({
+        chatAbortControllers: descending,
+        chatRunBuffers: buffers,
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-b", text: "b" });
+  });
+
+  it("keeps in-flight text when it fits the chat history budget", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "partial" },
+        messages: [],
+        maxBytes: 1_000,
+      }),
+    ).toEqual({ runId: "run-1", text: "partial" });
+  });
+
+  it("drops oversized in-flight text but keeps the run id for adoption", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "x".repeat(1_000) },
+        messages: [],
+        maxBytes: 100,
+      }),
+    ).toEqual({ runId: "run-1", text: "" });
   });
 });

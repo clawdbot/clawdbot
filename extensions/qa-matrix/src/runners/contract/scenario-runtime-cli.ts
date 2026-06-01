@@ -255,7 +255,7 @@ export function startMatrixQaOpenClawCli(params: {
           return;
         }
         settleWait = { reject, resolve };
-      }).catch((error) => {
+      }).catch((error: unknown) => {
         throw new Error(
           `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
         );
@@ -280,7 +280,9 @@ export function startMatrixQaOpenClawCli(params: {
     },
     writeStdin: async (text) => {
       if (!child.stdin.write(text)) {
-        await new Promise<void>((resolve) => child.stdin.once("drain", resolve));
+        await new Promise<void>((resolve) => {
+          child.stdin.once("drain", resolve);
+        });
       }
     },
     kill: () => {

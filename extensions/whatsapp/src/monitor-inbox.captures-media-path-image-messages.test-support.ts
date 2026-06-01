@@ -7,6 +7,8 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  settleInboundWork,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
@@ -49,13 +51,8 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await vi.waitFor(() => {
-      expect(
-        onMessage.mock.calls.length +
-          sock.readMessages.mock.calls.length +
-          inboundLoggerInfoMock.mock.calls.length,
-      ).toBeGreaterThan(0);
-    });
+    await waitForMessageCalls(onMessage, 1);
+    await settleInboundWork();
     return { onMessage, listener, sock };
   }
 

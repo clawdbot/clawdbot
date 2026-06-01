@@ -1,11 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
+  resetPluginStateStoreForTests();
   process.env.OPENCLAW_STATE_DIR = stateDir;
   for (const key of [
     "ALL_PROXY",
@@ -20,6 +22,7 @@ async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) 
   try {
     await run(stateDir);
   } finally {
+    resetPluginStateStoreForTests();
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
@@ -33,6 +36,7 @@ async function importOpenRouterModelCapabilities(scope: string) {
 
 describe("openrouter-model-capabilities", () => {
   afterEach(() => {
+    resetPluginStateStoreForTests();
     vi.unstubAllGlobals();
     delete process.env.OPENCLAW_STATE_DIR;
   });
@@ -134,7 +138,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("does not reuse older disk caches with precomputed OpenRouter context windows", async () => {
+  it("does not reuse retired JSON caches with precomputed OpenRouter context windows", async () => {
     await withOpenRouterStateDir(async (stateDir) => {
       const modelId = "nvidia/nemotron-3-super-120b-a12b:free";
       const cacheDir = join(stateDir, "cache");
@@ -195,6 +199,49 @@ describe("openrouter-model-capabilities", () => {
         contextWindow: 262_144,
         maxTokens: 262_144,
       });
+    });
+  });
+
+  it("loads cached OpenRouter capabilities from SQLite on the next import", async () => {
+    await withOpenRouterStateDir(async () => {
+      const fetchSpy = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: "acme/sqlite-cached-model",
+                  name: "SQLite Cached Model",
+                  architecture: { modality: "text+image->text" },
+                  supported_parameters: ["tools"],
+                  context_length: 8765,
+                  max_completion_tokens: 4321,
+                  pricing: { prompt: "0.000005", completion: "0.000006" },
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const firstModule = await importOpenRouterModelCapabilities("sqlite-cache-writer");
+      await firstModule.loadOpenRouterModelCapabilities("acme/sqlite-cached-model");
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      const secondModule = await importOpenRouterModelCapabilities("sqlite-cache-reader");
+      expect(secondModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")).toMatchObject(
+        {
+          input: ["text", "image"],
+          supportsTools: true,
+          contextWindow: 8765,
+          maxTokens: 4321,
+        },
+      );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 

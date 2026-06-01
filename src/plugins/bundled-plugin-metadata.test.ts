@@ -274,7 +274,7 @@ function collectRepoBundledChannelConfigsForTest(dirName: string) {
   const pluginDir = path.join(repoRoot, "extensions", dirName);
   const manifest = loadPluginManifest(pluginDir, false);
   if (!manifest.ok) {
-    throw manifest.error;
+    throw toLintErrorObject(manifest.error, "Non-Error thrown");
   }
   const configs = collectBundledChannelConfigs({
     pluginDir,
@@ -1151,3 +1151,17 @@ describe("bundled plugin metadata", () => {
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

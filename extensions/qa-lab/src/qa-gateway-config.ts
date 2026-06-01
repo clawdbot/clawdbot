@@ -74,7 +74,7 @@ export function buildQaGatewayConfig(params: {
   );
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
-    .filter((provider): provider is string => Boolean(provider));
+    .filter((providerValue): providerValue is string => Boolean(providerValue));
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
@@ -86,7 +86,7 @@ export function buildQaGatewayConfig(params: {
             .map((value) =>
               typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
             )
-            .filter((provider): provider is string => Boolean(provider)),
+            .filter((providerLocal): providerLocal is string => Boolean(providerLocal)),
         ),
       ]
     : [];

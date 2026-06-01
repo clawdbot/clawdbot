@@ -137,7 +137,7 @@ function processOpenRouterSseLine(
 function resolveOpenRouterStreamRemainingMs(deadline: ProviderOperationDeadline): number {
   return resolveProviderOperationTimeoutMs({
     deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
 }
 
@@ -188,7 +188,6 @@ async function readOpenRouterAudioStream(
     buffer = lines.pop() ?? "";
     for (const line of lines) {
       if (processOpenRouterSseLine(line.trim(), result)) {
-        doneSeen = true;
         await reader.cancel();
         return {
           audioBuffer: Buffer.concat(result.audioBuffers),

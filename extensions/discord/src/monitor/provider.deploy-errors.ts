@@ -336,7 +336,7 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
     details.push(`code=${discordCode}`);
   }
   if (rawBody !== undefined) {
-    let bodyText = "";
+    let bodyText;
     try {
       bodyText = JSON.stringify(rawBody);
     } catch {

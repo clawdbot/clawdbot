@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing as cliBackendsTesting } from "./cli-backends.js";
 import { createModelPickerVisibleProviderPredicate } from "./model-picker-visibility.js";
 import {
+  areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
@@ -162,5 +163,61 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("claude-cli")).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
     expect(isVisibleProvider("acme-cli")).toBe(true);
+  });
+});
+
+describe("areRuntimeModelRefsEquivalent", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
+  it("does not load setup runtime aliases for already-identical refs", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for identical refs");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    expect(
+      areRuntimeModelRefsEquivalent("anthropic/claude", "anthropic/claude", {
+        config: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves one setup runtime alias without loading the full setup registry", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for a single runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    expect(
+      areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "claude-cli": { command: "claude" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

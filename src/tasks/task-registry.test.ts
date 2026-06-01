@@ -15,12 +15,17 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import {
+  createTaskFlowForTask as createTaskFlowForTaskOrNull,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  getTaskFlowById,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
-  createTaskRecord,
+  createTaskRecord as createTaskRecordOrNull,
   findLatestTaskForOwnerKey,
   findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
@@ -49,6 +54,7 @@ import {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
+  configureTaskRegistryMaintenance,
   getInspectableTaskAuditSummary,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -62,6 +68,34 @@ import {
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 import { DEFAULT_TASK_RETENTION_MS, LOST_TASK_RETENTION_MS } from "./task-retention.js";
+
+function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
+  const task = createTaskRecordOrNull(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createTaskFlowForTask(
+  params: Parameters<typeof createTaskFlowForTaskOrNull>[0],
+): TaskFlowRecord {
+  const flow = createTaskFlowForTaskOrNull(params);
+  if (!flow) {
+    throw new Error("expected task-mirrored TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -106,6 +140,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   listTaskRecords?: () => ReturnType<typeof createTaskRecord>[];
   acpEntry?: AcpSessionStoreEntry;
   acpEntries?: AcpSessionStoreEntry[];
+  hasActiveAcpTurn?: (sessionKey: string) => boolean;
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
@@ -137,6 +172,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
+    hasActiveAcpTurn: params.hasActiveAcpTurn ?? (() => false),
     hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
       const normalized = sessionKey.trim().toLowerCase();
       return Array.from(params.currentTasks.values()).some(
@@ -187,9 +223,9 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
-    isCronRuntimeAuthoritative: () => true,
-    resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-    loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+    isRuntimeAuthoritative: () => true,
+    resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
+    loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
     readCronRunLogEntriesSync: () => [],
   });
 }
@@ -942,6 +978,146 @@ describe("task-registry", () => {
         taskId: task.taskId,
         parentFlowId: undefined,
       });
+    });
+  });
+
+  it("reports task update success and retries when task-mirrored flow sync persistence fails", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      vi.useFakeTimers();
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "mirrored-flow-sync-fail",
+        task: "Sync mirrored flow",
+        status: "running",
+        lastEventAt: 100,
+      });
+      const flow = createTaskFlowForTask({ task });
+      const linked = linkTaskToFlowById({
+        taskId: task.taskId,
+        flowId: flow.flowId,
+      });
+      expect(linked?.parentFlowId).toBe(flow.flowId);
+
+      let remainingUpsertFailures = 2;
+      const upsertFlow = vi.fn(() => {
+        if (remainingUpsertFailures > 0) {
+          remainingUpsertFailures -= 1;
+          throw new Error("SQLITE_FULL: database or disk is full");
+        }
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            flows: new Map(),
+          }),
+          saveSnapshot: () => {},
+          upsertFlow,
+        },
+      });
+
+      const updated = markTaskTerminalById({
+        taskId: task.taskId,
+        status: "succeeded",
+        endedAt: 200,
+        terminalSummary: "Done",
+      });
+
+      expect(updated?.status).toBe("succeeded");
+      const currentTask = requireTaskById(task.taskId);
+      expect(currentTask.status).toBe("succeeded");
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushAsyncWork();
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushAsyncWork();
+
+      expect(upsertFlow).toHaveBeenCalledTimes(3);
+      const retriedFlow = getTaskFlowById(flow.flowId);
+      expect(retriedFlow?.status).toBe("succeeded");
+      expect(retriedFlow?.endedAt).toBe(200);
+    });
+  });
+
+  it("does not let a delayed task-mirrored flow sync retry overwrite a newer linked task", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      vi.useFakeTimers();
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "mirrored-flow-stale-retry",
+        task: "Initial blocked task",
+        status: "running",
+        lastEventAt: 100,
+      });
+      const flow = createTaskFlowForTask({ task });
+      expect(
+        linkTaskToFlowById({
+          taskId: task.taskId,
+          flowId: flow.flowId,
+        })?.parentFlowId,
+      ).toBe(flow.flowId);
+
+      let failUpsert = true;
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            flows: new Map(),
+          }),
+          saveSnapshot: () => {},
+          upsertFlow: () => {
+            if (failUpsert) {
+              throw new Error("SQLITE_BUSY: database is locked");
+            }
+          },
+        },
+      });
+
+      expect(
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status: "succeeded",
+          endedAt: 200,
+          terminalOutcome: "blocked",
+          terminalSummary: "Needs follow-up",
+        })?.status,
+      ).toBe("succeeded");
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("running");
+
+      failUpsert = false;
+      const newerTask = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "mirrored-flow-newer-task",
+        task: "Retry task",
+        status: "running",
+        lastEventAt: 250,
+      });
+      expect(newerTask.parentFlowId).toBe(flow.flowId);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushAsyncWork();
+
+      const currentFlow = getTaskFlowById(flow.flowId);
+      expect(currentFlow?.status).toBe("running");
+      expect(currentFlow?.blockedTaskId).toBeUndefined();
     });
   });
 
@@ -1956,6 +2132,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryMemoryForTest();
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
 
       const task = createTaskRecord({
         runtime: "acp",
@@ -1989,6 +2166,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryMemoryForTest();
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
       const now = Date.now();
 
       const task = createTaskRecord({
@@ -2638,6 +2816,7 @@ describe("task-registry", () => {
         parseAgentSessionKey: () => null,
         isCronJobActive: () => false,
         getAgentRunContext: () => undefined,
+        hasActiveAcpTurn: () => false,
         hasActiveTaskForChildSessionKey: () => false,
         deleteTaskRecordById: () => false,
         ensureTaskRegistryReady: () => {},
@@ -2650,9 +2829,9 @@ describe("task-registry", () => {
         maybeDeliverTaskTerminalUpdate: async () => null,
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
-        isCronRuntimeAuthoritative: () => true,
-        resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-        loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+        isRuntimeAuthoritative: () => true,
+        resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
+        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
         readCronRunLogEntriesSync: () => [],
       });
 

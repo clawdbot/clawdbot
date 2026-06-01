@@ -3,7 +3,7 @@ export {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 export { getRuntimeConfig } from "../config/config.js";
-export { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
+export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export {
   forkSessionFromParent,
   resolveParentForkDecision,

@@ -1,13 +1,14 @@
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
+import { extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
-import { readStringParam } from "../../agents/tools/common.js";
+import { readStringArrayParam, readStringParam } from "../../agents/tools/common.js";
 import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
-import { basenameFromAnyPath } from "../../media/file-name.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
@@ -15,12 +16,12 @@ import {
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
-import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
+/** Shared boolean param reader used by message-action argument normalization. */
 export const readBooleanParam = readBooleanParamShared;
 
 const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
@@ -140,6 +141,7 @@ function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): st
   return Array.from(keys);
 }
 
+/** Resolves plugin-declared media source param aliases for a message action. */
 export function resolveExtraActionMediaSourceParamKeys(params: {
   cfg: OpenClawConfig;
   action?: ChannelMessageActionName;
@@ -168,6 +170,7 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
   });
 }
 
+/** Collects candidate media source strings from message-action args. */
 export function collectActionMediaSourceHints(
   args: Record<string, unknown>,
   extraParamKeys?: readonly string[],
@@ -178,6 +181,11 @@ export function collectActionMediaSourceHints(
     const entry = resolveMediaParamEntry(args, key);
     if (entry && normalizeOptionalString(entry.value)) {
       sources.push(entry.value);
+    }
+  }
+  for (const value of readStringArrayParam(args, "mediaUrls") ?? []) {
+    if (normalizeOptionalString(value)) {
+      sources.push(value);
     }
   }
   if (options?.structuredAttachments === "all") {
@@ -248,6 +256,7 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
+/** Media access policy used when hydrating attachment action parameters. */
 export type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
@@ -260,6 +269,7 @@ export type AttachmentMediaPolicy =
       mediaReadFile?: OutboundMediaReadFile;
     };
 
+/** Chooses sandbox or host media loading policy for attachment hydration. */
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
   mediaAccess?: OutboundMediaAccess;
@@ -391,6 +401,7 @@ async function hydrateAttachmentPayload(params: {
   }
 }
 
+/** Rewrites action media params to sandbox-safe paths and rejects data URLs. */
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   mediaPolicy: AttachmentMediaPolicy;
@@ -437,6 +448,7 @@ export async function normalizeSandboxMediaParams(params: {
   }
 }
 
+/** Normalizes a list of media hints against an optional sandbox root. */
 export async function normalizeSandboxMediaList(params: {
   values: string[];
   sandboxRoot?: string;
@@ -511,6 +523,7 @@ async function hydrateAttachmentActionPayload(params: {
   });
 }
 
+/** Hydrates attachment-bearing message actions with base64 buffers and metadata. */
 export async function hydrateAttachmentParamsForAction(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -551,6 +564,7 @@ export async function hydrateAttachmentParamsForAction(params: {
   });
 }
 
+/** Parses a named string param as JSON for structured message action fields. */
 export function parseJsonMessageParam(params: Record<string, unknown>, key: string): void {
   const raw = params[key];
   if (typeof raw !== "string") {
@@ -568,6 +582,7 @@ export function parseJsonMessageParam(params: Record<string, unknown>, key: stri
   }
 }
 
+/** Parses the interactive message action param as JSON when provided as a string. */
 export function parseInteractiveParam(params: Record<string, unknown>): void {
   const raw = params.interactive;
   if (typeof raw !== "string") {

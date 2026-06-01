@@ -573,6 +573,44 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("skips disabled snapshot skills before resolving raw apiKey SecretRefs", () => {
+    const skillName = "env-skill";
+    const snapshot = envSkillSnapshot(skillName, {
+      primaryEnv: "ENV_KEY",
+      requires: { env: ["ENV_KEY"] },
+    });
+    const config: OpenClawConfig = {
+      skills: {
+        entries: {
+          [skillName]: {
+            enabled: false,
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "GITHUB_PAT",
+            },
+          },
+        },
+      },
+    };
+
+    withClearedEnv(["ENV_KEY", "GITHUB_PAT"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        config,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(process.env.GITHUB_PAT).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(process.env.GITHUB_PAT).toBeUndefined();
+      }
+    });
+  });
+
   it("prefers the active runtime snapshot over raw SecretRef skill config", () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {

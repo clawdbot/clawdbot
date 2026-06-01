@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   callQaBrowserRequest,
   qaBrowserAct,
@@ -17,6 +17,10 @@ function createEnv() {
 }
 
 describe("browser-runtime", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("sends normalized browser.request payloads through the gateway", async () => {
     const env = createEnv();
 
@@ -171,6 +175,7 @@ describe("browser-runtime", () => {
       profile: "user",
       timeoutMs: 5_000,
       intervalMs: 1,
+      sleepImpl: async () => {},
     });
 
     expect(status).toEqual({ enabled: true, running: true, cdpReady: true });

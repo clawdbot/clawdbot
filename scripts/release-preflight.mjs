@@ -51,26 +51,26 @@ if (failed.length !== 0) {
 console.log("[release-preflight] OK");
 
 async function runSerial(commands) {
-  const failed = [];
+  const failedValue = [];
   for (const command of commands) {
     const status = await runCommand(command);
     if (status !== 0) {
-      failed.push({ ...command, status });
+      failedValue.push({ ...command, status });
       break;
     }
   }
-  return failed;
+  return failedValue;
 }
 
 async function runAll(commands) {
-  const failed = [];
+  const failedLocal = [];
   for (const command of commands) {
     const status = await runCommand(command);
     if (status !== 0) {
-      failed.push({ ...command, status });
+      failedLocal.push({ ...command, status });
     }
   }
-  return failed;
+  return failedLocal;
 }
 
 async function runCommand(command) {

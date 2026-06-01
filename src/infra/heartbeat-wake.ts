@@ -205,37 +205,52 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
   }
   timerDueAt = dueAt;
   timerKind = kind;
-  timer = setTimeout(async () => {
-    timer = null;
-    timerDueAt = null;
-    timerKind = null;
-    scheduled = false;
-    const active = handler;
-    if (!active) {
-      return;
-    }
-    if (running) {
-      scheduled = true;
-      schedule(delay, kind);
-      return;
-    }
+  timer = setTimeout(() => {
+    void (async () => {
+      timer = null;
+      timerDueAt = null;
+      timerKind = null;
+      scheduled = false;
+      const active = handler;
+      if (!active) {
+        return;
+      }
+      if (running) {
+        scheduled = true;
+        schedule(delay, kind);
+        return;
+      }
 
-    const pendingBatch = Array.from(pendingWakes.values());
-    pendingWakes.clear();
-    running = true;
-    try {
-      for (const pendingWake of pendingBatch) {
-        const wakeOpts = {
-          source: pendingWake.source,
-          intent: pendingWake.intent,
-          reason: pendingWake.reason ?? undefined,
-          ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
-          ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
-          ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
-        };
-        const res = await active(wakeOpts);
-        if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
-          // The target runtime is busy; retry this wake target soon.
+      const pendingBatch = Array.from(pendingWakes.values());
+      pendingWakes.clear();
+      running = true;
+      try {
+        for (const pendingWake of pendingBatch) {
+          const wakeOpts = {
+            source: pendingWake.source,
+            intent: pendingWake.intent,
+            reason: pendingWake.reason ?? undefined,
+            ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
+            ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+            ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
+          };
+          const res = await active(wakeOpts);
+          if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+            // The target runtime is busy; retry this wake target soon.
+            queuePendingWakeReason({
+              source: pendingWake.source,
+              intent: pendingWake.intent,
+              reason: pendingWake.reason ?? "retry",
+              agentId: pendingWake.agentId,
+              sessionKey: pendingWake.sessionKey,
+              heartbeat: pendingWake.heartbeat,
+            });
+            schedule(DEFAULT_RETRY_MS, "retry");
+          }
+        }
+      } catch {
+        // Error is already logged by the heartbeat runner; schedule a retry.
+        for (const pendingWake of pendingBatch) {
           queuePendingWakeReason({
             source: pendingWake.source,
             intent: pendingWake.intent,
@@ -244,28 +259,15 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             sessionKey: pendingWake.sessionKey,
             heartbeat: pendingWake.heartbeat,
           });
-          schedule(DEFAULT_RETRY_MS, "retry");
+        }
+        schedule(DEFAULT_RETRY_MS, "retry");
+      } finally {
+        running = false;
+        if (pendingWakes.size > 0 || scheduled) {
+          schedule(delay, "normal");
         }
       }
-    } catch {
-      // Error is already logged by the heartbeat runner; schedule a retry.
-      for (const pendingWake of pendingBatch) {
-        queuePendingWakeReason({
-          source: pendingWake.source,
-          intent: pendingWake.intent,
-          reason: pendingWake.reason ?? "retry",
-          agentId: pendingWake.agentId,
-          sessionKey: pendingWake.sessionKey,
-          heartbeat: pendingWake.heartbeat,
-        });
-      }
-      schedule(DEFAULT_RETRY_MS, "retry");
-    } finally {
-      running = false;
-      if (pendingWakes.size > 0 || scheduled) {
-        schedule(delay, "normal");
-      }
-    }
+    })();
   }, delay);
   timer.unref?.();
 }

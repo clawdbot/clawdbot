@@ -790,7 +790,9 @@ async function waitForFile(filePath: string): Promise<string> {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
     }
   }
   throw new Error(`timed out waiting for ${filePath}`);
@@ -838,10 +840,14 @@ describe("connectCodexAppServerEndpoint", () => {
     await expect(
       Promise.race([
         probe,
-        new Promise((_, reject) => setTimeout(() => reject(new Error("probe timed out")), 500)),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("probe timed out")), 500);
+        }),
       ]),
     ).resolves.toMatchObject([{ endpointId: "ws", ok: false }]);
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   it("rejects malformed stdio frames instead of throwing out of band", async () => {
@@ -930,7 +936,9 @@ describe("connectCodexAppServerEndpoint", () => {
     );
 
     await expect(supervisor.probeEndpoints()).resolves.toEqual([{ endpointId: "exits", ok: true }]);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     await expect(supervisor.probeEndpoints()).resolves.toMatchObject([
       {
         endpointId: "exits",

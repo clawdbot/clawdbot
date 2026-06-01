@@ -250,7 +250,9 @@ async function repairStaleOAuthProfilesForAgent(params: {
       if (result.removedProfileIds.length === 0) {
         return { status: "unchanged" };
       }
-      saveAuthProfileStore(result.store, params.agentDir);
+      saveAuthProfileStore(result.store, params.agentDir, {
+        pruneOrderProfileIds: result.removedProfileIds,
+      });
       return {
         status: "changed",
         removedProfileIds: result.removedProfileIds,

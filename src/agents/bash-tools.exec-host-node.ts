@@ -319,14 +319,14 @@ export async function executeNodeHostCommand(
           const {
             baseDecision,
             approvedByAsk: initialApprovedByAsk,
-            deniedReason: initialDeniedReason,
+            deniedReason: baseDeniedReason,
           } = execHostShared.createExecApprovalDecisionState({
             decision,
             askFallback,
           });
           let approvedByAsk = initialApprovedByAsk;
           let approvalDecision: "allow-once" | "allow-always" | null = null;
-          let deniedReason = initialDeniedReason;
+          let deniedReason = baseDeniedReason;
 
           if (baseDecision.timedOut && askFallback === "full" && approvedByAsk) {
             approvalDecision = "allow-once";
@@ -338,15 +338,15 @@ export async function executeNodeHostCommand(
             approvalDecision = "allow-always";
           }
 
-          ({ approvedByAsk, deniedReason } = execHostShared.enforceStrictInlineEvalApprovalBoundary(
-            {
-              baseDecision,
-              approvedByAsk,
-              deniedReason,
-              requiresInlineEvalApproval: inlineEvalHit !== null,
-              requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
-            },
-          ));
+          const strictBoundaryDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
+            baseDecision,
+            approvedByAsk,
+            deniedReason,
+            requiresInlineEvalApproval: inlineEvalHit !== null,
+            requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+          });
+          approvedByAsk = strictBoundaryDecision.approvedByAsk;
+          deniedReason = strictBoundaryDecision.deniedReason;
           if (deniedReason) {
             approvalDecision = null;
           }

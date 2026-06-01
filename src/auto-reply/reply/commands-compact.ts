@@ -273,6 +273,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
+    authProfileId: targetSessionEntry.authProfileOverride,
     contextTokenBudget,
     agentHarnessId:
       targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,

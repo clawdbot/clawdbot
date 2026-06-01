@@ -992,7 +992,7 @@ describe("OpenClaw SDK", () => {
       await oc.connect();
       const observedLast = (async () => {
         for await (const event of oc.events(
-          (event) => event.raw?.event === "chat" && event.raw.seq === 501,
+          (eventLocal) => eventLocal.raw?.event === "chat" && eventLocal.raw.seq === 501,
         )) {
           return event;
         }

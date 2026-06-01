@@ -182,8 +182,8 @@ function buildParams(
 ): GenerateContentParameters {
   return buildGoogleGenerateContentParams(model, context, options, {
     mapThinkingLevel: mapVertexThinkingLevel,
-    getDisabledThinkingConfig: (model) =>
-      getDisabledGoogleThinkingConfig(model, { mapThinkingLevel: mapVertexThinkingLevel }),
+    getDisabledThinkingConfig: (modelLocal) =>
+      getDisabledGoogleThinkingConfig(modelLocal, { mapThinkingLevel: mapVertexThinkingLevel }),
   });
 }
 

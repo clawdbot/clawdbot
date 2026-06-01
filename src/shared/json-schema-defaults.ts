@@ -204,7 +204,7 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
 }
 
 function decodePointerSegment(segment: string): string {
-  let decodedSegment = segment;
+  let decodedSegment;
   try {
     decodedSegment = decodeURIComponent(segment);
   } catch {
@@ -369,15 +369,15 @@ function resolveSchemaResourceRef(
   const resolvedRefResource =
     refParts.resource === "" ? refParts.resource : resolveSchemaId(refParts.resource, baseId);
   const seen = new Set<object>();
-  const visit = (current: JsonSchemaValue, baseId: string | undefined): LocalRefResolution => {
+  const visit = (current: JsonSchemaValue, baseIdLocal: string | undefined): LocalRefResolution => {
     if (!isRecord(current) || seen.has(current)) {
       return { found: false };
     }
     seen.add(current);
 
-    let currentBaseId = baseId;
+    let currentBaseId = baseIdLocal;
     if (typeof current.$id === "string" && current.$id !== "") {
-      const resolvedId = resolveSchemaId(current.$id, baseId);
+      const resolvedId = resolveSchemaId(current.$id, baseIdLocal);
       currentBaseId = resolvedId;
       if (resolvedRefResource === resolvedId || refParts.resource === stripFragment(current.$id)) {
         return refParts.fragment
@@ -765,7 +765,7 @@ function inlineLocalRefsForMatch(
       ? { found: false as const }
       : resolveSchemaRef(root, currentResourceRoot, schema.$ref, currentResourceBaseId);
     if (target.found) {
-      const { $ref, ...siblingSchema } = schema;
+      const { $ref: _$ref, ...siblingSchema } = schema;
       resolvingRefs.add(refKey);
       const inlinedTarget = inlineLocalRefsForMatch(
         target.schema,

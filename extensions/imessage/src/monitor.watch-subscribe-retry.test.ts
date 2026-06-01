@@ -132,7 +132,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     const monitorErrorPromise = monitorIMessageProvider({
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
-    }).catch((error) => error);
+    }).catch((error: unknown) => error);
 
     await vi.runAllTimersAsync();
     const monitorError = await monitorErrorPromise;

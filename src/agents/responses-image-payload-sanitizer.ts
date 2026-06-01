@@ -1,5 +1,5 @@
+import { sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl } from "@openclaw/media-core/inline-image-data-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl } from "../media/inline-image-data-url.js";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 

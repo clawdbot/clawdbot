@@ -47,15 +47,15 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const path = sanitizeInlineMediaNoteValue(params.path);
+  const pathValue = sanitizeInlineMediaNoteValue(params.path);
   const typeRaw = sanitizeInlineMediaNoteValue(params.type);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
   const urlRaw = sanitizeInlineMediaNoteValue(params.url);
   // When the channel mirrors the local path into MediaUrl (Telegram album
   // media is the canonical case), rendering ` | ${url}` adds no information
   // and clutters the prompt with `path | path` duplication (issue #47587).
-  const urlPart = urlRaw && urlRaw !== path ? ` | ${urlRaw}` : "";
-  return `${prefix}${path}${typePart}${urlPart}]`;
+  const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
+  return `${prefix}${pathValue}${typePart}${urlPart}]`;
 }
 
 // Common audio file extensions for transcription detection
@@ -74,11 +74,11 @@ const AUDIO_EXTENSIONS = new Set([
   ".oga",
 ]);
 
-function isAudioPath(path: string | undefined): boolean {
-  if (!path) {
+function isAudioPath(pathLocal: string | undefined): boolean {
+  if (!pathLocal) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(path);
+  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
   for (const ext of AUDIO_EXTENSIONS) {
     if (lower.endsWith(ext)) {
       return true;

@@ -21,17 +21,21 @@ type MockGoogleLiveConnectParams = {
 };
 
 const { connectMock, createTokenMock, session } = vi.hoisted(() => {
-  const session: MockGoogleLiveSession = {
+  const sessionValue: MockGoogleLiveSession = {
     close: vi.fn(),
     sendClientContent: vi.fn(),
     sendRealtimeInput: vi.fn(),
     sendToolResponse: vi.fn(),
   };
-  const connectMock = vi.fn(async (_params: MockGoogleLiveConnectParams) => session);
-  const createTokenMock = vi.fn(async (_params: unknown) => ({
+  const connectMockLocal = vi.fn(async (_params: MockGoogleLiveConnectParams) => sessionValue);
+  const createTokenMockLocal = vi.fn(async (_params: unknown) => ({
     name: "auth_tokens/browser-session",
   }));
-  return { connectMock, createTokenMock, session };
+  return {
+    connectMock: connectMockLocal,
+    createTokenMock: createTokenMockLocal,
+    session: sessionValue,
+  };
 });
 
 vi.mock("./google-genai-runtime.js", () => ({
@@ -365,7 +369,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("creates constrained browser sessions for Google Live Talk", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 
-    const session = await provider.createBrowserSession?.({
+    const sessionLocal = await provider.createBrowserSession?.({
       providerConfig: {
         apiKey: "gemini-key",
         model: "gemini-live-2.5-flash-preview",
@@ -420,9 +424,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0]?.behavior).toBe(
       "NON_BLOCKING",
     );
-    expect(session?.provider).toBe("google");
-    expect(session?.transport).toBe("provider-websocket");
-    const websocketSession = session as {
+    expect(sessionLocal?.provider).toBe("google");
+    expect(sessionLocal?.transport).toBe("provider-websocket");
+    const websocketSession = sessionLocal as {
       audio: {
         inputEncoding: string;
         inputSampleRateHz: number;

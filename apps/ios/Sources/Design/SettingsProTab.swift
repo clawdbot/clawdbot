@@ -45,6 +45,7 @@ struct SettingsProTab: View {
     @State var gatewayPassword = ""
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
+    @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
     @State var showGatewayProblemDetails = false
@@ -82,6 +83,7 @@ struct SettingsProTab: View {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
+                self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -107,8 +109,16 @@ struct SettingsProTab: View {
             .onChange(of: self.gatewayPassword) { _, newValue in
                 self.persistGatewayPassword(newValue)
             }
+            .onChange(of: self.setupCode) { _, newValue in
+                if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.stagedGatewaySetupLink = nil
+                }
+            }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
+            }
+            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+                self.applyPendingGatewaySetupLinkIfNeeded()
             }
         }
         .sheet(isPresented: self.$showGatewayProblemDetails) {

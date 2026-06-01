@@ -224,6 +224,23 @@ function liveCodexNpmPluginLane() {
   );
 }
 
+function liveMcpCodeModeGatewayLane() {
+  return liveLane(
+    "live-mcp-code-mode-gateway",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-mcp-code-mode-gateway",
+    {
+      cacheKey: "mcp-code-mode-gateway",
+      e2eImageKind: "functional",
+      needsLiveImage: false,
+      provider: "openai",
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
 function kitchenSinkRpcLane() {
   return serviceLane(
     "kitchen-sink-rpc",
@@ -386,6 +403,15 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
+  serviceLane(
+    "mcp-code-mode-gateway",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-code-mode-gateway",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
+      weight: 3,
+    },
+  ),
   lane(
     "agent-bundle-mcp-tools",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agent-bundle-mcp-tools",
@@ -534,6 +560,7 @@ export const tailLanes = [
     },
   ),
   liveCodexNpmPluginLane(),
+  liveMcpCodeModeGatewayLane(),
   livePluginToolLane(),
   liveLane(
     "live-acp-bind-claude",

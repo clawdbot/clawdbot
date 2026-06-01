@@ -920,6 +920,99 @@ function rewriteKnownModelRefs(
 
 const RETIRED_MODEL_REF_MESSAGE =
   'Configured retired model refs are no longer in the bundled catalogs; run "openclaw doctor --fix" to upgrade them.';
+const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
+
+function hasCanonicalOpenAIProvider(providers: Record<string, unknown>): boolean {
+  return Object.keys(providers).some(
+    (providerId) => normalizeProviderId(providerId) === OPENAI_PROVIDER_ID,
+  );
+}
+
+function normalizeLegacyOpenAIResponsesApi(
+  providerId: string,
+  provider: Record<string, unknown>,
+  changes: string[],
+): { value: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  const next: Record<string, unknown> = { ...provider };
+  if (next.api === LEGACY_OPENAI_CODEX_RESPONSES_API) {
+    next.api = OPENAI_CHATGPT_RESPONSES_API;
+    changes.push(
+      `Moved models.providers.${providerId}.api "${LEGACY_OPENAI_CODEX_RESPONSES_API}" → "${OPENAI_CHATGPT_RESPONSES_API}".`,
+    );
+    changed = true;
+  }
+
+  if (Array.isArray(provider.models)) {
+    let modelsChanged = false;
+    const nextModels = provider.models.map((model, index) => {
+      const modelRecord = getRecord(model);
+      if (!modelRecord || modelRecord.api !== LEGACY_OPENAI_CODEX_RESPONSES_API) {
+        return model;
+      }
+      modelsChanged = true;
+      changes.push(
+        `Moved models.providers.${providerId}.models[${index}].api "${LEGACY_OPENAI_CODEX_RESPONSES_API}" → "${OPENAI_CHATGPT_RESPONSES_API}".`,
+      );
+      return {
+        ...modelRecord,
+        api: OPENAI_CHATGPT_RESPONSES_API,
+      };
+    });
+    if (modelsChanged) {
+      next.models = nextModels;
+      changed = true;
+    }
+  }
+
+  return { value: next, changed };
+}
+
+function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes: string[]): void {
+  const models = getRecord(raw.models);
+  const providers = getRecord(models?.providers);
+  if (!models || !providers) {
+    return;
+  }
+
+  let providersChanged = false;
+  for (const [providerId, providerValue] of Object.entries({ ...providers })) {
+    const provider = getRecord(providerValue);
+    if (!provider) {
+      continue;
+    }
+
+    const normalized = normalizeLegacyOpenAIResponsesApi(providerId, provider, changes);
+    if (normalizeProviderId(providerId) !== LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+      if (normalized.changed) {
+        providers[providerId] = normalized.value;
+        providersChanged = true;
+      }
+      continue;
+    }
+
+    if (!hasCanonicalOpenAIProvider(providers)) {
+      providers[OPENAI_PROVIDER_ID] = normalized.value;
+      changes.push(
+        `Moved models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} → models.providers.${OPENAI_PROVIDER_ID}.`,
+      );
+    } else {
+      changes.push(
+        `Removed models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} because models.providers.${OPENAI_PROVIDER_ID} already exists.`,
+      );
+    }
+    delete providers[providerId];
+    providersChanged = true;
+  }
+
+  if (providersChanged) {
+    models.providers = providers;
+  }
+}
+
 const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
   "agents",
   "plugins",
@@ -935,6 +1028,46 @@ const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
 }));
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "models.providers.openai-codex->models.providers.openai",
+    describe: "Move legacy OpenAI Codex provider config to canonical OpenAI provider config",
+    legacyRules: [
+      {
+        path: ["models", "providers"],
+        message:
+          'models.providers.openai-codex is legacy; run "openclaw doctor --fix" to move it to models.providers.openai.',
+        match: (value) => {
+          const providers = getRecord(value);
+          return providers
+            ? Object.keys(providers).some(
+                (providerId) => normalizeProviderId(providerId) === LEGACY_OPENAI_CODEX_PROVIDER_ID,
+              )
+            : false;
+        },
+      },
+      {
+        path: ["models", "providers"],
+        message:
+          'openai-codex-responses is legacy; run "openclaw doctor --fix" to use openai-chatgpt-responses.',
+        match: (value) => {
+          const providers = getRecord(value);
+          return providers
+            ? Object.values(providers).some((providerValue) => {
+                const provider = getRecord(providerValue);
+                return (
+                  provider?.api === LEGACY_OPENAI_CODEX_RESPONSES_API ||
+                  (Array.isArray(provider?.models) &&
+                    provider.models.some(
+                      (model) => getRecord(model)?.api === LEGACY_OPENAI_CODEX_RESPONSES_API,
+                    ))
+                );
+              })
+            : false;
+        },
+      },
+    ],
+    apply: migrateLegacyOpenAICodexProvider,
+  }),
   defineLegacyConfigMigration({
     id: "models.retired-model-refs",
     describe: "Upgrade retired model refs to current catalog entries",

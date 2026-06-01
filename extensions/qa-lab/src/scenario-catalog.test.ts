@@ -405,6 +405,15 @@ describe("qa scenario catalog", () => {
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "control UI descriptor registration requires id, surface, label, and valid optional fields",
     );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "hosted media resolver registration missing resolver",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "model catalog provider registration missing provider",
+    );
     expect(
       config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
     ).toBe(true);

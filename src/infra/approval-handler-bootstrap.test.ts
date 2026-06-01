@@ -116,7 +116,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
     const result = await Promise.race([
       startTestBootstrap({ channelRuntime }).then((cleanup) => ({ cleanup })),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 50);
+      }),
     ]);
 
     expect(result).not.toBe("timeout");

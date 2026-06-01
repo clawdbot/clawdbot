@@ -23,6 +23,7 @@ export type {
   DiscordComponentBuildResult,
   DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
+  DiscordComponentCallbackDataKind,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
   DiscordComponentModalFieldType,

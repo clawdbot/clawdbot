@@ -549,6 +549,16 @@ export const VisibleRepliesSchema = z
     return value;
   });
 
+export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+
+export const MentionPatternsPolicySchema = z
+  .object({
+    mode: MentionPatternsModeSchema.optional(),
+    allowIn: z.array(z.string()).optional(),
+    denyIn: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),

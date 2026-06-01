@@ -14,6 +14,27 @@ function readTranscriptLines(transcriptPath: string): string[] {
   return lines;
 }
 
+async function appendHelloAndRequireId(transcriptPath: string): Promise<string> {
+  const appended = await appendInjectedAssistantMessageToTranscript({
+    transcriptPath,
+    message: "hello",
+  });
+  expect(appended.ok).toBe(true);
+  expect(appended.messageId).toBeTypeOf("string");
+  const messageId = appended.messageId;
+  if (!messageId) {
+    throw new Error("expected appended message id");
+  }
+  expect(messageId.length).toBeGreaterThan(0);
+  return messageId;
+}
+
+function readLastTranscriptRecord(transcriptPath: string): Record<string, unknown> {
+  const lines = readTranscriptLines(transcriptPath);
+  expect(lines.length).toBeGreaterThanOrEqual(2);
+  return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+}
+
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
@@ -24,22 +45,8 @@ describe("gateway chat.inject transcript writes", () => {
     });
 
     try {
-      const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
-        message: "hello",
-      });
-      expect(appended.ok).toBe(true);
-      expect(appended.messageId).toBeTypeOf("string");
-      const messageId = appended.messageId;
-      if (!messageId) {
-        throw new Error("expected appended message id");
-      }
-      expect(messageId.length).toBeGreaterThan(0);
-
-      const lines = readTranscriptLines(transcriptPath);
-      expect(lines.length).toBeGreaterThanOrEqual(2);
-
-      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+      await appendHelloAndRequireId(transcriptPath);
+      const last = readLastTranscriptRecord(transcriptPath);
       expect(last.type).toBe("message");
 
       // The regression we saw: raw jsonl appends omitted this field entirely.
@@ -71,20 +78,8 @@ describe("gateway chat.inject transcript writes", () => {
         "utf-8",
       );
 
-      const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
-        message: "hello",
-      });
-      expect(appended.ok).toBe(true);
-      expect(appended.messageId).toBeTypeOf("string");
-      const messageId = appended.messageId;
-      if (!messageId) {
-        throw new Error("expected appended message id");
-      }
-      expect(messageId.length).toBeGreaterThan(0);
-
-      const lines = readTranscriptLines(transcriptPath);
-      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+      const messageId = await appendHelloAndRequireId(transcriptPath);
+      const last = readLastTranscriptRecord(transcriptPath);
 
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", messageId);

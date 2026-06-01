@@ -13,6 +13,8 @@ export async function withServer(handler: RequestListener, fn: (baseUrl: string)
   try {
     await fn(`http://127.0.0.1:${address.port}`);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }

@@ -80,6 +80,94 @@ describe("presentation capability limits", () => {
     ]);
   });
 
+  it("applies callback byte limits to typed command actions", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Keep",
+          action: { type: "command", command: "/codex plugins menu" },
+        },
+        {
+          label: "Drop",
+          action: { type: "command", command: `/codex plugins enable ${"x".repeat(20)}` },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 24,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Keep",
+        action: { type: "command", command: "/codex plugins menu" },
+      },
+    ]);
+  });
+
+  it("keeps typed button actions when only the legacy fallback exceeds value limits", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Keep",
+          value: "legacy-value-that-is-too-long",
+          action: { type: "command", command: "/short" },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 8,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Keep",
+        action: { type: "command", command: "/short" },
+      },
+    ]);
+  });
+
+  it("keeps typed select actions when only the legacy fallback exceeds value limits", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            options: [
+              {
+                label: "Keep",
+                value: "legacy-value-that-is-too-long",
+                action: { type: "callback", value: "short" },
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        limits: {
+          selects: {
+            maxValueBytes: 8,
+          },
+        },
+      },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "select",
+        options: [{ label: "Keep", action: { type: "callback", value: "short" } }],
+      },
+    ]);
+  });
+
   it("adapts button and select blocks without touching text blocks", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {

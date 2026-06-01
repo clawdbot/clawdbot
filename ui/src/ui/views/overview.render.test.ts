@@ -18,7 +18,6 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,

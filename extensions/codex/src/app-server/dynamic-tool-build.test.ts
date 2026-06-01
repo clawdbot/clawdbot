@@ -179,6 +179,32 @@ describe("Codex app-server dynamic tool build", () => {
     expect(resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
   });
 
+  it("quarantines unreadable tool entries before Codex-specific filtering", async () => {
+    const messageTool = createRuntimeDynamicTool("message");
+    const sourceTools = new Proxy([messageTool] as RuntimeDynamicToolForTest[], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("fuzzplugin tool entry getter exploded");
+        }
+        if (property === "1") {
+          return messageTool;
+        }
+        if (property === "length") {
+          return 2;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    setOpenClawCodingToolsFactoryForTests(() => sourceTools);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
+  });
+
   it("limits Codex memory flush runs to managed read and write tools", async () => {
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {

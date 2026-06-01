@@ -118,7 +118,9 @@ describe("serveOpenClawChannelMcp shutdown", () => {
 
     transport.onclose?.();
     await servePromise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(unhandledRejections).toStrictEqual([]);
     expect(bridgeState.close).toHaveBeenCalledTimes(1);

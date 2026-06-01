@@ -24,6 +24,7 @@ type StartupThinkLevel =
   | "adaptive"
   | "max";
 
+/** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
   cfg: OpenClawConfig;
   bindHost: string;
@@ -74,6 +75,7 @@ export async function logGatewayStartup(params: {
   }
 }
 
+/** Normalize model thinking values that are useful in the compact startup log. */
 function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {
   return value === "off" ||
     value === "minimal" ||
@@ -87,6 +89,7 @@ function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefin
     : undefined;
 }
 
+/** Resolve explicit thinking overrides from agent defaults and per-model config. */
 function resolveExplicitStartupThinking(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -104,6 +107,7 @@ function resolveExplicitStartupThinking(params: {
   );
 }
 
+/** True when a configured catalog entry disables reasoning for the startup model. */
 function isConfiguredReasoningDisabled(params: {
   catalog: readonly ModelCatalogEntry[];
   provider: string;
@@ -115,6 +119,7 @@ function isConfiguredReasoningDisabled(params: {
   );
 }
 
+/** Format model thinking and fast-mode details for the Gateway startup banner. */
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -158,6 +163,7 @@ export function formatAgentModelStartupDetails(params: {
   return `thinking=${thinking}, fast=${fast.enabled ? "on" : "off"}`;
 }
 
+/** Format plugin count/list and optional startup duration for the ready log line. */
 function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,

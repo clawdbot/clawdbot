@@ -28,6 +28,7 @@ export type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  MentionPatternsPolicyConfig,
   MSTeamsChannelConfig,
   MSTeamsCloudName,
   MSTeamsConfig,

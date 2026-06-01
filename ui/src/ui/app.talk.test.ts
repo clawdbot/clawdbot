@@ -115,4 +115,41 @@ describe("OpenClawApp Talk controls", () => {
       { role: "user", text: "Second request", isStreaming: false },
     ]);
   });
+
+  it("routes Talk startup failures through the chat error surface", async () => {
+    startMock.mockRejectedValueOnce(new Error("voice provider missing"));
+    const { OpenClawApp } = await import("./app.ts");
+    const app = Object.create(OpenClawApp.prototype) as {
+      chatError: string | null;
+      client: unknown;
+      connected: boolean;
+      lastError: string | null;
+      realtimeTalkActive: boolean;
+      realtimeTalkConversation: Array<{ role: string; text: string; isStreaming: boolean }>;
+      realtimeTalkDetail: string | null;
+      realtimeTalkStatus: string;
+      realtimeTalkSession: { stop(): void } | null;
+      realtimeTalkTranscript: string | null;
+      sessionKey: string;
+    };
+    Object.defineProperties(app, {
+      chatError: { value: "previous chat failure", writable: true },
+      client: { value: { request: vi.fn() }, writable: true },
+      connected: { value: true, writable: true },
+      lastError: { value: "previous chat failure", writable: true },
+      realtimeTalkActive: { value: false, writable: true },
+      realtimeTalkConversation: { value: [], writable: true },
+      realtimeTalkDetail: { value: null, writable: true },
+      realtimeTalkSession: { value: null, writable: true },
+      realtimeTalkStatus: { value: "idle", writable: true },
+      realtimeTalkTranscript: { value: null, writable: true },
+      sessionKey: { value: "main", writable: true },
+    });
+
+    await OpenClawApp.prototype.toggleRealtimeTalk.call(app as never);
+
+    expect(app.lastError).toBe("voice provider missing");
+    expect(app.chatError).toBe("voice provider missing");
+    expect(stopMock).toHaveBeenCalledOnce();
+  });
 });

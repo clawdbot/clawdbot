@@ -65,9 +65,11 @@ async function listWorkspaceSkillMarkdownFiles(
   const skillFiles: string[] = [];
   const queue: string[] = [skillsRoot];
   const visitedDirs = new Set<string>();
-  let totalDirVisits = 0;
 
-  while (queue.length > 0 && skillFiles.length < maxFiles && totalDirVisits++ < maxTotalDirVisits) {
+  for (const _ of Array.from({ length: maxTotalDirVisits })) {
+    if (queue.length === 0 || skillFiles.length >= maxFiles) {
+      break;
+    }
     const dir = queue.shift()!;
     const dirRealPath = (await realpathWithTimeout(dir)) ?? path.resolve(dir);
     if (visitedDirs.has(dirRealPath)) {

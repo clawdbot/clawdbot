@@ -29,6 +29,22 @@ export interface AcpReplaySessions {
   updated_at: number;
 }
 
+export interface AcpSessions {
+  agent: string;
+  backend: string;
+  cwd: string | null;
+  identity_json: string | null;
+  last_activity_at: number;
+  last_error: string | null;
+  mode: string;
+  runtime_options_json: string | null;
+  runtime_session_name: string;
+  session_id: string | null;
+  session_key: string;
+  state: string;
+  updated_at: number;
+}
+
 export interface AgentDatabases {
   agent_id: string;
   last_seen_at: number;
@@ -128,6 +144,29 @@ export interface CaptureSessions {
   started_at: number;
 }
 
+export interface ChannelIngressEvents {
+  account_id: string;
+  attempts: Generated<number>;
+  channel_id: string;
+  claim_owner: string | null;
+  claim_token: string | null;
+  claimed_at: number | null;
+  completed_at: number | null;
+  completed_metadata_json: string | null;
+  event_id: string;
+  failed_at: number | null;
+  failed_reason: string | null;
+  lane_key: string | null;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  metadata_json: string | null;
+  payload_json: string;
+  queue_name: string;
+  received_at: number;
+  status: string;
+  updated_at: number;
+}
+
 export interface ChannelPairingAllowEntries {
   account_id: string;
   channel_key: string;
@@ -208,6 +247,8 @@ export interface CronJobs {
   delivery_account_id: string | null;
   delivery_best_effort: number | null;
   delivery_channel: string | null;
+  delivery_completion_mode: string | null;
+  delivery_completion_to: string | null;
   delivery_mode: string | null;
   delivery_thread_id: string | null;
   delivery_to: string | null;
@@ -902,6 +943,7 @@ export interface WorkspaceSetupState {
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
+  acp_sessions: AcpSessions;
   agent_databases: AgentDatabases;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
@@ -912,6 +954,7 @@ export interface DB {
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
   capture_sessions: CaptureSessions;
+  channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
   command_log_entries: CommandLogEntries;

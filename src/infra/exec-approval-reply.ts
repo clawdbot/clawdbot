@@ -162,6 +162,7 @@ function buildApprovalInteractiveButtons(
 ): InteractiveReplyButton[] {
   return descriptors.map((descriptor) => ({
     label: descriptor.label,
+    action: { type: "command", command: descriptor.command },
     value: descriptor.command,
     style: descriptor.style,
   }));
@@ -172,6 +173,7 @@ function buildApprovalPresentationButtons(
 ): MessagePresentationButton[] {
   return descriptors.map((descriptor) => ({
     label: descriptor.label,
+    action: { type: "command", command: descriptor.command },
     value: descriptor.command,
     style: descriptor.style,
   }));

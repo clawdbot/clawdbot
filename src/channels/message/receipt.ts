@@ -37,6 +37,7 @@ function appendUnique(values: string[], value: string | undefined): void {
   }
 }
 
+/** Builds one normalized receipt from platform send results or nested adapter receipts. */
 export function createMessageReceiptFromOutboundResults(params: {
   results: readonly MessageReceiptInputResult[];
   kind?: MessageReceiptPartKind;
@@ -46,6 +47,7 @@ export function createMessageReceiptFromOutboundResults(params: {
 }): MessageReceipt {
   const parts = params.results.flatMap((result, resultIndex) => {
     if (hasNestedReceiptData(result.receipt)) {
+      // Preserve adapter-supplied receipt parts first; only fill missing thread/reply metadata.
       return result.receipt.parts.length > 0
         ? result.receipt.parts.map((part, partIndex) => ({
             ...part,
@@ -108,10 +110,12 @@ export function createMessageReceiptFromOutboundResults(params: {
   };
 }
 
+/** Lists unique platform message ids in receipt order. */
 export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[] {
   return normalizeUniqueStringEntries(receipt.platformMessageIds);
 }
 
+/** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
   const primary = receipt.primaryPlatformMessageId?.trim();
   if (primary) {

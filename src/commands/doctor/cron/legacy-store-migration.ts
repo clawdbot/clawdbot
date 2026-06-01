@@ -1,14 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { tryCronScheduleIdentity } from "../../../cron/schedule-identity.js";
+import { isRecord } from "../../../../packages/normalization-core/src/record-coerce.js";
+import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
+import { normalizeCronStaggerMs } from "../../../cron/stagger.js";
 import type {
   CronConfigJobRuntimeEntry,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
 import type { CronStoreFile } from "../../../cron/types.js";
-import { isRecord } from "../../../../packages/normalization-core/src/record-coerce.js";
-import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";
@@ -63,6 +64,71 @@ function parseCronStateFile(raw: string): {
   } catch {
     return null;
   }
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  return normalizeOptionalString(record[key]);
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  return coerceFiniteScheduleNumber(record[key]);
+}
+
+function legacySchedulePayloadFromRecord(
+  schedule: Record<string, unknown>,
+):
+  | { kind: "at"; at: string }
+  | { kind: "every"; everyMs: number; anchorMs?: number }
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
+  | undefined {
+  const rawKind = readString(schedule, "kind")?.toLowerCase();
+  const expr = readString(schedule, "expr") ?? readString(schedule, "cron");
+  const at = readString(schedule, "at");
+  const atMs = readNumber(schedule, "atMs");
+  const everyMs = readNumber(schedule, "everyMs");
+  const anchorMs = readNumber(schedule, "anchorMs");
+  const tz = readString(schedule, "tz");
+  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+  const kind =
+    rawKind === "at" || rawKind === "every" || rawKind === "cron"
+      ? rawKind
+      : at || atMs !== undefined
+        ? "at"
+        : everyMs !== undefined
+          ? "every"
+          : expr
+            ? "cron"
+            : undefined;
+
+  if (kind === "at") {
+    return at
+      ? { kind: "at", at }
+      : atMs !== undefined
+        ? { kind: "at", at: String(atMs) }
+        : undefined;
+  }
+  if (kind === "every" && everyMs !== undefined) {
+    return { kind: "every", everyMs, anchorMs };
+  }
+  if (kind === "cron" && expr) {
+    return { kind: "cron", expr, tz, staggerMs };
+  }
+  return undefined;
+}
+
+function tryLegacyCronScheduleIdentity(job: Record<string, unknown>): string | undefined {
+  const schedule =
+    job.schedule && typeof job.schedule === "object" && !Array.isArray(job.schedule)
+      ? legacySchedulePayloadFromRecord(job.schedule as Record<string, unknown>)
+      : legacySchedulePayloadFromRecord(job);
+  if (!schedule) {
+    return undefined;
+  }
+  return JSON.stringify({
+    version: 1,
+    enabled: typeof job.enabled === "boolean" ? job.enabled : true,
+    schedule,
+  });
 }
 
 function getRawCronJobs(parsed: unknown): unknown[] {
@@ -135,7 +201,8 @@ function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown)
   job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
   if (
     typeof entry.scheduleIdentity === "string" &&
-    entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
+    entry.scheduleIdentity !==
+      tryLegacyCronScheduleIdentity(job as unknown as Record<string, unknown>)
   ) {
     ensureJobStateObject(job);
     job.state.nextRunAtMs = undefined;

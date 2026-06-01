@@ -437,7 +437,7 @@ export async function monitorLineProvider(
             logVerbose(`line: received ${body.events.length} webhook events`);
             void Promise.resolve()
               .then(() => match.target.bot.handleWebhook(body))
-              .catch((err) => {
+              .catch((err: unknown) => {
                 match.target.runtime.error?.(
                   danger(`line webhook dispatch failed: ${String(err)}`),
                 );

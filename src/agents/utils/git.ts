@@ -79,8 +79,8 @@ function splitRef(url: string): { repo: string; ref?: string } {
 function parseGenericGitUrl(url: string): GitSource | null {
   const { repo: repoWithoutRef, ref } = splitRef(url);
   let repo = repoWithoutRef;
-  let host = "";
-  let path = "";
+  let host;
+  let path;
 
   const scpLikeMatch = repoWithoutRef.match(/^git@([^:]+):(.+)$/);
   if (scpLikeMatch) {

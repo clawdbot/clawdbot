@@ -123,9 +123,10 @@ describe("web tool runtime context", () => {
 
   it("treats resolved global provider owners as explicit selections", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
-    const { resolveWebSearchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
+    const { resolveWebSearchToolRuntimeContext: resolveWebSearchToolRuntimeContextLocal } =
+      await import("./web-tool-runtime-context.js");
 
-    const resolved = resolveWebSearchToolRuntimeContext({
+    const resolved = resolveWebSearchToolRuntimeContextLocal({
       config: { tools: { web: { search: { provider: "brave" } } } },
     });
 

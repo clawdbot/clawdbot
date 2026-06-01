@@ -8,7 +8,7 @@ import {
   resolveEffectiveDebugProxyUrl,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
@@ -31,6 +31,9 @@ export {
 } from "./gateway-metadata.js";
 
 const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
+const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
+const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
+const DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS = 240;
 const discordDnsLookup = createDiscordDnsLookup();
 
 type DiscordGatewayWebSocketCtor = new (
@@ -55,6 +58,13 @@ type DiscordGatewayRegistrationState = {
   ws?: unknown;
   isConnecting?: boolean;
 };
+type DiscordGatewayTransportErrorDetails = {
+  name?: string;
+  message: string;
+  code?: string;
+  closeCode?: number;
+  statusCode?: number;
+};
 
 function assignGatewayClient(
   plugin: discordGateway.GatewayPlugin,
@@ -66,6 +76,94 @@ function assignGatewayClient(
 function hasGatewaySocketStarted(plugin: discordGateway.GatewayPlugin): boolean {
   const state = plugin as unknown as DiscordGatewayRegistrationState;
   return state.ws != null || state.isConnecting === true;
+}
+
+function readStringProperty(value: object, key: string): string | undefined {
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "string" && property ? property : undefined;
+}
+
+function readNumberProperty(value: object, key: string): number | undefined {
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "number" && Number.isFinite(property) ? property : undefined;
+}
+
+function describeDiscordGatewayTransportError(error: Error): DiscordGatewayTransportErrorDetails {
+  const code = readStringProperty(error, "code");
+  const closeCode = readNumberProperty(error, "closeCode");
+  const statusCode = readNumberProperty(error, "statusCode");
+  return {
+    ...(error.name ? { name: error.name } : {}),
+    message: error.message,
+    ...(code ? { code } : {}),
+    ...(closeCode !== undefined ? { closeCode } : {}),
+    ...(statusCode !== undefined ? { statusCode } : {}),
+  };
+}
+
+function formatDiscordGatewayCloseReason(reason: Buffer): string {
+  if (!reason.length) {
+    return "<empty>";
+  }
+  const text = reason.toString("utf8").replaceAll(/\s+/g, " ").trim();
+  if (!text) {
+    return `<${reason.length} bytes>`;
+  }
+  if (text.length <= DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
+}
+
+function formatDiscordGatewayTransportErrorLog(params: {
+  flowId: string;
+  error: DiscordGatewayTransportErrorDetails;
+}): string {
+  const details = [
+    `flow=${params.flowId}`,
+    params.error.name ? `name=${params.error.name}` : undefined,
+    params.error.code ? `code=${params.error.code}` : undefined,
+    typeof params.error.closeCode === "number" ? `closeCode=${params.error.closeCode}` : undefined,
+    typeof params.error.statusCode === "number"
+      ? `statusCode=${params.error.statusCode}`
+      : undefined,
+    `message=${params.error.message}`,
+  ].filter(Boolean);
+  return `discord: gateway websocket error ${details.join(" ")}`;
+}
+
+function formatDiscordGatewayTransportCloseLog(params: {
+  flowId: string;
+  code: number;
+  reason: Buffer;
+  lastError?: DiscordGatewayTransportErrorDetails;
+}): string {
+  const receiverLimit =
+    params.code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE ||
+    params.lastError?.code === DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE;
+  const details = [
+    `flow=${params.flowId}`,
+    `code=${params.code}`,
+    `reasonBytes=${params.reason.length}`,
+    `reason=${formatDiscordGatewayCloseReason(params.reason)}`,
+    params.lastError?.code ? `lastErrorCode=${params.lastError.code}` : undefined,
+    params.lastError?.message ? `lastError=${params.lastError.message}` : undefined,
+    receiverLimit ? "hint=possible ws receiver buffered-parts limit" : undefined,
+  ].filter(Boolean);
+  return `discord: gateway websocket closed ${details.join(" ")}`;
+}
+
+function shouldLogDiscordGatewayTransportClose(params: {
+  code: number;
+  reason: Buffer;
+  lastError?: DiscordGatewayTransportErrorDetails;
+}): boolean {
+  return (
+    params.code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE ||
+    (params.code !== 1000 && params.code !== 1001) ||
+    params.reason.length > 0 ||
+    params.lastError !== undefined
+  );
 }
 
 type ResolveDiscordGatewayIntentsParams = {
@@ -141,7 +239,9 @@ function createGatewayPlugin(params: {
             info,
             usedFallback: false,
           }))
-          .catch((error) => resolveGatewayInfoWithFallback({ runtime: params.runtime, error }));
+          .catch((error: unknown) =>
+            resolveGatewayInfoWithFallback({ runtime: params.runtime, error }),
+          );
         this.gatewayInfo = resolved.info;
         this.gatewayInfoUsedFallback = resolved.usedFallback;
       }
@@ -170,6 +270,7 @@ function createGatewayPlugin(params: {
         handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
       });
+      let lastTransportError: DiscordGatewayTransportErrorDetails | undefined;
       const emitTransportActivity = () => {
         if ((this as unknown as { ws?: unknown }).ws !== socket) {
           return;
@@ -195,17 +296,37 @@ function createGatewayPlugin(params: {
         });
       });
       socket.on?.("close", (code: number, reason: Buffer) => {
+        const closeReason = Buffer.isBuffer(reason) ? reason : Buffer.from(String(reason ?? ""));
         captureWsEvent({
           url,
           direction: "local",
           kind: "ws-close",
           flowId: wsFlowId,
           closeCode: code,
-          payload: reason,
+          payload: closeReason,
           meta: { subsystem: "discord-gateway" },
         });
+        if (
+          shouldLogDiscordGatewayTransportClose({
+            code,
+            reason: closeReason,
+            lastError: lastTransportError,
+          })
+        ) {
+          params.runtime?.log?.(
+            warn(
+              formatDiscordGatewayTransportCloseLog({
+                flowId: wsFlowId,
+                code,
+                reason: closeReason,
+                lastError: lastTransportError,
+              }),
+            ),
+          );
+        }
       });
       socket.on?.("error", (error: Error) => {
+        lastTransportError = describeDiscordGatewayTransportError(error);
         captureWsEvent({
           url,
           direction: "local",
@@ -214,6 +335,11 @@ function createGatewayPlugin(params: {
           errorText: error.message,
           meta: { subsystem: "discord-gateway" },
         });
+        params.runtime?.log?.(
+          warn(
+            formatDiscordGatewayTransportErrorLog({ flowId: wsFlowId, error: lastTransportError }),
+          ),
+        );
       });
       if ("binaryType" in socket) {
         try {

@@ -388,7 +388,11 @@ export async function acquireQaCredentialLease<TPayload>(
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
   const sleepImpl =
-    opts.sleepImpl ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    opts.sleepImpl ??
+    ((ms: number) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();

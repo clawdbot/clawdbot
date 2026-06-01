@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -8,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { FILE_TYPE_SNIFF_MAX_BYTES } from "../../media/mime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   attachmentProbeFs,

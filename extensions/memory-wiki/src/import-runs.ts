@@ -114,8 +114,9 @@ export async function listMemoryWikiImportRuns(
   const importRunsDir = resolveImportRunsDir(config.vault.path);
   const entries = await fs
     .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error?.code === "ENOENT") {
+    .catch((error: unknown) => {
+      const code = asRecord(error)?.code;
+      if (code === "ENOENT") {
         return [];
       }
       throw error;

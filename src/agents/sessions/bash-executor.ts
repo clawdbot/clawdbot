@@ -7,8 +7,8 @@
  */
 
 import type { WriteStream } from "node:fs";
+import { sanitizeBinaryOutput } from "../shell-utils.js";
 import { stripAnsi } from "../utils/ansi.js";
-import { sanitizeBinaryOutput } from "../utils/shell.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createPrivateTempWriteStream } from "./tools/private-temp-file.js";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.js";

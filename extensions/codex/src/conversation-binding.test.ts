@@ -1096,7 +1096,9 @@ describe("codex conversation binding", () => {
         },
         { timeoutMs: 50 },
       );
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(result).toEqual({
         handled: true,

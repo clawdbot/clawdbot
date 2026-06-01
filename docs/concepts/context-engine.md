@@ -91,7 +91,7 @@ For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by pr
 OpenClaw calls two optional subagent lifecycle hooks:
 
 <ParamField path="prepareSubagentSpawn" type="method">
-  Prepare shared context state before a child run starts. The hook receives parent/child session keys, `contextMode` (`isolated` or `fork`), available transcript ids/files, and optional TTL. If it returns a rollback handle, OpenClaw calls it when spawn fails after preparation succeeds.
+  Prepare shared context state before a child run starts. The hook receives parent/child session keys, `contextMode` (`isolated` or `fork`), available transcript ids/files, and optional TTL. If it returns a rollback handle, OpenClaw calls it when spawn fails after preparation succeeds. Native subagent spawns that request `lightContext` and resolve to `contextMode="isolated"` intentionally skip this hook so the child starts from the lightweight bootstrap context without context-engine-managed pre-spawn state.
 </ParamField>
 <ParamField path="onSubagentEnded" type="method">
   Clean up when a subagent session completes or is swept.

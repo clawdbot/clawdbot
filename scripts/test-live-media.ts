@@ -420,7 +420,7 @@ export async function runCli(argv: string[]): Promise<number> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
     .then((code) => process.exit(code))
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exit(1);
     });

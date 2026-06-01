@@ -74,7 +74,7 @@ export function createMatrixThreadContextResolver(params: {
 
     const rootEvent = await params.client
       .getEvent(input.roomId, input.threadRootId)
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.logVerboseMessage(
           `matrix: failed resolving thread root room=${input.roomId} id=${input.threadRootId}: ${String(err)}`,
         );

@@ -112,6 +112,7 @@ export async function runDoctorConfigPreflight(
     migrateState?: boolean;
     migrateLegacyConfig?: boolean;
     repairPrefixedConfig?: boolean;
+    recoverCorruptTargetStore?: boolean;
     invalidConfigNote?: string | false;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
@@ -168,7 +169,11 @@ export async function runDoctorConfigPreflight(
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
       await loadDoctorStateMigrations();
     const stateResult = snapshot.valid
-      ? await autoMigrateLegacyState({ cfg: baseConfig, env: process.env })
+      ? await autoMigrateLegacyState({
+          cfg: baseConfig,
+          env: process.env,
+          recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+        })
       : await autoMigrateLegacyTaskStateSidecars({ env: process.env });
     noteStateMigrationResult(stateResult);
   }

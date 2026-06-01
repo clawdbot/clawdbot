@@ -4034,6 +4034,32 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
+  it("replaces a copied local openclaw package with the host peer symlink", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const fakeHostRoot = suiteTempRootTracker.makeTempDir();
+    resolveRootMock.mockReturnValue(fakeHostRoot);
+
+    writePluginWithPeerDeps(pluginDir, { openclaw: "*" });
+    fs.mkdirSync(path.join(pluginDir, "node_modules", "openclaw"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "node_modules", "openclaw", "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.5.31" }),
+      "utf-8",
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(true);
+    expect(warnings).toHaveLength(0);
+    if (!result.ok) {
+      return;
+    }
+
+    const symlinkPath = path.join(result.targetDir, "node_modules", "openclaw");
+    expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
+  });
+
   it("does not create a symlink when peerDependencies is empty", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     resolveRootMock.mockReturnValue(suiteTempRootTracker.makeTempDir());

@@ -30,7 +30,7 @@ export function waitFor<T>(params: {
       try {
         result = params.read();
       } catch (error) {
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
         return;
       }
       if (result !== null) {
@@ -48,7 +48,9 @@ export function waitFor<T>(params: {
 }
 
 export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function resolveSpawnPty() {
@@ -166,4 +168,18 @@ export function startPty(
   };
   opts.activeRuns?.push(run);
   return run;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

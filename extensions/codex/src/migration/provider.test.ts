@@ -1462,7 +1462,7 @@ describe("buildCodexMigrationProvider", () => {
         if (method === "plugin/list" && isTarget) {
           targetPluginListCalls += 1;
           if (targetPluginListCalls === 1) {
-            return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+            return pluginList([], "openai-bundled");
           }
           return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
         }
@@ -2225,12 +2225,15 @@ function createConfigRuntime(
   } as unknown as MigrationProviderContext["runtime"];
 }
 
-function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
+function pluginList(
+  plugins: v2.PluginSummary[],
+  marketplaceName = CODEX_PLUGINS_MARKETPLACE_NAME,
+): v2.PluginListResponse {
   return {
     marketplaces: [
       {
-        name: CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: "/marketplaces/openai-curated",
+        name: marketplaceName,
+        path: `/marketplaces/${marketplaceName}`,
         interface: null,
         plugins,
       },

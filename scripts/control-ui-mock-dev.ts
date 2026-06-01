@@ -7,6 +7,10 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../ui/vite.config.ts";
 
 type CliOptions = {
   host: string;
@@ -190,6 +194,64 @@ function searchPrefixes(term: string): string[] {
 
 function createChatPickerScenario(): ControlUiMockGatewayScenario {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const workspaceFiles = [
+    {
+      missing: false,
+      name: "AGENTS.md",
+      path: "/mock/workspace/AGENTS.md",
+      size: 2148,
+      updatedAtMs: baseTime - 120_000,
+    },
+    {
+      missing: false,
+      name: "plan.md",
+      path: "/mock/workspace/plan.md",
+      size: 912,
+      updatedAtMs: baseTime - 90_000,
+    },
+    {
+      missing: false,
+      name: "notes/context.md",
+      path: "/mock/workspace/notes/context.md",
+      size: 1620,
+      updatedAtMs: baseTime - 30_000,
+    },
+  ];
+  const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
+    match: { agentId },
+    response: {
+      agentId,
+      files: workspaceFiles,
+      workspace: "/mock/workspace",
+    },
+  }));
+  const workspaceFileContentByName = new Map([
+    [
+      "AGENTS.md",
+      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
+    ],
+    [
+      "plan.md",
+      "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
+    ],
+    [
+      "notes/context.md",
+      "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
+    ],
+  ]);
+  const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
+    workspaceFiles.map((file) => ({
+      match: { agentId, name: file.name },
+      response: {
+        agentId,
+        file: {
+          ...file,
+          content: workspaceFileContentByName.get(file.name) ?? "",
+        },
+        workspace: "/mock/workspace",
+      },
+    })),
+  );
   const sessions = [
     sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
     ...buildSessionRows({
@@ -219,6 +281,12 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     defaultAgentId: "openclaw-mock",
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "agents.files.get": {
+        cases: workspaceFileCases,
+      },
+      "agents.files.list": {
+        cases: workspaceListCases,
+      },
       "sessions.list": {
         cases: [
           ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
@@ -291,7 +359,7 @@ const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
   clearScreen: false,
-  configFile: false,
+  configFile: path.join(uiRoot, "vite.config.ts"),
   define: {
     OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("mock"),
   },
@@ -301,6 +369,9 @@ const server = await createServer({
   },
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
+  resolve: {
+    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+  },
   root: uiRoot,
   server: {
     host: options.host,

@@ -13,7 +13,9 @@ function resetWarningFilterInstallState(): void {
 }
 
 async function flushWarnings(): Promise<void> {
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 describe("warning filter", () => {

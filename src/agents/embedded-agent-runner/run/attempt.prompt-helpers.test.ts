@@ -40,12 +40,12 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 import {
   forgetPromptBuildDrainCacheForRun,
   resolvePromptSubmissionSkipReason,
-  resolveAttemptPrependSystemContext,
+  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
 } from "./attempt.prompt-helpers.js";
 
-describe("resolveAttemptPrependSystemContext", () => {
-  it("prepends active video task guidance ahead of hook system context", () => {
+describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
+  it("joins active media task guidance for user triggers", () => {
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
       "Image task hint",
     );
@@ -56,10 +56,9 @@ describe("resolveAttemptPrependSystemContext", () => {
       "Music task hint",
     );
 
-    const result = resolveAttemptPrependSystemContext({
+    const result = resolveAttemptMediaTaskSystemPromptAddition({
       sessionKey: "agent:main:discord:direct:123",
       trigger: "user",
-      hookPrependSystemContext: "Hook system context",
     });
 
     expect(
@@ -71,12 +70,10 @@ describe("resolveAttemptPrependSystemContext", () => {
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).toHaveBeenCalledWith("agent:main:discord:direct:123");
-    expect(result).toBe(
-      "Image task hint\n\nActive task hint\n\nMusic task hint\n\nHook system context",
-    );
+    expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
   });
 
-  it("skips active video task guidance for non-user triggers", () => {
+  it("returns undefined (no media guidance) for non-user/manual triggers", () => {
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
       "Should not be used",
@@ -90,10 +87,9 @@ describe("resolveAttemptPrependSystemContext", () => {
       "Should not be used",
     );
 
-    const result = resolveAttemptPrependSystemContext({
+    const result = resolveAttemptMediaTaskSystemPromptAddition({
       sessionKey: "agent:main:discord:direct:123",
       trigger: "heartbeat",
-      hookPrependSystemContext: "Hook system context",
     });
 
     expect(
@@ -105,7 +101,7 @@ describe("resolveAttemptPrependSystemContext", () => {
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).not.toHaveBeenCalled();
-    expect(result).toBe("Hook system context");
+    expect(result).toBeUndefined();
   });
 });
 

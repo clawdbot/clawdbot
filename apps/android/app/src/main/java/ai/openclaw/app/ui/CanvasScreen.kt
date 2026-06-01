@@ -26,6 +26,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.util.concurrent.atomic.AtomicReference
 
+/** Hosts the gateway canvas WebView and attaches it to the runtime canvas controller. */
 @SuppressLint("SetJavaScriptEnabled")
 @Suppress("DEPRECATION")
 @Composable
@@ -151,6 +152,9 @@ fun CanvasScreen(
           }
         }
 
+      // The listener accepts any WebView origin at registration time because
+      // gateway A2UI URLs are dynamic; CanvasActionTrust validates the live URL
+      // before forwarding each message.
       val bridge =
         CanvasA2UIActionBridge(
           isTrustedPage = { viewModel.isTrustedCanvasActionUrl(currentPageUrlRef.get()) },
@@ -184,6 +188,7 @@ fun CanvasScreen(
   )
 }
 
+/** Filters WebView postMessage payloads before they enter the A2UI action handler. */
 internal class CanvasA2UIActionBridge(
   private val isTrustedPage: () -> Boolean,
   private val onMessage: (String) -> Unit,

@@ -21,13 +21,13 @@ type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>
 function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
-  onBlockReplyFlush: ReturnType<typeof vi.fn>;
+  onBlockReplyFlush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
   trace: ReturnType<typeof vi.fn>;
   isEnabled: ReturnType<typeof vi.fn>;
 } {
-  const onBlockReplyFlush = vi.fn();
+  const onBlockReplyFlush = vi.fn<() => Promise<void>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();

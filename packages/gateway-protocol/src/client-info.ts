@@ -22,10 +22,12 @@ export const GATEWAY_CLIENT_IDS = {
   PROBE: "openclaw-probe",
 } as const;
 
+/** Stable gateway client ids used on the wire during hello/connect handshakes. */
 export type GatewayClientId = (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
 
 // Back-compat naming (internal): these values are IDs, not display names.
 export const GATEWAY_CLIENT_NAMES = GATEWAY_CLIENT_IDS;
+/** Compatibility alias for internal callers that still use "name" terminology. */
 export type GatewayClientName = GatewayClientId;
 
 export const GATEWAY_CLIENT_MODES = {
@@ -38,8 +40,10 @@ export const GATEWAY_CLIENT_MODES = {
   TEST: "test",
 } as const;
 
+/** Coarse client category used for gateway policy and diagnostics. */
 export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
 
+/** Client metadata sent during gateway connection setup. */
 export type GatewayClientInfo = {
   id: GatewayClientId;
   displayName?: string;
@@ -55,11 +59,13 @@ export const GATEWAY_CLIENT_CAPS = {
   TOOL_EVENTS: "tool-events",
 } as const;
 
+/** Optional capability advertised by clients during gateway handshake. */
 export type GatewayClientCap = (typeof GATEWAY_CLIENT_CAPS)[keyof typeof GATEWAY_CLIENT_CAPS];
 
 const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(GATEWAY_CLIENT_IDS));
 const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY_CLIENT_MODES));
 
+/** Normalizes untrusted client ids and rejects unknown values. */
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
@@ -70,10 +76,12 @@ export function normalizeGatewayClientId(raw?: string | null): GatewayClientId |
     : undefined;
 }
 
+/** Normalizes legacy client-name fields through the canonical client-id registry. */
 export function normalizeGatewayClientName(raw?: string | null): GatewayClientName | undefined {
   return normalizeGatewayClientId(raw);
 }
 
+/** Normalizes untrusted client modes and rejects unknown values. */
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
@@ -84,6 +92,7 @@ export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMo
     : undefined;
 }
 
+/** Checks a client-advertised capability list without treating missing caps as errors. */
 export function hasGatewayClientCap(
   caps: string[] | null | undefined,
   cap: GatewayClientCap,

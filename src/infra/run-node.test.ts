@@ -2796,7 +2796,7 @@ describe("run-node script", () => {
         }) as unknown as NodeJS.Process;
 
         const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
-        expect(fakeProcess.kill).toHaveBeenCalledWith(987654, 0);
+        expect(fakeProcess["kill"]).toHaveBeenCalledWith(987654, 0);
         expect(JSON.parse(await fs.readFile(path.join(lockDir, "owner.json"), "utf-8")).pid).toBe(
           4242,
         );

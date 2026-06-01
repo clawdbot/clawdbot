@@ -189,20 +189,20 @@ async function runIMessageCliJson(
     let stderr = "";
     let killEscalation: ReturnType<typeof setTimeout> | null = null;
     let settled = false;
-    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
+    const clearTimers = (optionsValue: { keepKillEscalation?: boolean } = {}): void => {
       if (timer) {
         clearTimeout(timer);
       }
-      if (killEscalation && !options.keepKillEscalation) {
+      if (killEscalation && !optionsValue.keepKillEscalation) {
         clearTimeout(killEscalation);
       }
     };
-    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
+    const fail = (error: Error, optionsLocal: { keepKillEscalation?: boolean } = {}): void => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimers(options);
+      clearTimers(optionsLocal);
       reject(error);
     };
     const succeed = (value: Record<string, unknown>): void => {

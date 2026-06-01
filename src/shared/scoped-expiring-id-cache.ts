@@ -8,6 +8,7 @@ function resolveNonNegativeInteger(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
 }
 
+/** Creates a scoped TTL cache for ids that should expire independently per scope. */
 export function createScopedExpiringIdCache<
   TScope extends string | number,
   TId extends string | number,
@@ -21,6 +22,7 @@ export function createScopedExpiringIdCache<
 
   function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
     for (const [id, timestamp] of entry) {
+      // Equality stays live so callers can treat ttlMs as an inclusive age limit.
       if (now - timestamp > ttlMs) {
         entry.delete(id);
       }
@@ -41,6 +43,7 @@ export function createScopedExpiringIdCache<
       }
       entry.set(idKey, now);
       if (entry.size > cleanupThreshold) {
+        // Avoid per-record scans until a scope grows past the caller's expected steady state.
         cleanupExpired(scopeKey, entry, now);
       }
     },

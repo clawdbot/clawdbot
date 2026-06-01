@@ -215,7 +215,7 @@ function resolvePreferredMatrixStorageRoot(params: {
     };
   }
 
-  let siblingEntries: fs.Dirent[] = [];
+  let siblingEntries: fs.Dirent[];
   try {
     siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
   } catch {

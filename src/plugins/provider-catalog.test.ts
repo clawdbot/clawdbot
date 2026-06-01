@@ -227,4 +227,30 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       expected: createPairedCatalogProviders("secret-key"),
     });
   });
+
+  it("omits unreadable paired provider catalog entries", async () => {
+    const unreadableProvider = new Proxy(createProviderConfig(), {
+      ownKeys() {
+        throw new Error("mockplugin provider config keys failed");
+      },
+    });
+    const result = await buildPairedProviderApiKeyCatalog({
+      ctx: createCatalogContext({
+        apiKeys: { fuzzplugin: "secret-key" },
+      }),
+      providerId: "fuzzplugin",
+      buildProviders: async () =>
+        ({
+          readable: createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
+          unreadable: unreadableProvider,
+        }) as Record<string, ModelProviderConfig>,
+    });
+
+    expectPairedCatalogProviders(result, {
+      readable: {
+        ...createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
+        apiKey: "secret-key",
+      },
+    });
+  });
 });

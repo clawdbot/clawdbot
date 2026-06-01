@@ -262,10 +262,10 @@ function runInfo(runId, repo) {
   );
 }
 
-function printEntries(entries, ref, workflow, run) {
-  if (run) {
-    console.log(`Run: ${run.url}`);
-    console.log(`Workflow: ${run.workflowName}`);
+function printEntries(entries, ref, workflow, runValue) {
+  if (runValue) {
+    console.log(`Run: ${runValue.url}`);
+    console.log(`Workflow: ${runValue.workflowName}`);
   }
   console.log(`Ref: ${ref}`);
   console.log(
@@ -318,8 +318,8 @@ function main() {
     );
   } else {
     const repo = options.repo || detectRepo();
-    const run = runInfo(options.input, repo);
-    const ref = options.ref || run.headSha || run.headBranch;
+    const runLocal = runInfo(options.input, repo);
+    const ref = options.ref || runLocal.headSha || runLocal.headBranch;
     const outputDir =
       options.dir || path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${options.input}`);
     const artifactNames = downloadDockerArtifacts(options.input, repo, outputDir);
@@ -329,7 +329,7 @@ function main() {
     );
     console.log(`Artifacts: ${artifactNames.join(", ")}`);
     console.log(`Downloaded: ${outputDir}`);
-    printEntries(entries, ref, options.workflow, run);
+    printEntries(entries, ref, options.workflow, runLocal);
   }
 }
 

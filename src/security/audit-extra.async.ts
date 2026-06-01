@@ -221,7 +221,7 @@ async function listInstalledPluginDirs(params: {
   if (!st.ok || !st.isDir) {
     return { extensionsDir, pluginDirs: [] };
   }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
     params.onReadError?.(err);
     return [];
   });
@@ -891,7 +891,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
       dirPath: pluginPath,
       includeFiles: forcedScanEntries,
       summaryCache: params.summaryCache,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       findings.push({
         checkId: "plugins.code_safety.scan_failed",
         severity: "warn",
@@ -971,7 +971,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       const summary = await getCodeSafetySummary({
         dirPath: skillDir,
         summaryCache: params.summaryCache,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",

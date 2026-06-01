@@ -1,9 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
-import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
-import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
-import { inferLegacyName } from "../../../cron/service/normalize.js";
-import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,6 +6,11 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
+import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
+import { inferCronJobName } from "../../../cron/service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import { hasLegacyOpenAICodexCronModelRef, migrateLegacyCronPayload } from "./payload-migration.js";
 
@@ -35,6 +35,7 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
+  removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
 };
 
 function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
@@ -237,8 +238,9 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   let mutated = false;
   const keptJobs: Array<Record<string, unknown>> = [];
+  const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
 
-  for (const raw of jobs) {
+  for (const [sourceIndex, raw] of jobs.entries()) {
     const jobIssues = new Set<CronStoreIssueKey>();
     const trackIssue = (key: CronStoreIssueKey) => {
       if (jobIssues.has(key)) {
@@ -277,7 +279,7 @@ export function normalizeStoredCronJobs(
 
     const nameRaw = raw.name;
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
-      raw.name = inferLegacyName({
+      raw.name = inferCronJobName({
         schedule: raw.schedule as never,
         payload: raw.payload as never,
       });
@@ -354,6 +356,15 @@ export function normalizeStoredCronJobs(
       }
       if (payloadRecord.kind === "agentTurn" && copyTopLevelAgentTurnFields(raw, payloadRecord)) {
         mutated = true;
+      }
+      if (payloadRecord.kind === "systemEvent" && !normalizeOptionalString(payloadRecord.text)) {
+        const message = normalizeOptionalString(payloadRecord.message);
+        if (message) {
+          payloadRecord.text = message;
+          delete payloadRecord.message;
+          mutated = true;
+          trackIssue("legacyPayloadKind");
+        }
       }
     }
 
@@ -573,6 +584,7 @@ export function normalizeStoredCronJobs(
       invalidPersistedReason === "invalid-schedule"
     ) {
       trackIssue("invalidSchedule");
+      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
     }
@@ -581,6 +593,7 @@ export function normalizeStoredCronJobs(
       invalidPersistedReason === "invalid-payload"
     ) {
       trackIssue("invalidPayload");
+      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
     }
@@ -591,5 +604,5 @@ export function normalizeStoredCronJobs(
     jobs.splice(0, jobs.length, ...keptJobs);
   }
 
-  return { issues, jobs, mutated };
+  return { issues, jobs, mutated, removedJobs };
 }

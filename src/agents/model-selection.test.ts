@@ -2529,6 +2529,72 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
     });
 
+    it("treats params.thinking=false as off (#74374)", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: false },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
+    it('treats params.thinking="disabled" as off (#74374)', () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: "disabled" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
+    it('treats params.thinking="none" as off', () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: "none" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
     it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {
       const cfg = {
         agents: {

@@ -32,6 +32,7 @@ const unitFastCandidateGlobs = [
   "src/link-understanding/**/*.test.ts",
   "src/logging/**/*.test.ts",
   "packages/markdown-core/src/**/*.test.ts",
+  "packages/media-core/src/**/*.test.ts",
   "packages/terminal-core/src/**/*.test.ts",
   "src/media/**/*.test.ts",
   "src/media-generation/**/*.test.ts",
@@ -67,7 +68,12 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
+  "src/acp/control-plane/manager.backend-failover.test.ts",
+  "src/acp/control-plane/manager.failover.test.ts",
+  "src/acp/control-plane/manager.runtime-config.test.ts",
+  "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.test.ts",
+  "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/session-mapper.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
@@ -75,8 +81,16 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.stop-reason.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
+  "src/acp/translator.final-snapshots.test.ts",
+  "src/acp/translator.prompt-size.test.ts",
+  "src/acp/translator.replay.test.ts",
+  "src/acp/translator.session-config.test.ts",
+  "src/acp/translator.session-list.test.ts",
   "src/acp/translator.session-rate-limit.test.ts",
+  "src/acp/translator.session-setup.test.ts",
+  "src/acp/translator.session-snapshot.test.ts",
   "src/acp/translator.set-session-mode.test.ts",
+  "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "extensions/canvas/src/host/server.test.ts",
   "src/crestodian/audit.test.ts",
@@ -247,7 +261,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
+    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers|manager\.test-helpers)/u,
   },
   {
     code: "vitest-mock-api",
@@ -400,7 +414,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
       : collectUnitFastTestCandidates(cwd);
   const analysis = candidates.map((file) => {
     const absolutePath = path.join(cwd, file);
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(absolutePath, "utf8");
     } catch {
@@ -477,7 +491,7 @@ function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
     return false;
   }
 
-  let source = "";
+  let source;
   try {
     source = fs.readFileSync(path.join(cwd, normalized), "utf8");
   } catch {

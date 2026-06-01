@@ -148,7 +148,9 @@ describe("compileMemoryWikiVault", () => {
         activePageReads += 1;
         maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
         try {
-          await new Promise((resolve) => setTimeout(resolve, 5));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 5);
+          });
           return await originalReadFile(...args);
         } finally {
           activePageReads -= 1;

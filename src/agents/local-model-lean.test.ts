@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "./local-model-lean.js";
+import {
+  filterLocalModelLeanTools,
+  isLocalModelLeanEnabled,
+  resolveLocalModelLeanPreserveToolNames,
+} from "./local-model-lean.js";
 
 function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
@@ -28,6 +32,65 @@ describe("local model lean tool filtering", () => {
         tools: tools(["read", "browser", "cron", "message", "exec"]),
         config: cfg,
         agentId: "gemma",
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+  });
+
+  it("keeps explicitly preserved tools when lean mode is enabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        preserveToolNames: ["browser", "cron", "group:messaging"],
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+  });
+
+  it("adds reply-required message tools to lean preservation", () => {
+    expect(
+      resolveLocalModelLeanPreserveToolNames({
+        forceMessageTool: true,
+      }),
+    ).toEqual(["message"]);
+    expect(
+      resolveLocalModelLeanPreserveToolNames({
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).toEqual(["message"]);
+    expect(
+      resolveLocalModelLeanPreserveToolNames({
+        toolNames: ["group:messaging"],
+        forceMessageTool: true,
+      }),
+    ).toEqual(["group:messaging", "message"]);
+  });
+
+  it("does not treat wildcard preservation as disabling lean mode", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        preserveToolNames: ["*"],
       }).map((tool) => tool.name),
     ).toEqual(["read", "exec"]);
   });

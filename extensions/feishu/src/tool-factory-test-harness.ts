@@ -77,5 +77,6 @@ export function createToolFactoryHarness(cfg: OpenClawPluginApi["config"]) {
   return {
     api: api as OpenClawPluginApi,
     resolveTool,
+    registered,
   };
 }

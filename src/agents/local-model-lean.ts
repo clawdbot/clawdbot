@@ -2,8 +2,32 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+
+function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
+  if (!names) {
+    return new Set();
+  }
+  return new Set(
+    expandToolGroups([...names])
+      .map(normalizeToolName)
+      .filter((name) => name && name !== "*"),
+  );
+}
+
+export function resolveLocalModelLeanPreserveToolNames(params?: {
+  toolNames?: Iterable<string>;
+  forceMessageTool?: boolean;
+  sourceReplyDeliveryMode?: string;
+}): string[] {
+  const names = [...(params?.toolNames ?? [])];
+  if (params?.forceMessageTool || params?.sourceReplyDeliveryMode === "message_tool_only") {
+    names.push("message");
+  }
+  return [...new Set(names)];
+}
 
 function resolveLocalModelLeanAgentId(params: {
   config?: OpenClawConfig;
@@ -43,9 +67,17 @@ export function filterLocalModelLeanTools(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  preserveToolNames?: Iterable<string>;
 }): AnyAgentTool[] {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;
   }
-  return params.tools.filter((tool) => !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(tool.name));
+  const preservedToolNames = resolvePreservedLocalModelLeanToolNames(params.preserveToolNames);
+  return params.tools.filter((tool) => {
+    const normalizedName = normalizeToolName(tool.name);
+    return (
+      preservedToolNames.has(normalizedName) ||
+      !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
+    );
+  });
 }

@@ -203,7 +203,7 @@ export async function runServiceUninstall(params: {
     }
   }
 
-  let loaded = false;
+  let loaded;
   try {
     loaded = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -222,8 +222,6 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
   }
-
-  loaded = false;
   try {
     loaded = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -447,7 +445,7 @@ export async function runServiceStop(params: {
     return;
   }
 
-  let stopped = false;
+  let stopped;
   try {
     stopped = await params.service.isLoaded({ env: process.env });
   } catch {

@@ -45,11 +45,11 @@ async function ensureDmComponentAuthorized(params: {
     allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
     cfg: ctx.cfg,
     token: ctx.token,
-    readStoreAllowFrom: async ({ accountId, dmPolicy }) =>
+    readStoreAllowFrom: async ({ accountId, dmPolicy: dmPolicyLocal }) =>
       await readChannelIngressStoreAllowFromForDmPolicy({
         provider: "discord",
         accountId,
-        dmPolicy,
+        dmPolicy: dmPolicyLocal,
       }),
     eventKind: "button",
   });

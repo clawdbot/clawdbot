@@ -11,7 +11,7 @@ import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stre
 import type { Model } from "../../llm/types.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
-import { isSessionWriteLockTimeoutError } from "../session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
@@ -179,7 +179,7 @@ async function appendGooglePromptCacheEntry(
   try {
     await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
   } catch (err) {
-    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockTimeoutError(err)) {
+    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockAcquireError(err)) {
       throw err;
     }
     // ignore persistence failures

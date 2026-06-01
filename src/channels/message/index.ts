@@ -1,7 +1,11 @@
 export { deriveDurableFinalDeliveryRequirements } from "./capabilities.js";
 export { defineChannelMessageAdapter } from "./adapter.js";
 export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
-export { createDurableInboundReceiveJournal } from "./durable-receive.js";
+export {
+  createDurableInboundReceiveJournal,
+  createDurableInboundReceiveJournalFromQueue,
+} from "./durable-receive.js";
+export { createChannelIngressQueue } from "./ingress-queue.js";
 export {
   listDeclaredChannelMessageLiveCapabilities,
   listDeclaredDurableFinalCapabilities,
@@ -48,8 +52,20 @@ export type {
   DurableInboundReceiveJournal,
   DurableInboundReceiveJournalOptions,
   DurableInboundReceivePendingRecord,
+  DurableInboundReceiveQueueJournalOptions,
   DurableInboundReceiveReleaseOptions,
 } from "./durable-receive.js";
+export type {
+  ChannelIngressQueue,
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueEnqueueResult,
+  ChannelIngressQueueFailedRecord,
+  ChannelIngressQueuePruneOptions,
+  ChannelIngressQueueRecord,
+  CreateChannelIngressQueueOptions,
+} from "./ingress-queue.js";
 export type {
   ChannelMessageOutboundBridgeAdapter,
   ChannelMessageOutboundBridgeResult,

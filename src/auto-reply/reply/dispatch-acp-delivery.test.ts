@@ -780,6 +780,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(routeParams.threadId).toBe("101.000");
   });
 
+  it("uses inherited account and thread metadata for routed ACP replies", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:main:feishu:direct:ou_123",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "feishu",
+      originatingTo: "user:ou_123",
+      originatingAccountId: "work",
+      originatingThreadId: "thread:om_123",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ accountId?: string; threadId?: string | number }]
+    >;
+    expect(routeParams.accountId).toBe("work");
+    expect(routeParams.threadId).toBe("thread:om_123");
+  });
+
   it("routes ACP replies when cfg.channels is missing", async () => {
     await expectVisibleChatBlockRoutesToAccount({} as OpenClawConfig, undefined);
   });

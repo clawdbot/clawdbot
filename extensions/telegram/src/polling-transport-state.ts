@@ -67,7 +67,7 @@ export class TelegramPollingTransportState {
   // Fire-and-forget close used on the rebuild path so the polling cycle is not
   // blocked by a slow destroy. The error path is logged but never rethrown.
   #closeTransportAsync(transport: TelegramTransport, context: string) {
-    void transport.close().catch((err) => {
+    void transport.close().catch((err: unknown) => {
       this.opts.log(
         `[telegram][diag] failed to close transport (${context}): ${formatCloseError(err)}`,
       );

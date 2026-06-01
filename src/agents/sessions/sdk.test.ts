@@ -185,7 +185,7 @@ describe("createAgentSession tool defaults", () => {
 
     const handleAgentEvent = (
       session as unknown as { handleAgentEvent(event: unknown): Promise<void> }
-    ).handleAgentEvent;
+    )["handleAgentEvent"];
 
     await handleAgentEvent({
       type: "message_end",

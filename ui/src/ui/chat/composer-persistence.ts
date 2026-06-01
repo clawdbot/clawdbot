@@ -6,6 +6,8 @@ import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;
 const MAX_STORED_QUEUE_ITEMS = 50;
+export const INTERRUPTED_MODEL_WAIT_ERROR =
+  "Model selection was interrupted. Review and retry when ready.";
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
@@ -182,7 +184,9 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     return null;
   }
   const sendState =
-    item.sendState === "failed" || item.sendState === "waiting-reconnect"
+    item.sendState === "failed" ||
+    item.sendState === "waiting-reconnect" ||
+    item.sendState === "waiting-model"
       ? item.sendState
       : undefined;
   return {
@@ -240,6 +244,9 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   }
   if (entry.sendState === "failed" || entry.sendState === "waiting-reconnect") {
     item.sendState = entry.sendState;
+  } else if (entry.sendState === "waiting-model") {
+    item.sendState = "failed";
+    item.sendError = INTERRUPTED_MODEL_WAIT_ERROR;
   }
   const sendError = normalizeOptionalString(entry.sendError);
   if (sendError) {
@@ -352,6 +359,78 @@ export function persistChatComposerState(
     writeStore(storage, key, store);
   } catch {
     // Best-effort only: quota and privacy-mode storage errors should not break chat.
+  }
+}
+
+export function removeStoredChatComposerQueueItem(
+  state: Pick<
+    ChatComposerPersistenceState,
+    "settings" | "assistantAgentId" | "agentsList" | "hello"
+  >,
+  sessionKey: string,
+  id: string,
+): void {
+  const storage = getSafeSessionStorage();
+  if (!storage || !sessionKey.trim() || !id.trim()) {
+    return;
+  }
+  try {
+    const key = storageKeyForGateway(state.settings?.gatewayUrl);
+    const store = readStore(storage, key);
+    const storeSessionKey = storageSessionKeyForState(state, sessionKey);
+    const session = normalizeStoredSession(store.sessions[storeSessionKey]);
+    if (!session?.queue?.length) {
+      return;
+    }
+    const queue = session.queue.filter((item) => item.id !== id);
+    if (!session.draft && queue.length === 0) {
+      delete store.sessions[storeSessionKey];
+    } else {
+      store.sessions[storeSessionKey] = {
+        ...(session.draft ? { draft: session.draft } : {}),
+        ...(queue.length ? { queue } : {}),
+        updatedAt: Date.now(),
+      };
+    }
+    writeStore(storage, key, store);
+  } catch {
+    // Best-effort only: queue persistence must not make cancellation fail.
+  }
+}
+
+export function persistStoredChatComposerQueue(
+  state: Pick<
+    ChatComposerPersistenceState,
+    "settings" | "assistantAgentId" | "agentsList" | "hello"
+  >,
+  sessionKey: string,
+  queue: ChatQueueItem[],
+): void {
+  const storage = getSafeSessionStorage();
+  if (!storage || !sessionKey.trim()) {
+    return;
+  }
+  try {
+    const key = storageKeyForGateway(state.settings?.gatewayUrl);
+    const store = readStore(storage, key);
+    const storeSessionKey = storageSessionKeyForState(state, sessionKey);
+    const session = normalizeStoredSession(store.sessions[storeSessionKey]);
+    const serializedQueue = queue
+      .slice(0, MAX_STORED_QUEUE_ITEMS)
+      .map(serializeQueueItem)
+      .filter((item): item is ChatQueueItem => item !== null);
+    if (!session?.draft && serializedQueue.length === 0) {
+      delete store.sessions[storeSessionKey];
+    } else {
+      store.sessions[storeSessionKey] = {
+        ...(session?.draft ? { draft: session.draft } : {}),
+        ...(serializedQueue.length ? { queue: serializedQueue } : {}),
+        updatedAt: Date.now(),
+      };
+    }
+    writeStore(storage, key, store);
+  } catch {
+    // Best-effort only: queue persistence must not make send recovery fail.
   }
 }
 

@@ -75,9 +75,11 @@ export function runAgentHarnessLlmInputHook(params: {
   if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
     return;
   }
-  void hookRunner.runLlmInput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`llm_input hook failed: ${String(error)}`);
-  });
+  void hookRunner
+    .runLlmInput(params.event, buildAgentHookContext(params.ctx))
+    .catch((error: unknown) => {
+      log.warn(`llm_input hook failed: ${String(error)}`);
+    });
 }
 
 export function runAgentHarnessLlmOutputHook(params: {
@@ -89,9 +91,11 @@ export function runAgentHarnessLlmOutputHook(params: {
   if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
     return;
   }
-  void hookRunner.runLlmOutput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`llm_output hook failed: ${String(error)}`);
-  });
+  void hookRunner
+    .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
+    .catch((error: unknown) => {
+      log.warn(`llm_output hook failed: ${String(error)}`);
+    });
 }
 
 async function executeAgentHarnessAgentEndHook(params: {

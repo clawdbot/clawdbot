@@ -1130,7 +1130,7 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     let err: unknown;
-    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught) => {
+    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -1145,7 +1145,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1164,7 +1164,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let err: unknown;
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -1185,7 +1185,7 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     let err: unknown;
-    await callGateway({ method: "health" }).catch((caught) => {
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -1213,7 +1213,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1241,7 +1241,7 @@ describe("callGateway error details", () => {
     };
 
     let err: unknown;
-    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
     expect(isGatewayTransportError(err)).toBe(true);
@@ -1264,7 +1264,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught) => {
+    const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1285,7 +1285,7 @@ describe("callGateway error details", () => {
 
       vi.useFakeTimers();
       let errMessage = "";
-      const promise = callGateway({ method: "health" }).catch((caught) => {
+      const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
         errMessage = caught instanceof Error ? caught.message : String(caught);
       });
 
@@ -1306,9 +1306,11 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
+    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch(
+      (caught: unknown) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
 
     await vi.advanceTimersByTimeAsync(1);
     expect(errMessage).toBe("");

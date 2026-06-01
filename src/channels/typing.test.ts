@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
+type TypingHarnessOptions = TypingCallbackOverrides & { useDefaultMaxDuration?: boolean };
 type TypingHarnessStart = ReturnType<typeof vi.fn<() => Promise<void>>>;
 type TypingHarnessError = ReturnType<typeof vi.fn<(err: unknown) => void>>;
 
@@ -11,18 +12,30 @@ const flushMicrotasks = async () => {
   await Promise.resolve();
 };
 
+const activeCallbacks = new Set<ReturnType<typeof createTypingCallbacks>>();
+
+afterEach(async () => {
+  for (const callbacks of activeCallbacks) {
+    callbacks.onCleanup?.();
+  }
+  activeCallbacks.clear();
+  await flushMicrotasks();
+  vi.useRealTimers();
+});
+
 async function withFakeTimers(run: () => Promise<void>) {
   vi.useFakeTimers();
   try {
     await run();
   } finally {
+    await flushMicrotasks();
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
   }
 }
 
-function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
+function createTypingHarness(overrides: TypingHarnessOptions = {}) {
   const start: TypingHarnessStart = vi.fn<() => Promise<void>>(async () => {});
   const stop: TypingHarnessStart = vi.fn<() => Promise<void>>(async () => {});
   const onStartError: TypingHarnessError = vi.fn<(err: unknown) => void>();
@@ -52,22 +65,19 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
     ...(overrides.keepaliveIntervalMs !== undefined
       ? { keepaliveIntervalMs: overrides.keepaliveIntervalMs }
       : {}),
-    ...(overrides.maxDurationMs !== undefined ? { maxDurationMs: overrides.maxDurationMs } : {}),
+    ...(overrides.maxDurationMs !== undefined
+      ? { maxDurationMs: overrides.maxDurationMs }
+      : overrides.useDefaultMaxDuration
+        ? {}
+        : { maxDurationMs: 0 }),
   });
+  activeCallbacks.add(callbacks);
   return { start, stop, onStartError, onStopError, callbacks };
 }
 
 describe("createTypingCallbacks", () => {
   beforeEach(() => {
     vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    if (vi.isFakeTimers()) {
-      vi.clearAllTimers();
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("invokes start on reply start", async () => {
@@ -353,7 +363,7 @@ describe("createTypingCallbacks", () => {
 
     it("uses default 60s TTL when not specified", async () => {
       await withFakeTimers(async () => {
-        const { stop, callbacks } = createTypingHarness();
+        const { stop, callbacks } = createTypingHarness({ useDefaultMaxDuration: true });
 
         await callbacks.onReplyStart();
 

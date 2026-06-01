@@ -98,8 +98,9 @@ export function markGatewayModelCatalogStaleForReload(): void {
 // isolated unit tests harder. Keep this intentionally obscure.
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   resetGatewayModelCatalogState();
-  const { resetModelCatalogCacheForTest } = await loadModelCatalogModule();
-  resetModelCatalogCacheForTest();
+  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+    await loadModelCatalogModule();
+  resetModelCatalogCacheForTestLocal();
 }
 
 export async function loadGatewayModelCatalog(

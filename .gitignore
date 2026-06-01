@@ -42,6 +42,7 @@ apps/macos-mlx-tts/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/*/.build/
+packages/*/dist/
 apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/

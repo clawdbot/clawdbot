@@ -7,6 +7,7 @@ export type LazyPromiseLoaderOptions = {
   cacheRejections?: boolean;
 };
 
+/** Creates a small promise cache that dedupes concurrent loads and can be cleared manually. */
 export function createLazyPromiseLoader<T>(
   load: () => T | Promise<T>,
   options: LazyPromiseLoaderOptions = {},
@@ -17,6 +18,8 @@ export function createLazyPromiseLoader<T>(
     const loaded = Promise.resolve().then(load);
     if (options.cacheRejections !== true) {
       void loaded.catch(() => {
+        // Failed lazy loads are usually transient import/runtime issues; evict the exact
+        // rejected promise so the next caller can retry without racing a newer load.
         if (promise === loaded) {
           promise = undefined;
         }
@@ -36,6 +39,7 @@ export function createLazyPromiseLoader<T>(
   };
 }
 
+/** Convenience wrapper for dynamic-import-shaped loaders. */
 export function createLazyImportLoader<T>(
   load: () => Promise<T>,
   options?: LazyPromiseLoaderOptions,

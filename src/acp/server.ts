@@ -14,7 +14,11 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { createFileAcpEventLedger, resolveDefaultAcpEventLedgerPath } from "./event-ledger.js";
+import {
+  createSqliteAcpEventLedger,
+  migrateFileAcpEventLedgerToSqlite,
+  resolveDefaultAcpEventLedgerPath,
+} from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
@@ -116,7 +120,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   if (!readiness.ready) {
     rejectGatewayReady(new Error("gateway event loop readiness timeout"));
   }
-  await gatewayReady.catch((err) => {
+  await gatewayReady.catch((err: unknown) => {
     shutdown();
     throw err;
   });
@@ -127,9 +131,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
-  const eventLedger = createFileAcpEventLedger({
+  await migrateFileAcpEventLedgerToSqlite({
     filePath: resolveDefaultAcpEventLedgerPath(process.env),
+    archiveSource: true,
   });
+  const eventLedger = createSqliteAcpEventLedger();
 
   void new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
@@ -265,7 +271,7 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
     );
   }
   const opts = parseArgs(argv);
-  serveAcpGateway(opts).catch((err) => {
+  serveAcpGateway(opts).catch((err: unknown) => {
     console.error(String(err));
     process.exit(1);
   });

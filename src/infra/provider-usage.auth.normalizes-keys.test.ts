@@ -164,6 +164,18 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         return token ? { token } : null;
       }
 
+      if (params.provider === "anthropic") {
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        const token = resolveToken({
+          providerIds: ["anthropic"],
+          envDirect: [params.context.env?.ANTHROPIC_API_KEY],
+        });
+        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
+      }
+
       if (params.provider === "minimax") {
         const token = resolveToken({
           providerIds: ["minimax"],
@@ -723,6 +735,26 @@ describe("resolveProviderAuths key normalization", () => {
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
+    });
+  });
+
+  it("does not use standard Anthropic API keys for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
+      },
+      expected: [],
+    });
+  });
+
+  it("allows Anthropic setup tokens from API-key sources for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
     });
   });
 

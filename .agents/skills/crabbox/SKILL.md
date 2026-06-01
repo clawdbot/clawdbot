@@ -223,6 +223,21 @@ Read the JSON summary and the Testbox line. Useful fields:
 - Actions run URL/id from the Testbox output
 - `exitCode`
 
+Use provider-backed cache volumes only for rebuildable caches, not secrets or
+checkout state. On Blacksmith, Crabbox forwards them as sticky disks:
+
+```sh
+node scripts/crabbox-wrapper.mjs run \
+  --provider blacksmith-testbox \
+  --cache-volume pnpm-store=openclaw-node24-pnpm-lock:/tmp/openclaw-pnpm-store \
+  --timing-json \
+  -- \
+  corepack pnpm check:changed
+```
+
+The selected provider must advertise cache-volume support. If not, omit
+`--cache-volume` and rely on kept-lease caches.
+
 `blacksmith testbox list` may hide hydrating or ready boxes. Use:
 
 ```sh
@@ -590,7 +605,8 @@ Crabbox Blacksmith backend delegates setup to:
 
 The hydration workflow owns checkout, Node/pnpm setup, dependency install,
 secrets, ready marker, and keepalive. Crabbox owns dispatch, sync, SSH command
-execution, timing, logs/results, and cleanup.
+execution, timing, logs/results, cleanup, and cache-volume requests. Blacksmith
+implements cache volumes as sticky disks.
 
 Minimal Blacksmith-backed Crabbox run, from repo root:
 
@@ -685,6 +701,7 @@ crabbox events <run_id> --json
 crabbox logs <run_id>
 crabbox results <run_id>
 crabbox cache stats --id <id-or-slug>
+crabbox cache volumes
 crabbox ssh --id <id-or-slug>
 blacksmith testbox list
 ```

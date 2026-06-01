@@ -144,6 +144,33 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("keeps balance-only summary snapshots", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      summary: "Balance ¥42.50",
+    });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [{ provider: "deepseek", token: "token-d" }],
+      mockFetch,
+    );
+
+    expect(summary.providers).toEqual([
+      {
+        provider: "deepseek",
+        displayName: "DeepSeek",
+        windows: [],
+        summary: "Balance ¥42.50",
+      },
+    ]);
+  });
+
   it("keeps usage summary available when one provider fetch rejects", async () => {
     resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
       async ({ provider }): Promise<ProviderUsageSnapshot | null> => {

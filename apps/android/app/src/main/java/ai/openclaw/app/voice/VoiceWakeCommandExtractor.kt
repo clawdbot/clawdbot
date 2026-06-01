@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 object VoiceWakeCommandExtractor {
+  /** Extracts the command text that follows a configured wake phrase. */
   fun extractCommand(
     text: String,
     triggerWords: List<String>,

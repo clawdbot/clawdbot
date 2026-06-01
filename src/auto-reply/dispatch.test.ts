@@ -141,10 +141,12 @@ describe("withReplyDispatcher", () => {
         order.push("waitForIdle");
       },
     } satisfies ReplyDispatcher;
-    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
-      dispatcher.sendFinalReply({ text: "ok" });
-      return { text: "ok" };
-    });
+    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ dispatcher: dispatcherLocal }) => {
+        dispatcherLocal.sendFinalReply({ text: "ok" });
+        return { text: "ok" };
+      },
+    );
 
     await dispatchInboundMessage({
       ctx: buildTestCtx(),

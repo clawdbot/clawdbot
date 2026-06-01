@@ -3,6 +3,7 @@ import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
+  stripMalformedXmlArgValueSuffix,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 
@@ -10,6 +11,87 @@ describe("assertRequiredParams", () => {
   it("returns object params unchanged", () => {
     const params = { path: "test.txt" };
     expect(getToolParamsRecord(params)).toBe(params);
+  });
+
+  it("strips only the malformed terminal XML arg-value suffix", () => {
+    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>")).toBe("echo test");
+    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>>>>")).toBe("echo test");
+    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>")).toBe("echo test</arg_value>");
+    expect(stripMalformedXmlArgValueSuffix("echo </arg_value>> test")).toBe(
+      "echo </arg_value>> test",
+    );
+  });
+
+  it("strips malformed path suffixes without touching payload text", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "notes.txt</arg_value>>",
+      content: "keep literal payload</arg_value>>",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "notes.txt",
+        content: "keep literal payload</arg_value>>",
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("rejects paths that become empty after malformed XML arg-value suffix stripping", async () => {
+    const execute = vi.fn();
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await expect(tool.execute("id", { path: "</arg_value>>", content: "x" })).rejects.toThrow(
+      /Missing required parameter: path/,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("preserves edit replacement payloads while cleaning the path", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "edit",
+        label: "edit",
+        description: "edit a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.edit,
+    );
+
+    const edits = [
+      {
+        oldText: "literal old</arg_value>>",
+        newText: "literal new</arg_value>>",
+      },
+    ];
+    await tool.execute("id", { path: "notes.txt</arg_value>>>", edits });
+
+    expect(execute).toHaveBeenCalledWith("id", { path: "notes.txt", edits }, undefined, undefined);
   });
 
   it("includes received keys in error when some params are present but content is missing", () => {

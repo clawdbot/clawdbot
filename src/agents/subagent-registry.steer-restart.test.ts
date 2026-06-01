@@ -65,7 +65,7 @@ vi.mock("../config/sessions.js", () => {
 });
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async (eventValue?: unknown, _ctx?: unknown) => {});
+const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 const removeInternalSessionEffectsTranscriptMock = vi.fn(async (_sessionFile?: string) => {});
 
@@ -186,7 +186,9 @@ describe("subagent registry steer restarts", () => {
   });
 
   const flushAnnounce = async () => {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   };
   const waitForRegistrySideEffect = async (assertion: () => void) => {
     await vi.waitFor(assertion, { interval: 1, timeout: 1_000 });

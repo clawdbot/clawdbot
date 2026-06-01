@@ -195,6 +195,7 @@ function extractFrontmatterBlock(content: string): string | undefined {
   return normalized.slice(4, endIndex);
 }
 
+/** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
 export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   const block = extractFrontmatterBlock(content);
   if (!block) {

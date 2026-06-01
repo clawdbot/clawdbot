@@ -418,7 +418,16 @@ export function buildChannelUiCatalog(
   return { entries, order, labels, detailLabels, systemImages, byId };
 }
 
-export function listChannelPluginCatalogEntries(
+/**
+ * Raw catalog primitive. This may include untrusted workspace entries and
+ * workspace shadows. Security-sensitive or execution-facing callers should
+ * prefer `listTrustedChannelPluginCatalogEntries`; use this primitive only when
+ * the caller immediately applies trust filtering or explicitly excludes
+ * workspace entries.
+ *
+ * @internal
+ */
+export function listRawChannelPluginCatalogEntries(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
   const manifestEntries = listChannelCatalogEntries({
@@ -485,6 +494,17 @@ export function listChannelPluginCatalogEntries(
     });
 }
 
+/**
+ * @deprecated Use `listTrustedChannelPluginCatalogEntries` for execution-facing
+ * paths, or `listRawChannelPluginCatalogEntries` for internal plumbing
+ * that applies its own trust filtering.
+ */
+export function listChannelPluginCatalogEntries(
+  options: CatalogOptions = {},
+): ChannelPluginCatalogEntry[] {
+  return listRawChannelPluginCatalogEntries(options);
+}
+
 export function getChannelPluginCatalogEntry(
   id: string,
   options: CatalogOptions = {},
@@ -493,5 +513,5 @@ export function getChannelPluginCatalogEntry(
   if (!trimmed) {
     return undefined;
   }
-  return listChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
+  return listRawChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
 }

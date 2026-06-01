@@ -504,7 +504,7 @@ describe("memory index", () => {
     managersForCleanup.add(first);
     await first.probeEmbeddingAvailability();
     const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
-    let second: MemoryIndexManager | null = null;
+    let second: MemoryIndexManager | null;
     try {
       await vi.waitFor(() => {
         expect(providerCloseCalls).toBe(1);
@@ -570,6 +570,90 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
+  });
+
+  it("retries transient query embedding transport failures during search", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-query-retry.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).provider = {
+      id: "openai",
+      model: "mock-embed",
+      embedQuery: async () => {
+        queryCalls += 1;
+        if (queryCalls === 1) {
+          throw new Error("TypeError: fetch failed | other side closed");
+        }
+        return [1, 0, 0, 0];
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(2);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+  });
+
+  it("fails search after bounded query embedding retries are exhausted", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-query-retry-exhausted.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "openai",
+      model: "mock-embed",
+      embedQuery: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
+    expect(queryCalls).toBe(3);
   });
 
   it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {

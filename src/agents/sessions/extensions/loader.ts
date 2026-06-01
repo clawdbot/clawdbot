@@ -655,9 +655,9 @@ function discoverExtensionsInDir(dir: string): string[] {
 
       // 2 & 3. Subdirectories
       if (entry.isDirectory() || entry.isSymbolicLink()) {
-        const entries = resolveExtensionEntries(entryPath);
-        if (entries) {
-          discovered.push(...entries);
+        const entriesLocal = resolveExtensionEntries(entryPath);
+        if (entriesLocal) {
+          discovered.push(...entriesLocal);
         }
       }
     }

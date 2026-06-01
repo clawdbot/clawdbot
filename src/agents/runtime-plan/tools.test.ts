@@ -5,6 +5,8 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import type { RuntimeToolSchemaDiagnostic } from "../tool-schema-projection.js";
 import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
@@ -52,6 +54,82 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       modelApi: "openai-responses",
       model,
     });
+  });
+
+  it("quarantines unreadable tools before RuntimePlan normalization", () => {
+    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
+    const unreadable = { ...createParameterFreeTool(), name: "fuzzplugin_unreadable" } as AgentTool;
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    const tools = [unreadable, healthy];
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    const normalize = vi.fn((entries: AgentTool[]) => entries);
+    const runtimePlan = {
+      tools: {
+        normalize,
+        logDiagnostics: vi.fn(),
+      },
+    } as unknown as AgentRuntimePlan;
+
+    expect(
+      normalizeAgentRuntimeTools({
+        runtimePlan,
+        tools,
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+      }),
+    ).toEqual([healthy]);
+    expect(normalize).toHaveBeenCalledWith([healthy], {
+      workspaceDir: undefined,
+      modelApi: undefined,
+      model: undefined,
+    });
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "fuzzplugin_unreadable",
+          toolIndex: 0,
+          violations: ["fuzzplugin_unreadable.parameters is unreadable"],
+        },
+      ],
+    ]);
+  });
+
+  it("quarantines non-object schemas before provider schema normalization", () => {
+    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
+    const arraySchema = {
+      ...createParameterFreeTool("fuzzplugin_array_root"),
+      parameters: { type: "array", items: { type: "number" } },
+    } as unknown as AgentTool;
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools: entries }) => entries);
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools: [arraySchema, healthy],
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+      }),
+    ).toEqual([healthy]);
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [healthy],
+        provider: "openai",
+      }),
+    );
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "fuzzplugin_array_root",
+          toolIndex: 0,
+          violations: ['fuzzplugin_array_root.parameters.type must be "object"'],
+        },
+      ],
+    ]);
   });
 
   it("accepts legacy optional model fields while normalizing RuntimePlan context", () => {
@@ -109,6 +187,129 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       model: createNativeOpenAIResponsesModel(),
       allowRuntimePluginLoad: undefined,
     });
+  });
+
+  it("preserves plugin metadata when provider schema normalization clones tools", () => {
+    const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
+    setPluginToolMeta(tool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "lookup_note",
+        operation: "tool",
+      },
+    });
+    const normalized = {
+      ...tool,
+      parameters: normalizedParameterFreeSchema(),
+    };
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [tool],
+      provider: "openai",
+    });
+
+    expect(result[0]).toBe(normalized);
+    expect(getPluginToolMeta(result[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "fixture",
+        toolName: "lookup_note",
+      },
+    });
+  });
+
+  it("does not reread quarantined tools while preserving normalized metadata", () => {
+    const unreadableName = {
+      ...createParameterFreeTool("fuzzplugin_unreadable_name"),
+    } as AgentTool;
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name getter exploded");
+      },
+    });
+    const healthy = createParameterFreeTool("fixture__lookup_note") as AgentTool;
+    setPluginToolMeta(healthy, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "lookup_note",
+        operation: "tool",
+      },
+    });
+    const normalized = {
+      ...healthy,
+      parameters: normalizedParameterFreeSchema(),
+    };
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [unreadableName, healthy],
+      provider: "openai",
+      onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+    });
+
+    expect(result).toEqual([normalized]);
+    expect(getPluginToolMeta(result[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "fixture",
+        toolName: "lookup_note",
+      },
+    });
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0].name is unreadable"],
+        },
+      ],
+    ]);
+  });
+
+  it("quarantines unreadable tools before provider schema normalization", () => {
+    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
+    const unreadable = { ...createParameterFreeTool(), name: "fuzzplugin_unreadable" } as AgentTool;
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    const tools = [unreadable, healthy];
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools: entries }) => entries);
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools,
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+      }),
+    ).toEqual([healthy]);
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [healthy],
+        provider: "openai",
+      }),
+    );
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "fuzzplugin_unreadable",
+          toolIndex: 0,
+          violations: ["fuzzplugin_unreadable.parameters is unreadable"],
+        },
+      ],
+    ]);
   });
 
   it("can normalize without cold-loading provider runtime plugins", () => {

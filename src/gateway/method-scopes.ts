@@ -28,6 +28,7 @@ export {
   type OperatorScope,
 };
 
+/** Default scopes granted to CLI/operator clients when no narrower local policy is known. */
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
   READ_SCOPE,
@@ -38,6 +39,8 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 ];
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
+  // Core descriptors are authoritative, then reserved namespace policy, then active plugin
+  // descriptors. Node/dynamic sentinels are intentionally excluded from operator scopes.
   const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;
@@ -53,30 +56,37 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 
+/** Returns true when a method requires the approvals operator scope. */
 export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
 }
 
+/** Returns true when a method requires the pairing operator scope. */
 export function isPairingMethod(method: string): boolean {
   return resolveScopedMethod(method) === PAIRING_SCOPE;
 }
 
+/** Returns true when a method can be satisfied by read or stronger write/admin scopes. */
 export function isReadMethod(method: string): boolean {
   return resolveScopedMethod(method) === READ_SCOPE;
 }
 
+/** Returns true when a method requires write or admin operator scope. */
 export function isWriteMethod(method: string): boolean {
   return resolveScopedMethod(method) === WRITE_SCOPE;
 }
 
+/** Returns true when a method is reserved for node-role clients instead of operators. */
 export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);
 }
 
+/** Returns true when a method requires admin operator scope. */
 export function isAdminOnlyMethod(method: string): boolean {
   return resolveScopedMethod(method) === ADMIN_SCOPE;
 }
 
+/** Resolves the required static operator scope for a gateway method, if one exists. */
 export function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
   return resolveScopedMethod(method);
 }
@@ -123,12 +133,15 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params: unknown,
 ): OperatorScope[] {
+  // Dynamic methods derive authorization from params and live plugin registrations instead of
+  // a single static method scope.
   if (method === "plugins.sessionAction") {
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
   return [WRITE_SCOPE];
 }
 
+/** Returns the narrowest known operator scopes needed to call a gateway method. */
 export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
@@ -144,6 +157,7 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   return [];
 }
 
+/** Checks whether a presented operator scope set authorizes a gateway method call. */
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
@@ -158,6 +172,8 @@ export function authorizeOperatorScopesForMethod(
       const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
       const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
       if (!pluginId || !actionId) {
+        // Malformed dynamic params cannot be matched to a plugin action. Any valid operator scope
+        // may proceed so the handler can return the precise validation error.
         return scopes.some((scope) => isOperatorScope(scope))
           ? { allowed: true }
           : { allowed: false, missingScope: WRITE_SCOPE };
@@ -182,6 +198,7 @@ export function authorizeOperatorScopesForMethod(
   return { allowed: false, missingScope: requiredScope };
 }
 
+/** Returns true when a method has any core, node, dynamic, reserved, or plugin scope policy. */
 export function isGatewayMethodClassified(method: string): boolean {
   if (isNodeRoleMethod(method)) {
     return true;

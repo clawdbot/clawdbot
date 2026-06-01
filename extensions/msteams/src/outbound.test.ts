@@ -125,7 +125,7 @@ describe("msteamsOutbound cfg threading", () => {
   });
 
   it("passes resolved cfg to sendMessageMSTeams for text sends", async () => {
-    const cfg = {
+    const cfgResult = {
       channels: {
         msteams: {
           appId: "resolved-app-id",
@@ -134,20 +134,20 @@ describe("msteamsOutbound cfg threading", () => {
     } as OpenClawConfig;
 
     await requireSendText()({
-      cfg,
+      cfg: cfgResult,
       to: "conversation:abc",
       text: "hello",
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
+      cfg: cfgResult,
       to: "conversation:abc",
       text: "hello",
     });
   });
 
   it("passes resolved cfg and media roots for media sends", async () => {
-    const cfg = {
+    const cfgValue = {
       channels: {
         msteams: {
           appId: "resolved-app-id",
@@ -156,7 +156,7 @@ describe("msteamsOutbound cfg threading", () => {
     } as OpenClawConfig;
 
     await requireSendMedia()({
-      cfg,
+      cfg: cfgValue,
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -164,7 +164,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
+      cfg: cfgValue,
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -222,7 +222,7 @@ describe("msteamsOutbound cfg threading", () => {
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
       to: "conversation:abc",
-      card: (rendered?.channelData?.msteams as { presentationCard: unknown }).presentationCard,
+      card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
     expect(result).toEqual({
       channel: "msteams",
@@ -351,7 +351,7 @@ describe("msteamsOutbound cfg threading", () => {
   });
 
   it("passes resolved cfg to sendPollMSTeams and stores poll metadata", async () => {
-    const cfg = {
+    const cfgLocal = {
       channels: {
         msteams: {
           appId: "resolved-app-id",
@@ -360,7 +360,7 @@ describe("msteamsOutbound cfg threading", () => {
     } as OpenClawConfig;
 
     await requireSendPoll()({
-      cfg,
+      cfg: cfgLocal,
       to: "conversation:abc",
       poll: {
         question: "Snack?",
@@ -369,7 +369,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
-      cfg,
+      cfg: cfgLocal,
       to: "conversation:abc",
       question: "Snack?",
       options: ["Pizza", "Sushi"],

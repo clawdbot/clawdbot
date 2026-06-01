@@ -303,7 +303,9 @@ describe("openHttpConnectTunnel", () => {
       return socket;
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     targetTlsSocket.emit("secureConnect");

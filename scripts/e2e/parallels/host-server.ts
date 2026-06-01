@@ -121,7 +121,9 @@ async function waitForHostServer(
     if (await canConnect(port)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   child.kill("SIGTERM");
   die(`host artifact server did not start on port ${port}: ${stderr.trim()}`);
@@ -151,7 +153,9 @@ async function canConnect(port: number): Promise<boolean> {
 }
 
 async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export const testing = {

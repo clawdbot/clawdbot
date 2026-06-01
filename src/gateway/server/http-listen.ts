@@ -22,7 +22,7 @@ export async function listenGatewayHttpServer(params: {
 }) {
   const { httpServer, bindHost, port } = params;
 
-  for (let attempt = 0; ; attempt++) {
+  for (const attempt of Array.from({ length: EADDRINUSE_MAX_RETRIES + 1 }, (_, index) => index)) {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {

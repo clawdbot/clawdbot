@@ -553,26 +553,58 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
-  const outboundSessionThreadId =
-    resolvedThreadId !== undefined ? `${chatId}:${resolvedThreadId}` : undefined;
+  const canonicalThreadId =
+    resolvedThreadId !== undefined
+      ? buildTelegramCanonicalTopicThreadId({ chatId, topicId: resolvedThreadId })
+      : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
     route: baseRoute,
-    threadId: outboundSessionThreadId,
+    threadId: canonicalThreadId,
     currentSessionKey: params.currentSessionKey,
     precedence: ["threadId", "currentSession"],
-    canRecoverCurrentThread: ({ route }) =>
-      route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
+    canRecoverCurrentThread: ({ route: routeLocal }) =>
+      routeLocal.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
-  const deliveryThreadId =
-    resolvedThreadId ?? parseTelegramThreadId(route.threadId) ?? route.threadId;
+  const routeThreadId = resolveTelegramNativeTopicThreadId(route.threadId, resolvedThreadId);
   return {
     ...route,
-    ...(deliveryThreadId !== undefined ? { threadId: deliveryThreadId } : {}),
+    ...(routeThreadId !== undefined ? { threadId: routeThreadId } : {}),
     from:
-      deliveryThreadId !== undefined
-        ? `telegram:${chatId}:topic:${deliveryThreadId}`
+      routeThreadId !== undefined
+        ? `telegram:${chatId}:topic:${routeThreadId}`
         : `telegram:${chatId}`,
   };
+}
+
+function buildTelegramCanonicalTopicThreadId(params: { chatId: string; topicId: number }): string {
+  // Core session routing sees one canonical thread id. Telegram topic ids are
+  // chat-scoped, so direct-topic sessions include the chat id to avoid collisions.
+  return `${params.chatId}:${params.topicId}`;
+}
+
+function resolveTelegramNativeTopicThreadId(
+  threadId?: string | number,
+  nativeTopicId?: number,
+): string | number | undefined {
+  if (nativeTopicId !== undefined) {
+    return nativeTopicId;
+  }
+  // Keep the chat-scoped canonical id inside OpenClaw state; translate it back
+  // only when returning Telegram route metadata used by send/typing paths.
+  if (threadId === undefined) {
+    return undefined;
+  }
+  const parsedThreadId = parseTelegramThreadId(threadId);
+  if (parsedThreadId !== undefined) {
+    return parsedThreadId;
+  }
+  if (typeof threadId === "string") {
+    const canonicalMatch = /:(\d+)$/.exec(threadId.trim());
+    if (canonicalMatch?.[1]) {
+      return Number(canonicalMatch[1]);
+    }
+  }
+  return threadId;
 }
 
 async function resolveTelegramTargets(params: {

@@ -14,10 +14,12 @@ export type MiniMaxRegion = "cn" | "global";
 const MINIMAX_OAUTH_CONFIG = {
   cn: {
     baseUrl: "https://api.minimaxi.com",
+    oauthBaseUrl: "https://account.minimaxi.com",
     clientId: "78257093-7e40-4613-99e0-527b14b39113",
   },
   global: {
     baseUrl: "https://api.minimax.io",
+    oauthBaseUrl: "https://account.minimax.io",
     clientId: "78257093-7e40-4613-99e0-527b14b39113",
   },
 } as const;
@@ -30,11 +32,11 @@ const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
   return {
-    codeEndpoint: `${config.baseUrl}/oauth/code`,
-    tokenEndpoint: `${config.baseUrl}/oauth/token`,
+    codeEndpoint: `${config.oauthBaseUrl}/oauth2/device/code`,
+    tokenEndpoint: `${config.oauthBaseUrl}/oauth2/token`,
     clientId: config.clientId,
     baseUrl: config.baseUrl,
-    hostname: new URL(config.baseUrl).hostname,
+    hostname: new URL(config.oauthBaseUrl).hostname,
   };
 }
 
@@ -284,7 +286,9 @@ export async function loginMiniMaxPortalOAuth(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
+    });
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 

@@ -117,7 +117,10 @@ function ensureSlackTestRuntime(): {
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const flush = () =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {

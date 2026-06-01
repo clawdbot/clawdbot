@@ -206,7 +206,9 @@ export async function waitForHttpBodyDeltas(
     if (deltas.length >= count) {
       return deltas;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
   }
   throw new Error(`expected ${count} http body deltas`);
 }

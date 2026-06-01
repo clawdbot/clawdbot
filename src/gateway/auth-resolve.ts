@@ -6,7 +6,10 @@ import type {
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 
+/** Authentication modes after config, override, and credential inputs are combined. */
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+
+/** Records which input selected the effective Gateway auth mode. */
 export type ResolvedGatewayAuthModeSource =
   | "override"
   | "config"
@@ -14,6 +17,7 @@ export type ResolvedGatewayAuthModeSource =
   | "token"
   | "default";
 
+/** Fully resolved Gateway auth policy before startup validates required secrets. */
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
   modeSource?: ResolvedGatewayAuthModeSource;
@@ -23,11 +27,13 @@ export type ResolvedGatewayAuth = {
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
+/** Shared-secret auth shape exposed to Gateway clients that support a single bearer secret. */
 export type EffectiveSharedGatewayAuth = {
   mode: "token" | "password";
   secret: string | undefined;
 };
 
+/** Resolve Gateway auth mode, credentials, trusted-proxy policy, and Tailscale allowance. */
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
   authOverride?: GatewayAuthConfig | null;
@@ -38,6 +44,9 @@ export function resolveGatewayAuth(params: {
   const authOverride = params.authOverride ?? undefined;
   const authConfig: GatewayAuthConfig = { ...baseAuthConfig };
   if (authOverride) {
+    // Runtime overrides are sparse field overlays; omitted fields keep the
+    // persisted config so callers can replace one auth knob without cloning all
+    // credential and proxy settings.
     if (authOverride.mode !== undefined) {
       authConfig.mode = authOverride.mode;
     }
@@ -60,6 +69,8 @@ export function resolveGatewayAuth(params: {
   const env = params.env ?? process.env;
   const tokenRef = resolveSecretInputRef({ value: authConfig.token }).ref;
   const passwordRef = resolveSecretInputRef({ value: authConfig.password }).ref;
+  // Secret refs are not plaintext credentials here. Startup/runtime secret
+  // resolution validates active refs before request authorization sees them.
   const resolvedCredentials = resolveGatewayCredentialsFromValues({
     configToken: tokenRef ? undefined : authConfig.token,
     configPassword: passwordRef ? undefined : authConfig.password,
@@ -86,11 +97,15 @@ export function resolveGatewayAuth(params: {
     mode = "token";
     modeSource = "token";
   } else {
+    // Token remains the default so the config assertion can produce a clear
+    // missing-token diagnostic instead of silently disabling Gateway auth.
     mode = "token";
     modeSource = "default";
   }
 
   const allowTailscale =
+    // Tailscale serve can supply network-level access control, but password and
+    // trusted-proxy modes keep their stricter explicit auth boundary.
     authConfig.allowTailscale ??
     (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
 
@@ -104,6 +119,7 @@ export function resolveGatewayAuth(params: {
   };
 }
 
+/** Return the effective token/password secret for clients that cannot model every auth mode. */
 export function resolveEffectiveSharedGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
   authOverride?: GatewayAuthConfig | null;

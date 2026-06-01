@@ -53,6 +53,7 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
@@ -822,12 +823,19 @@ export async function runExecProcess(opts: {
       shellRuntimeEnv,
       opts.pathPrepend,
     );
+    const commandWithShellSnapshot = await maybeWrapCommandWithShellSnapshot({
+      command: commandWithPathPrepend,
+      shell,
+      shellArgs,
+      cwd: opts.workdir,
+      env: shellRuntimeEnv,
+    });
 
-    const childArgv = [shell, ...shellArgs, commandWithPathPrepend];
+    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
-        ptyCommand: commandWithPathPrepend,
+        ptyCommand: commandWithShellSnapshot,
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,
@@ -983,7 +991,7 @@ export async function runExecProcess(opts: {
       });
       return outcome;
     })
-    .catch((err): ExecProcessOutcome => {
+    .catch((err: unknown): ExecProcessOutcome => {
       updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");

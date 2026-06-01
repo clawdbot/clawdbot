@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
@@ -423,6 +424,29 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.gatewayReachable).toBe(false);
+  });
+});
+
+describe("buildTailscaleHttpsUrl", () => {
+  it("uses the configured Tailscale Service hostname for Serve", () => {
+    expect(
+      buildTailscaleHttpsUrl({
+        tailscaleMode: "serve",
+        tailscaleDns: "node.tailnet.ts.net",
+        serviceName: "svc:openclaw",
+        controlUiBasePath: "/control",
+      }),
+    ).toBe("https://openclaw.tailnet.ts.net/control");
+  });
+
+  it("does not advertise a node-IP URL for named Services", () => {
+    expect(
+      buildTailscaleHttpsUrl({
+        tailscaleMode: "serve",
+        tailscaleDns: "100.64.0.8",
+        serviceName: "svc:openclaw",
+      }),
+    ).toBeNull();
   });
 });
 

@@ -34,6 +34,9 @@ function parseRestartDeliveryContext(params: unknown): {
   return { deliveryContext: normalizedContext, threadId };
 }
 
+// Restart sentinels can resume a channel turn after the gateway comes back.
+// Keep only routable delivery fields plus a normalized thread id so malformed
+// UI/tool payloads do not leak arbitrary data into the sentinel file.
 export function parseRestartRequestParams(params: unknown): {
   sessionKey: string | undefined;
   deliveryContext: RestartDeliveryContext | undefined;

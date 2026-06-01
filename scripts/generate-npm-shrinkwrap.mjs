@@ -11,6 +11,8 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 const STABLE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
+const NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function usage() {
   return [
@@ -288,11 +290,6 @@ function readPnpmLockScopedVersionOverrides() {
   }
   return expandScopedOverrideChildren(overrides);
 }
-
-function setKey(values) {
-  return [...values].toSorted((left, right) => left.localeCompare(right)).join("\0");
-}
-
 function mergeOverrideEntry(merged, name, spec) {
   const current = merged[name];
   if (current === undefined) {
@@ -398,15 +395,41 @@ export function createNpmShrinkwrapCommand(args, options = {}) {
   });
 }
 
+export function readPositiveIntEnv(name, fallback, env = process.env) {
+  const text = String(env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+export function createNpmShrinkwrapExecOptions(invocation, cwd, env = process.env) {
+  return {
+    cwd,
+    env: invocation.env ?? env,
+    maxBuffer: readPositiveIntEnv(
+      "OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES",
+      NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES,
+      env,
+    ),
+    shell: invocation.shell,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: readPositiveIntEnv(
+      "OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS",
+      NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS,
+      env,
+    ),
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  };
+}
+
 function runNpm(args, cwd) {
   const npm = createNpmShrinkwrapCommand(args);
-  execFileSync(npm.command, npm.args, {
-    cwd,
-    env: npm.env ?? process.env,
-    shell: npm.shell,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: npm.windowsVerbatimArguments,
-  });
+  execFileSync(npm.command, npm.args, createNpmShrinkwrapExecOptions(npm, cwd));
 }
 
 function packageExtensionAppliesToDependency(selector, dependencyName) {
@@ -1239,7 +1262,7 @@ function updateOrCheckPackage(packageDir, check, changedPaths = []) {
     return;
   }
 
-  let current = "";
+  let current;
   try {
     current = readFileSync(shrinkwrapPath, "utf8");
   } catch {

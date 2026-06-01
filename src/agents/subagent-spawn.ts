@@ -41,6 +41,12 @@ import {
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
 import {
+  normalizeStoredOverrideModel,
+  resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
+} from "./model-selection.js";
+import { resolveThinkingDefault } from "./model-thinking-default.js";
+import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -81,6 +87,7 @@ import {
   getGlobalHookRunner,
   getSessionBindingService,
   getRuntimeConfig,
+  loadSessionStore,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -367,6 +374,62 @@ function resolveStoreEntryByKeys(
   return undefined;
 }
 
+function readRequesterThinkingLevel(params: {
+  cfg: OpenClawConfig;
+  requesterInternalKey: string;
+  requesterAgentId?: string;
+}): string | undefined {
+  let entry: SessionEntry | undefined;
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+    });
+    const store = loadSessionStore(target.storePath, { clone: false });
+    entry = resolveStoreEntryByKeys(store, target.storeKeys);
+  } catch {
+    entry = undefined;
+  }
+  if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
+    return entry.thinkingLevel.trim();
+  }
+  const requesterAgentThinking = params.requesterAgentId
+    ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
+    : undefined;
+  if (requesterAgentThinking) {
+    return requesterAgentThinking;
+  }
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+  });
+  if (entry) {
+    const normalizedOverride = normalizeStoredOverrideModel({
+      providerOverride: entry.providerOverride,
+      modelOverride: entry.modelOverride,
+    });
+    const persistedModel = resolvePersistedSelectedModelRef({
+      defaultProvider: defaultModel.provider,
+      runtimeProvider: entry.modelProvider,
+      runtimeModel: entry.model,
+      overrideProvider: normalizedOverride.providerOverride,
+      overrideModel: normalizedOverride.modelOverride,
+    });
+    if (persistedModel) {
+      return resolveThinkingDefault({
+        cfg: params.cfg,
+        provider: persistedModel.provider,
+        model: persistedModel.model,
+      });
+    }
+  }
+  return resolveThinkingDefault({
+    cfg: params.cfg,
+    provider: defaultModel.provider,
+    model: defaultModel.model,
+  });
+}
+
 type PreparedSpawnContext =
   | {
       status: "ok";
@@ -548,15 +611,23 @@ function sanitizeMountPathHint(value?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  // Prevent prompt injection via control/newline characters in system prompt hints.
-  // eslint-disable-next-line no-control-regex
-  if (/[\r\n\u0000-\u001F\u007F\u0085\u2028\u2029]/.test(trimmed)) {
+  if (hasPromptUnsafeControlCharacter(trimmed)) {
     return undefined;
   }
   if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
     return undefined;
   }
   return trimmed;
+}
+
+function hasPromptUnsafeControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function cleanupProvisionalSession(
@@ -1180,13 +1251,21 @@ export async function spawnSubagentDirect(
     maxSpawnDepth,
   });
   const targetAgentDir = resolveAgentDir(cfg, targetAgentId);
+  const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  const callerThinkingRaw = readRequesterThinkingLevel({
+    cfg,
+    requesterInternalKey,
+    requesterAgentId,
+  });
   const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
+    requesterAgentConfig,
     targetAgentConfig,
     modelOverride,
     thinkingOverrideRaw,
+    callerThinkingRaw,
   });
   if (plan.status === "error") {
     return {
@@ -1406,13 +1485,16 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
-  const contextEnginePrepareResult = await prepareContextEngineSubagentSpawn({
-    cfg,
-    context: preparedSpawnContext,
-    requesterInternalKey,
-    childSessionKey,
-    runTimeoutSeconds,
-  });
+  const contextEnginePrepareResult =
+    params.lightContext && preparedSpawnContext.mode === "isolated"
+      ? ({ status: "ok", preparation: undefined } as const)
+      : await prepareContextEngineSubagentSpawn({
+          cfg,
+          context: preparedSpawnContext,
+          requesterInternalKey,
+          childSessionKey,
+          runTimeoutSeconds,
+        });
   if (contextEnginePrepareResult.status === "error") {
     await cleanupFailedSpawnBeforeAgentStart({
       childSessionKey,

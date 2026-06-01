@@ -68,6 +68,7 @@ private enum class StatusVisual {
   Offline,
 }
 
+/** Legacy tab scaffold used by the mobile post-onboarding experience. */
 @Composable
 fun PostOnboardingTabs(
   viewModel: MainViewModel,
@@ -150,6 +151,8 @@ fun PostOnboardingTabs(
           .background(mobileBackgroundGradient),
     ) {
       if (chatTabStarted) {
+        // Keep chat mounted after first use so session state and scroll position
+        // survive tab switches.
         Box(
           modifier =
             Modifier
@@ -162,6 +165,8 @@ fun PostOnboardingTabs(
       }
 
       if (screenTabStarted) {
+        // Canvas can be expensive to initialize; keep it mounted once visited
+        // and hide it by alpha/z-order instead of destroying the view tree.
         ScreenTabScreen(
           viewModel = viewModel,
           visible = activeTab == HomeTab.Screen,
@@ -184,6 +189,7 @@ fun PostOnboardingTabs(
   }
 }
 
+/** Screen tab wrapper that refreshes canvas data once per gateway connection. */
 @Composable
 private fun ScreenTabScreen(
   viewModel: MainViewModel,
@@ -205,6 +211,7 @@ private fun ScreenTabScreen(
   }
 }
 
+/** Top status chip derived from gateway connection text. */
 @Composable
 private fun TopStatusBar(
   statusText: String,
@@ -295,6 +302,7 @@ private fun TopStatusBar(
   }
 }
 
+/** Bottom navigation for the legacy tab scaffold. */
 @Composable
 private fun BottomTabBar(
   activeTab: HomeTab,

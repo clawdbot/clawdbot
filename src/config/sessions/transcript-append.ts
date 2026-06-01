@@ -34,7 +34,9 @@ type TranscriptLeafInfo = {
 };
 
 async function yieldTranscriptAppendScan(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function lineParentLinkedEntryId(line: string): string | undefined {

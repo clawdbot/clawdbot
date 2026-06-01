@@ -212,8 +212,16 @@ export function acquireLocalHeavyCheckLockSync(params) {
     DEFAULT_STALE_LOCK_MS,
   );
   const startedAt = Date.now();
-  let waitingLogged = false;
-  let lastProgressAt = 0;
+  let waitLogBudget = 1;
+  let lastProgressAt = startedAt;
+  const consumeInitialWaitLog = () => waitLogBudget-- > 0;
+  const consumeProgressLog = (now) => {
+    if (now - lastProgressAt < progressMs) {
+      return false;
+    }
+    lastProgressAt = now;
+    return true;
+  };
 
   fs.mkdirSync(locksDir, { recursive: true });
   if (!params.lockName) {
@@ -255,23 +263,20 @@ export function acquireLocalHeavyCheckLockSync(params) {
         );
       }
 
-      if (!waitingLogged) {
+      if (consumeInitialWaitLog()) {
         const ownerLabel = describeOwner(owner);
         console.error(
           `[${params.toolName}] queued behind the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
-        waitingLogged = true;
-        lastProgressAt = Date.now();
-      } else if (Date.now() - lastProgressAt >= progressMs) {
+      } else if (consumeProgressLog(Date.now())) {
         const ownerLabel = describeOwner(owner);
         console.error(
           `[${params.toolName}] still waiting ${formatElapsedMs(elapsedMs)} for the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
-        lastProgressAt = Date.now();
       }
 
       sleepSync(pollMs);

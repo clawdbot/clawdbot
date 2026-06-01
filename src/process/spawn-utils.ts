@@ -64,7 +64,7 @@ async function spawnAndWaitForSpawn(
       }
       settled = true;
       cleanup();
-      reject(err);
+      reject(toLintErrorObject(err, "Non-Error rejection"));
     };
     const onSpawn = () => {
       finishResolve();
@@ -116,4 +116,18 @@ export async function spawnWithFallback(
   }
 
   throw lastError;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

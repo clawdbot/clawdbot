@@ -79,6 +79,7 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
+const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   factor: 1.2,
   minTimeout: 250,
@@ -192,20 +193,37 @@ function resolveStableJitterMs(params: { seed: string; windowMs: number }): numb
   return bucket % (Math.floor(params.windowMs) + 1);
 }
 
-function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
-  const expectedEmbedMs = Math.max(1, embedTimeoutMs);
-  const waitBudgetMs = Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 6);
+function resolveQmdWriteLockOptions(expectedMs: number, minWaitMs: number) {
+  const expected = Math.max(1, expectedMs);
+  const waitBudgetMs = Math.max(minWaitMs, expected * 6);
   return {
     retries: {
       retries: Math.max(60, Math.ceil(waitBudgetMs / QMD_EMBED_LOCK_RETRY_TEMPLATE.maxTimeout)),
       ...QMD_EMBED_LOCK_RETRY_TEMPLATE,
     },
-    stale: Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 2),
+    stale: Math.max(minWaitMs, expected * 2),
   };
 }
 
 export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
   return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
+}
+
+// Cross-process serialization for qmd embeds (heavy ML work, serialized globally).
+function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
+  return resolveQmdWriteLockOptions(embedTimeoutMs, QMD_EMBED_LOCK_MIN_WAIT_MS);
+}
+
+// One per-store write lock shared by the update and embed phases (both write the
+// same qmd index.sqlite), so a foreground `memory search` dirty-sync and a
+// background gateway update/embed never write the same store at once
+// (writer-vs-writer SQLITE_BUSY, #66339). Sized to the slower of the two writes
+// so a contending caller waits for the in-flight write instead of erroring.
+function resolveQmdStoreWriteLockOptions(updateTimeoutMs: number, embedTimeoutMs: number) {
+  return resolveQmdWriteLockOptions(
+    Math.max(updateTimeoutMs, embedTimeoutMs),
+    QMD_WRITE_LOCK_MIN_WAIT_MS,
+  );
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
@@ -461,18 +479,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.qmd.update.onBoot) {
       const bootRun = this.runUpdate("boot", true);
       if (this.qmd.update.waitForBootSync) {
-        await bootRun.catch((err) => {
+        await bootRun.catch((err: unknown) => {
           log.warn(`qmd boot update failed: ${String(err)}`);
         });
       } else {
-        void bootRun.catch((err) => {
+        void bootRun.catch((err: unknown) => {
           log.warn(`qmd boot update failed: ${String(err)}`);
         });
       }
     }
     if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
-        void this.runUpdate("interval").catch((err) => {
+        void this.runUpdate("interval").catch((err: unknown) => {
           log.warn(`qmd update failed (${String(err)})`);
         });
       }, this.qmd.update.intervalMs);
@@ -480,7 +498,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.shouldScheduleEmbedTimer()) {
       const startPeriodicEmbedTimer = () => {
         this.embedTimer = setInterval(() => {
-          void this.runUpdate("embed-interval").catch((err) => {
+          void this.runUpdate("embed-interval").catch((err: unknown) => {
             log.warn(`qmd embed interval update failed (${String(err)})`);
           });
         }, this.qmd.update.embedIntervalMs);
@@ -493,7 +511,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             return;
           }
           void this.runUpdate("embed-interval")
-            .catch((err) => {
+            .catch((err: unknown) => {
               log.warn(`qmd embed interval update failed (${String(err)})`);
             })
             .finally(() => {
@@ -1436,8 +1454,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
+      const timeoutMs = this.qmd.limits.timeoutMs;
       const result = await this.runQmd(["status"], {
-        timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+        timeoutMs,
       });
       const vectorCount = parseQmdStatusVectorCount(`${result.stdout}\n${result.stderr}`);
       if (vectorCount === null) {
@@ -1533,12 +1552,19 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       if (this.shouldRunEmbed(force)) {
         try {
-          await this.withQmdEmbedLock(async () => {
-            await this.runQmd(["embed"], {
-              timeoutMs: this.qmd.update.embedTimeoutMs,
-              discardOutput: true,
-            });
-          });
+          // Wait for embed capacity before taking the per-store write lock. The
+          // store lock should protect active qmd writes only, not time spent queued
+          // behind unrelated agents' embeds.
+          await this.withQmdEmbedQueue(() =>
+            this.withQmdGlobalEmbedLock(() =>
+              this.withQmdStoreWriteLock(async () => {
+                await this.runQmd(["embed"], {
+                  timeoutMs: this.qmd.update.embedTimeoutMs,
+                  discardOutput: true,
+                });
+              }),
+            ),
+          );
           this.lastEmbedAt = Date.now();
           this.embedBackoffUntil = null;
           this.embedFailureCount = 0;
@@ -1624,7 +1650,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           return;
         }
         await this.sync({ reason: "watch" });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         log.warn(`qmd watch sync failed: ${String(err)}`);
       });
     }, this.syncSettings.watchDebounceMs);
@@ -1639,7 +1665,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     this.sessionWarm.add(key);
-    void this.sync({ reason: "session-start" }).catch((err) => {
+    void this.sync({ reason: "session-start" }).catch((err: unknown) => {
       log.warn(`qmd session-start sync failed: ${String(err)}`);
     });
   }
@@ -1666,7 +1692,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(
           `qmd update retry ${attempt}/${maxAttempts - 1} after failure (${reason}): ${String(err)}`,
         );
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
       }
     }
   }
@@ -1747,8 +1775,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private async withQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
+  private async withQmdEmbedQueue<T>(task: () => Promise<T>): Promise<T> {
     const queue = getQmdEmbedQueueState();
     const previous = queue.tail;
     let releaseCurrent!: () => void;
@@ -1761,14 +1788,38 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     await previous.catch(() => undefined);
     try {
-      return await withFileLock(
-        lockPath,
-        resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
-        task,
-      );
+      return await task();
     } finally {
       releaseCurrent();
     }
+  }
+
+  private async withQmdGlobalEmbedLock<T>(task: () => Promise<T>): Promise<T> {
+    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
+    return await withFileLock(
+      lockPath,
+      resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
+      task,
+    );
+  }
+
+  private async withQmdStoreWriteLock<T>(task: () => Promise<T>): Promise<T> {
+    // One per-store cross-process write lock guarding every qmd write (update and
+    // embed) against the same index.sqlite, so a foreground `memory search`
+    // dirty-sync and a background gateway update/embed never write concurrently
+    // (writer-vs-writer SQLITE_BUSY, #66339). It lives beside the agent's qmd dir,
+    // so writes for different agents still run in parallel. Update takes only this
+    // lock; embed first waits for global embed capacity, then takes this lock for
+    // the active qmd write.
+    const lockPath = path.join(this.agentStateDir, "qmd-write.lock");
+    return await withFileLock(
+      lockPath,
+      resolveQmdStoreWriteLockOptions(
+        this.qmd.update.updateTimeoutMs,
+        this.qmd.update.embedTimeoutMs,
+      ),
+      task,
+    );
   }
 
   private async withQmdUpdateQueue<T>(task: () => Promise<T>): Promise<T> {
@@ -1795,7 +1846,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (waitResult === "closed") {
         return undefined as T;
       }
-      return await task();
+      // Serialize the update write across processes (gateway + CLI). The in-process
+      // queue above is keyed per store but a separate process cannot see it. The
+      // shared per-store write lock also serializes against the embed write below,
+      // which targets the same index.sqlite.
+      return await this.withQmdStoreWriteLock(task);
     } finally {
       releaseCurrent();
       void next.finally(() => {
@@ -2015,8 +2070,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       case "vsearch":
         // Vector search only
         return [{ type: "vec", query: semanticQuery }];
-      case "query":
-      case undefined:
       default:
         // Full hybrid: lex + vec + hyde (query expansion)
         return [
@@ -2391,7 +2444,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return cached;
     }
     const db = this.ensureDb();
-    let rows: Array<{ collection: string; path: string }> = [];
+    let rows: Array<{ collection: string; path: string }>;
     try {
       rows = db
         .prepare("SELECT collection, path FROM documents WHERE hash = ? AND active = 1")
@@ -2453,7 +2506,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return null;
     }
     const exactPath = path.normalize(trimmedFile).replace(/\\/g, "/");
-    let rows: Array<{ path: string }> = [];
+    let rows: Array<{ path: string }>;
     try {
       const db = this.ensureDb();
       const exactRows = db
@@ -2523,8 +2576,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private toCollectionRelativePath(collection: string, filePath: string): string | null {
-    const root = this.collectionRoots.get(collection);
-    if (!root) {
+    const rootItem = this.collectionRoots.get(collection);
+    if (!rootItem) {
       return null;
     }
     const trimmedFilePath = filePath.trim();
@@ -2534,11 +2587,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     const normalizedInput = path.normalize(trimmedFilePath);
     const absolutePath = path.isAbsolute(normalizedInput)
       ? normalizedInput
-      : path.resolve(root.path, normalizedInput);
-    if (!this.isWithinRoot(root.path, absolutePath)) {
+      : path.resolve(rootItem.path, normalizedInput);
+    if (!this.isWithinRoot(rootItem.path, absolutePath)) {
       return null;
     }
-    const relative = path.relative(root.path, absolutePath);
+    const relative = path.relative(rootItem.path, absolutePath);
     if (!relative || relative === ".") {
       return null;
     }
@@ -2705,8 +2758,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       let total = 0;
       for (const row of rows) {
-        const root = this.collectionRoots.get(row.collection);
-        const source = root?.kind ?? "memory";
+        const rootCandidate = this.collectionRoots.get(row.collection);
+        const source = rootCandidate?.kind ?? "memory";
         const entry = bySource.get(source) ?? { files: 0, chunks: 0 };
         entry.files += row.c ?? 0;
         entry.chunks += row.c ?? 0;
@@ -2747,12 +2800,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     collection: string,
     collectionRelativePath: string,
   ): { rel: string; abs: string; source: MemorySource } | null {
-    const root = this.collectionRoots.get(collection);
-    if (!root) {
+    const rootEntry = this.collectionRoots.get(collection);
+    if (!rootEntry) {
       return null;
     }
     const normalizedRelative = collectionRelativePath.replace(/\\/g, "/");
-    const absPath = path.normalize(path.resolve(root.path, collectionRelativePath));
+    const absPath = path.normalize(path.resolve(rootEntry.path, collectionRelativePath));
     const relativeToWorkspace = path.relative(this.workspaceDir, absPath);
     const relPath = this.buildSearchPath(
       collection,
@@ -2760,7 +2813,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       relativeToWorkspace,
       absPath,
     );
-    return { rel: relPath, abs: absPath, source: root.kind };
+    return { rel: relPath, abs: absPath, source: rootEntry.kind };
   }
 
   private buildSearchPath(
@@ -2807,13 +2860,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!collection || rest.length === 0) {
         throw new Error("invalid qmd path");
       }
-      const root = this.collectionRoots.get(collection);
-      if (!root) {
+      const rootResult = this.collectionRoots.get(collection);
+      if (!rootResult) {
         throw new Error(`unknown qmd collection: ${collection}`);
       }
       const joined = rest.join("/");
-      const resolved = path.resolve(root.path, joined);
-      if (!this.isWithinRoot(root.path, resolved)) {
+      const resolved = path.resolve(rootResult.path, joined);
+      if (!this.isWithinRoot(rootResult.path, resolved)) {
         throw new Error("qmd path escapes collection");
       }
       return resolved;
@@ -2831,12 +2884,12 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private isIndexedWorkspaceReadPath(absPath: string): boolean {
     const normalizedAbsPath = path.normalize(absPath);
-    for (const [collection, root] of this.collectionRoots.entries()) {
-      if (!this.isWithinRoot(root.path, normalizedAbsPath)) {
+    for (const [collection, rootValue] of this.collectionRoots.entries()) {
+      if (!this.isWithinRoot(rootValue.path, normalizedAbsPath)) {
         continue;
       }
       const collectionRelativePath = path
-        .relative(root.path, normalizedAbsPath)
+        .relative(rootValue.path, normalizedAbsPath)
         .replace(/\\/g, "/");
       if (!collectionRelativePath || collectionRelativePath.startsWith("..")) {
         continue;
@@ -2847,7 +2900,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           .get(collection, collectionRelativePath) as { path: string } | undefined;
         if (
           exactRow &&
-          path.normalize(path.resolve(root.path, exactRow.path)) === normalizedAbsPath
+          path.normalize(path.resolve(rootValue.path, exactRow.path)) === normalizedAbsPath
         ) {
           return true;
         }
@@ -2857,7 +2910,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         const match = rows.find((row) =>
           this.matchesPreferredFileHint(row.path, collectionRelativePath),
         );
-        if (match && path.normalize(path.resolve(root.path, match.path)) === normalizedAbsPath) {
+        if (
+          match &&
+          path.normalize(path.resolve(rootValue.path, match.path)) === normalizedAbsPath
+        ) {
           return true;
         }
       } catch (err) {
@@ -2875,8 +2931,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     return isPathInside(this.workspaceDir, absPath);
   }
 
-  private isWithinRoot(root: string, candidate: string): boolean {
-    return isPathInside(root, candidate);
+  private isWithinRoot(rootLocal: string, candidate: string): boolean {
+    return isPathInside(rootLocal, candidate);
   }
 
   private clampResultsByInjectedChars(results: MemorySearchResult[]): MemorySearchResult[] {
@@ -2993,7 +3049,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     await Promise.race([
       pending.catch(() => undefined),
-      new Promise<void>((resolve) => setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS)),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS);
+      }),
     ]);
   }
 

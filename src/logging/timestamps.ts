@@ -7,7 +7,7 @@ export function isValidTimeZone(tz: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
-  let valid = false;
+  let valid;
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz }).format();
     valid = true;

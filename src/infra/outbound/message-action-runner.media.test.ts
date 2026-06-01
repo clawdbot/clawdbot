@@ -364,6 +364,15 @@ describe("runMessageAction media behavior", () => {
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
+      expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
+      expect(sendParams.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
     });
   });
 
@@ -515,7 +524,7 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("rejects host-local text attachments even when fs root expansion is enabled", async () => {
+    it("hydrates validated host-local text attachments when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-text-"));
@@ -523,21 +532,30 @@ describe("runMessageAction media behavior", () => {
         const outsidePath = path.join(tempDir, "secret.txt");
         await fs.writeFile(outsidePath, "secret", "utf8");
 
-        await expect(
-          runMessageAction({
-            cfg: {
-              ...cfg,
-              tools: { fs: { workspaceOnly: false } },
-            },
-            action: "sendAttachment",
-            params: {
-              channel: "attachmentchat",
-              target: "+15551234567",
-              media: outsidePath,
-              message: "caption",
-            },
-          }),
-        ).rejects.toThrow(/Host-local media sends only allow/i);
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        expect(result.kind).toBe("action");
+        expect(result.payload).toMatchObject({
+          ok: true,
+          filename: "secret.txt",
+          caption: "caption",
+          contentType: "text/plain",
+        });
+        expect((result.payload as { buffer?: string }).buffer).toBe(
+          Buffer.from("secret").toString("base64"),
+        );
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }

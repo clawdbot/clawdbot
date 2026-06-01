@@ -9,6 +9,7 @@ import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -28,6 +29,7 @@ import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -46,7 +48,7 @@ import {
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {
@@ -56,6 +58,8 @@ export {
 } from "./auth-profiles.js";
 export {
   formatMissingAuthError,
+  isProviderAuthError,
+  ProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
 } from "./model-auth-runtime-shared.js";
@@ -376,6 +380,189 @@ function shouldUseImplicitAwsSdkAuth(params: {
 
 function profileTypeToAuthMode(type: AuthProfileCredential["type"]): ResolvedProviderAuth["mode"] {
   return type === "oauth" ? "oauth" : type === "token" ? "token" : "api-key";
+}
+
+type ProviderEntryApiKeyProfileReference =
+  | { kind: "none" }
+  | { kind: "literal"; apiKey: string; source: string }
+  | {
+      kind: "profile";
+      profileId: string;
+      credential: AuthProfileCredential;
+      mode: ResolvedProviderAuth["mode"];
+    }
+  | {
+      kind: "profile-incompatible";
+      profileId: string;
+      credentialProvider: string;
+      credentialType: AuthProfileCredential["type"];
+      reason: "credential-class" | "provider-binding";
+    }
+  | { kind: "marker" };
+
+export type ProviderEntryApiKeyBindingResolution =
+  | { kind: "none" }
+  | { kind: "literal"; apiKey: string; source: string }
+  | { kind: "profile-resolved"; auth: ResolvedProviderAuth }
+  | {
+      kind: "profile-incompatible";
+      profileId: string;
+      credentialProvider: string;
+      credentialType: AuthProfileCredential["type"];
+      reason: "credential-class" | "provider-binding";
+    }
+  | { kind: "profile-unresolved"; profileId: string; error?: unknown };
+
+function normalizeProviderEntryBaseUrlForBinding(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return trimmed.toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+function providerEntriesShareBaseUrl(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  credentialProvider: string;
+}): boolean {
+  const providerBaseUrl = normalizeProviderEntryBaseUrlForBinding(
+    resolveProviderConfig(params.cfg, params.provider)?.baseUrl,
+  );
+  const credentialProviderBaseUrl = normalizeProviderEntryBaseUrlForBinding(
+    resolveProviderConfig(params.cfg, params.credentialProvider)?.baseUrl,
+  );
+  return Boolean(
+    providerBaseUrl && credentialProviderBaseUrl && providerBaseUrl === credentialProviderBaseUrl,
+  );
+}
+
+function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
+  return credential.type === "api_key" || credential.type === "token";
+}
+
+export function canUseProfileAsProviderEntryApiKey(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  credential: AuthProfileCredential;
+}): boolean {
+  if (!isBearerProfileCredential(params.credential)) {
+    return false;
+  }
+  if (
+    isStoredCredentialCompatibleWithAuthProvider({
+      cfg: params.cfg,
+      provider: params.provider,
+      credential: params.credential,
+    })
+  ) {
+    return true;
+  }
+  // Split-provider entries may intentionally point at the same upstream endpoint
+  // with different profile ids. Require a matching configured base URL before
+  // allowing a bearer profile to cross provider ids.
+  return providerEntriesShareBaseUrl({
+    cfg: params.cfg,
+    provider: params.provider,
+    credentialProvider: params.credential.provider,
+  });
+}
+
+export function resolveProviderEntryApiKeyProfileReference(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  store: AuthProfileStore;
+}): ProviderEntryApiKeyProfileReference {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (coerceSecretRef(providerConfig?.apiKey)) {
+    return { kind: "none" };
+  }
+  const perEntryRawKey = normalizeOptionalSecretInput(providerConfig?.apiKey);
+  if (!perEntryRawKey) {
+    return { kind: "none" };
+  }
+  if (isNonSecretApiKeyMarker(perEntryRawKey)) {
+    return { kind: "marker" };
+  }
+  const credential = params.store.profiles[perEntryRawKey];
+  if (!credential) {
+    return { kind: "literal", apiKey: perEntryRawKey, source: "models.json" };
+  }
+  if (!isBearerProfileCredential(credential)) {
+    return {
+      kind: "profile-incompatible",
+      profileId: perEntryRawKey,
+      credentialProvider: credential.provider,
+      credentialType: credential.type,
+      reason: "credential-class",
+    };
+  }
+  if (
+    !canUseProfileAsProviderEntryApiKey({ cfg: params.cfg, provider: params.provider, credential })
+  ) {
+    return {
+      kind: "profile-incompatible",
+      profileId: perEntryRawKey,
+      credentialProvider: credential.provider,
+      credentialType: credential.type,
+      reason: "provider-binding",
+    };
+  }
+  return {
+    kind: "profile",
+    profileId: perEntryRawKey,
+    credential,
+    mode: profileTypeToAuthMode(credential.type),
+  };
+}
+
+export async function resolveProviderEntryApiKeyBinding(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  store: AuthProfileStore;
+  agentDir?: string;
+}): Promise<ProviderEntryApiKeyBindingResolution> {
+  const reference = resolveProviderEntryApiKeyProfileReference(params);
+  if (reference.kind === "none" || reference.kind === "marker") {
+    return { kind: "none" };
+  }
+  if (reference.kind === "literal") {
+    return reference;
+  }
+  if (reference.kind === "profile-incompatible") {
+    return reference;
+  }
+  try {
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store: params.store,
+      profileId: reference.profileId,
+      agentDir: params.agentDir,
+    });
+    if (!resolved) {
+      return { kind: "profile-unresolved", profileId: reference.profileId };
+    }
+    const resolvedProfileId = resolved.profileId ?? reference.profileId;
+    return {
+      kind: "profile-resolved",
+      auth: {
+        apiKey: resolved.apiKey,
+        profileId: resolvedProfileId,
+        source: `profile:${resolvedProfileId}`,
+        mode: resolved.profileType ? profileTypeToAuthMode(resolved.profileType) : reference.mode,
+      },
+    };
+  } catch (err) {
+    return { kind: "profile-unresolved", profileId: reference.profileId, error: err };
+  }
 }
 
 function resolveConfiguredAwsSdkProfileAuth(params: {
@@ -844,16 +1031,7 @@ export async function resolveApiKeyForProvider(params: {
   if (shouldUseImplicitAwsSdkAuth({ cfg, provider, modelApi: params.modelApi })) {
     return resolveAwsSdkAuthInfo();
   }
-  if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
-    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
-    if (customKey) {
-      return {
-        apiKey: customKey.apiKey,
-        source: customKey.source,
-        mode: "api-key",
-      };
-    }
-  }
+
   if (params.credentialPrecedence === "env-first") {
     const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
     if (envResolved) {
@@ -877,6 +1055,62 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
+  // Resolve stored profile-id references before literal apiKey fallbacks.
+  // Matched profile references are terminal so bad bindings cannot silently
+  // fall through to a different credential or to the profile id as bearer text.
+  scopedStore ??= resolveScopedAuthProfileStore({
+    agentDir,
+    cfg,
+    provider,
+    preferredProfile,
+  });
+  const providerEntryBinding = await resolveProviderEntryApiKeyBinding({
+    cfg,
+    provider,
+    store: scopedStore,
+    agentDir,
+  });
+  if (providerEntryBinding.kind === "profile-resolved") {
+    assertAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      profileId: providerEntryBinding.auth.profileId ?? provider,
+      mode: providerEntryBinding.auth.mode,
+    });
+    return providerEntryBinding.auth;
+  }
+  if (providerEntryBinding.kind === "profile-incompatible") {
+    const reason =
+      providerEntryBinding.reason === "credential-class"
+        ? "which is not a bearer-style auth class"
+        : "which is not compatible with this provider entry's auth binding";
+    const action =
+      providerEntryBinding.reason === "credential-class"
+        ? "Use an api-key or token profile, or set apiKey to a literal bearer token."
+        : "Use a compatible provider auth alias, configure the referenced provider entry with the same baseUrl, or set apiKey to a literal bearer token.";
+    throw new Error(
+      `Per-entry apiKey "${providerEntryBinding.profileId}" for provider "${provider}" references a "${providerEntryBinding.credentialType}" credential for provider "${providerEntryBinding.credentialProvider}", ${reason}. ${action}`,
+    );
+  }
+  if (providerEntryBinding.kind === "profile-unresolved") {
+    const cause = providerEntryBinding.error
+      ? formatErrorMessage(providerEntryBinding.error)
+      : "credential resolution returned no key";
+    throw new Error(
+      `Per-entry apiKey "${providerEntryBinding.profileId}" for provider "${provider}" matched a stored profile but failed to resolve: ${cause}. Fix the referenced profile or set apiKey to a literal bearer token.`,
+    );
+  }
+
+  if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
+    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+    if (customKey) {
+      return {
+        apiKey: customKey.apiKey,
+        source: customKey.source,
+        mode: "api-key",
+      };
+    }
+  }
   const providerConfig = resolveProviderConfig(cfg, provider);
   const configuredLocalKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
@@ -1032,7 +1266,9 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
+  throw new ProviderAuthError(
+    "missing-provider-auth",
+    provider,
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,

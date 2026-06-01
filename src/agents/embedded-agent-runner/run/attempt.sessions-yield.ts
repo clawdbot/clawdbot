@@ -25,7 +25,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
   const outcome = await Promise.race([
     params.settlePromise
       .then(() => "settled" as const)
-      .catch((err) => {
+      .catch((err: unknown) => {
         log.warn(
           `sessions_yield abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );

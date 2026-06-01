@@ -1,3 +1,4 @@
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRuntimeError } from "./errors.js";
 import {
@@ -7,7 +8,6 @@ import {
   requireAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "./registry.js";
-import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {

@@ -107,7 +107,8 @@ async function runToolCallRepairCase(params: {
       }),
   });
 
-  for await (const item of stream) {
+  for await (const ignoredItem of stream) {
+    void ignoredItem;
     // drain
   }
   const result = await stream.result();
@@ -256,7 +257,8 @@ describe("openai-completions malformed tool-call argument repair", () => {
           }),
       });
 
-      for await (const item of stream) {
+      for await (const ignoredItem of stream) {
+        void ignoredItem;
         // drain
       }
       const result = await stream.result();

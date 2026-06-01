@@ -153,6 +153,16 @@ export function formatEnvelopeTimestamp(
   return weekday ? `${weekday} ${formatted}` : formatted;
 }
 
+function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
+  const label = sanitizeEnvelopeHeaderPart(from || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  if (idMarkerIndex > 0) {
+    const displayLabel = label.slice(0, idMarkerIndex).trim();
+    return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  }
+  return label.includes(":") ? "(sender)" : label;
+}
+
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   const channel = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.channel) || "Channel");
   const parts: string[] = [channel];
@@ -211,12 +221,15 @@ export function formatInboundEnvelope(params: {
   const resolvedSenderRaw =
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
+  const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
   const body =
     isDirect && params.fromMe
       ? `(self): ${params.body}`
-      : !isDirect && resolvedSender
-        ? `${resolvedSender}: ${params.body}`
-        : params.body;
+      : isDirect && directSender
+        ? `${directSender}: ${params.body}`
+        : !isDirect && resolvedSender
+          ? `${resolvedSender}: ${params.body}`
+          : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,

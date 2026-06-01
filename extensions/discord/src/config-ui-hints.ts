@@ -17,6 +17,22 @@ export const discordChannelConfigUiHints = {
     label: "Discord Config Writes",
     help: "Allow Discord to write config in response to channel events/commands (default: true).",
   },
+  mentionPatterns: {
+    label: "Discord Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Discord channel IDs. Native Discord @mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Discord Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Discord Mention Pattern Allowlist",
+    help: "Discord channel IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Discord Mention Pattern Denylist",
+    help: "Discord channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
+  },
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",

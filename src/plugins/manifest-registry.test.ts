@@ -1878,6 +1878,7 @@ describe("loadPluginManifestRegistry", () => {
             {
               rootPath: "plugins.entries.openai.config",
               overlayPath: "image",
+              overlayMapPath: "accounts",
               required: ["apiKey"],
             },
           ],
@@ -1953,6 +1954,7 @@ describe("loadPluginManifestRegistry", () => {
           {
             rootPath: "plugins.entries.openai.config",
             overlayPath: "image",
+            overlayMapPath: "accounts",
             required: ["apiKey"],
           },
         ],

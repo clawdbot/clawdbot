@@ -4,6 +4,7 @@ import type {
   ResponseFunctionCallOutputItemList,
   ResponseFunctionToolCall,
   ResponseInput,
+  ResponseInputItem,
   ResponseInputContent,
   ResponseInputImage,
   ResponseInputText,
@@ -38,6 +39,23 @@ import { transformMessages } from "./transform-messages.js";
 // =============================================================================
 // Utilities
 // =============================================================================
+
+type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
+
+function normalizeResponsesReasoningReplayItem(params: {
+  item: ReplayableResponseReasoningItem;
+  replayResponsesItemIds: boolean;
+}): ReplayableResponseReasoningItem {
+  const next = { ...(params.item as ReplayableResponseReasoningItem & Record<string, unknown>) };
+  if (!Array.isArray(next.summary)) {
+    next.summary = [];
+  }
+  if (!params.replayResponsesItemIds) {
+    delete next.id;
+  }
+  return next as ReplayableResponseReasoningItem;
+}
 
 function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
   const payload: TextSignatureV1 = { v: 1, id };
@@ -75,6 +93,20 @@ function parseTextSignature(
   return { id: signature };
 }
 
+function resolveReplayableResponsesMessageId(params: {
+  textSignatureId?: string;
+  fallbackId: string;
+  fallbackOrdinal: number;
+  previousReplayItemWasReasoning: boolean;
+}): string | undefined {
+  if (!params.textSignatureId) {
+    return params.fallbackOrdinal === 0
+      ? params.fallbackId
+      : `${params.fallbackId}_${params.fallbackOrdinal}`;
+  }
+  return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
+}
+
 export interface OpenAIResponsesStreamOptions {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   resolveServiceTier?: (
@@ -89,6 +121,7 @@ export interface OpenAIResponsesStreamOptions {
 
 export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
+  replayResponsesItemIds?: boolean;
 }
 export { convertResponsesTools };
 export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
@@ -139,6 +172,7 @@ export function convertResponsesMessages<TApi extends Api>(
   options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
   const messages: ResponseInput = [];
+  const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
 
   const normalizeIdPart = (part: string): string => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -221,6 +255,7 @@ export function convertResponsesMessages<TApi extends Api>(
       const output: ResponseInput = [];
       let textFallbackOrdinal = 0;
       const assistantMsg = msg;
+      let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         assistantMsg.model !== model.id &&
         assistantMsg.provider === model.provider &&
@@ -229,56 +264,62 @@ export function convertResponsesMessages<TApi extends Api>(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
-            const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-            output.push(reasoningItem);
+            const reasoningItem = normalizeResponsesReasoningReplayItem({
+              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
+              replayResponsesItemIds: shouldReplayResponsesItemIds,
+            });
+            output.push(reasoningItem as ResponseInputItem);
+            previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
           const textBlock = block;
           const parsedSignature = parseTextSignature(textBlock.textSignature);
-          // OpenAI requires id to be max 64 characters
-          let msgId = parsedSignature?.id;
-          if (!msgId) {
-            // Reasoning-dropped/model-switch replay strips textSignature, which can
-            // leave several text blocks in one assistant turn without ids. msgIndex
-            // is per-message, so disambiguate fallbacks to avoid duplicate item ids
-            // (issue #88019).
-            msgId =
-              textFallbackOrdinal === 0
-                ? `msg_${msgIndex}`
-                : `msg_${msgIndex}_${textFallbackOrdinal}`;
+          let msgId = shouldReplayResponsesItemIds
+            ? resolveReplayableResponsesMessageId({
+                textSignatureId: parsedSignature?.id,
+                fallbackId: `msg_${msgIndex}`,
+                fallbackOrdinal: textFallbackOrdinal,
+                previousReplayItemWasReasoning,
+              })
+            : undefined;
+          if (!parsedSignature?.id) {
             textFallbackOrdinal += 1;
-          } else if (msgId.length > 64) {
+          }
+          if (msgId && msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
-          output.push({
+          const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
             content: [
               { type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] },
             ],
             status: "completed",
-            id: msgId,
+            ...(msgId ? { id: msgId } : {}),
             phase: parsedSignature?.phase,
-          } satisfies ResponseOutputMessage);
+          };
+          output.push(messageItem as ResponseInputItem);
+          previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const toolCall = block;
           const [callId, itemIdRaw] = toolCall.id.split("|");
-          let itemId: string | undefined = itemIdRaw;
+          let itemId: string | undefined = shouldReplayResponsesItemIds ? itemIdRaw : undefined;
 
           // For different-model messages, set id to undefined to avoid pairing validation.
           // OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
           // By omitting the id, we avoid triggering that validation (like cross-provider does).
-          if (isDifferentModel && itemId?.startsWith("fc_")) {
+          if (shouldReplayResponsesItemIds && isDifferentModel && itemId?.startsWith("fc_")) {
             itemId = undefined;
           }
 
           output.push({
             type: "function_call",
-            id: itemId,
+            ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: toolCall.name,
             arguments: JSON.stringify(toolCall.arguments),
           });
+          previousReplayItemWasReasoning = false;
         }
       }
       if (output.length === 0) {

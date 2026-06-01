@@ -45,6 +45,8 @@ openclaw doctor --deep
 openclaw doctor --fix
 openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
+openclaw doctor --post-upgrade
+openclaw doctor --post-upgrade --json
 ```
 
 For channel-specific permissions, use the channel probes instead of `doctor`:
@@ -68,7 +70,8 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--allow-exec`: allow doctor to execute configured exec SecretRefs while verifying secrets
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
-- `--json`: with `--lint`, emit JSON findings instead of human output
+- `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
+- `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
 - `--only <id>`: with `--lint`, run only a check id; repeat to run a small selected set
@@ -188,6 +191,16 @@ id is not registered, no check runs for that id; use the command's `checksRun`
 and `checksSkipped` fields to verify a focused gate is selecting the checks you
 expect.
 
+## Post-upgrade mode
+
+`openclaw doctor --post-upgrade` runs plugin compatibility probes intended to be
+chained after a build or upgrade. Findings are emitted to stdout; the command
+exits with code 1 if any finding has `level: "error"`. Add `--json` to receive a
+machine-readable envelope (`{ probesRun, findings }`) suitable for CI, the
+community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the
+installed plugin index is missing or malformed, JSON mode still emits that
+envelope with a `plugin.index_unavailable` error finding.
+
 Notes:
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
@@ -199,7 +212,7 @@ Notes:
 - Modernized health checks can expose a `repair()` path for `doctor --fix`; checks that do not expose one continue through the existing doctor repair flow.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` when you intentionally want to replace the launcher.
 - State integrity checks now detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires an interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
-- Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and can rewrite them in place before the scheduler has to auto-normalize them at runtime.
+- Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and rewrites them before importing canonical rows into SQLite.
 - Doctor reports cron jobs with explicit `payload.model` overrides, including provider namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
 - On Linux, doctor warns when the user's crontab still runs legacy `~/.openclaw/bin/ensure-whatsapp.sh`; that script is no longer maintained and can log false WhatsApp gateway outages when cron lacks the systemd user-bus environment.
 - When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.

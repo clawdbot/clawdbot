@@ -27,6 +27,8 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   if (!name) {
     throw new Error("gateway method descriptor name must not be empty");
   }
+  // Plugin-owned methods pass through the plugin namespace policy so plugins cannot weaken
+  // protected core-looking method names by declaring a permissive scope.
   const normalizedScope =
     input.scope === NODE_GATEWAY_METHOD_SCOPE || input.scope === DYNAMIC_GATEWAY_METHOD_SCOPE
       ? input.scope
@@ -48,12 +50,15 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   };
 }
 
+/** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
 ): GatewayMethodRegistry {
   const descriptors = inputs.map(normalizeDescriptor);
   const byName = new Map<string, GatewayMethodDescriptor>();
   for (const descriptor of descriptors) {
+    // Duplicate method names would make authorization and handler dispatch disagree about the
+    // owner/scope, so reject them before exposing any registry view.
     if (byName.has(descriptor.name)) {
       throw new Error(`gateway method already registered: ${descriptor.name}`);
     }
@@ -73,6 +78,7 @@ export function createGatewayMethodRegistry(
   };
 }
 
+/** Converts a plain handler map into scoped descriptors owned by one gateway surface. */
 export function createGatewayMethodDescriptorsFromHandlers(params: {
   handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
@@ -94,6 +100,7 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
   });
 }
 
+/** Creates a plugin-owned method descriptor with plugin namespace scope normalization. */
 export function createPluginGatewayMethodDescriptor(params: {
   pluginId: string;
   name: string;
@@ -109,6 +116,7 @@ export function createPluginGatewayMethodDescriptor(params: {
   };
 }
 
+/** Resolves plugin method descriptors, including the legacy handler-only registry shape. */
 export function createPluginGatewayMethodDescriptors(
   registry: Pick<PluginRegistry, "gatewayHandlers"> &
     Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
@@ -117,6 +125,8 @@ export function createPluginGatewayMethodDescriptors(
   if (descriptors.length > 0) {
     return [...descriptors];
   }
+  // Older plugin registries only carried handlers, so keep them callable but assign admin scope
+  // until the plugin can provide explicit descriptor metadata.
   return createGatewayMethodDescriptorsFromHandlers({
     handlers: registry.gatewayHandlers,
     owner: { kind: "plugin", pluginId: "unknown" },

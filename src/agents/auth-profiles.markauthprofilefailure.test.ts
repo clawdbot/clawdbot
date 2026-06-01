@@ -225,6 +225,27 @@ describe("markAuthProfileFailure", () => {
       expect(stats?.failureCounts?.overloaded).toBe(1);
     });
   });
+
+  it("records timeout failures with model-scoped cooldown (#87462)", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "timeout",
+        modelId: "claude-sonnet-4.6",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.cooldownUntil).toBe("number");
+      expect(stats?.cooldownReason).toBe("timeout");
+      // cooldownModel must be set so fallback models on the same profile
+      // can still bypass; otherwise one model's transient timeout takes
+      // down the whole provider chain (#87462).
+      expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+      expect(stats?.failureCounts?.timeout).toBe(1);
+    });
+  });
   it("disables auth_permanent failures for ~10 minutes by default", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();

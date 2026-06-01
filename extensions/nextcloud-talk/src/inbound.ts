@@ -230,7 +230,7 @@ export async function handleNextcloudTalkInbound(params: {
     providerKey: "nextcloud-talk",
     accountId: account.accountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
-    log: (message) => runtime.log?.(message),
+    log: (messageValue) => runtime.log?.(messageValue),
   });
   const commandAuthorized = access.commandAccess.authorized;
   const accessReason =
@@ -279,7 +279,7 @@ export async function handleNextcloudTalkInbound(params: {
 
   if (access.commandAccess.shouldBlockControlCommand) {
     logInboundDrop({
-      log: (message) => runtime.log?.(message),
+      log: (messageLocal) => runtime.log?.(messageLocal),
       channel: CHANNEL_ID,
       reason: "control command (unauthorized)",
       target: senderId,

@@ -1633,7 +1633,9 @@ async function getFreeGatewayPort(): Promise<number> {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthProfileStore {
@@ -1900,7 +1902,9 @@ async function waitForSessionAssistantText(params: {
         `${params.context}: waiting for transcript (${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s)`,
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     delayMs = Math.min(delayMs * 2, 250);
   }
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);

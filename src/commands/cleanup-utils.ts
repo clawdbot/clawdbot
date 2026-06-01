@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
+import {
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
+} from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
+import { resolveHomeDir, shortenHomeInString } from "../utils.js";
 
 type RemovalResult = {
   ok: boolean;
@@ -19,21 +24,24 @@ type CleanupResolvedPaths = {
   oauthInsideState: boolean;
 };
 
+type RemovalOptions = {
+  dryRun?: boolean;
+  label?: string;
+};
+
+type StateRemovalOptions = {
+  dryRun?: boolean;
+  preservePaths?: readonly string[];
+};
+
 function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
-  const defaults = cfg?.agents?.defaults;
-  if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {
-    dirs.add(resolveUserPath(defaults.workspace));
-  }
-  const list = Array.isArray(cfg?.agents?.list) ? cfg?.agents?.list : [];
-  for (const agent of list) {
-    const workspace = (agent as { workspace?: unknown }).workspace;
-    if (typeof workspace === "string" && workspace.trim()) {
-      dirs.add(resolveUserPath(workspace));
-    }
-  }
-  if (dirs.size === 0) {
+  if (!cfg) {
     dirs.add(resolveDefaultAgentWorkspaceDir());
+    return [...dirs];
+  }
+  for (const agentId of listAgentIds(cfg)) {
+    dirs.add(resolveAgentWorkspaceDir(cfg, agentId));
   }
   return [...dirs];
 }
@@ -78,7 +86,7 @@ function isUnsafeRemovalTarget(target: string): boolean {
 export async function removePath(
   target: string,
   runtime: RuntimeEnv,
-  opts?: { dryRun?: boolean; label?: string },
+  opts?: RemovalOptions,
 ): Promise<RemovalResult> {
   if (!target?.trim()) {
     return { ok: false, skipped: true };
@@ -104,15 +112,116 @@ export async function removePath(
   }
 }
 
+export async function removeWorkspaceAttestationPaths(
+  workspaceDirs: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: RemovalOptions,
+): Promise<void> {
+  for (const workspaceDir of workspaceDirs) {
+    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+      workspaceDir,
+    ).entries()) {
+      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+        await removePath(attestationPath, runtime, opts);
+      }
+    }
+  }
+}
+
+async function existingPaths(paths: readonly string[]): Promise<string[]> {
+  const existing: string[] = [];
+  for (const target of paths) {
+    if (!target?.trim()) {
+      continue;
+    }
+    const resolved = path.resolve(target);
+    try {
+      await fs.lstat(resolved);
+      existing.push(resolved);
+    } catch {
+      // Missing workspaces do not need preservation during destructive cleanup.
+    }
+  }
+  return existing;
+}
+
+function shouldPreservePath(target: string, preservePaths: readonly string[]): boolean {
+  return preservePaths.some((preservePath) => isPathWithin(target, preservePath));
+}
+
+function pathContainsPreservedPath(target: string, preservePaths: readonly string[]): boolean {
+  return preservePaths.some((preservePath) => isPathWithin(preservePath, target));
+}
+
+async function removePathPreserving(
+  target: string,
+  preservePaths: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: RemovalOptions,
+): Promise<RemovalResult> {
+  if (!target?.trim()) {
+    return { ok: false, skipped: true };
+  }
+  const resolved = path.resolve(target);
+  const label = opts?.label ?? resolved;
+  const displayLabel = shortenHomeInString(label);
+  if (isUnsafeRemovalTarget(resolved)) {
+    runtime.error(`Refusing to remove unsafe path: ${displayLabel}`);
+    return { ok: false };
+  }
+  if (shouldPreservePath(resolved, preservePaths)) {
+    return { ok: true, skipped: true };
+  }
+  if (!pathContainsPreservedPath(resolved, preservePaths)) {
+    return removePath(resolved, runtime, opts);
+  }
+  if (opts?.dryRun) {
+    const preserved = preservePaths
+      .filter((preservePath) => isPathWithin(preservePath, resolved))
+      .map((preservePath) => shortenHomeInString(preservePath))
+      .join(", ");
+    runtime.log(`[dry-run] remove ${displayLabel} preserving ${preserved}`);
+    return { ok: true, skipped: true };
+  }
+  try {
+    const stat = await fs.lstat(resolved);
+    if (!stat.isDirectory()) {
+      return removePath(resolved, runtime, opts);
+    }
+    const entries = await fs.readdir(resolved);
+    for (const entry of entries) {
+      await removePathPreserving(path.join(resolved, entry), preservePaths, runtime);
+    }
+    runtime.log(`Removed contents of ${displayLabel}`);
+    return { ok: true };
+  } catch (err) {
+    runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
+    return { ok: false };
+  }
+}
+
 export async function removeStateAndLinkedPaths(
   cleanup: CleanupResolvedPaths,
   runtime: RuntimeEnv,
-  opts?: { dryRun?: boolean },
+  opts?: StateRemovalOptions,
 ): Promise<void> {
-  await removePath(cleanup.stateDir, runtime, {
-    dryRun: opts?.dryRun,
-    label: cleanup.stateDir,
-  });
+  const stateDir = path.resolve(cleanup.stateDir);
+  const preservePaths = (
+    opts?.dryRun
+      ? (opts.preservePaths ?? []).map((target) => path.resolve(target))
+      : await existingPaths(opts?.preservePaths ?? [])
+  ).filter((target) => isPathWithin(target, stateDir));
+  if (preservePaths.length > 0) {
+    await removePathPreserving(stateDir, preservePaths, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.stateDir,
+    });
+  } else {
+    await removePath(cleanup.stateDir, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.stateDir,
+    });
+  }
   if (!cleanup.configInsideState) {
     await removePath(cleanup.configPath, runtime, {
       dryRun: opts?.dryRun,

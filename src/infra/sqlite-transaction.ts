@@ -30,7 +30,7 @@ function isRetryableCommitError(error: unknown): boolean {
 }
 
 function commitImmediateTransaction(db: DatabaseSync): void {
-  for (let attempt = 1; ; attempt += 1) {
+  for (const attempt of Array.from({ length: MAX_COMMIT_ATTEMPTS }, (_, index) => index + 1)) {
     try {
       db.exec("COMMIT");
       return;

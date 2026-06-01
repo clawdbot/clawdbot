@@ -26,6 +26,9 @@ import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
+/**
+ * Serializes Android runtime-permission prompts behind coroutine-friendly request calls.
+ */
 class PermissionRequester internal constructor(
   private val activity: ComponentActivity,
   launcherFactory: ((Map<String, Boolean>) -> Unit) -> ActivityResultLauncher<Array<String>>,
@@ -50,8 +53,12 @@ class PermissionRequester internal constructor(
   private val mutex = Mutex()
   private val requestSlotsLock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
+  // ActivityResult launchers cannot be registered after start; pre-register a small pool for nested UI flows.
   private val launchers = List(4) { createPermissionRequestSlot(launcherFactory) }
 
+  /**
+   * Request missing Android runtime permissions and return the final grant state for every requested permission.
+   */
   suspend fun requestIfMissing(
     permissions: List<String>,
     timeoutMs: Long = 20_000,
@@ -93,6 +100,7 @@ class PermissionRequester internal constructor(
           try {
             withTimeout(timeoutMs) { deferred.await() }
           } catch (err: TimeoutCancellationException) {
+            // Late ActivityResult callbacks are ignored by completePermissionRequest.
             request.timedOut = true
             throw err
           }
@@ -130,6 +138,7 @@ class PermissionRequester internal constructor(
 
   private fun reservePermissionRequestSlot(request: PendingPermissionRequest): PermissionRequestSlot =
     synchronized(requestSlotsLock) {
+      // The outer mutex serializes normal callers; this guard catches accidental concurrent launchers in tests.
       val slot = launchers.firstOrNull { it.request == null } ?: error("permission request launcher busy")
       slot.request = request
       slot
@@ -145,6 +154,7 @@ class PermissionRequester internal constructor(
           slot.request = null
         }
       } ?: return
+    // Timed-out requests have already resumed callers with failure; ignore any late platform callback.
     if (request.timedOut) return
     request.deferred.complete(result)
   }
@@ -186,6 +196,7 @@ class PermissionRequester internal constructor(
         val actualObserver =
           LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
+            // Do not resume a destroyed Activity with a positive result.
             finish(false)
           }
         observer = actualObserver

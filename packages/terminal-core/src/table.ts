@@ -1,4 +1,4 @@
-import { splitGraphemes, visibleWidth } from "./ansi.js";
+import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { displayString } from "./display-string.js";
 
 type Align = "left" | "right" | "center";
@@ -48,20 +48,24 @@ function repeat(ch: string, n: number): string {
 }
 
 function padCell(text: string, width: number, align: Align): string {
-  const w = visibleWidth(text);
+  // A single grapheme wider than the cell (e.g. a width-2 CJK/emoji glyph in a
+  // width-1 column) survives wrapLine intact, so clamp here to keep every cell
+  // exactly `width` columns and preserve the border-alignment invariant.
+  const content = visibleWidth(text) > width ? truncateToVisibleWidth(text, width) : text;
+  const w = visibleWidth(content);
   if (w >= width) {
-    return text;
+    return content;
   }
   const pad = width - w;
   if (align === "right") {
-    return `${repeat(" ", pad)}${text}`;
+    return `${repeat(" ", pad)}${content}`;
   }
   if (align === "center") {
     const left = Math.floor(pad / 2);
     const right = pad - left;
-    return `${repeat(" ", left)}${text}${repeat(" ", right)}`;
+    return `${repeat(" ", left)}${content}${repeat(" ", right)}`;
   }
-  return `${text}${repeat(" ", pad)}`;
+  return `${content}${repeat(" ", pad)}`;
 }
 
 function wrapLine(text: string, width: number): string[] {
@@ -183,7 +187,7 @@ function wrapLine(text: string, width: number): string[] {
     return params.every((param) => Number.isInteger(param)) ? params : null;
   };
 
-  const activeSgrAfter = (tokens: Token[]) => {
+  const activeSgrAfter = (tokensValue: Token[]) => {
     type SgrCategory =
       | "background"
       | "blink"
@@ -268,7 +272,7 @@ function wrapLine(text: string, width: number): string[] {
       }
       return false;
     };
-    for (const token of tokens) {
+    for (const token of tokensValue) {
       if (token.kind !== "ansi") {
         continue;
       }
@@ -310,17 +314,17 @@ function wrapLine(text: string, width: number): string[] {
     lines.push(cleaned);
   };
 
-  const trimLeadingSpaces = (tokens: Token[]) => {
+  const trimLeadingSpaces = (tokensLocal: Token[]) => {
     while (true) {
-      const firstCharIndex = tokens.findIndex((token) => token.kind === "char");
-      if (firstCharIndex < 0) {
+      const firstCharIndexLocal = tokensLocal.findIndex((token) => token.kind === "char");
+      if (firstCharIndexLocal < 0) {
         return;
       }
-      const firstChar = tokens[firstCharIndex];
+      const firstChar = tokensLocal[firstCharIndexLocal];
       if (!firstChar || !isSpaceChar(firstChar.value)) {
         return;
       }
-      tokens.splice(firstCharIndex, 1);
+      tokensLocal.splice(firstCharIndexLocal, 1);
     }
   };
 
@@ -509,8 +513,8 @@ export function renderTable(opts: RenderTableOptions): string {
   // If we have room and any flex columns, expand them to fill the available width.
   // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
   if (maxWidth) {
-    const sepCount = columns.length + 1;
-    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
+    const sepCountLocal = columns.length + 1;
+    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCountLocal;
     let extra = maxWidth - currentTotal;
     if (extra > 0) {
       const flexCols = columns

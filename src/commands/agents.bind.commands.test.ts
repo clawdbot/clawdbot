@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   loadFreshAgentsBindCommandModuleForTest,
   readConfigFileSnapshotMock,
@@ -116,6 +117,21 @@ let agentsBindCommand: typeof import("./agents.commands.bind.js").agentsBindComm
 let agentsBindingsCommand: typeof import("./agents.commands.bind.js").agentsBindingsCommand;
 let agentsUnbindCommand: typeof import("./agents.commands.bind.js").agentsUnbindCommand;
 
+type JsonTestRuntime = RuntimeEnv & {
+  writeStdout: ReturnType<typeof vi.fn>;
+  writeJson: ReturnType<typeof vi.fn>;
+};
+
+function createJsonTestRuntime(): JsonTestRuntime {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
+}
+
 describe("agents bind/unbind commands", () => {
   beforeAll(async () => {
     ({ agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } =
@@ -227,6 +243,26 @@ describe("agents bind/unbind commands", () => {
       { agentId: "main", match: { channel: "matrix" } },
     ]);
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("reports empty unbind-all as JSON without text logs", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+    const jsonRuntime = createJsonTestRuntime();
+
+    await agentsUnbindCommand({ agent: "main", all: true, json: true }, jsonRuntime);
+
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(jsonRuntime.log).not.toHaveBeenCalled();
+    expect(jsonRuntime.writeJson.mock.calls[0]?.[0]).toStrictEqual({
+      agentId: "main",
+      removed: [],
+      missing: [],
+      conflicts: [],
+    });
+    expect(jsonRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("reports ownership conflicts during unbind and exits 1", async () => {

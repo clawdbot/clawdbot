@@ -9,6 +9,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
@@ -16,7 +17,7 @@ import {
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -54,10 +55,12 @@ import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
+type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
 
 let cachedModelAuth: {
   resolveApiKeyForProvider: ResolveApiKeyForProvider;
   requireApiKey: RequireApiKey;
+  isProviderAuthError: IsProviderAuthError;
 } | null = null;
 
 async function loadModelAuth() {
@@ -425,59 +428,140 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
   };
 }
 
+type ProviderExecutionAuth =
+  | {
+      kind: "api-key";
+      apiKeys: string[];
+      source?: string;
+      providerConfig?: ModelProviderConfig;
+    }
+  | {
+      kind: "none";
+      source: string;
+      providerConfig?: ModelProviderConfig;
+    };
+
 async function resolveProviderExecutionAuth(params: {
   providerId: string;
+  provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
   workspaceDir?: string;
-}) {
+}): Promise<ProviderExecutionAuth> {
+  const providerConfig = params.cfg.models?.providers?.[params.providerId];
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
   });
   if (literalApiKey) {
     return {
+      kind: "api-key",
       apiKeys: collectProviderApiKeysForExecution({
         provider: params.providerId,
         primaryApiKey: literalApiKey,
       }),
-      providerConfig: params.cfg.models?.providers?.[params.providerId],
+      source: `models.providers.${params.providerId}.apiKey`,
+      providerConfig,
     };
   }
-  const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
-  const auth = await resolveApiKeyForProvider({
-    provider: params.providerId,
-    cfg: params.cfg,
-    profileId: params.entry.profile,
-    preferredProfile: params.entry.preferredProfile,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-  });
-  return {
-    apiKeys: collectProviderApiKeysForExecution({
+  const resolveMediaProviderAuth = (): ProviderExecutionAuth | undefined => {
+    const context = {
+      config: params.cfg,
       provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
-    }),
-    providerConfig: params.cfg.models?.providers?.[params.providerId],
+      providerConfig,
+    };
+    const providerAuth = params.provider?.resolveAuth?.(context);
+    if (!providerAuth) {
+      const syntheticAuth = params.provider?.resolveSyntheticAuth?.(context);
+      const syntheticApiKey = syntheticAuth?.apiKey.trim();
+      const syntheticSource = syntheticAuth?.source;
+      return syntheticApiKey
+        ? {
+            kind: "api-key",
+            apiKeys: collectProviderApiKeysForExecution({
+              provider: params.providerId,
+              primaryApiKey: syntheticApiKey,
+            }),
+            source: syntheticSource,
+            providerConfig,
+          }
+        : undefined;
+    }
+    if (providerAuth.kind === "none") {
+      return {
+        kind: "none",
+        source: providerAuth.source,
+        providerConfig,
+      };
+    }
+    const apiKey = providerAuth.apiKey.trim();
+    if (!apiKey) {
+      return undefined;
+    }
+    return {
+      kind: "api-key",
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: apiKey,
+      }),
+      source: providerAuth.source,
+      providerConfig,
+    };
   };
+  const { isProviderAuthError, requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
+  try {
+    const auth = await resolveApiKeyForProvider({
+      provider: params.providerId,
+      cfg: params.cfg,
+      profileId: params.entry.profile,
+      preferredProfile: params.entry.preferredProfile,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    const apiKey = requireApiKey(auth, params.providerId);
+    return {
+      kind: "api-key",
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: apiKey,
+      }),
+      source: auth.source,
+      providerConfig,
+    };
+  } catch (err) {
+    if (
+      !isProviderAuthError(err, "missing-provider-auth") &&
+      !isProviderAuthError(err, "missing-api-key")
+    ) {
+      throw err;
+    }
+    const mediaAuth = resolveMediaProviderAuth();
+    if (mediaAuth) {
+      return mediaAuth;
+    }
+    throw err;
+  }
 }
 
 async function resolveProviderExecutionContext(params: {
   providerId: string;
+  provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   config?: MediaUnderstandingConfig;
   agentDir?: string;
   workspaceDir?: string;
 }) {
-  const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
+  const auth = await resolveProviderExecutionAuth({
     providerId: params.providerId,
+    provider: params.provider,
     cfg: params.cfg,
     entry: params.entry,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
+  const providerConfig = auth.providerConfig;
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
     ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
@@ -490,7 +574,7 @@ async function resolveProviderExecutionContext(params: {
     sanitizeConfiguredProviderRequest(params.config?.request),
     sanitizeConfiguredProviderRequest(params.entry.request),
   );
-  return { apiKeys, baseUrl, headers, request };
+  return { auth, baseUrl, headers, request };
 }
 
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
@@ -649,8 +733,9 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
+    const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
       providerId,
+      provider,
       cfg,
       entry,
       config: params.config,
@@ -671,31 +756,39 @@ export async function runProviderEntry(params: {
         workspaceDir: params.workspaceDir,
       }) ||
       entry.model;
-    const result = await executeWithApiKeyRotation({
-      provider: providerId,
-      apiKeys,
-      transientRetry: providerOperationRetryConfig("read"),
-      execute: async (apiKey) =>
-        transcribeAudio({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          apiKey,
-          baseUrl,
-          headers,
-          request,
-          model,
-          language:
-            requestOverrides.language ??
-            entry.language ??
-            params.config?.language ??
-            cfg.tools?.media?.audio?.language,
-          prompt: requestOverrides.prompt ?? prompt,
-          query: providerQuery,
-          timeoutMs,
-          fetchFn,
-        }),
+    const authSource = auth.source ?? `provider:${providerId}`;
+    const buildRequest = (requestAuth: { kind: "api-key"; apiKey: string } | { kind: "none" }) => ({
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      apiKey: requestAuth.kind === "api-key" ? requestAuth.apiKey : CUSTOM_LOCAL_AUTH_MARKER,
+      auth:
+        requestAuth.kind === "api-key"
+          ? { kind: "api-key" as const, apiKey: requestAuth.apiKey, source: auth.source }
+          : { kind: "none" as const, source: authSource },
+      baseUrl,
+      headers,
+      request,
+      model,
+      language:
+        requestOverrides.language ??
+        entry.language ??
+        params.config?.language ??
+        cfg.tools?.media?.audio?.language,
+      prompt: requestOverrides.prompt ?? prompt,
+      query: providerQuery,
+      timeoutMs,
+      fetchFn,
     });
+    const result =
+      auth.kind === "api-key"
+        ? await executeWithApiKeyRotation({
+            provider: providerId,
+            apiKeys: auth.apiKeys,
+            transientRetry: providerOperationRetryConfig("read"),
+            execute: async (apiKey) => transcribeAudio(buildRequest({ kind: "api-key", apiKey })),
+          })
+        : await transcribeAudio(buildRequest({ kind: "none" }));
     return {
       kind: "audio.transcription",
       attachmentIndex: params.attachmentIndex,
@@ -722,33 +815,42 @@ export async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
+  const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
     providerId,
+    provider,
     cfg,
     entry,
     config: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
-  const result = await executeWithApiKeyRotation({
-    provider: providerId,
-    apiKeys,
-    transientRetry: providerOperationRetryConfig("read"),
-    execute: (apiKey) =>
-      describeVideo({
-        buffer: media.buffer,
-        fileName: media.fileName,
-        mime: media.mime,
-        apiKey,
-        baseUrl,
-        headers,
-        request,
-        model: entry.model,
-        prompt,
-        timeoutMs,
-        fetchFn,
-      }),
+  const authSource = auth.source ?? `provider:${providerId}`;
+  const buildRequest = (requestAuth: { kind: "api-key"; apiKey: string } | { kind: "none" }) => ({
+    buffer: media.buffer,
+    fileName: media.fileName,
+    mime: media.mime,
+    apiKey: requestAuth.kind === "api-key" ? requestAuth.apiKey : CUSTOM_LOCAL_AUTH_MARKER,
+    auth:
+      requestAuth.kind === "api-key"
+        ? { kind: "api-key" as const, apiKey: requestAuth.apiKey, source: auth.source }
+        : { kind: "none" as const, source: authSource },
+    baseUrl,
+    headers,
+    request,
+    model: entry.model,
+    prompt,
+    timeoutMs,
+    fetchFn,
   });
+  const result =
+    auth.kind === "api-key"
+      ? await executeWithApiKeyRotation({
+          provider: providerId,
+          apiKeys: auth.apiKeys,
+          transientRetry: providerOperationRetryConfig("read"),
+          execute: (apiKey) => describeVideo(buildRequest({ kind: "api-key", apiKey })),
+        })
+      : await describeVideo(buildRequest({ kind: "none" }));
   return {
     kind: "video.description",
     attachmentIndex: params.attachmentIndex,

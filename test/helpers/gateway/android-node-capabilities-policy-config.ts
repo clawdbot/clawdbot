@@ -27,7 +27,7 @@ export function unwrapRemoteConfigSnapshot(raw: unknown): OpenClawConfig {
     return legacyConfig as OpenClawConfig;
   }
 
-  if (Object.keys(rawObj).length > 0 && !Object.prototype.hasOwnProperty.call(rawObj, "payload")) {
+  if (Object.keys(rawObj).length > 0 && !Object.hasOwn(rawObj, "payload")) {
     return rawObj as OpenClawConfig;
   }
 

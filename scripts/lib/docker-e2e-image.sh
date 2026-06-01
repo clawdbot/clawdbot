@@ -117,3 +117,37 @@ docker_e2e_test_state_function_b64() {
     base64 |
     tr -d '\n'
 }
+
+docker_e2e_sample_stats_until_exit() {
+  local container_name="${1:?missing container name}"
+  local docker_pid="${2:?missing docker pid}"
+  local stats_log="${3:?missing stats log}"
+  local run_log="${4:?missing run log}"
+  local label="${5:-Docker E2E}"
+  local heartbeat_seconds="${6:-30}"
+  local started_at="$SECONDS"
+  local last_heartbeat="$SECONDS"
+
+  if ! [[ "$heartbeat_seconds" =~ ^[0-9]+$ ]] || [ "$heartbeat_seconds" -lt 1 ]; then
+    heartbeat_seconds="30"
+  fi
+
+  while kill -0 "$docker_pid" 2>/dev/null; do
+    if docker_e2e_docker_cmd inspect "$container_name" >/dev/null 2>&1; then
+      docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$container_name" >>"$stats_log" 2>/dev/null || true
+    fi
+
+    if ((SECONDS - last_heartbeat >= heartbeat_seconds)); then
+      local elapsed_seconds=$((SECONDS - started_at))
+      local log_bytes="0"
+      if [ -f "$run_log" ]; then
+        log_bytes="$(wc -c <"$run_log" 2>/dev/null || echo 0)"
+        log_bytes="${log_bytes//[[:space:]]/}"
+      fi
+      echo "$label still running (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)..."
+      last_heartbeat="$SECONDS"
+    fi
+
+    sleep 2
+  done
+}

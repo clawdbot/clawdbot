@@ -10,6 +10,22 @@ export const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 export type ModelCatalogBrowseView = "default" | "configured" | "all";
 
+const modelCatalogBrowseDeps = {
+  setTimeout: globalThis.setTimeout,
+  clearTimeout: globalThis.clearTimeout,
+};
+
+export function setModelCatalogBrowseTestDeps(
+  overrides: Partial<typeof modelCatalogBrowseDeps>,
+): void {
+  Object.assign(modelCatalogBrowseDeps, overrides);
+}
+
+export function restoreModelCatalogBrowseTestDeps(): void {
+  modelCatalogBrowseDeps.setTimeout = globalThis.setTimeout;
+  modelCatalogBrowseDeps.clearTimeout = globalThis.clearTimeout;
+}
+
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
   return (
     clampTimerTimeoutMs(value, 1) ??
@@ -37,7 +53,7 @@ export async function loadModelCatalogForBrowse(params: {
   const timedOut = Symbol("model-catalog-browse-timeout");
   const catalogPromise = params.loadCatalog({ readOnly: true });
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), timeoutMs);
+    timeout = modelCatalogBrowseDeps.setTimeout(() => resolve(timedOut), timeoutMs);
     timeout.unref?.();
   });
 
@@ -51,7 +67,7 @@ export async function loadModelCatalogForBrowse(params: {
     return result;
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      modelCatalogBrowseDeps.clearTimeout(timeout);
     }
   }
 }

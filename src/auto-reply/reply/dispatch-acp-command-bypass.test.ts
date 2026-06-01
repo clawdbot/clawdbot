@@ -73,6 +73,30 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
+  it("returns true for registry-backed local help commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandBody: "/help",
+      BodyForCommands: "/help",
+      BodyForAgent: "/help",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("prefers clean command text over channel envelopes", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
+      BodyForCommands: "/status",
+      BodyForAgent: "/status",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
   it("returns true for local unfocus commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",

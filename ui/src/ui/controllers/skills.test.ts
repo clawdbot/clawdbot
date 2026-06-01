@@ -11,8 +11,10 @@ import {
   type SkillsState,
 } from "./skills.ts";
 
-function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn();
+type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
+  const request = vi.fn<TestRequest>();
   const state: SkillsState = {
     client: {
       request,
@@ -53,7 +55,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> 
   return { state, request };
 }
 
-function createDeferredRequestQueue(request: ReturnType<typeof vi.fn>) {
+function createDeferredRequestQueue(request: ReturnType<typeof vi.fn<TestRequest>>) {
   const resolvers: Array<(value: unknown) => void> = [];
   request.mockImplementation(
     () =>
@@ -68,7 +70,10 @@ function createDeferredRequestQueue(request: ReturnType<typeof vi.fn>) {
   };
 }
 
-function mockSkillMutationRequests(request: ReturnType<typeof vi.fn>, installMessage?: string) {
+function mockSkillMutationRequests(
+  request: ReturnType<typeof vi.fn<TestRequest>>,
+  installMessage?: string,
+) {
   request.mockImplementation(async (method: string) => {
     if (method === "skills.install" && installMessage) {
       return { message: installMessage };

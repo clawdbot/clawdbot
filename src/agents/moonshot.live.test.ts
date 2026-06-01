@@ -60,7 +60,9 @@ describeLive("moonshot live", () => {
       if (text.length > 0) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 500);
+      });
     }
 
     if (text.length === 0) {

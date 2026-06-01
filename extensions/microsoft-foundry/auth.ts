@@ -52,7 +52,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       );
     }
 
-    let account = getLoggedInAccount();
+    const account = getLoggedInAccount();
     let tenantId = account?.tenantId;
     if (account) {
       const useExisting = await ctx.prompter.confirm({
@@ -61,7 +61,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       });
       if (!useExisting) {
         const loginResult = await loginWithTenantFallback(ctx);
-        account = loginResult.account;
         tenantId = loginResult.tenantId ?? loginResult.account?.tenantId;
       }
     } else {
@@ -70,7 +69,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
         "Azure Login",
       );
       const loginResult = await loginWithTenantFallback(ctx);
-      account = loginResult.account;
       tenantId = loginResult.tenantId ?? loginResult.account?.tenantId;
     }
 

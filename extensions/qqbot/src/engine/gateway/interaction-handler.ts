@@ -199,7 +199,7 @@ export function createInteractionHandler(
     // ---- Approval button / other ----
     const parsed = parseApprovalButtonData(event.data?.resolved?.button_data ?? "");
     if (!parsed) {
-      void acknowledgeInteraction(creds, event.id).catch((err) => {
+      void acknowledgeInteraction(creds, event.id).catch((err: unknown) => {
         log?.error(`Interaction ACK failed: ${err instanceof Error ? err.message : String(err)}`);
       });
       return;

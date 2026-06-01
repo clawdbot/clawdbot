@@ -11,6 +11,7 @@ import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
+import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
@@ -112,43 +113,18 @@ function buildFakeTools(count = 36) {
   });
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) {
-    return 0;
-  }
-  let count = 0;
-  let offset = 0;
-  while (true) {
-    const next = haystack.indexOf(needle, offset);
-    if (next < 0) {
-      return count;
-    }
-    count += 1;
-    offset = next + needle.length;
-  }
-}
-
 async function readSessionLogMentions(params: {
   stateDir: string;
   targetTool: string;
 }): Promise<Record<string, number>> {
   const sessionsDir = path.join(params.stateDir, "agents", "qa", "sessions");
-  const mentions: Record<string, number> = {
-    tool_search_code: 0,
-    [params.targetTool]: 0,
-  };
-  let files: string[] = [];
-  try {
-    files = await fs.readdir(sessionsDir);
-  } catch {
-    return mentions;
-  }
-  for (const file of files.filter((candidate) => candidate.endsWith(".jsonl"))) {
-    const raw = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
-    mentions.tool_search_code += countOccurrences(raw, "tool_search_code");
-    mentions[params.targetTool] += countOccurrences(raw, params.targetTool);
-  }
-  return mentions;
+  return await countSessionLogMentions({
+    sessionsDir,
+    needles: {
+      tool_search_code: "tool_search_code",
+      [params.targetTool]: params.targetTool,
+    },
+  });
 }
 
 export async function fetchJson(

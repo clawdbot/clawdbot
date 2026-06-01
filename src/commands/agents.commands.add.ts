@@ -415,6 +415,7 @@ export async function agentsAddCommand(
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId,
       agentDir,
+      validateCatalog: false,
     });
 
     let selection: ChannelChoice[] = [];

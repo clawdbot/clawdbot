@@ -1,4 +1,4 @@
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -93,7 +93,9 @@ function createContextEngineRequiringAssembly(): ContextEngine {
 }
 
 async function flushDiagnosticEvents(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function captureDiagnosticEvents(): {
@@ -484,7 +486,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
     const prepared = await v2.prepare(params);
     const session = await v2.start(prepared);
 
-    expect(v2.resume).toBeUndefined();
+    expect(v2["resume"]).toBeUndefined();
     expect(await v2.send(session)).toBe(result);
     expect(runAttempt).toHaveBeenCalledWith(params);
     expect(session.harnessId).toBe("codex");
@@ -513,7 +515,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
     const outcome = await v2.resolveOutcome(session, result);
     expect(outcome.agentHarnessId).toBe("codex");
     expect(outcome.agentHarnessResultClassification).toBe("empty");
-    expect(harness.classify).toHaveBeenCalledWith(result, params);
+    expect(harness["classify"]).toHaveBeenCalledWith(result, params);
   });
 
   it("preserves harness-supplied classification when no classify hook is registered", async () => {

@@ -1,11 +1,3 @@
-/**
- * Cron session reaper — prunes completed isolated cron run sessions
- * from the session store after a configurable retention period.
- *
- * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` are ephemeral
- * run records. The base session (`...:cron:<jobId>`) is kept as-is.
- */
-
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
@@ -21,6 +13,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
 const lastSweepAtMsByStore = new Map<string, number>();
 
+/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
@@ -42,14 +35,10 @@ type ReaperResult = {
 };
 
 /**
- * Sweep the session store and prune expired cron run sessions.
- * Designed to be called from the cron timer tick — self-throttles via
- * MIN_SWEEP_INTERVAL_MS to avoid excessive I/O.
+ * Sweeps completed isolated cron run sessions while preserving base cron sessions.
  *
- * Lock ordering: this function acquires the session-store file lock via
- * `updateSessionStore`. It must be called OUTSIDE of the cron service's
- * own `locked()` section to avoid lock-order inversions. The cron timer
- * calls this after all `locked()` sections have been released.
+ * Must run outside the cron service `locked()` section because this acquires
+ * the session-store file lock; reversing that order can deadlock timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
@@ -64,7 +53,8 @@ export async function sweepCronRunSessions(params: {
   const storePath = params.sessionStorePath;
   const lastSweepAtMs = lastSweepAtMsByStore.get(storePath) ?? 0;
 
-  // Throttle: don't sweep more often than every 5 minutes.
+  // Timer ticks can be frequent; throttle per store path to avoid repeated
+  // session-store I/O while preserving a force path for deterministic tests.
   if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
@@ -108,6 +98,8 @@ export async function sweepCronRunSessions(params: {
   if (prunedSessions.size > 0) {
     try {
       const store = loadSessionStore(storePath, { skipCache: true });
+      // Archive only transcripts that no remaining session references; base
+      // cron sessions intentionally keep their transcript history.
       const referencedSessionIds = new Set(
         Object.values(store)
           .map((entry) => entry?.sessionId)
@@ -143,7 +135,7 @@ export async function sweepCronRunSessions(params: {
   return { swept: true, pruned };
 }
 
-/** Reset the throttle timer (for tests). */
+/** Resets per-store reaper throttles between tests. */
 export function resetReaperThrottle(): void {
   lastSweepAtMsByStore.clear();
 }

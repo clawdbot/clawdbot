@@ -104,6 +104,13 @@ Env var equivalents:
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
+## Exec shell snapshots
+
+On non-Windows Gateway hosts, bash and zsh `exec` commands use a startup snapshot by default.
+Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this path.
+Values `false`, `no`, and `off` also disable it. Per-call `exec.env` values cannot toggle
+snapshots or redirect the snapshot cache.
+
 ## Runtime-injected env vars
 
 OpenClaw also injects context markers into spawned child processes:

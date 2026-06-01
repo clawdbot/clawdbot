@@ -21,6 +21,7 @@ function isZombieProcess(pid: number): boolean {
   }
 }
 
+/** Returns true only when a positive PID exists and is not a Linux zombie process. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
@@ -36,6 +37,7 @@ export function isPidAlive(pid: number): boolean {
   return true;
 }
 
+/** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
 export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;

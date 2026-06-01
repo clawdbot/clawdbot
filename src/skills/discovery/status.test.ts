@@ -339,7 +339,9 @@ describe("buildWorkspaceSkillStatus", () => {
 
     expect(JSON.stringify(report)).not.toContain(secret);
     const discord = report.skills.find((skill) => skill.name === "discord");
-    const check = discord?.configChecks.find((entry) => entry.path === "channels.discord.token");
+    const check = discord?.configChecks.find(
+      (entryLocal) => entryLocal.path === "channels.discord.token",
+    );
     expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
     expect(check && "value" in check).toBe(false);
   });

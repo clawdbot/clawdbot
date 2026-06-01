@@ -40,6 +40,7 @@ const READY_OFFSET_LOG_NEEDLES = [
   Buffer.from("[gateway] http server listening"),
 ];
 const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
+const isolatedStateRoots = new WeakMap();
 
 function readPositiveInt(raw, fallback) {
   const text = String(raw ?? "").trim();
@@ -236,12 +237,22 @@ function ensureGatewayConfig(config, port) {
   };
 }
 
-function activateSmokePlugin(config, pluginId) {
+export function activateSmokePlugin(config, pluginId, channels = []) {
   const allow = Array.isArray(config.plugins?.allow)
     ? Array.from(new Set([...config.plugins.allow, pluginId].filter(isNonEmptyString)))
     : undefined;
+  const channelConfig = { ...config.channels };
+  for (const channel of channels) {
+    channelConfig[channel] = {
+      ...(typeof channelConfig[channel] === "object" && channelConfig[channel] !== null
+        ? channelConfig[channel]
+        : {}),
+      enabled: true,
+    };
+  }
   return {
     ...config,
+    ...(channels.length > 0 ? { channels: channelConfig } : {}),
     plugins: {
       ...config.plugins,
       enabled: true,
@@ -339,7 +350,7 @@ export function runCommand(command, args, options = {}) {
       if (clearCommandTimer) {
         clearTimeout(clearCommandTimer);
       }
-      reject(error);
+      reject(toLintErrorObject(error, "Command spawn failed"));
     });
     child.on("close", (status, signal) => {
       if (settled) {
@@ -500,7 +511,10 @@ async function assertHttpOk(port, pathName) {
     }
     await delay(500);
   }
-  throw lastError ?? new Error(`${pathName} did not return HTTP 200`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`${pathName} did not return HTTP 200`),
+    "Non-Error thrown",
+  );
 }
 
 async function assertReadyzProbe(options) {
@@ -524,10 +538,13 @@ async function assertReadyzProbe(options) {
     }
     await delay(500);
   }
-  throw lastError ?? new Error("/readyz did not return HTTP 200");
+  throw toLintErrorObject(
+    lastError ?? new Error("/readyz did not return HTTP 200"),
+    "Non-Error thrown",
+  );
 }
 
-async function rpcCall(method, params, options) {
+export async function rpcCall(method, params, options) {
   const rpcStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-runtime-rpc-"));
   const args = [
     options.entrypoint,
@@ -544,15 +561,19 @@ async function rpcCall(method, params, options) {
     "--params",
     JSON.stringify(params ?? {}),
   ];
-  const { stdout } = await runCommand("node", args, {
-    env: {
-      ...process.env,
-      ...options.env,
-      OPENCLAW_NO_ONBOARD: "1",
-      OPENCLAW_STATE_DIR: rpcStateDir,
-    },
-  });
-  return unwrapRpcPayload(parseJsonOutput(stdout));
+  try {
+    const { stdout } = await runCommand("node", args, {
+      env: {
+        ...process.env,
+        ...options.env,
+        OPENCLAW_NO_ONBOARD: "1",
+        OPENCLAW_STATE_DIR: rpcStateDir,
+      },
+    });
+    return unwrapRpcPayload(parseJsonOutput(stdout));
+  } finally {
+    fs.rmSync(rpcStateDir, { force: true, recursive: true });
+  }
 }
 
 async function retryRpcCall(method, params, options) {
@@ -569,7 +590,10 @@ async function retryRpcCall(method, params, options) {
       await delay(500);
     }
   }
-  throw lastError ?? new Error(`gateway RPC ${method} timed out before retry`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
+    "Non-Error thrown",
+  );
 }
 
 function isRetryableGatewayCallError(error) {
@@ -631,7 +655,10 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const plan = buildPluginPlan(manifest);
   const port =
     readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
-  const config = ensureGatewayConfig(activateSmokePlugin(readConfig(), pluginId), port);
+  const config = ensureGatewayConfig(
+    activateSmokePlugin(readConfig(), pluginId, plan.channels),
+    port,
+  );
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
     config.messages = {
@@ -691,21 +718,10 @@ async function runManifestProbes(plan, options) {
       { probe: false, timeoutMs: 2000 },
       options,
     );
-    if (!isChannelVisible(status, channel)) {
-      console.log(
-        `Runtime channel status smoke skipped for ${options.pluginId}: ${channel} is not visible in dry channels.status`,
-      );
-    }
+    assertChannelVisible(status, channel, options.pluginId);
   }
   if (plan.runtimeSlashAliases.length > 0 && plan.activeInThisProbe) {
-    const commands = await retryRpcCall(
-      "commands.list",
-      { scope: "both", includeArgs: true },
-      options,
-    );
-    for (const alias of plan.runtimeSlashAliases) {
-      assertCommandVisible(commands, alias);
-    }
+    await retryCommandsListWithAliases(plan.runtimeSlashAliases, options);
   } else if (plan.runtimeSlashAliases.length > 0) {
     console.log(
       `Runtime slash command smoke skipped for ${options.pluginId}: plugin is lazy in this probe`,
@@ -741,10 +757,19 @@ function isChannelVisible(payload, channel) {
   return false;
 }
 
-function assertCommandVisible(payload, alias) {
+export function assertChannelVisible(payload, channel, pluginId) {
+  if (isChannelVisible(payload, channel)) {
+    return;
+  }
+  throw new Error(
+    `Runtime channel status missing manifest channel ${channel} for ${pluginId}: channels.status did not expose the declared channel`,
+  );
+}
+
+export function isCommandVisible(payload, alias) {
   const expected = alias.replace(/^\//u, "").toLowerCase();
   const commands = Array.isArray(payload.commands) ? payload.commands : [];
-  const found = commands.some((command) => {
+  return commands.some((command) => {
     const names = [
       command?.name,
       command?.nativeName,
@@ -754,11 +779,32 @@ function assertCommandVisible(payload, alias) {
       .map((value) => value.replace(/^\//u, "").toLowerCase());
     return names.includes(expected);
   });
-  if (!found) {
+}
+
+function assertCommandVisible(payload, alias) {
+  const expected = alias.replace(/^\//u, "").toLowerCase();
+  if (!isCommandVisible(payload, alias)) {
     throw new Error(
       `commands.list did not include /${expected}: ${JSON.stringify(payload).slice(0, 2000)}`,
     );
   }
+}
+
+async function retryCommandsListWithAliases(aliases, options) {
+  const started = Date.now();
+  let commands;
+  while (Date.now() - started < COMMAND_TIMEOUT_MS) {
+    commands = await retryRpcCall("commands.list", { scope: "both", includeArgs: true }, options);
+    const missing = aliases.filter((alias) => !isCommandVisible(commands, alias));
+    if (missing.length === 0) {
+      return commands;
+    }
+    await delay(500);
+  }
+  for (const alias of aliases) {
+    assertCommandVisible(commands, alias);
+  }
+  return commands;
 }
 
 function assertToolVisible(payload, tool) {
@@ -914,6 +960,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     throw error;
   } finally {
     await stopGateway(child);
+    cleanupIsolatedStateEnv(env);
   }
 }
 
@@ -976,6 +1023,7 @@ async function smokeOpenAiTts(pluginIndex) {
     throw error;
   } finally {
     await stopGateway(child);
+    cleanupIsolatedStateEnv(env);
   }
 }
 
@@ -985,7 +1033,7 @@ export function createIsolatedStateEnv(label) {
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   fs.mkdirSync(stateDir, { recursive: true });
-  return {
+  const env = {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
@@ -993,6 +1041,17 @@ export function createIsolatedStateEnv(label) {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
   };
+  isolatedStateRoots.set(env, root);
+  return env;
+}
+
+export function cleanupIsolatedStateEnv(env) {
+  const root = isolatedStateRoots.get(env);
+  if (!root) {
+    return;
+  }
+  isolatedStateRoots.delete(env);
+  fs.rmSync(root, { force: true, recursive: true });
 }
 
 function tailFile(file) {
@@ -1021,4 +1080,18 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

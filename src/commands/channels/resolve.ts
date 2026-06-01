@@ -207,7 +207,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
-  let results: ResolveResult[] = [];
+  let results: ResolveResult[];
   if (preferredKind) {
     const resolved = await plugin.resolver.resolveTargets({
       cfg,

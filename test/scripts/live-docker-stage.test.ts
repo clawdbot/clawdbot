@@ -19,6 +19,10 @@ describe("live Docker state staging", () => {
     expect(script).toContain("--exclude=workspace");
     expect(script).toContain("--exclude=sandboxes");
     expect(script).toContain("--exclude=plugins/installs.json");
+    expect(script).toContain("--exclude=plugins/installs.json.migrated");
+    expect(script).toContain("DELETE FROM installed_plugin_index");
+    expect(script).toContain("PRAGMA secure_delete = ON");
+    expect(script).toContain("VACUUM");
     expect(script).toContain("host-absolute paths");
   });
 });

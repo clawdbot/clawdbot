@@ -159,7 +159,9 @@ async function expectBackgroundSessionSurvivesAbort(params: {
 
   abortController.abort();
   if (ABORT_SETTLE_MS > 0) {
-    await new Promise((resolve) => setTimeout(resolve, ABORT_SETTLE_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ABORT_SETTLE_MS);
+    });
   }
 
   const running = getSession(sessionId);

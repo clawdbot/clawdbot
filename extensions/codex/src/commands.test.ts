@@ -151,6 +151,16 @@ function expectResultTextContains(result: PluginCommandResult, expected: string)
   expect(requireResultText(result)).toContain(expected);
 }
 
+function buttonCommands(result: PluginCommandResult): string[] {
+  const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
+  if (!block || block.type !== "buttons") {
+    throw new Error("expected button presentation");
+  }
+  return block.buttons.map((button) =>
+    button.action?.type === "command" ? button.action.command : "",
+  );
+}
+
 function installAuthProfileStore(store: AuthProfileStore, config: PluginCommandContext["config"]) {
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -208,11 +218,6 @@ function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArra
 function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
   return mockCall(mockFn, callIndex)[argIndex];
 }
-
-function requireRequestParams(call: unknown[] | undefined): Record<string, unknown> {
-  return requireRecord(call?.[2], "expected request params object");
-}
-
 function requestParams(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
   return requireRecord(mockArg(mockFn, callIndex, 2), "expected request params object");
 }
@@ -267,6 +272,31 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
+  it("renders the top-level Codex menu as portable native slash commands", async () => {
+    const result = await handleCodexCommand(createContext(""));
+
+    expectResultTextContains(result, "/codex plugins menu");
+    expect(buttonCommands(result)).toEqual([
+      "/codex plugins menu",
+      "/codex permissions menu",
+      "/codex fast menu",
+      "/codex computer-use menu",
+      "/codex account",
+      "/codex help",
+    ]);
+  });
+
+  it("routes /codex plugins menu to the Codex-owned plugin picker", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO();
+
+    const result = await handleCodexCommand(createContext("plugins menu"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "/codex plugins enable");
+    expect(buttonCommands(result)).toContain("/codex plugins list");
+  });
+
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({
       "google-calendar": {
@@ -312,8 +342,8 @@ describe("codex command", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const deps = createDeps({
       codexControlRequest: vi.fn(
-        async (_pluginConfig: unknown, method: string, requestParams: unknown) => {
-          requests.push({ method, params: requestParams });
+        async (_pluginConfig: unknown, method: string, requestParamsValue: unknown) => {
+          requests.push({ method, params: requestParamsValue });
           return {
             thread: { id: "thread-123", cwd: "/repo" },
             model: "gpt-5.4",
@@ -1722,7 +1752,8 @@ describe("codex command", () => {
 
   it("respects openai-alias explicit order over stale lastGood for API key profiles", async () => {
     const config = {};
-    const now = Date.now();
+    const ignoredNow = Date.now();
+    void ignoredNow;
     installAuthProfileStore(
       {
         version: 1,
@@ -2149,11 +2180,13 @@ describe("codex command", () => {
           buttons: [
             {
               label: "Send diagnostics",
+              action: { type: "command", command: `/codex diagnostics confirm ${token}` },
               value: `/codex diagnostics confirm ${token}`,
               style: "danger",
             },
             {
               label: "Cancel",
+              action: { type: "command", command: `/codex diagnostics cancel ${token}` },
               value: `/codex diagnostics cancel ${token}`,
               style: "secondary",
             },
@@ -2347,12 +2380,14 @@ describe("codex command", () => {
       `${secondSessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
     );
-    const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParams) => ({
+    const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParamsLocal) => ({
       ok: true as const,
       value: {
         threadId:
-          requestParams && typeof requestParams === "object" && "threadId" in requestParams
-            ? requestParams.threadId
+          requestParamsLocal &&
+          typeof requestParamsLocal === "object" &&
+          "threadId" in requestParamsLocal
+            ? requestParamsLocal.threadId
             : undefined,
       },
     }));

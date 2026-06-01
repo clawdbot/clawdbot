@@ -41,7 +41,9 @@ describe("browser control HTTP auth", () => {
     if (!current) {
       return;
     }
-    await new Promise<void>((resolve) => current.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      current.close(() => resolve());
+    });
   });
 
   it("requires bearer auth for standalone browser HTTP routes", async () => {

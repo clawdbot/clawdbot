@@ -452,8 +452,8 @@ export function createWriteToolDefinition(
       );
       return component;
     },
-    renderResult(result, options, theme, context) {
-      void options;
+    renderResult(result, optionsLocal, theme, context) {
+      void optionsLocal;
       const output = formatWriteResult({ ...result, isError: context.isError }, theme);
       if (!output) {
         const component = (context.lastComponent as Container | undefined) ?? new Container();

@@ -596,7 +596,9 @@ describe("session cost usage", () => {
         activeStats += 1;
         maxActiveStats = Math.max(maxActiveStats, activeStats);
         try {
-          await new Promise((resolve) => setTimeout(resolve, 2));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 2);
+          });
           return await originalStat(target);
         } finally {
           activeStats -= 1;

@@ -28,6 +28,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearDroppedCliSessionBinding,
@@ -35,6 +36,7 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
@@ -488,7 +490,7 @@ export function createFollowupRunner(params: {
       let progressDeliveryChain: Promise<void> = Promise.resolve();
       const pendingProgressDeliveries = new Set<Promise<void>>();
       const enqueueProgressDelivery = (deliver: () => Promise<void>) => {
-        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err) => {
+        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err: unknown) => {
           logVerbose(`followup queue: progress delivery failed: ${formatErrorMessage(err)}`);
         });
         const task = progressDeliveryChain.finally(() => {
@@ -542,30 +544,56 @@ export function createFollowupRunner(params: {
           provider: run.messageProvider,
         }),
       );
-      if (run.sessionKey) {
-        registerAgentRunContext(runId, {
-          sessionKey: run.sessionKey,
-          verboseLevel: run.verboseLevel,
-          isControlUiVisible: shouldSurfaceToControlUi,
-        });
-      }
       let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      activeSessionEntry = await runPreflightCompactionIfNeeded({
-        cfg: runtimeConfig,
-        followupRun: effectiveQueued,
-        promptForEstimate: queued.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore,
-        sessionKey: replySessionKey,
-        storePath,
-        isHeartbeat: opts?.isHeartbeat === true,
-        replyOperation,
-      });
+      try {
+        activeSessionEntry = await runPreflightCompactionIfNeeded({
+          cfg: runtimeConfig,
+          followupRun: effectiveQueued,
+          promptForEstimate: queued.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore,
+          sessionKey: replySessionKey,
+          storePath,
+          isHeartbeat: opts?.isHeartbeat === true,
+          replyOperation,
+        });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        replyOperation.fail("run_failed", err);
+        const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
+          includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
+        });
+        if (preflightCompactionFailureText) {
+          await sendFollowupPayloads(
+            [
+              markReplyPayloadForSourceSuppressionDelivery({
+                text: preflightCompactionFailureText,
+              }),
+            ],
+            effectiveQueued,
+            { provider: fallbackProvider, modelId: fallbackModel },
+          );
+          return;
+        }
+        throw err;
+      }
+      if (run.sessionKey) {
+        const owningSessionId =
+          activeSessionEntry?.sessionId === run.sessionId
+            ? activeSessionEntry.sessionId
+            : run.sessionId;
+        registerAgentRunContext(runId, {
+          sessionKey: run.sessionKey,
+          ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          verboseLevel: run.verboseLevel,
+          isControlUiVisible: shouldSurfaceToControlUi,
+        });
+      }
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
@@ -658,6 +686,7 @@ export function createFollowupRunner(params: {
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          sessionId: run.sessionId,
           abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
@@ -755,9 +784,9 @@ export function createFollowupRunner(params: {
                   },
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
-                      ? (result) =>
+                      ? (resultLocal) =>
                           keepCliSessionBindingOnlyWhenReused({
-                            result,
+                            result: resultLocal,
                             existingSessionId: cliSessionBinding?.sessionId,
                             onDroppedReplacement: () => {
                               droppedCliSessionReplacement = true;

@@ -212,6 +212,43 @@ describe("isProfileInCooldown", () => {
     expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
   });
 
+  it("returns false for a different model when cooldown is model-scoped (timeout) — #87462", () => {
+    const store = makeStore({
+      "google:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gemini-3-flash-preview",
+      },
+    });
+    // Other Google fallback models bypass the cooldown
+    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3.1-flash-lite")).toBe(
+      false,
+    );
+    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-2.5-flash")).toBe(false);
+    // Same model stays blocked
+    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3-flash-preview")).toBe(
+      true,
+    );
+    // No model specified — blocked (conservative)
+    expect(isProfileInCooldown(store, "google:default")).toBe(true);
+  });
+
+  it("returns true for all models when timeout cooldownModel is undefined (legacy widened scope)", () => {
+    const store = makeStore({
+      "google:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "timeout",
+        cooldownModel: undefined,
+      },
+    });
+    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3-flash-preview")).toBe(
+      true,
+    );
+    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3.1-flash-lite")).toBe(
+      true,
+    );
+  });
+
   it("does not bypass model-scoped cooldown when disabledUntil is active", () => {
     const store = makeStore({
       "github-copilot:github": {
@@ -225,6 +262,20 @@ describe("isProfileInCooldown", () => {
     // Even though cooldownModel is for a different model, billing disable
     // should keep the profile blocked for all models.
     expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
+  });
+
+  it("does not bypass model-scoped cooldown when blockedUntil is active", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "google:default": {
+        blockedUntil: now + 120_000,
+        blockedReason: "subscription_limit",
+        cooldownUntil: now + 60_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gemini-3-flash-preview",
+      },
+    });
+    expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(true);
   });
 });
 

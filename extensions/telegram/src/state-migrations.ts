@@ -88,7 +88,7 @@ function listTelegramLegacySidecarAccountIds(params: {
   prefix: string;
   suffix: string;
 }): string[] {
-  let persistedAccountIds: string[] = [];
+  let persistedAccountIds: string[];
   try {
     persistedAccountIds = fs
       .readdirSync(path.join(params.stateDir, "telegram"), { withFileTypes: true })

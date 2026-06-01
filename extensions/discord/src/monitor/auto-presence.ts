@@ -298,7 +298,7 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedAt = 0;
 
   const runEvaluation = (options?: { force?: boolean }) => {
-    let decision: DiscordAutoPresenceDecision | null = null;
+    let decision: DiscordAutoPresenceDecision | null;
     try {
       decision = resolveDiscordAutoPresenceDecision({
         discordConfig: params.discordConfig,

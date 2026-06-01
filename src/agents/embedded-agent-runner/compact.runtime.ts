@@ -10,6 +10,7 @@ function loadCompactRuntime() {
 export async function compactEmbeddedAgentSessionDirect(
   ...args: Parameters<CompactEmbeddedAgentSessionDirect>
 ): ReturnType<CompactEmbeddedAgentSessionDirect> {
-  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
-  return compactEmbeddedAgentSessionDirect(...args);
+  const { compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectLocal } =
+    await loadCompactRuntime();
+  return compactEmbeddedAgentSessionDirectLocal(...args);
 }

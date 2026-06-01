@@ -542,7 +542,7 @@ function rewriteClawHubMarkdownLinkTarget(rawTarget, relativeSourceDir, source) 
     return rawTarget;
   }
 
-  let normalizedRelative = "";
+  let normalizedRelative;
   if (pathPart.startsWith("docs/")) {
     normalizedRelative = normalizeSlashes(pathPart.slice("docs/".length));
   } else if (

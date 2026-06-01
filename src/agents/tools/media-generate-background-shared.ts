@@ -47,6 +47,11 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
+export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+  const normalizedSessionKey = sessionKey?.trim();
+  return Boolean(normalizedSessionKey);
+}
+
 export type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
@@ -144,6 +149,9 @@ function createMediaGenerationTaskRun(params: {
       lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
+    if (!task) {
+      return null;
+    }
     const handle = {
       taskId: task.taskId,
       runId,
@@ -289,7 +297,7 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
     queueMicrotask(() => {
-      void work().catch((error) => {
+      void work().catch((error: unknown) => {
         params.onCrash(`Detached ${params.toolName} job crashed`, { error });
       });
     });
@@ -331,7 +339,6 @@ export function buildMediaGenerationStartedToolResult(params: {
         : {}),
       ...params.detailExtras,
     },
-    terminate: true,
   };
 }
 

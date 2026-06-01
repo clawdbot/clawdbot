@@ -127,7 +127,7 @@ function isSshIMessageCliWrapper(cliPath: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
-  let detected = false;
+  let detected;
   try {
     const content = readFileSync(expandCliPathForInspection(cliPath), "utf8");
     detected = /\bssh\b[\s\S]*\bimsg\b/u.test(content);
@@ -512,6 +512,16 @@ function createIMessageSendReceipt(params: {
   return createMessageReceiptFromOutboundResults(receiptParams);
 }
 
+function isConcreteIMessageMessageId(messageId: string | undefined): boolean {
+  const trimmed = messageId?.trim();
+  return Boolean(trimmed && trimmed !== "unknown" && trimmed !== "ok");
+}
+
+function canSynthesizeAttachmentChatHandle(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.includes("@") || trimmed.startsWith("+");
+}
+
 function resolveOutboundEchoScope(params: {
   accountId: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -680,12 +690,30 @@ function isAttachmentCommandFallbackError(error: unknown): boolean {
   );
 }
 
-async function resolveAttachmentChatGuid(params: {
+async function resolveAttachmentChatTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
 }): Promise<string | null> {
   if (params.target.kind === "chat_guid") {
     return params.target.chatGuid;
+  }
+  if (params.target.kind === "handle") {
+    if (!canSynthesizeAttachmentChatHandle(params.target.to)) {
+      return null;
+    }
+    const normalizedHandle = normalizeIMessageHandle(params.target.to);
+    if (!normalizedHandle) {
+      return null;
+    }
+    const service = params.target.service !== "auto" ? params.target.service : params.service;
+    if (service === "sms") {
+      return `SMS;-;${normalizedHandle}`;
+    }
+    if (service === "imessage") {
+      return `iMessage;-;${normalizedHandle}`;
+    }
+    return `any;-;${normalizedHandle}`;
   }
   if (params.target.kind !== "chat_id") {
     return null;
@@ -694,19 +722,21 @@ async function resolveAttachmentChatGuid(params: {
   return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
 }
 
-async function trySendAttachmentForExplicitChat(params: {
+async function trySendAttachmentForTarget(params: {
   accountId: string;
   dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
   filePath: string;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
-  let attachmentChatGuid: string | null = null;
+  let attachmentChatTarget: string | null;
   try {
-    attachmentChatGuid = await resolveAttachmentChatGuid({
+    attachmentChatTarget = await resolveAttachmentChatTarget({
       target: params.target,
+      service: params.service,
       runCliJson: params.runCliJson,
     });
   } catch (error) {
@@ -715,7 +745,7 @@ async function trySendAttachmentForExplicitChat(params: {
     }
     throw error;
   }
-  if (!attachmentChatGuid) {
+  if (!attachmentChatTarget) {
     return null;
   }
 
@@ -724,7 +754,7 @@ async function trySendAttachmentForExplicitChat(params: {
     result = await params.runCliJson([
       "send-attachment",
       "--chat",
-      attachmentChatGuid,
+      attachmentChatTarget,
       "--file",
       params.filePath,
       "--transport",
@@ -768,7 +798,16 @@ async function trySendAttachmentForExplicitChat(params: {
     rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
-      chatGuid: params.target.kind === "chat_guid" ? params.target.chatGuid : attachmentChatGuid,
+      chatGuid:
+        params.target.kind === "chat_guid"
+          ? params.target.chatGuid
+          : params.target.kind === "chat_id"
+            ? attachmentChatTarget
+            : undefined,
+      chatIdentifier:
+        params.target.kind === "chat_identifier" || params.target.kind === "handle"
+          ? attachmentChatTarget
+          : undefined,
       chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
       timestamp: Date.now(),
       isFromMe: true,
@@ -865,18 +904,46 @@ export async function sendMessageIMessage(
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
-  if (filePath && !message.trim() && !resolvedReplyToId) {
-    const attachmentResult = await trySendAttachmentForExplicitChat({
+  if (filePath && !resolvedReplyToId) {
+    const attachmentEchoText = message.trim()
+      ? resolveOutboundEchoText("", mediaContentType)
+      : echoText;
+    const attachmentResult = await trySendAttachmentForTarget({
       accountId: account.accountId,
       dbPath: chatDbLookupPath,
       target,
+      service,
       filePath,
-      echoText,
+      echoText: attachmentEchoText,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
     if (attachmentResult) {
-      return attachmentResult;
+      if (!message.trim()) {
+        return attachmentResult;
+      }
+      const captionResult = await sendMessageIMessage(to, text, {
+        ...opts,
+        ...(opts.client ? { client: opts.client } : {}),
+        mediaUrl: undefined,
+      });
+      const messageId = isConcreteIMessageMessageId(attachmentResult.messageId)
+        ? attachmentResult.messageId
+        : captionResult.messageId;
+      return {
+        messageId,
+        ...((captionResult.guid ?? attachmentResult.guid)
+          ? { guid: captionResult.guid ?? attachmentResult.guid }
+          : {}),
+        sentText: captionResult.sentText,
+        ...((captionResult.echoText ?? attachmentResult.echoText)
+          ? { echoText: captionResult.echoText ?? attachmentResult.echoText }
+          : {}),
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ receipt: attachmentResult.receipt }, { receipt: captionResult.receipt }],
+          sentAt: Math.max(attachmentResult.receipt.sentAt, captionResult.receipt.sentAt),
+        }),
+      };
     }
   }
   const params: Record<string, unknown> = {

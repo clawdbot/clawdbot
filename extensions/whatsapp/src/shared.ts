@@ -212,8 +212,8 @@ export function createWhatsAppPluginBase(params: {
       deriveLegacySessionChatType,
       resolveLegacyGroupSessionKey,
       isLegacyGroupSessionKey,
-      canonicalizeLegacySessionKey: (params) =>
-        canonicalizeLegacySessionKey({ key: params.key, agentId: params.agentId }),
+      canonicalizeLegacySessionKey: (paramsLocal) =>
+        canonicalizeLegacySessionKey({ key: paramsLocal.key, agentId: paramsLocal.agentId }),
     },
     secrets: {
       unsupportedSecretRefSurfacePatterns,

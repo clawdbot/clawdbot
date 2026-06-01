@@ -2,6 +2,7 @@ import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin
 import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 
 function buildModel(): Model<"openai-responses"> {
   return {
@@ -85,6 +86,7 @@ async function runAbortedOpenAIResponsesStream(params: {
     description: string;
     parameters: ReturnType<typeof Type.Object>;
   }>;
+  replayResponsesItemIds?: boolean;
 }) {
   const controller = new AbortController();
   controller.abort();
@@ -99,11 +101,12 @@ async function runAbortedOpenAIResponsesStream(params: {
     },
     {
       apiKey: "test",
+      replayResponsesItemIds: params.replayResponsesItemIds ?? true,
       signal: controller.signal,
-      onPayload: (nextPayload) => {
+      onPayload: (nextPayload: unknown) => {
         payload = nextPayload as Record<string, unknown>;
       },
-    },
+    } as never,
   );
 
   await responseStream.result();
@@ -220,8 +223,58 @@ describe("openai-responses reasoning replay", () => {
     expect(new Set(messageIds).size).toBe(2);
   });
 
+  it("does not replay a signed assistant message id after its reasoning item was pruned", async () => {
+    expect(
+      resolveReplayableResponsesMessageId({
+        replayResponsesItemIds: true,
+        textSignatureId: "msg_real_response_item_requiring_reasoning",
+        fallbackId: "msg_0",
+        fallbackOrdinal: 0,
+        previousReplayItemWasReasoning: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveReplayableResponsesMessageId({
+        replayResponsesItemIds: true,
+        textSignatureId: "msg_real_response_item_requiring_reasoning",
+        fallbackId: "msg_0",
+        fallbackOrdinal: 0,
+        previousReplayItemWasReasoning: true,
+      }),
+    ).toBe("msg_real_response_item_requiring_reasoning");
+
+    expect(
+      resolveReplayableResponsesMessageId({
+        replayResponsesItemIds: true,
+        textSignatureId: "msg_commentary",
+        fallbackId: "msg_0",
+        fallbackOrdinal: 0,
+        previousReplayItemWasReasoning: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveReplayableResponsesMessageId({
+        replayResponsesItemIds: true,
+        fallbackId: "msg_0",
+        fallbackOrdinal: 0,
+        previousReplayItemWasReasoning: false,
+      }),
+    ).toBe("msg_0");
+
+    expect(
+      resolveReplayableResponsesMessageId({
+        replayResponsesItemIds: true,
+        fallbackId: "msg_0",
+        fallbackOrdinal: 1,
+        previousReplayItemWasReasoning: false,
+      }),
+    ).toBe("msg_0_1");
+  });
+
   it.each(["commentary", "final_answer"] as const)(
-    "replays assistant message phase metadata for %s",
+    "replays assistant message id and phase metadata for %s when paired with reasoning",
     async (phase) => {
       const assistantWithText = buildAssistantMessage({
         stopReason: "stop",
@@ -249,6 +302,34 @@ describe("openai-responses reasoning replay", () => {
         (item) => item.id === `msg_${phase}`,
       );
       expect(replayedMessage?.phase).toBe(phase);
+    },
+  );
+
+  it.each(["commentary", "final_answer"] as const)(
+    "omits phase-tagged assistant message id for %s when reasoning is absent",
+    async (phase) => {
+      const assistantWithText = buildAssistantMessage({
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "hello",
+            textSignature: JSON.stringify({ v: 1, id: `msg_${phase}`, phase }),
+          },
+        ],
+      });
+
+      const { input } = await runAbortedOpenAIResponsesStream({
+        messages: [
+          { role: "user", content: "Hi", timestamp: Date.now() },
+          assistantWithText,
+          { role: "user", content: "Ok", timestamp: Date.now() },
+        ],
+      });
+
+      const [replayedMessage] = extractInputMessages(input);
+      expect(replayedMessage).toMatchObject({ phase });
+      expect(replayedMessage).not.toHaveProperty("id");
     },
   );
 

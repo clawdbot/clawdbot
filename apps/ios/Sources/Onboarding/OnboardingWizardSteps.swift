@@ -7,7 +7,7 @@ struct OnboardingIntroStep: View {
         VStack(spacing: 0) {
             Spacer()
 
-            Image(systemName: "iphone.gen3")
+            Image(systemName: UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone.gen3")
                 .font(.system(size: 60, weight: .semibold))
                 .foregroundStyle(.tint)
                 .padding(.bottom, 18)
@@ -17,7 +17,7 @@ struct OnboardingIntroStep: View {
                 .multilineTextAlignment(.center)
                 .padding(.bottom, 10)
 
-            Text("Turn this iPhone into a secure OpenClaw node for chat, voice, camera, and device tools.")
+            Text("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -114,7 +114,7 @@ struct OnboardingWelcomeStep: View {
                     .foregroundStyle(.secondary)
                 Text("/pair qr")
                     .font(.system(.footnote, design: .monospaced).weight(.semibold))
-                Text("Then scan the QR code here to connect this iPhone.")
+                Text("Then scan the QR code here to connect this device.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -148,6 +148,7 @@ struct OnboardingWelcomeStep: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
             }
+            .padding(.horizontal, 24)
             .padding(.bottom, 12)
 
             Text(self.statusLine)

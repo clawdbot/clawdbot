@@ -17,6 +17,14 @@ describe("transport stream shared helpers", () => {
     expect(sanitizeTransportPayloadText("emoji 🙈 ok")).toBe("emoji 🙈 ok");
   });
 
+  it("returns empty string for nullish payloads instead of throwing", () => {
+    expect(sanitizeTransportPayloadText(undefined as unknown as string)).toBe("");
+    expect(sanitizeTransportPayloadText(null as unknown as string)).toBe("");
+    expect(sanitizeNonEmptyTransportPayloadText(undefined as unknown as string)).toBe(
+      "(no output)",
+    );
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],

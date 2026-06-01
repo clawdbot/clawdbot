@@ -440,7 +440,9 @@ async function waitForLocalHistory(params: {
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 
@@ -479,7 +481,9 @@ async function waitForCloudCompletion(params: {
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 

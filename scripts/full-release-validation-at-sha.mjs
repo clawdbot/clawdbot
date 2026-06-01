@@ -202,7 +202,7 @@ function main() {
     stdio: "inherit",
   });
 
-  let parentRunId = "";
+  let parentRunId;
   try {
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {

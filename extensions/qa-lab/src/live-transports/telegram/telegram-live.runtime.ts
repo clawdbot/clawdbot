@@ -29,6 +29,7 @@ import {
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+  redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
@@ -60,6 +61,7 @@ type TelegramQaScenarioId =
   | "telegram-other-bot-command-gating"
   | "telegram-context-command"
   | "telegram-current-session-status-tool"
+  | "telegram-tool-only-usage-footer"
   | "telegram-stream-final-single-message"
   | "telegram-long-final-three-chunks"
   | "telegram-long-final-reuses-preview"
@@ -394,6 +396,37 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
         replyToLatestSutMessage: true,
       }),
+  },
+  {
+    id: "telegram-tool-only-usage-footer",
+    title: "Telegram tool-only reply includes usage footer",
+    defaultEnabled: false,
+    rationale:
+      "Opt-in real Telegram proof that /usage tokens decorates message-tool-only visible replies.",
+    regressionRefs: ["openclaw/openclaw#87392"],
+    timeoutMs: 90_000,
+    buildRun: (sutUsername) => {
+      const marker = `QA-TELEGRAM-USAGE-FOOTER-${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        steps: [
+          {
+            expectReply: true,
+            input: `/usage@${sutUsername} tokens`,
+            expectedTextIncludes: ["Usage", "tokens"],
+          },
+          {
+            allowAnySutReply: true,
+            expectReply: true,
+            input: `@${sutUsername} Telegram usage footer QA. Reply exactly: ${marker}`,
+            expectedTextIncludes: [marker, "Usage:"],
+            expectedJoinedSutTextIncludes: [marker, "Usage:"],
+            expectedSutMessageCount: 2,
+            replyToLatestSutMessage: true,
+            settleMs: 4_000,
+          },
+        ],
+      };
+    },
   },
   {
     id: "telegram-mentioned-message-reply",
@@ -866,7 +899,9 @@ async function sendGroupMessage(
 }
 
 async function waitForTelegramPollRetryDelay(remainingMs: number) {
-  await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(100, remainingMs))));
+  await new Promise((resolve) => {
+    setTimeout(resolve, Math.min(250, Math.max(100, remainingMs)));
+  });
 }
 
 async function waitForObservedMessage(params: {
@@ -1088,7 +1123,9 @@ async function waitForTelegramChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`telegram account "${accountId}" did not become ready`);
 }
@@ -1957,7 +1994,7 @@ export async function runTelegramQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const publishedCleanupIssues = redactPublicMetadata
-    ? cleanupIssues.map(() => "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)")
+    ? redactQaLiveLaneIssues(cleanupIssues)
     : cleanupIssues;
   const passedCount = scenarioResults.filter((entry) => entry.status === "pass").length;
   const failedCount = scenarioResults.filter((entry) => entry.status === "fail").length;

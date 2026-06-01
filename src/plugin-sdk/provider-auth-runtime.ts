@@ -302,16 +302,17 @@ export async function resolveApiKeyForProvider(
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   const runtimeAuth = await loadRuntimeModelAuthModule();
-  const resolveApiKeyForProvider =
+  const resolveApiKeyForProviderLocal =
     typeof runtimeAuth.resolveApiKeyForProvider === "function"
       ? runtimeAuth.resolveApiKeyForProvider
       : resolveModelApiKeyForProvider;
-  return resolveApiKeyForProvider(params);
+  return resolveApiKeyForProviderLocal(params);
 }
 
 export async function getRuntimeAuthForModel(
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
-  const { getRuntimeAuthForModel } = await loadRuntimeModelAuthModule();
-  return getRuntimeAuthForModel(params);
+  const { getRuntimeAuthForModel: getRuntimeAuthForModelLocal } =
+    await loadRuntimeModelAuthModule();
+  return getRuntimeAuthForModelLocal(params);
 }

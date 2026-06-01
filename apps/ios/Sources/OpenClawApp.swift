@@ -669,8 +669,8 @@ extension OpenClawApp {
         switch route {
         case .agent, .dashboard:
             await self.appModel.handleDeepLink(url: url)
-        case .gateway:
-            break
+        case let .gateway(link):
+            self.appModel.stageGatewaySetupLink(link)
         }
     }
 

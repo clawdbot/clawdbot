@@ -11,6 +11,12 @@ import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import {
+  ackLeasedAgentSteeringItemsFromSubagentRuns,
+  leasePendingAgentSteeringItemsFromSubagentRuns,
+  prependAgentSteeringPrompt,
+  releaseLeasedAgentSteeringItemsFromSubagentRuns,
+} from "./agent-steering-queue.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
@@ -1167,7 +1173,7 @@ function ensureListener() {
         startedAt,
       };
       await completeSubagentRunWithRecovery(completionParams, "lifecycle-ok-event");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       log.warn("lifecycle event handler failed", { err, runId: evt.runId });
     });
   });
@@ -1374,6 +1380,68 @@ export function listSubagentRunsForRequester(
 ): SubagentRunRecord[] {
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
+
+export function leasePendingAgentSteeringItems(params: {
+  requesterSessionKey: string;
+  leaseId: string;
+  now?: number;
+}) {
+  restoreSubagentRunsOnce();
+  const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
+    runs: subagentRuns,
+    requesterSessionKey: params.requesterSessionKey,
+    leaseId: params.leaseId,
+    now: params.now,
+  });
+  if (leased) {
+    persistSubagentRuns();
+  }
+  return leased;
+}
+
+export function ackPendingAgentSteeringItems(params: {
+  runIds: readonly string[];
+  leaseId: string;
+  now?: number;
+}): number {
+  const updated = ackLeasedAgentSteeringItemsFromSubagentRuns({
+    runs: subagentRuns,
+    runIds: params.runIds,
+    leaseId: params.leaseId,
+    now: params.now,
+  });
+  if (updated > 0) {
+    persistSubagentRuns();
+    for (const runId of params.runIds) {
+      const entry = subagentRuns.get(runId);
+      if (!entry || typeof entry.cleanupCompletedAt === "number") {
+        continue;
+      }
+      entry.cleanupHandled = false;
+      startSubagentAnnounceCleanupFlow(runId, entry);
+    }
+  }
+  return updated;
+}
+
+export function releasePendingAgentSteeringItems(params: {
+  runIds: readonly string[];
+  leaseId: string;
+  error?: string;
+}): number {
+  const updated = releaseLeasedAgentSteeringItemsFromSubagentRuns({
+    runs: subagentRuns,
+    runIds: params.runIds,
+    leaseId: params.leaseId,
+    error: params.error,
+  });
+  if (updated > 0) {
+    persistSubagentRuns();
+  }
+  return updated;
+}
+
+export { prependAgentSteeringPrompt };
 
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(

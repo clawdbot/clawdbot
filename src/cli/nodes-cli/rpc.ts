@@ -146,7 +146,7 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
 }
 
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
-  let nodes: NodeListNode[] = [];
+  let nodes: NodeListNode[];
   try {
     const res = await callGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);

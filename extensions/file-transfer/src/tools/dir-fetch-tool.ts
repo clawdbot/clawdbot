@@ -588,7 +588,7 @@ export function createDirFetchTool(): AnyAgentTool {
         throw new Error(`dir.fetch UNCOMPRESSED_TOO_LARGE: ${reason}`);
       };
       for (const { relPath, absPath } of walked) {
-        let size = 0;
+        let size;
         try {
           const st = await fs.stat(absPath);
           size = st.size;

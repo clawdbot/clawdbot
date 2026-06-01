@@ -385,6 +385,7 @@ describe("telegram live qa runtime", () => {
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-current-session-status-tool",
+      "telegram-tool-only-usage-footer",
       "telegram-mentioned-message-reply",
       "telegram-reply-chain-exact-marker",
       "telegram-stream-final-single-message",
@@ -402,6 +403,7 @@ describe("telegram live qa runtime", () => {
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-current-session-status-tool",
+      "telegram-tool-only-usage-footer",
       "telegram-mentioned-message-reply",
       "telegram-reply-chain-exact-marker",
       "telegram-stream-final-single-message",
@@ -453,6 +455,15 @@ describe("telegram live qa runtime", () => {
       ":telegram:group:",
     ]);
     expect(statusToolStep?.replyToLatestSutMessage).toBe(true);
+    const usageFooterSteps = requireScenario(scenarios, "telegram-tool-only-usage-footer").buildRun(
+      "sut_bot",
+    ).steps;
+    expect(usageFooterSteps).toHaveLength(2);
+    expect(usageFooterSteps[0]?.input).toBe("/usage@sut_bot tokens");
+    expect(usageFooterSteps[0]?.expectedTextIncludes).toEqual(["Usage", "tokens"]);
+    expect(usageFooterSteps[1]?.expectedTextIncludes?.at(-1)).toBe("Usage:");
+    expect(usageFooterSteps[1]?.expectedSutMessageCount).toBe(2);
+    expect(usageFooterSteps[1]?.replyToLatestSutMessage).toBe(true);
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
@@ -536,6 +547,9 @@ describe("telegram live qa runtime", () => {
     expect(requireScenario(catalog, "telegram-current-session-status-tool").defaultEnabled).toBe(
       false,
     );
+    const usageFooter = requireScenario(catalog, "telegram-tool-only-usage-footer");
+    expect(usageFooter.defaultEnabled).toBe(false);
+    expect(usageFooter.regressionRefs).toEqual(["openclaw/openclaw#87392"]);
     const streamSingle = requireScenario(catalog, "telegram-stream-final-single-message");
     expect(streamSingle.defaultEnabled).toBe(false);
     expect(streamSingle.regressionRefs).toEqual(["openclaw/openclaw#39905"]);

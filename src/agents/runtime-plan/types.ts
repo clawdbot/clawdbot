@@ -81,11 +81,23 @@ export type AgentRuntimeProviderHandle = {
 
 export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
+export type AgentRuntimeMessagePresentationAction =
+  | {
+      type: "command";
+      command: string;
+    }
+  | {
+      type: "callback";
+      value: string;
+    };
+
 /** Portable action control exposed to agent runtime reply payloads. */
 export type AgentRuntimeMessagePresentationButton = {
   /** User-visible button label. */
   label: string;
-  /** Callback command or opaque value sent when pressed. */
+  /** Typed action sent when pressed. */
+  action?: AgentRuntimeMessagePresentationAction;
+  /** Legacy opaque callback value sent when pressed. */
   value?: string;
   /** External URL opened by the button. */
   url?: string;
@@ -103,8 +115,10 @@ export type AgentRuntimeMessagePresentationButton = {
 export type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
-  /** Callback command or opaque value sent when selected. */
-  value: string;
+  /** Typed action sent when selected. */
+  action?: AgentRuntimeMessagePresentationAction;
+  /** Legacy opaque callback value sent when selected. */
+  value?: string;
 };
 
 /**

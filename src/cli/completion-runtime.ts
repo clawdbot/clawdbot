@@ -12,6 +12,7 @@ export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
 
+/** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
 export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
@@ -27,6 +28,7 @@ function resolveShellBasename(
   return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
 }
 
+/** Resolves the active shell from environment paths, defaulting to zsh for unknown shells. */
 export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
   const shellPath = normalizeOptionalString(env.SHELL) ?? "";
   const shellName = shellPath ? resolveShellBasename(shellPath) : "";
@@ -58,6 +60,7 @@ function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string
   return path.join(stateDir, "completions");
 }
 
+/** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
 export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
   const basename = sanitizeCompletionBasename(binName);
   const extension =
@@ -78,6 +81,7 @@ function escapePowerShellSingleQuotedString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+/** Formats the profile line that sources the cached completion script for a shell. */
 export function formatCompletionSourceLine(
   shell: CompletionShell,
   _binName: string,
@@ -92,6 +96,7 @@ export function formatCompletionSourceLine(
   return `[ -f "${cachePath}" ] && source "${cachePath}"`;
 }
 
+/** Formats the command users can run to reload the shell profile after installation. */
 export function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string {
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(profilePath)}'`;
@@ -151,6 +156,7 @@ function updateCompletionProfile(
   return { next, changed: next !== content, hadExisting };
 }
 
+/** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
 export function resolveCompletionProfilePath(
   shell: CompletionShell,
   options: {
@@ -186,6 +192,7 @@ export function resolveCompletionProfilePath(
   return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
 }
 
+/** Returns whether a shell profile already contains an OpenClaw completion block or source line. */
 export async function isCompletionInstalled(
   shell: CompletionShell,
   binName = "openclaw",

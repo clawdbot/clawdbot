@@ -1,5 +1,5 @@
 /**
- * File-backed store for Bot Framework OAuth SSO tokens.
+ * SQLite-backed store for Bot Framework OAuth SSO tokens.
  *
  * Tokens are keyed by (connectionName, userId). `userId` should be the
  * stable AAD object ID (`activity.from.aadObjectId`) when available,
@@ -11,8 +11,17 @@
  * valid token without reaching back into Bot Framework every turn.
  */
 
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { getMSTeamsRuntime } from "./runtime.js";
+import {
+  resolveMSTeamsSqliteStateEnv,
+  toPluginJsonValue,
+  withMSTeamsSqliteMutationLock,
+} from "./sqlite-state.js";
 import { resolveMSTeamsStorePath } from "./storage.js";
-import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
+import { readJsonFile } from "./store-fs.js";
 
 type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
@@ -40,13 +49,54 @@ type SsoStoreData = {
 };
 
 const STORE_FILENAME = "msteams-sso-tokens.json";
+const SSO_TOKENS_NAMESPACE = "sso-tokens";
+const SSO_TOKEN_MIGRATIONS_NAMESPACE = "sso-token-migrations";
+const SSO_TOKEN_LOCK_FILENAME = "msteams-sso-tokens.sqlite.lock";
+const MAX_SSO_TOKENS = 5000;
 const STORE_KEY_VERSION_PREFIX = "v2:";
 
 function makeKey(connectionName: string, userId: string): string {
-  return `${STORE_KEY_VERSION_PREFIX}${Buffer.from(
-    JSON.stringify([connectionName, userId]),
-    "utf8",
-  ).toString("base64url")}`;
+  return `${STORE_KEY_VERSION_PREFIX}${createHash("sha256")
+    .update(JSON.stringify([connectionName, userId]))
+    .digest("hex")}`;
+}
+
+function buildMigrationKey(filePath: string): string {
+  return `legacy-json:${createHash("sha256").update(filePath).digest("hex")}`;
+}
+
+function buildMigrationContentKey(filePath: string, value: unknown): string {
+  return `legacy-json-content:${createHash("sha256")
+    .update(filePath)
+    .update("\0")
+    .update(JSON.stringify(value) ?? "undefined")
+    .digest("hex")}`;
+}
+
+function createTokenStore(params?: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  stateDir?: string;
+  storePath?: string;
+}): PluginStateKeyedStore<MSTeamsSsoStoredToken> {
+  return getMSTeamsRuntime().state.openKeyedStore<MSTeamsSsoStoredToken>({
+    namespace: SSO_TOKENS_NAMESPACE,
+    maxEntries: MAX_SSO_TOKENS,
+    env: resolveMSTeamsSqliteStateEnv(params),
+  });
+}
+
+function createMigrationStore(params?: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  stateDir?: string;
+  storePath?: string;
+}): PluginStateKeyedStore<{ importedAt: string }> {
+  return getMSTeamsRuntime().state.openKeyedStore<{ importedAt: string }>({
+    namespace: SSO_TOKEN_MIGRATIONS_NAMESPACE,
+    maxEntries: 100,
+    env: resolveMSTeamsSqliteStateEnv(params),
+  });
 }
 
 function normalizeStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
@@ -89,60 +139,81 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
   stateDir?: string;
   storePath?: string;
 }): MSTeamsSsoTokenStore {
-  const filePath = resolveMSTeamsStorePath({
+  const legacyFilePath = resolveMSTeamsStorePath({
     filename: STORE_FILENAME,
     env: params?.env,
     homedir: params?.homedir,
     stateDir: params?.stateDir,
     storePath: params?.storePath,
   });
-
   const empty: SsoStoreData = { version: 1, tokens: {} };
+  const tokenStore = createTokenStore(params);
+  const migrationStore = createMigrationStore(params);
+  const migrationKey = buildMigrationKey(legacyFilePath);
+  let legacyImportPromise: Promise<void> | null = null;
 
-  const readStore = async (): Promise<SsoStoreData> => {
-    const { value } = await readJsonFile(filePath, empty);
-    if (!isSsoStoreData(value)) {
-      return { version: 1, tokens: {} };
+  const importLegacyStore = async (): Promise<void> => {
+    const imported = (await migrationStore.lookup(migrationKey)) !== undefined;
+    const { value, exists } = await readJsonFile<unknown>(legacyFilePath, empty);
+    const contentKey = exists ? buildMigrationContentKey(legacyFilePath, value) : null;
+    if (contentKey && (await migrationStore.lookup(contentKey))) {
+      return;
     }
-    const tokens: Record<string, MSTeamsSsoStoredToken> = {};
-    for (const stored of Object.values(value.tokens)) {
-      const normalized = normalizeStoredToken(stored);
-      if (!normalized) {
-        continue;
+    if (exists && isSsoStoreData(value)) {
+      for (const stored of Object.values(value.tokens)) {
+        const normalized = normalizeStoredToken(stored);
+        if (!normalized) {
+          continue;
+        }
+        await tokenStore.registerIfAbsent(
+          makeKey(normalized.connectionName, normalized.userId),
+          toPluginJsonValue(normalized),
+        );
       }
-      tokens[makeKey(normalized.connectionName, normalized.userId)] = normalized;
     }
-    return {
-      version: 1,
-      tokens,
-    };
+    if (contentKey) {
+      await migrationStore.register(contentKey, { importedAt: new Date().toISOString() });
+    }
+    if (!imported) {
+      await migrationStore.register(migrationKey, { importedAt: new Date().toISOString() });
+    }
+    if (exists) {
+      await fs.rm(legacyFilePath, { force: true }).catch(() => {});
+    }
+  };
+
+  const ensureLegacyImported = async (): Promise<void> => {
+    if (!legacyImportPromise) {
+      legacyImportPromise = withMSTeamsSqliteMutationLock(params, SSO_TOKEN_LOCK_FILENAME, () =>
+        importLegacyStore(),
+      ).finally(() => {
+        legacyImportPromise = null;
+      });
+    }
+    await legacyImportPromise;
   };
 
   return {
     async get({ connectionName, userId }) {
-      const store = await readStore();
-      return store.tokens[makeKey(connectionName, userId)] ?? null;
+      await ensureLegacyImported();
+      return (await tokenStore.lookup(makeKey(connectionName, userId))) ?? null;
     },
 
     async save(token) {
-      await withFileLock(filePath, empty, async () => {
-        const store = await readStore();
-        const key = makeKey(token.connectionName, token.userId);
-        store.tokens[key] = { ...token };
-        await writeJsonFile(filePath, store);
+      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_LOCK_FILENAME, async () => {
+        await importLegacyStore();
+        await tokenStore.register(
+          makeKey(token.connectionName, token.userId),
+          toPluginJsonValue({ ...token }),
+        );
       });
     },
 
     async remove({ connectionName, userId }) {
       let removed = false;
-      await withFileLock(filePath, empty, async () => {
-        const store = await readStore();
-        const key = makeKey(connectionName, userId);
-        if (store.tokens[key]) {
-          delete store.tokens[key];
-          removed = true;
-          await writeJsonFile(filePath, store);
-        }
+      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_LOCK_FILENAME, async () => {
+        await importLegacyStore();
+        removed = await tokenStore.delete(makeKey(connectionName, userId));
       });
       return removed;
     },

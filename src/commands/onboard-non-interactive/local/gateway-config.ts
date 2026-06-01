@@ -95,7 +95,6 @@ export function applyNonInteractiveGatewayConfig(params: {
         runtime.exit(1);
         return null;
       }
-      gatewayToken = resolvedFromEnv;
       nextConfig = {
         ...nextConfig,
         gateway: {

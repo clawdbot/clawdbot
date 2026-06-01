@@ -19,10 +19,13 @@ import {
   resolveNormalizedTargetInput,
 } from "./target-normalization.js";
 
+/** Directory-backed destination kind used by outbound target resolution. */
 export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
+/** Strategy for resolving multiple matching directory entries. */
 export type ResolveAmbiguousMode = "error" | "best" | "first";
 
+/** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
   to: string;
   kind: TargetResolveKind;
@@ -31,6 +34,7 @@ export type ResolvedMessagingTarget = {
   resolutionSource: "plugin" | "directory" | "normalized";
 };
 
+/** Result of resolving a user-supplied outbound target. */
 export type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
@@ -43,6 +47,7 @@ function asResolvedMessagingTarget(
 
 export { maybeResolveIdLikeTarget } from "./target-id-resolution.js";
 
+/** Resolves a channel target using the shared outbound target resolver. */
 export async function resolveChannelTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -59,6 +64,7 @@ export async function resolveChannelTarget(params: {
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
+/** Clears cached directory entries for all channels or one channel/account scope. */
 export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
   if (!params?.channel) {
     directoryCache.clear();
@@ -88,6 +94,7 @@ function stripTargetPrefixes(value: string): string {
     .trim();
 }
 
+/** Formats a resolved target for user-facing summaries. */
 export function formatTargetDisplay(params: {
   channel: ChannelId;
   target: string;
@@ -339,6 +346,7 @@ function pickAmbiguousMatch(
   return best ?? entries[0] ?? null;
 }
 
+/** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
 export async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -461,6 +469,7 @@ export async function resolveMessagingTarget(params: {
   };
 }
 
+/** Looks up a display label for a resolved target id from cached/live directory entries. */
 export async function lookupDirectoryDisplay(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

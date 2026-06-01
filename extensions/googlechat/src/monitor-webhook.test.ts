@@ -267,9 +267,9 @@ describe("googlechat monitor webhook", () => {
       },
     });
     resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
-      for (const target of targets) {
-        if (await isMatch(target)) {
-          return target;
+      for (const targetLocal of targets) {
+        if (await isMatch(targetLocal)) {
+          return targetLocal;
         }
       }
       return null;

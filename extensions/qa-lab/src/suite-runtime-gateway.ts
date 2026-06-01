@@ -289,7 +289,10 @@ async function runConfigMutation(params: {
       return { ok: true, restarted: true };
     }
   }
-  throw lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`);
+  throw toLintErrorObject(
+    lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
+    "Non-Error thrown",
+  );
 }
 
 async function patchConfig(params: {
@@ -354,3 +357,17 @@ export {
   waitForQaChannelReady,
   waitForTransportReady,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

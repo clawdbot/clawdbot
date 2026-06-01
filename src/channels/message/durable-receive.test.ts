@@ -1,9 +1,15 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   PluginStateEntry,
   PluginStateKeyedStore,
 } from "../../plugin-state/plugin-state-store.types.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createDurableInboundReceiveJournalFromQueue } from "./durable-receive.js";
 import { createDurableInboundReceiveJournal } from "./durable-receive.js";
+import { createChannelIngressQueue } from "./ingress-queue.js";
 
 type TestPayload = { body: string };
 type TestMetadata = { source: string };
@@ -36,6 +42,15 @@ function createMemoryStore<T>(): PluginStateKeyedStore<T> {
       values.set(key, { key, value, createdAt: Date.now() });
       return true;
     },
+    async update(key, updateValue) {
+      const next = updateValue(values.get(key)?.value);
+      if (next === undefined) {
+        return false;
+      }
+      assertNoUndefinedFields(next);
+      values.set(key, { key, value: next, createdAt: Date.now() });
+      return true;
+    },
     async lookup(key) {
       return values.get(key)?.value;
     },
@@ -54,6 +69,16 @@ function createMemoryStore<T>(): PluginStateKeyedStore<T> {
       values.clear();
     },
   };
+}
+
+async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-durable-receive-"));
+  try {
+    return await fn(stateDir);
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 }
 
 describe("createDurableInboundReceiveJournal", () => {
@@ -130,6 +155,9 @@ describe("createDurableInboundReceiveJournal", () => {
       async registerIfAbsent() {
         return false;
       },
+      async update() {
+        return false;
+      },
       async lookup() {
         return undefined;
       },
@@ -149,6 +177,9 @@ describe("createDurableInboundReceiveJournal", () => {
     > = {
       async register() {},
       async registerIfAbsent() {
+        return false;
+      },
+      async update() {
         return false;
       },
       async lookup() {
@@ -195,6 +226,9 @@ describe("createDurableInboundReceiveJournal", () => {
     > = {
       async register() {},
       async registerIfAbsent() {
+        return false;
+      },
+      async update() {
         return false;
       },
       async lookup() {
@@ -297,5 +331,71 @@ describe("createDurableInboundReceiveJournal", () => {
         receivedAt: 2,
       },
     ]);
+  });
+
+  it("can use the shared channel ingress queue as durable storage", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<TestPayload, TestMetadata, TestCompletedMetadata>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+      const journal = createDurableInboundReceiveJournalFromQueue({
+        queue,
+        retention: { completedMaxEntries: 1 },
+      });
+
+      await expect(
+        journal.accept("message-1", { body: "hello" }, { metadata: { source: "live" } }),
+      ).resolves.toMatchObject({
+        kind: "accepted",
+        duplicate: false,
+        record: {
+          id: "message-1",
+          payload: { body: "hello" },
+          metadata: { source: "live" },
+          receivedAt: 10,
+        },
+      });
+
+      await expect(journal.pending()).resolves.toMatchObject([
+        {
+          id: "message-1",
+          payload: { body: "hello" },
+          metadata: { source: "live" },
+        },
+      ]);
+
+      await expect(journal.release("message-1", { lastError: "retry" })).resolves.toBe(true);
+      await expect(journal.pending()).resolves.toMatchObject([
+        {
+          id: "message-1",
+          attempts: 1,
+          lastError: "retry",
+        },
+      ]);
+
+      await journal.complete("message-1", {
+        metadata: { delivered: true },
+        completedAt: 20,
+      });
+      await expect(journal.accept("message-1", { body: "again" })).resolves.toMatchObject({
+        kind: "completed",
+        duplicate: true,
+        record: {
+          id: "message-1",
+          completedAt: 20,
+          metadata: { delivered: true },
+        },
+      });
+
+      await journal.accept("message-2", { body: "new" });
+      await journal.complete("message-2", { completedAt: 21 });
+      await expect(journal.accept("message-1", { body: "past retention" })).resolves.toMatchObject({
+        kind: "accepted",
+        duplicate: false,
+      });
+    });
   });
 });

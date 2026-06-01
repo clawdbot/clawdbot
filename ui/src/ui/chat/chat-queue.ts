@@ -13,6 +13,8 @@ export type ChatQueueProps = {
 
 function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
+    case "waiting-model":
+      return "Waiting for model";
     case "sending":
       return "Sending";
     case "waiting-reconnect":

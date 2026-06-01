@@ -294,7 +294,7 @@ async function processMessage(
   const configuredGroupName = message.groupName?.trim() || "";
   const groupContext =
     isGroup && !configuredGroupName
-      ? await resolveZaloGroupContext(account.profile, chatId).catch((err) => {
+      ? await resolveZaloGroupContext(account.profile, chatId).catch((err: unknown) => {
           logVerbose(
             core,
             runtime,
@@ -986,7 +986,7 @@ export async function monitorZalouserProvider(
               statusSink,
             );
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             runtime.error(`[${account.accountId}] Failed to process message: ${String(err)}`);
           });
       },

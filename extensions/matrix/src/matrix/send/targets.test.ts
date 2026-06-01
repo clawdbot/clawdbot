@@ -53,8 +53,8 @@ describe("resolveMatrixRoomId", () => {
     const roomId = await resolveMatrixRoomId(client, userId);
 
     expect(roomId).toBe("!room:example.org");
-    expect(client.getJoinedRooms).toHaveBeenCalledTimes(1);
-    expect(client.setAccountData).not.toHaveBeenCalled();
+    expect(client["getJoinedRooms"]).toHaveBeenCalledTimes(1);
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
   it("falls back to joined rooms and persists m.direct", async () => {
@@ -65,7 +65,7 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe(roomId);
-    expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
+    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
   });
 
   it("prefers joined rooms marked direct in local member state over plain strict rooms", async () => {
@@ -87,7 +87,7 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!explicit:example.org");
-    expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
+    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, {
       [userId]: ["!explicit:example.org"],
     });
   });
@@ -111,7 +111,7 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!fallback:example.org");
-    expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
+    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, {
       [userId]: ["!fallback:example.org"],
     });
   });
@@ -150,7 +150,7 @@ describe("resolveMatrixRoomId", () => {
     await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
       `No direct room found for ${userId} (m.direct missing)`,
     );
-    expect(client.setAccountData).not.toHaveBeenCalled();
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
   it("accepts nested Matrix user target prefixes", async () => {
@@ -167,7 +167,7 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, `matrix:user:${userId}`);
 
     expect(resolved).toBe(roomId);
-    expect(client.resolveRoom).not.toHaveBeenCalled();
+    expect(client["resolveRoom"]).not.toHaveBeenCalled();
   });
 
   it("scopes direct-room cache per Matrix client", async () => {
@@ -196,8 +196,8 @@ describe("resolveMatrixRoomId", () => {
     await expect(resolveMatrixRoomId(clientA, userId)).resolves.toBe("!room-a:example.org");
     await expect(resolveMatrixRoomId(clientB, userId)).resolves.toBe("!room-b:example.org");
 
-    expect(clientA.getAccountData).toHaveBeenCalledTimes(1);
-    expect(clientB.getAccountData).toHaveBeenCalledTimes(1);
+    expect(clientA["getAccountData"]).toHaveBeenCalledTimes(1);
+    expect(clientB["getAccountData"]).toHaveBeenCalledTimes(1);
   });
 
   it("ignores m.direct entries that point at shared rooms", async () => {

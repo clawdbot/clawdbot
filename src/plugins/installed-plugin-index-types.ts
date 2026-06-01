@@ -29,6 +29,23 @@ export type InstalledPluginStartupInfo = {
   memory: boolean;
   deferConfiguredChannelFullLoadUntilAfterListen: boolean;
   agentHarnesses: readonly string[];
+  /**
+   * Manifest activation.onConfigPaths copied into the installed index for
+   * pre-manifest startup scoping. Missing on older persisted index files.
+   */
+  configPaths?: readonly string[];
+};
+
+export type InstalledPluginContributionInfo = {
+  channels: readonly string[];
+  channelConfigs: readonly string[];
+  providers: readonly string[];
+  modelCatalogProviders: readonly string[];
+  modelSupportPrefixes: readonly string[];
+  modelSupportPatterns: readonly string[];
+  autoEnableProviderIds: readonly string[];
+  commandAliases: readonly string[];
+  contracts: Readonly<Record<string, readonly string[]>>;
 };
 
 export type InstalledPluginInstallRecordInfo = Pick<
@@ -104,6 +121,7 @@ export type InstalledPluginIndexRecord = {
   enabledByDefaultOnPlatforms?: readonly string[];
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
+  contributions?: InstalledPluginContributionInfo;
   compat: readonly PluginCompatCode[];
 };
 

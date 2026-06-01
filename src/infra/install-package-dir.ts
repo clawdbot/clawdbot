@@ -211,9 +211,9 @@ export async function installPackageDir(params: {
     }
     return { ok: false as const, error };
   };
-  const failWithCode = async (params: { error: string; code?: string }, cause?: unknown) => {
-    const failed = await fail(params.error, cause);
-    return params.code ? { ...failed, code: params.code } : failed;
+  const failWithCode = async (paramsLocal: { error: string; code?: string }, cause?: unknown) => {
+    const failed = await fail(paramsLocal.error, cause);
+    return paramsLocal.code ? { ...failed, code: paramsLocal.code } : failed;
   };
   const restoreBackup = async () => {
     if (!backupDir) {

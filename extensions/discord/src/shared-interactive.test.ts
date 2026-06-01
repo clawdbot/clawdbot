@@ -134,7 +134,7 @@ describe("buildDiscordInteractiveComponents", () => {
           { type: "context", text: "main branch" },
           {
             type: "buttons",
-            buttons: [{ label: "Open", value: "open" }],
+            buttons: [{ label: "Open", action: { type: "command", command: "/codex open" } }],
           },
         ],
       }),
@@ -145,7 +145,46 @@ describe("buildDiscordInteractiveComponents", () => {
         { type: "text", text: "-# main branch" },
         {
           type: "actions",
-          buttons: [{ label: "Open", style: "secondary", callbackData: "open" }],
+          buttons: [
+            {
+              label: "Open",
+              style: "secondary",
+              callbackData: "/codex open",
+              callbackDataKind: "command",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("marks typed callback actions as opaque callback data", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Opaque",
+                action: { type: "callback", value: "/codex permissions yolo" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Opaque",
+              style: "secondary",
+              callbackData: "/codex permissions yolo",
+              callbackDataKind: "callback",
+            },
+          ],
         },
       ],
     });
@@ -207,5 +246,94 @@ describe("buildDiscordInteractiveComponents", () => {
         },
       ],
     });
+  });
+
+  it("preserves typed command actions for command-only select options", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Pick",
+            options: [
+              {
+                label: "Run",
+                action: { type: "command", command: "/codex permissions yolo" },
+                value: "/codex permissions yolo",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          select: {
+            type: "string",
+            placeholder: "Pick",
+            callbackDataKind: "command",
+            options: [{ label: "Run", value: "/codex permissions yolo" }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("marks typed callback actions for callback-only select options", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Pick",
+            options: [
+              {
+                label: "Inspect",
+                action: { type: "callback", value: "inspect:123" },
+                value: "inspect:123",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          select: {
+            type: "string",
+            placeholder: "Pick",
+            callbackDataKind: "callback",
+            options: [{ label: "Inspect", value: "inspect:123" }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("does not render mixed command and callback select actions", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Pick",
+            options: [
+              {
+                label: "Run",
+                action: { type: "command", command: "/codex run" },
+                value: "/codex run",
+              },
+              {
+                label: "Inspect",
+                action: { type: "callback", value: "inspect:123" },
+                value: "inspect:123",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 });

@@ -38,14 +38,14 @@ All Codex harness settings live under `plugins.entries.codex.config`.
 
 Supported top-level fields:
 
-| Field                      | Default                  | Meaning                                                                                                                                   |
-| -------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                               |
-| `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings.                                                                        |
-| `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                                  |
-| `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                               |
-| `codexPlugins`             | disabled                 | Native Codex plugin/app support for migrated source-installed curated plugins. See [Native Codex plugins](/plugins/codex-native-plugins). |
-| `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                          |
+| Field                      | Default                  | Meaning                                                                                                                              |
+| -------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                          |
+| `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings.                                                                   |
+| `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                             |
+| `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                          |
+| `codexPlugins`             | disabled                 | Native Codex plugin/app support for configured first-party Codex plugins. See [Native Codex plugins](/plugins/codex-native-plugins). |
+| `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                     |
 
 ## App-server transport
 
@@ -368,7 +368,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.134.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.135.0`. A `model/list` probe
 against that bundled app-server returned:
 
 | Model id              | Default | Hidden | Input modalities | Reasoning efforts        |

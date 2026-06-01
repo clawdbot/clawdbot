@@ -152,18 +152,18 @@ function createGoogleChatSecretContractApi() {
       if (!refValue) {
         return;
       }
-      const path = `${pathKey}.serviceAccount`;
+      const pathLocal = `${pathKey}.serviceAccount`;
       if (!active) {
         params.context.warnings.push({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path,
-          message: `${path}: Google Chat account is disabled.`,
+          path: pathLocal,
+          message: `${pathLocal}: Google Chat account is disabled.`,
         });
         return;
       }
       params.context.assignments.push({
         ref: refValue,
-        path,
+        path: pathLocal,
         expected: "string-or-object",
         apply: (value) => {
           target.serviceAccount = value;

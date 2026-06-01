@@ -9,10 +9,12 @@ import type { GatewayHelloOk } from "./gateway.ts";
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
 
+type GatewayRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<GatewayRequest>>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -43,7 +45,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
-    readonly request = vi.fn(async (method: string) => {
+    readonly request = vi.fn<GatewayRequest>(async (method: string) => {
       if (method === "update.status") {
         return { sentinel: null };
       }
@@ -123,6 +125,7 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
   activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
@@ -137,7 +140,6 @@ function createHost(): TestGatewayHost {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       splitRatio: 0.6,
       navCollapsed: false,
@@ -189,7 +191,7 @@ function createHost(): TestGatewayHost {
     execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
-    updateComplete: new Promise(() => undefined),
+    updateComplete: new Promise(() => {}),
   } as unknown as TestGatewayHost;
 }
 
@@ -206,6 +208,18 @@ function connectHostGateway() {
   connectGateway(host);
   const client = requireGatewayClient();
   return { host, client };
+}
+
+function eventPayloads(host: TestGatewayHost, event: string): Array<Record<string, unknown>> {
+  const payloads: Array<Record<string, unknown>> = [];
+  for (const entry of host.eventLogBuffer) {
+    const candidate = entry as { event?: unknown; payload?: unknown };
+    if (candidate.event !== event || !candidate.payload || typeof candidate.payload !== "object") {
+      continue;
+    }
+    payloads.push(candidate.payload as Record<string, unknown>);
+  }
+  return payloads;
 }
 
 function emitToolResultEvent(client: GatewayClientMock) {
@@ -620,7 +634,7 @@ describe("connectGateway", () => {
     try {
       const { host, client } = connectHostGateway();
       const pendingReload = vi.fn();
-      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
       client.emitClose({ code: 1005 });
 
@@ -1101,6 +1115,67 @@ describe("connectGateway", () => {
     emitToolResultEvent(client);
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("records first assistant paint timing for tracked chat sends", async () => {
+    const { host, client } = connectHostGateway();
+    host.updateComplete = Promise.resolve();
+    host.chatRunId = "run-first-visible";
+    host.chatStream = "";
+    (
+      host as TestGatewayHost & {
+        chatSendTimingsByRun: Map<string, Record<string, unknown>>;
+      }
+    ).chatSendTimingsByRun = new Map([
+      [
+        "run-first-visible",
+        {
+          runId: "run-first-visible",
+          sessionKey: "main",
+          sendAttempts: 1,
+          sendState: "sending",
+          submittedAtMs: 100,
+          requestStartedAtMs: 125,
+          ackAtMs: 150,
+          ackStatus: "started",
+        },
+      ],
+    ]);
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-first-visible",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Hello",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          timestamp: Date.now(),
+        },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        eventPayloads(host, "control-ui.chat.send").some(
+          (payload) => payload.phase === "first-assistant-visible",
+        ),
+      ).toBe(true),
+    );
+    const firstVisible = eventPayloads(host, "control-ui.chat.send").find(
+      (payload) => payload.phase === "first-assistant-visible",
+    );
+    expect(firstVisible).toMatchObject({
+      runId: "run-first-visible",
+      sessionKey: "main",
+      ackStatus: "started",
+      eventState: "delta",
+      sendState: "sending",
+    });
+    expect(firstVisible?.ackToFirstAssistantEventMs).toEqual(expect.any(Number));
+    expect(host.chatStream).toBe("Hello");
   });
 
   it("renders session-scoped tool events for externally started runs", () => {

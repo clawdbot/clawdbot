@@ -84,6 +84,18 @@ https://gateway.example.com/webhooks/sms
 
   </Step>
 
+  <Step title="Expose the exact SMS webhook path">
+    Your public URL must route the SMS path to the Gateway process. If you use Tailscale Funnel for local testing, expose `/webhooks/sms` explicitly:
+
+```bash
+tailscale funnel --bg --set-path /webhooks/sms http://127.0.0.1:<gateway-port>/webhooks/sms
+tailscale funnel status
+```
+
+    Voice Call and SMS use separate webhook paths. If the same Twilio number handles both, keep both routes configured in Twilio and in your tunnel.
+
+  </Step>
+
   <Step title="Start the Gateway and approve first sender">
 
 ```bash
@@ -148,6 +160,27 @@ Then enable the channel in config:
 ```
 
 `TWILIO_SMS_FROM` is accepted as an alias for `TWILIO_PHONE_NUMBER`. Use `TWILIO_MESSAGING_SERVICE_SID` instead of a phone-number sender when Twilio should choose the sender from a Messaging Service.
+
+### SecretRef auth token
+
+`authToken` can be a SecretRef. Use this when the Gateway should resolve the Twilio Auth Token from the OpenClaw secrets runtime instead of storing plaintext config:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+      fromNumber: "+15551234567",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+The referenced environment variable or secret provider must be visible to the Gateway runtime. Restart managed Gateway processes after changing host environment variables.
 
 ### Allowlist-only private number
 
@@ -245,16 +278,36 @@ SMS output is plain text. OpenClaw strips markdown, flattens fenced code blocks,
 After the Gateway starts:
 
 1. Confirm the Gateway log shows the SMS webhook route.
-2. Send an SMS to the Twilio number from your phone.
-3. Run `openclaw pairing list sms`.
-4. Approve the pairing code with `openclaw pairing approve sms <CODE>`.
-5. Send another SMS and confirm the agent replies.
+2. Run a Twilio-side probe:
+
+```bash
+openclaw channels capabilities --channel sms
+openclaw channels status --channel sms --probe --json
+```
+
+3. Send an SMS to the Twilio number from your phone.
+4. Run `openclaw pairing list sms`.
+5. Approve the pairing code with `openclaw pairing approve sms <CODE>`.
+6. Send another SMS and confirm the agent replies.
 
 For outbound-only testing, use:
 
 ```bash
 openclaw message send --channel sms --target sms:+15557654321 --message "OpenClaw SMS test"
 ```
+
+### End-to-end test from macOS iMessage/SMS
+
+On a Mac that can send carrier SMS through Messages, you can use `imsg` to drive the sender side without touching your phone:
+
+```bash
+imsg send --to "+15551234567" --service sms --text "OpenClaw SMS E2E $(date -u +%Y%m%dT%H%M%SZ)" --json
+openclaw pairing list sms
+openclaw pairing approve sms <CODE>
+imsg send --to "+15551234567" --service sms --text "reply exactly SMS pong" --json
+```
+
+The first message should create a pairing request. The second message should receive the agent reply through Twilio.
 
 ## Webhook security
 
@@ -310,6 +363,13 @@ Check that `publicWebhookUrl` exactly matches the URL configured in Twilio, incl
 ### No pairing request appears
 
 Check the Twilio number's **Messaging** webhook URL and method. It must point to the SMS webhook URL and use `POST`. Also confirm the Gateway is reachable from the public internet or through your tunnel.
+
+If the Twilio message log shows error `11200`, Twilio accepted the inbound SMS but could not reach your webhook. Check:
+
+- Twilio **Messaging > A message comes in** points at `publicWebhookUrl`.
+- The method is `POST`.
+- The tunnel or reverse proxy exposes the exact `webhookPath`; for Tailscale Funnel, run `tailscale funnel status` and confirm `/webhooks/sms` is listed.
+- `publicWebhookUrl` uses the same scheme, host, path, and query string Twilio sends, so signature validation can reproduce the signed URL.
 
 ### Outbound sends fail
 

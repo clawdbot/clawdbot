@@ -22,7 +22,10 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
       markCanceled();
       void reader.cancel().catch(() => undefined);
       reject(
-        signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
+        toLintErrorObject(
+          signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
+          "Non-Error rejection",
+        ),
       );
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -91,4 +94,18 @@ export async function readBoundedResponseText(response, label, maxBytes, options
   }
 
   return chunks.join("");
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

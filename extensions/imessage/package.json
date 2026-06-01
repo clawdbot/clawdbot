@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/imessage",
-  "version": "2026.5.30",
+  "version": "2026.6.1",
   "private": true,
   "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
   "type": "module",
@@ -12,6 +12,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true
+    },
     "channel": {
       "id": "imessage",
       "label": "iMessage",
@@ -40,10 +43,10 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.5.30"
+      "pluginApi": ">=2026.6.1"
     },
     "build": {
-      "openclawVersion": "2026.5.30"
+      "openclawVersion": "2026.6.1"
     }
   },
   "pluginInspector": {

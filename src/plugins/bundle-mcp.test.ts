@@ -10,7 +10,9 @@ import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
   withBundleHomeEnv,
+  writeBundleTextFiles,
   writeClaudeBundleManifest,
+  resolveBundlePluginRoot,
 } from "./bundle-mcp.test-support.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
@@ -257,6 +259,53 @@ describe("loadEnabledBundleMcpConfig", () => {
             normalizePathForAssertion("local-probe.mjs")!,
           ],
         });
+      },
+    );
+  });
+
+  it("loads Link-style Codex bundle MCP config", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-link",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = resolveBundlePluginRoot(homeDir, "link");
+        await writeBundleTextFiles(pluginRoot, {
+          ".codex-plugin/plugin.json": `${JSON.stringify(
+            {
+              name: "link",
+              skills: "./skills/",
+              mcpServers: "./.mcp.json",
+            },
+            null,
+            2,
+          )}\n`,
+          ".mcp.json": `${JSON.stringify(
+            {
+              mcpServers: {
+                link: {
+                  command: "pnpx",
+                  args: ["@stripe/link-cli", "--mcp"],
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+        });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["link"]),
+        });
+        const loadedServer = loaded.config.mcpServers.link;
+
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("pnpx");
+        expect(getServerArgs(loadedServer)).toEqual(["@stripe/link-cli", "--mcp"]);
+        await expectResolvedPathEqual(
+          isRecord(loadedServer) ? loadedServer.cwd : undefined,
+          pluginRoot,
+        );
       },
     );
   });

@@ -16,6 +16,7 @@ import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gate
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
@@ -283,10 +284,16 @@ export async function resolveGatewayProbeSnapshot(params: {
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
+  serviceName?: string | null;
   controlUiBasePath?: string;
 }): string | null {
-  return params.tailscaleMode !== "off" && params.tailscaleDns
-    ? `https://${params.tailscaleDns}${normalizeControlUiBasePath(params.controlUiBasePath)}`
+  const host = resolveTailscalePublishedHost({
+    tailscaleMode: params.tailscaleMode,
+    tailnetHost: params.tailscaleDns,
+    serviceName: params.serviceName,
+  });
+  return params.tailscaleMode !== "off" && host
+    ? `https://${host}${normalizeControlUiBasePath(params.controlUiBasePath)}`
     : null;
 }
 

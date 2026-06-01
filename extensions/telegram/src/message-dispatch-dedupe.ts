@@ -11,7 +11,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getTelegramRuntime } from "./runtime.js";
+import { getOptionalTelegramRuntime } from "./runtime.js";
 
 const TELEGRAM_MESSAGE_DISPATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "telegram.message-dispatch-dedupe";
@@ -53,14 +53,14 @@ export type TelegramMessageDispatchClaim =
   | { kind: "duplicate" }
   | { kind: "invalid" };
 
-function openDispatchDedupeStore(): TelegramMessageDispatchDedupeStore {
-  return (
-    dispatchDedupeStoreForTest ??
-    getTelegramRuntime().state.openKeyedStore<TelegramMessageDispatchDedupeRecord>({
-      namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
-      maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
-    })
-  );
+function openDispatchDedupeStore(): TelegramMessageDispatchDedupeStore | undefined {
+  if (dispatchDedupeStoreForTest) {
+    return dispatchDedupeStoreForTest;
+  }
+  return getOptionalTelegramRuntime()?.state.openKeyedStore<TelegramMessageDispatchDedupeRecord>({
+    namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+    maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
+  });
 }
 
 function resolveDispatchScopeKey(storePath: string): string {
@@ -106,7 +106,9 @@ function dedupeBucketLockKey(bucketKey: string): string {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function pruneDedupeBucketEntries(entries: Record<string, number>, now: number): void {
@@ -313,23 +315,23 @@ export function createTelegramMessageDispatchReplayGuard(params: {
     return next;
   }
 
-  async function withBucketLock<T>(params: {
+  async function withBucketLock<T>(paramsLocal: {
     store: TelegramMessageDispatchDedupeStore;
     namespace: string;
     bucketId: string;
     bucketKey: string;
     write: () => Promise<T>;
   }): Promise<T> {
-    const lockKey = dedupeBucketLockKey(params.bucketKey);
+    const lockKey = dedupeBucketLockKey(paramsLocal.bucketKey);
     const lockValue = createDedupeBucketRecord({
       scopeKey,
-      namespace: `${params.namespace}:lock`,
-      bucketId: params.bucketId,
+      namespace: `${paramsLocal.namespace}:lock`,
+      bucketId: paramsLocal.bucketId,
     });
     let locked = false;
     for (let attempt = 0; attempt < TELEGRAM_MESSAGE_DISPATCH_DEDUPE_LOCK_ATTEMPTS; attempt += 1) {
       if (
-        await params.store.registerIfAbsent(lockKey, lockValue, {
+        await paramsLocal.store.registerIfAbsent(lockKey, lockValue, {
           ttlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_LOCK_TTL_MS,
         })
       ) {
@@ -340,13 +342,13 @@ export function createTelegramMessageDispatchReplayGuard(params: {
     }
     if (!locked) {
       throw new Error(
-        `timed out acquiring Telegram dispatch dedupe bucket lock: ${params.bucketId}`,
+        `timed out acquiring Telegram dispatch dedupe bucket lock: ${paramsLocal.bucketId}`,
       );
     }
     try {
-      return await params.write();
+      return await paramsLocal.write();
     } finally {
-      await params.store.delete(lockKey);
+      await paramsLocal.store.delete(lockKey);
     }
   }
 
@@ -364,14 +366,14 @@ export function createTelegramMessageDispatchReplayGuard(params: {
         return { kind: "inflight", pending: existing.promise };
       }
       const pending = rememberPendingClaim(entryKey);
-      const store = getStore();
-      if (!store) {
+      const storeEntry = getStore();
+      if (!storeEntry) {
         return { kind: "claimed" };
       }
       try {
         if (
           await lookupDedupeBucketContains({
-            store,
+            store: storeEntry,
             scopeKey,
             namespace,
             bucketId,
@@ -396,8 +398,8 @@ export function createTelegramMessageDispatchReplayGuard(params: {
       const entryKey = dedupeEntryKey(scopeKey, namespace, key);
       const bucketId = dedupeBucketId(key);
       const bucketKey = dedupeBucketEntryKey(scopeKey, namespace, bucketId);
-      const store = getStore();
-      if (!store) {
+      const storeResult = getStore();
+      if (!storeResult) {
         rememberCommittedInMemory(entryKey, namespace, now);
         inflight.get(entryKey)?.resolve(true);
         inflight.delete(entryKey);
@@ -406,12 +408,12 @@ export function createTelegramMessageDispatchReplayGuard(params: {
       try {
         await enqueueBucketWrite(bucketKey, async () => {
           await withBucketLock({
-            store,
+            store: storeResult,
             namespace,
             bucketId,
             bucketKey,
             write: async () => {
-              const bucket = normalizeDedupeBucketRecord(await store.lookup(bucketKey), {
+              const bucket = normalizeDedupeBucketRecord(await storeResult.lookup(bucketKey), {
                 scopeKey,
                 namespace,
                 bucketId,
@@ -419,7 +421,9 @@ export function createTelegramMessageDispatchReplayGuard(params: {
               });
               bucket.entries[key] = now;
               pruneDedupeBucketEntries(bucket.entries, now);
-              await store.register(bucketKey, bucket, { ttlMs: TELEGRAM_MESSAGE_DISPATCH_TTL_MS });
+              await storeResult.register(bucketKey, bucket, {
+                ttlMs: TELEGRAM_MESSAGE_DISPATCH_TTL_MS,
+              });
             },
           });
         });
@@ -452,13 +456,13 @@ export function createTelegramMessageDispatchReplayGuard(params: {
       if (hasCommittedInMemory(entryKey)) {
         return true;
       }
-      const store = getStore();
-      if (!store) {
+      const storeValue = getStore();
+      if (!storeValue) {
         return false;
       }
       try {
         return await lookupDedupeBucketContains({
-          store,
+          store: storeValue,
           scopeKey,
           namespace,
           bucketId,
@@ -476,13 +480,13 @@ export function createTelegramMessageDispatchReplayGuard(params: {
       const memoryCount = [...committedInMemory.values()].filter(
         (entry) => entry.namespace === namespace,
       ).length;
-      const store = getStore();
-      if (!store) {
+      const storeLocal = getStore();
+      if (!storeLocal) {
         return memoryCount;
       }
       try {
         const now = Date.now();
-        const persistedCount = (await store.entries())
+        const persistedCount = (await storeLocal.entries())
           .filter(
             (entry) => entry.value.scopeKey === scopeKey && entry.value.namespace === namespace,
           )

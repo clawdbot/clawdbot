@@ -539,7 +539,7 @@ describe("qa cli registration", () => {
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
-    const [{ registration }] = listQaRunnerCliContributions.mock.results[0]?.value;
+    const [{ registration }] = listQaRunnerCliContributions.mock.results[0].value;
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 

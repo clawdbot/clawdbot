@@ -29,6 +29,8 @@ function lazyHandlerModule<T>(
   selectHandlers: (module: T) => GatewayRequestHandlers,
 ): () => Promise<GatewayRequestHandlers> {
   let handlersPromise: Promise<GatewayRequestHandlers> | null = null;
+  // Gateway starts advertise the method table before most handler modules are needed; cache the
+  // first import promise so concurrent calls to the same method family share one load.
   return () => (handlersPromise ??= loadModule().then(selectHandlers));
 }
 
@@ -43,6 +45,8 @@ function createLazyCoreHandlers(params: {
         const handlers = await params.loadHandlers();
         const handler = handlers[method];
         if (!handler) {
+          // Descriptor drift should fail loudly: advertised core methods must exist in the
+          // loaded family module once the lazy boundary resolves.
           throw new Error(`lazy gateway handler not found: ${method}`);
         }
         await handler(opts);
@@ -217,6 +221,8 @@ function authorizeGatewayMethod(
   client: GatewayRequestOptions["client"],
   params: unknown,
 ) {
+  // Pre-connect and health requests are allowed through; role/scope checks require the
+  // authenticated connect metadata established by the gateway handshake.
   if (!client?.connect) {
     return null;
   }
@@ -560,6 +566,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
 };
 
+/** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
@@ -569,6 +576,8 @@ function createRequestGatewayMethodRegistry(
   const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
   const coreDescriptorHandlers = { ...coreGatewayHandlers };
   for (const [method, extraHandler] of extraHandlerEntries) {
+    // Tests and local harnesses can override classified core methods, but plugin-provided
+    // methods win so a loaded plugin cannot be shadowed by a caller-local extra handler.
     if (!pluginMethodNames.has(method) && isCoreGatewayMethodClassified(method)) {
       coreDescriptorHandlers[method] = extraHandler;
     }
@@ -597,6 +606,7 @@ function createRequestGatewayMethodRegistry(
   ]);
 }
 
+/** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
@@ -609,6 +619,8 @@ export async function handleGatewayRequest(
     return;
   }
   if (context.unavailableGatewayMethods?.has(req.method)) {
+    // During startup, methods can be listed before their runtime is ready. Return the protocol
+    // retry shape so clients can back off without treating startup as a permanent unknown method.
     respond(
       false,
       undefined,
@@ -623,6 +635,8 @@ export async function handleGatewayRequest(
   if (methodRegistry.isControlPlaneWrite(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });
     if (!budget.allowed) {
+      // Control-plane writes mutate gateway-wide state; rate limit before handler lookup so
+      // plugin and aux write methods share the same protection.
       const actor = resolveControlPlaneActor(client);
       context.logGateway.warn(
         `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
@@ -667,5 +681,6 @@ export async function handleGatewayRequest(
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
+  // The scope also carries caller identity into plugin-owned gateway methods.
   await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
 }

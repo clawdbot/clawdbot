@@ -76,9 +76,9 @@ function collectActiveAuthHints(config: OpenClawConfig): {
     if (profile) {
       explicitProfileIds.add(profile);
       if (provider) {
-        const providers = explicitProfileProviders.get(profile) ?? new Set<string>();
-        providers.add(provider);
-        explicitProfileProviders.set(profile, providers);
+        const providersLocal = explicitProfileProviders.get(profile) ?? new Set<string>();
+        providersLocal.add(provider);
+        explicitProfileProviders.set(profile, providersLocal);
       }
     }
     if (provider) {

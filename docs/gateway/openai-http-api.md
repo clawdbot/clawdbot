@@ -212,7 +212,7 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 ### Supported request fields
 
 - `tools`: array of `{ "type": "function", "function": { ... } }`
-- `tool_choice`: `"auto"`, `"none"`
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "function": { "name": "..." } }`
 - `messages[*].role: "tool"` follow-up turns
 - `messages[*].tool_call_id` for binding tool results back to a prior tool call
 - `max_completion_tokens`: number; per-call cap for total completion tokens (reasoning tokens included). Current OpenAI Chat Completions field name; preferred when both `max_completion_tokens` and `max_tokens` are sent.
@@ -234,9 +234,9 @@ The endpoint returns `400 invalid_request_error` for unsupported tool variants, 
 - non-function tool entries
 - missing `tool.function.name`
 - `tool_choice` variants such as `allowed_tools` and `custom`
-- `tool_choice: "required"` (not yet enforced at runtime; will be supported once hard enforcement is implemented)
-- `tool_choice: { "type": "function", "function": { "name": "..." } }` (same rationale as `required`)
 - `tool_choice.function.name` values that do not match provided `tools`
+
+For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and returns an error if the agent response does not include a matching structured client-tool call. This contract applies to the caller-supplied HTTP `tools` list, not every internal OpenClaw agent tool.
 
 ### Non-streaming tool response shape
 

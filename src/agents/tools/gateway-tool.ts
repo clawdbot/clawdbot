@@ -10,6 +10,7 @@ import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js"
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
@@ -33,6 +34,7 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 // Per SECURITY.md the model/agent itself is not a trusted principal.
 // `assertGatewayConfigMutationAllowed` is the explicit model -> operator
 // trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
@@ -112,6 +114,14 @@ function stripConfigWriteResultPayload(result: unknown): unknown {
   const stripped = { ...result };
   delete stripped.config;
   return stripped;
+}
+
+function isConfigSchemaPathNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes(CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE)
+  );
 }
 
 function parseGatewayConfigMutationRaw(
@@ -475,8 +485,20 @@ export function createGatewayTool(opts?: {
           required: true,
           label: "path",
         });
-        const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
-        return jsonResult({ ok: true, result });
+        try {
+          const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+          return jsonResult({ ok: true, result });
+        } catch (error) {
+          if (isConfigSchemaPathNotFoundError(error)) {
+            return jsonResult({
+              ok: false,
+              code: "schema_path_not_found",
+              path,
+              message: CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE,
+            });
+          }
+          throw error;
+        }
       }
       if (action === "config.apply") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =

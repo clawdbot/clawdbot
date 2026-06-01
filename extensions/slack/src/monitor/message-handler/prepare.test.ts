@@ -267,6 +267,64 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
   });
 
+  it("keeps Slack assistant DM thread targets when replyToMode is off", async () => {
+    const prepared = await prepareMessageWith(
+      createDefaultSlackCtx(),
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.100",
+        parent_user_id: "B1",
+        text: "assistant thread message",
+        assistant_thread: {
+          channel_id: "D123",
+          thread_ts: "10.000",
+          context: {
+            channel_id: "C999",
+            team_id: "T1",
+          },
+        },
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+    expect(payload.SlackAssistantThread).toBe(true);
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
+    expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
+  });
+
+  it("does not force Slack assistant context onto top-level channel replies when replyToMode is off", async () => {
+    const prepared = await prepareMessageWith(
+      createDefaultSlackCtx(),
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        ts: "10.100",
+        text: "<@B1> top-level assistant context",
+        assistant_thread: {
+          channel_id: "D123",
+          thread_ts: "10.000",
+          context: {
+            channel_id: "C999",
+            team_id: "T1",
+          },
+        },
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(prepared.forcedReplyThreadTs).toBeUndefined();
+    expect(payload.SlackAssistantThread).toBe(true);
+    expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
+    expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
+  });
+
   it("prefers Slack assistant message context over stale lifecycle cache", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.saveSlackAssistantThreadContext({

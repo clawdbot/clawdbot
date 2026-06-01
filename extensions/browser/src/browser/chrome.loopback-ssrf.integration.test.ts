@@ -42,14 +42,12 @@ async function startLoopbackCdpServer(): Promise<RunningServer> {
 
 afterEach(async () => {
   await Promise.all(
-    runningServers
-      .splice(0)
-      .map(
-        (server) =>
-          new Promise<void>((resolve, reject) =>
-            server.close((err) => (err ? reject(err) : resolve())),
-          ),
-      ),
+    runningServers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        }),
+    ),
   );
 });
 

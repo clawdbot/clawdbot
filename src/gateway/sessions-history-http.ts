@@ -152,10 +152,7 @@ export async function handleSessionHistoryHttpRequest(
   }
   const limit = resolveLimit(req);
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
-  const effectiveMaxChars =
-    typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
-      ? cfg.gateway.webchat.chatHistoryMaxChars
-      : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
@@ -259,7 +256,7 @@ export async function handleSessionHistoryHttpRequest(
         }
         await work();
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         // Surface the underlying error so operators can distinguish transient
         // infrastructure failures (for example a `getRuntimeConfig()` read error
         // inside the reauth path) from deliberate revocation, then fail closed.
@@ -269,14 +266,14 @@ export async function handleSessionHistoryHttpRequest(
   };
 
   const isStreamStillAuthorized = async (): Promise<boolean> => {
-    const cfg = getRuntimeConfig();
+    const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       req,
       auth: opts.getResolvedAuth?.() ?? opts.auth,
-      trustedProxies: cfg.gateway?.trustedProxies,
-      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
+      trustedProxies: cfgLocal.gateway?.trustedProxies,
+      allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
       rateLimiter: opts.rateLimiter,
-      cfg,
+      cfg: cfgLocal,
     });
     if (!currentRequestAuth.ok) {
       return false;

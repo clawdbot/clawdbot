@@ -40,7 +40,7 @@ export async function resolveQaNodeExecPath(params?: {
 
   const locator = platform === "win32" ? "where" : "which";
   const execFileImpl = params?.execFileImpl ?? execFileAsync;
-  let stdout = "";
+  let stdout;
   try {
     ({ stdout } = await execFileImpl(locator, ["node"], {
       encoding: "utf8",

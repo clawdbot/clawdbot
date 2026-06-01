@@ -556,6 +556,183 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("falls back to bundled static catalog rows without agent discovery", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+    const baseRuntimeHooks = createRuntimeHooks();
+    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
+    const runProviderDynamicModel = vi.fn(() => undefined);
+
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
+      allowBundledStaticCatalogFallback: true,
+      preferBundledStaticCatalogTransport: true,
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "openai",
+      id: "gpt-5.3-codex",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledTimes(1);
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.3-codex",
+        cfg,
+      }),
+    );
+    expect(prepareProviderDynamicModel).toHaveBeenCalled();
+    expect(runProviderDynamicModel).toHaveBeenCalled();
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("keeps provider dynamic metadata for runtime-preferred models", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      name: "GPT-5.5 Pro",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 123_456,
+      maxTokens: 64_000,
+    });
+    const baseRuntimeHooks = createRuntimeHooks();
+    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
+    const runProviderDynamicModel = vi.fn(() => ({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      name: "GPT-5.5 Pro",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    }));
+    const shouldPreferProviderRuntimeResolvedModel = vi.fn(() => true);
+
+    const result = await resolveModelAsync("openai", "gpt-5.5-pro", "/tmp/agent", undefined, {
+      allowBundledStaticCatalogFallback: true,
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+        shouldPreferProviderRuntimeResolvedModel,
+      },
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      api: "openai-chatgpt-responses",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    expect(prepareProviderDynamicModel).toHaveBeenCalled();
+    expect(runProviderDynamicModel).toHaveBeenCalled();
+    expect(shouldPreferProviderRuntimeResolvedModel).toHaveBeenCalled();
+  });
+
+  it("looks up each static fallback candidate with its own normalized model id", async () => {
+    resolveBundledStaticCatalogModelMock.mockImplementation(({ provider, modelId }) => ({
+      provider,
+      id: modelId,
+      name: modelId,
+      api: "openai-responses",
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }));
+
+    const anthropicResult = await resolveModelAsync(
+      "anthropic",
+      "anthropic/claude-haiku-4-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+        skipProviderRuntimeHooks: true,
+      },
+    );
+    const openaiResult = await resolveModelAsync("openai", "gpt-4o", "/tmp/agent", undefined, {
+      allowBundledStaticCatalogFallback: true,
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+      skipProviderRuntimeHooks: true,
+    });
+
+    expectRecordFields(expectResolvedModel(anthropicResult), {
+      provider: "anthropic",
+      id: "claude-haiku-4-5",
+    });
+    expectRecordFields(expectResolvedModel(openaiResult), {
+      provider: "openai",
+      id: "gpt-4o",
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "anthropic",
+      modelId: "claude-haiku-4-5",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "openai",
+      modelId: "gpt-4o",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "claude-haiku-4-5",
+      }),
+    );
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "anthropic/claude-haiku-4-5",
+      }),
+    );
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
   it("applies provider overrides to bundled static catalog rows while skipping agent discovery", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "mistral",
@@ -810,6 +987,27 @@ describe("resolveModel", () => {
     expect(model.provider).toBe("custom");
     expect(model.id).toBe("missing-model");
     expect(model.api).toBe("openai-completions");
+  });
+
+  it("defaults baseUrl-only Google fallback models to native Gemini transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("google", "gemini-2.5-flash-lite", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.provider).toBe("google");
+    expect(model.id).toBe("gemini-2.5-flash-lite");
+    expect(model.api).toBe("google-generative-ai");
+    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("uses bundled static metadata for configured provider fallback token limits", () => {

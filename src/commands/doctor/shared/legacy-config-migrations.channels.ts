@@ -460,7 +460,34 @@ const FEISHU_ACCOUNT_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const WEBCHAT_CHANNEL_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "webchat"],
+    message: 'channels.webchat is retired. Run "openclaw doctor --fix".',
+  },
+];
+
+function migrateRetiredWebchatChannelConfig(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = getRecord(raw.channels);
+  if (!channels || !hasOwnKey(channels, "webchat")) {
+    return;
+  }
+
+  delete channels.webchat;
+  raw.channels = channels;
+  cleanupEmptyRecord(raw, "channels");
+  changes.push("Removed retired channels.webchat config.");
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "channels.webchat-remove",
+    describe: "Remove retired WebChat channel config",
+    legacyRules: WEBCHAT_CHANNEL_RULES,
+    apply: (raw, changes) => {
+      migrateRetiredWebchatChannelConfig(raw, changes);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "legacy-group-routing->channel-groups",
     describe:

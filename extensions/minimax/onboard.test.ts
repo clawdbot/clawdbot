@@ -14,16 +14,16 @@ describe("minimax onboard", () => {
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
       authHeader: true,
-      models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
+      models: [buildMinimaxApiModelDefinition("MiniMax-M3")],
     });
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toEqual({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M3"]).toEqual({
       alias: "Minimax",
     });
-    expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M2.7" });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M3" });
   });
 
-  it("keeps reasoning enabled for MiniMax-M2.7", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7");
+  it("keeps reasoning enabled for MiniMax-M3", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M3");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
@@ -73,7 +73,7 @@ describe("minimax onboard", () => {
       legacyApi: "openai-completions",
     });
     expect(provider?.authHeader).toBe(true);
-    expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M2.7"]);
+    expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M3"]);
   });
 
   it("preserves other providers when adding minimax", () => {

@@ -72,12 +72,12 @@ export async function checkGatewayHealth(params: {
 
   if (healthOk) {
     try {
-      const status = await callGateway({
+      const statusLocal = await callGateway({
         method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
       });
-      const issues = collectChannelStatusIssues(status);
+      const issues = collectChannelStatusIssues(statusLocal);
       if (issues.length > 0) {
         note(
           issues

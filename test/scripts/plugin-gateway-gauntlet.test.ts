@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGauntletPrebuildCommand,
@@ -58,6 +59,26 @@ describe("plugin gateway gauntlet helpers", () => {
       },
       scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
     };
+  }
+
+  function isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 5_000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (await predicate()) {
+        return;
+      }
+      await delay(25);
+    }
+    throw new Error("condition was not met before timeout");
   }
 
   it("stops parsing options after the argument terminator", () => {
@@ -431,7 +452,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("marks spawn errors as failed measured rows", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = runMeasuredCommand({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -447,6 +468,66 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(row.spawnError?.code).toBe("ENOENT");
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out measured command process groups when the leader exits first",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const scriptPath = path.join(repoRoot, "leader-exits.mjs");
+      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+      let grandchildPid = 0;
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      try {
+        const rowPromise = runMeasuredCommand({
+          cwd: repoRoot,
+          env: process.env,
+          logDir,
+          command: process.execPath,
+          args: [scriptPath, grandchildPidPath],
+          label: "timeout-leader-exits",
+          phase: "probe",
+          timeoutKillGraceMs: 25,
+          timeoutMs: 1_000,
+          timeMode: "none",
+        });
+
+        await waitFor(() =>
+          fs
+            .access(grandchildPidPath)
+            .then(() => true)
+            .catch(() => false),
+        );
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
+
+        const row = await rowPromise;
+        expect(row.timedOut).toBe(true);
+        expect(row.spawnError?.code).toBe("ETIMEDOUT");
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("captures output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
@@ -568,7 +649,9 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(row.spawnError?.code).toBe("ETIMEDOUT");
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 

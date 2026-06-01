@@ -5,6 +5,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-scenarios/assertions.mjs";
+const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+
+function nodeOptionsWithoutExperimentalWarnings(): string {
+  const current = process.env.NODE_OPTIONS ?? "";
+  return current.includes(DISABLE_EXPERIMENTAL_WARNING)
+    ? current
+    : [current, DISABLE_EXPERIMENTAL_WARNING].filter(Boolean).join(" ");
+}
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -14,6 +22,10 @@ function writeJson(filePath: string, value: unknown) {
 function runAssertion(args: string[]) {
   return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, ...args], {
     encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+    },
   });
 }
 

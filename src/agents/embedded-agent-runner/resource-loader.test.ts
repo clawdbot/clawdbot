@@ -6,7 +6,7 @@ import {
 } from "./resource-loader.js";
 
 vi.mock("../sessions/index.js", () => ({
-  DefaultResourceLoader: vi.fn(function DefaultResourceLoader(
+  DefaultResourceLoader: vi.fn(function DefaultResourceLoaderLocal(
     this: Record<string, unknown>,
     options: unknown,
   ) {

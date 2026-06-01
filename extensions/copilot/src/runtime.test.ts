@@ -66,7 +66,6 @@ function makeOptions(overrides: Partial<ClientCreateOptions> = {}): ClientCreate
     copilotHome: overrides.copilotHome ?? "copilot-home",
     useLoggedInUser: overrides.useLoggedInUser ?? true,
     gitHubToken: overrides.gitHubToken,
-    cwd: overrides.cwd,
   };
 }
 
@@ -420,7 +419,7 @@ describe("createCopilotClientPool", () => {
   it("normalizes non-Error stop failures during dispose", async () => {
     const sdk = makeFake({
       stop: () => {
-        throw "stop-string";
+        throw toLintErrorObject("stop-string", "Non-Error thrown");
       },
     });
     const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
@@ -486,3 +485,17 @@ describe("createCopilotClientPool", () => {
     expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -98,7 +98,7 @@ async function formatRunnerErrorMessage(error: unknown) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(async (error) => {
+  main().catch(async (error: unknown) => {
     process.stderr.write(
       `package telegram live e2e failed: ${await formatRunnerErrorMessage(error)}\n`,
     );

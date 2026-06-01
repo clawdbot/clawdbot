@@ -26,6 +26,7 @@ import {
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
+  shouldSkipRetryableCodexHarnessLiveError,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -103,13 +104,6 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
 
 function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
-}
-
-function isRetryableCodexHarnessLiveError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("gateway request timeout for sessions.list");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1189,7 +1183,11 @@ describeLive("gateway live (Codex harness)", () => {
             console.error(
               "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
             );
-          } else if (isRetryableCodexHarnessLiveError(error)) {
+          } else if (
+            shouldSkipRetryableCodexHarnessLiveError(error, {
+              subagentProbe: CODEX_HARNESS_SUBAGENT_PROBE,
+            })
+          ) {
             console.error(
               `SKIP: Codex harness live backend hit a retryable gateway timeout; skipping live Codex harness assertions. ${error instanceof Error ? error.message : String(error)}`,
             );

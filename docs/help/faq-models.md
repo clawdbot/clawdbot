@@ -215,7 +215,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
   </Accordion>
 
-  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
+  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M3"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
     profile was found), so the model can't be resolved.
 
@@ -227,8 +227,9 @@ troubleshooting, see the main [FAQ](/help/faq).
        (`MINIMAX_API_KEY` for `minimax`, `MINIMAX_OAUTH_TOKEN` or stored MiniMax
        OAuth for `minimax-portal`).
     3. Use the exact model id (case-sensitive) for your auth path:
-       `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed` for API-key
-       setup, or `minimax-portal/MiniMax-M2.7` /
+       `minimax/MiniMax-M3`, `minimax/MiniMax-M2.7`, or
+       `minimax/MiniMax-M2.7-highspeed` for API-key setup, or
+       `minimax-portal/MiniMax-M3`, `minimax-portal/MiniMax-M2.7`, or
        `minimax-portal/MiniMax-M2.7-highspeed` for OAuth setup.
     4. Run:
 
@@ -253,9 +254,9 @@ troubleshooting, see the main [FAQ](/help/faq).
       env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "minimax/MiniMax-M2.7" },
+          model: { primary: "minimax/MiniMax-M3" },
           models: {
-            "minimax/MiniMax-M2.7": { alias: "minimax" },
+            "minimax/MiniMax-M3": { alias: "minimax" },
             "openai/gpt-5.5": { alias: "gpt" },
           },
         },

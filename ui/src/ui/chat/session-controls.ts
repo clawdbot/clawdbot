@@ -1,8 +1,11 @@
 import { html } from "lit";
-import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import { createChatSessionsLoadOverrides, scopedAgentListParamsForSession } from "../app-chat.ts";
+import {
+  createChatSessionsLoadOverrides,
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+} from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -40,7 +43,7 @@ import {
 import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
-type ChatSessionSelectSurface = "desktop" | "mobile";
+type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
 type ChatSessionPickerSearchController = {
   activeRequestId: number | null;
   activeRequestSignature: string | null;
@@ -48,32 +51,58 @@ type ChatSessionPickerSearchController = {
   timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
+type ChatInlineSelectOption = {
+  value: string;
+  label: string;
+};
+
+const FAST_MODE_PROVIDER_IDS = new Set([
+  "anthropic",
+  "minimax",
+  "minimax-portal",
+  "openai",
+  "openrouter",
+  "xai",
+]);
+
 const CHAT_SESSION_PICKER_SEARCH_DEBOUNCE_MS = 300;
 const chatSessionPickerSearchControllers = new WeakMap<
   AppViewState,
   ChatSessionPickerSearchController
 >();
 
+function setChatError(state: AppViewState, error: string | null) {
+  state.lastError = error;
+  state.chatError = error;
+}
+
 export function renderChatSessionSelect(
   state: AppViewState,
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
-  options: { surface?: ChatSessionSelectSurface } = {},
+  options: {
+    compact?: boolean;
+    sessionSwitcherOnly?: boolean;
+    surface?: ChatSessionSelectSurface;
+  } = {},
 ) {
   rememberChatAgentSessionRows(state, state.sessionsResult);
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const agentOptions = resolveChatAgentFilterOptions(state);
   const hasAgentSelect = agentOptions.length > 1;
-  const agentSelect = renderChatAgentSelect(state, onSwitchSession, agentOptions);
-  const modelSelect = renderChatModelSelect(state);
-  const thinkingSelect = renderChatThinkingSelect(state);
-  const quotaPill = renderChatQuotaPill(state);
+  const compact = options.compact ?? false;
+  const agentSelect = compact ? "" : renderChatAgentSelect(state, onSwitchSession, agentOptions);
+  const sessionSwitcherOnly = options.sessionSwitcherOnly ?? false;
+  const modelSelect = sessionSwitcherOnly ? "" : renderChatModelSelect(state);
+  const quotaPill = sessionSwitcherOnly ? "" : renderChatQuotaPill(state);
   const surface = options.surface ?? "desktop";
   const selectedSessionLabel = resolveSelectedChatSessionLabel(state, sessionGroups);
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;
   const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
   const rowClass = [
     "chat-controls__session-row",
-    hasAgentSelect ? "" : "chat-controls__session-row--single-agent",
+    sessionSwitcherOnly ? "chat-controls__session-row--session-switcher" : "",
+    hasAgentSelect && !compact ? "" : "chat-controls__session-row--single-agent",
+    compact ? "chat-controls__session-row--compact" : "",
     quotaPill ? "chat-controls__session-row--has-quota" : "",
     flashSession ? "chat-controls__session-row--flash" : "",
   ]
@@ -89,8 +118,9 @@ export function renderChatSessionSelect(
         selectedSessionLabel,
         pickerOpen,
         disabled: !state.connected || !state.client,
+        compact,
       })}
-      ${modelSelect} ${thinkingSelect} ${quotaPill}
+      ${modelSelect} ${quotaPill}
     </div>
     <div class="chat-controls__session-notice" role="status" aria-live="polite">
       ${state.sessionSwitchNotice?.text ?? ""}
@@ -514,8 +544,10 @@ function renderChatSessionPicker(params: {
   selectedSessionLabel: string;
   pickerOpen: boolean;
   disabled: boolean;
+  compact: boolean;
 }) {
-  const { state, onSwitchSession, surface, selectedSessionLabel, pickerOpen, disabled } = params;
+  const { state, onSwitchSession, surface, selectedSessionLabel, pickerOpen, disabled, compact } =
+    params;
   const pickerId = `chat-session-picker-${surface}`;
   return html`
     <div class="chat-controls__session chat-controls__session-picker">
@@ -537,6 +569,11 @@ function renderChatSessionPicker(params: {
           }
         }}
       >
+        ${compact
+          ? html`<span class="chat-controls__session-trigger-compact-icon" aria-hidden="true">
+              ${icons.messageSquare}
+            </span>`
+          : ""}
         <span class="chat-controls__session-trigger-label">${selectedSessionLabel}</span>
         <span class="chat-controls__session-trigger-icon" aria-hidden="true">
           ${icons.chevronDown}
@@ -794,8 +831,10 @@ async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewS
   return refreshVisibleToolsEffectiveForCurrentSession(state);
 }
 
-function renderChatModelSelect(state: AppViewState) {
+export function renderChatModelSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
+  const thinking = resolveChatThinkingSelectState(state);
+  const fastMode = resolveChatFastModeSelectState(state, currentOverride);
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
@@ -804,35 +843,35 @@ function renderChatModelSelect(state: AppViewState) {
     Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
     (state.chatModelsLoading && options.length === 0) ||
     !state.client;
+  const thinkingDisabled =
+    !state.connected ||
+    busy ||
+    !state.client ||
+    (thinking.options.length === 0 && thinking.currentOverride === "");
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
       : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
-  return html`
-    <label class="field chat-controls__session chat-controls__model">
-      <select
-        data-chat-model-select="true"
-        aria-label=${t("chat.selectors.model")}
-        title=${selectedLabel}
-        .value=${live(currentOverride)}
-        ?disabled=${disabled}
-        @change=${async (e: Event) => {
-          const next = (e.target as HTMLSelectElement).value.trim();
-          await switchChatModel(state, next);
-        }}
-      >
-        <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
-        ${repeat(
-          options,
-          (entry) => entry.value,
-          (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
-              ${entry.label}
-            </option>`,
-        )}
-      </select>
-    </label>
-  `;
+  const selectedThinkingLabel =
+    thinking.currentOverride === ""
+      ? thinking.defaultLabel
+      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
+        thinking.currentOverride);
+  const modelOptions = [{ value: "", label: defaultLabel }, ...options];
+  return renderChatModelReasoningSelect({
+    disabled,
+    modelOptions,
+    selectedModelLabel: selectedLabel,
+    selectedModelValue: currentOverride,
+    selectedThinkingLabel,
+    selectedThinkingValue: thinking.currentOverride,
+    fastMode,
+    thinkingDisabled,
+    thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
+    onModelSelect: (next) => switchChatModel(state, next),
+    onFastModeSelect: (next) => switchChatFastMode(state, next),
+    onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
+  });
 }
 
 type ChatThinkingSelectOption = {
@@ -846,6 +885,13 @@ type ChatThinkingSelectState = {
   options: ChatThinkingSelectOption[];
 };
 
+type ChatFastModeSelectState = {
+  currentOverride: "" | "on" | "off";
+  disabled: boolean;
+  options: ChatInlineSelectOption[];
+  supported: boolean;
+};
+
 function resolveThinkingTargetModel(state: AppViewState): {
   provider: string | null;
   model: string | null;
@@ -855,6 +901,70 @@ function resolveThinkingTargetModel(state: AppViewState): {
     provider: activeRow?.modelProvider ?? state.sessionsResult?.defaults?.modelProvider ?? null,
     model: activeRow?.model ?? state.sessionsResult?.defaults?.model ?? null,
   };
+}
+
+function resolveProviderFromModelValue(
+  value: string,
+  catalog: AppViewState["chatModelCatalog"],
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const separator = trimmed.indexOf("/");
+  if (separator > 0) {
+    return trimmed.slice(0, separator).toLowerCase();
+  }
+  return (
+    catalog
+      .find((entry) => entry.id.trim().toLowerCase() === trimmed.toLowerCase())
+      ?.provider.trim()
+      .toLowerCase() || null
+  );
+}
+
+function resolveChatFastModeSelectState(
+  state: AppViewState,
+  currentModelOverride: string,
+): ChatFastModeSelectState {
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const { provider } = resolveThinkingTargetModel(state);
+  const effectiveProvider =
+    resolveProviderFromModelValue(currentModelOverride, state.chatModelCatalog ?? []) ??
+    provider?.trim().toLowerCase() ??
+    null;
+  const currentOverride =
+    activeRow?.fastMode === true ? "on" : activeRow?.fastMode === false ? "off" : "";
+  const supported = Boolean(
+    (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
+  );
+  return {
+    currentOverride,
+    disabled:
+      !supported ||
+      !state.connected ||
+      state.chatLoading ||
+      state.chatSending ||
+      Boolean(state.chatRunId) ||
+      state.chatStream !== null ||
+      !state.client,
+    options: [
+      { value: "", label: "Default" },
+      { value: "on", label: "Fast" },
+      { value: "off", label: "Standard" },
+    ],
+    supported,
+  };
+}
+
+function sessionModelMatchesDefaults(
+  row: SessionsListResult["sessions"][number] | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!row?.modelProvider || row.modelProvider === defaults?.modelProvider) &&
+    (!row?.model || row.model === defaults?.model)
+  );
 }
 
 function buildThinkingOptions(
@@ -895,7 +1005,7 @@ function resolveThinkingLevelOptions(
   model: string | null,
   catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
-  const sessionModelMatchesDefaults =
+  const sessionModelMatchesDefaultsLocal =
     (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
     (!activeRow?.model || activeRow.model === defaults?.model);
   const catalogEntry =
@@ -904,7 +1014,7 @@ function resolveThinkingLevelOptions(
       : undefined;
   const explicitLevels =
     (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+    (sessionModelMatchesDefaultsLocal && defaults?.thinkingLevels?.length
       ? defaults.thinkingLevels
       : null);
   if (explicitLevels) {
@@ -915,7 +1025,7 @@ function resolveThinkingLevelOptions(
   }
   const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+    (sessionModelMatchesDefaultsLocal && defaults?.thinkingOptions?.length
       ? defaults.thinkingOptions
       : null);
   if (catalogEntry?.reasoning === false) {
@@ -939,17 +1049,22 @@ export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkin
     typeof persisted === "string" && persisted.trim()
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
+  const defaults = state.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel(state);
   const levels = resolveThinkingLevelOptions(
     activeRow,
-    state.sessionsResult?.defaults,
+    defaults,
     provider,
     model,
     state.chatModelCatalog ?? [],
   );
+  const defaultFromSessionDefaults =
+    (!activeRow || sessionModelMatchesDefaults(activeRow, defaults)) && defaults?.thinkingDefault
+      ? defaults.thinkingDefault
+      : undefined;
   const defaultLevel =
     activeRow?.thinkingDefault ??
-    state.sessionsResult?.defaults?.thinkingDefault ??
+    defaultFromSessionDefaults ??
     (provider && model
       ? resolveThinkingDefaultForModel({
           provider,
@@ -965,42 +1080,273 @@ export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkin
   };
 }
 
-export function renderChatThinkingSelect(state: AppViewState) {
-  const { currentOverride, defaultLabel, options } = resolveChatThinkingSelectState(state);
-  const busy =
-    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
-  const disabled =
-    !state.connected || busy || !state.client || (options.length === 0 && currentOverride === "");
-  const selectedLabel =
-    currentOverride === ""
-      ? defaultLabel
-      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
-  const onChange = async (e: Event) => {
-    const next = (e.target as HTMLSelectElement).value.trim();
-    await switchChatThinkingLevel(state, next);
-  };
+function formatCombinedPickerModelLabel(label: string): string {
+  const match = /^Default \((.+)\)$/u.exec(label);
+  return match?.[1] ?? label;
+}
+
+function formatCombinedPickerModelOptionLabel(
+  option: ChatInlineSelectOption,
+  selected: boolean,
+): string {
+  return option.value === "" && selected
+    ? formatCombinedPickerModelLabel(option.label)
+    : option.label;
+}
+
+function formatCombinedPickerThinkingLabel(label: string): string {
+  return label.replace(/^Inherited:\s*/u, "");
+}
+
+function formatCombinedPickerThinkingOptionLabel(option: ChatInlineSelectOption): string {
+  return option.value === "" ? "Default" : formatCombinedPickerThinkingLabel(option.label);
+}
+
+function renderChatModelReasoningSelect(params: {
+  fastMode: ChatFastModeSelectState;
+  disabled: boolean;
+  modelOptions: ChatInlineSelectOption[];
+  selectedModelLabel: string;
+  selectedModelValue: string;
+  selectedThinkingLabel: string;
+  selectedThinkingValue: string;
+  thinkingDisabled: boolean;
+  thinkingOptions: ChatInlineSelectOption[];
+  onFastModeSelect: (value: "" | "on" | "off") => Promise<unknown>;
+  onModelSelect: (value: string) => Promise<unknown>;
+  onThinkingSelect: (value: string) => Promise<unknown>;
+}) {
+  const {
+    disabled,
+    fastMode,
+    modelOptions,
+    selectedModelLabel,
+    selectedModelValue,
+    selectedThinkingLabel,
+    selectedThinkingValue,
+    thinkingDisabled,
+    thinkingOptions,
+    onFastModeSelect,
+    onModelSelect,
+    onThinkingSelect,
+  } = params;
+  const triggerModel = formatCombinedPickerModelLabel(selectedModelLabel);
+  const triggerThinking = formatCombinedPickerThinkingLabel(selectedThinkingLabel);
+  const triggerLabel = `${triggerModel} · ${triggerThinking}`;
   return html`
-    <label class="field chat-controls__session chat-controls__thinking-select">
-      <select
-        class="chat-controls__thinking-select-full"
+    <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+      <summary
+        class="chat-controls__inline-select-trigger ${disabled
+          ? "chat-controls__inline-select-trigger--disabled"
+          : ""}"
+        data-chat-model-select="true"
         data-chat-thinking-select="true"
-        aria-label=${t("chat.selectors.thinkingLevel")}
-        title=${selectedLabel}
-        ?disabled=${disabled}
-        @change=${onChange}
+        data-chat-select-value=${selectedModelValue}
+        data-chat-thinking-value=${selectedThinkingValue}
+        data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
+        aria-label=${`${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerLabel}`}
+        aria-disabled=${disabled ? "true" : "false"}
+        title=${triggerLabel}
+        @click=${(event: MouseEvent) => {
+          if (disabled) {
+            event.preventDefault();
+          }
+        }}
       >
-        <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
-        ${repeat(
-          options,
-          (entry) => entry.value,
-          (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
-              ${entry.label}
-            </option>`,
-        )}
-      </select>
-    </label>
+        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
+        <span class="chat-controls__inline-select-icon" aria-hidden="true">
+          ${icons.chevronDown}
+        </span>
+      </summary>
+      <div
+        class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined"
+        aria-label=${t("chat.selectors.model")}
+      >
+        <div class="chat-controls__inline-select-section-label">Model</div>
+        <div class="chat-controls__combined-model-list">
+          ${repeat(
+            modelOptions,
+            (entry) => entry.value,
+            (entry) => {
+              const selected = entry.value === selectedModelValue;
+              return html`
+                <div class="chat-controls__combined-model">
+                  <button
+                    class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
+                      ? "chat-controls__inline-select-option--selected"
+                      : ""}"
+                    data-chat-model-option=${entry.value}
+                    role="option"
+                    aria-selected=${selected ? "true" : "false"}
+                    type="button"
+                    ?disabled=${disabled}
+                    @click=${async (event: MouseEvent) => {
+                      if (disabled || selected) {
+                        event.preventDefault();
+                        return;
+                      }
+                      (event.currentTarget as HTMLElement)
+                        .closest("details")
+                        ?.removeAttribute("open");
+                      await onModelSelect(entry.value);
+                    }}
+                  >
+                    <span>${formatCombinedPickerModelOptionLabel(entry, selected)}</span>
+                    ${selected
+                      ? html`<span
+                          class="chat-controls__inline-select-check chat-controls__combined-model-arrow"
+                          aria-hidden="true"
+                        >
+                          ${icons.chevronDown}
+                        </span>`
+                      : ""}
+                  </button>
+                </div>
+              `;
+            },
+          )}
+        </div>
+        <div
+          class="chat-controls__reasoning-panel"
+          role="listbox"
+          aria-label=${t("chat.selectors.thinkingLevel")}
+        >
+          <div class="chat-controls__inline-select-section-label">Reasoning</div>
+          <div class="chat-controls__reasoning-options">
+            ${repeat(
+              thinkingOptions,
+              (thinking) => thinking.value,
+              (thinking) => {
+                const thinkingSelected = thinking.value === selectedThinkingValue;
+                return html`
+                  <button
+                    class="chat-controls__reasoning-option ${thinkingSelected
+                      ? "chat-controls__reasoning-option--selected"
+                      : ""}"
+                    data-chat-thinking-option=${thinking.value}
+                    role="option"
+                    aria-selected=${thinkingSelected ? "true" : "false"}
+                    type="button"
+                    ?disabled=${thinkingDisabled}
+                    @click=${async (event: MouseEvent) => {
+                      event.stopPropagation();
+                      if (thinkingDisabled) {
+                        event.preventDefault();
+                        return;
+                      }
+                      (event.currentTarget as HTMLElement)
+                        .closest("details")
+                        ?.removeAttribute("open");
+                      await onThinkingSelect(thinking.value);
+                    }}
+                  >
+                    <span>${formatCombinedPickerThinkingOptionLabel(thinking)}</span>
+                    ${thinkingSelected
+                      ? html`<span class="chat-controls__inline-select-check" aria-hidden="true">
+                          ${icons.check}
+                        </span>`
+                      : ""}
+                  </button>
+                `;
+              },
+            )}
+          </div>
+          ${fastMode.supported
+            ? html`
+                <div class="chat-controls__inline-select-section-label">Speed</div>
+                <div class="chat-controls__reasoning-options" role="listbox">
+                  ${repeat(
+                    fastMode.options,
+                    (speed) => speed.value,
+                    (speed) => {
+                      const speedValue = speed.value as "" | "on" | "off";
+                      const speedSelected = speedValue === fastMode.currentOverride;
+                      return html`
+                        <button
+                          class="chat-controls__reasoning-option ${speedSelected
+                            ? "chat-controls__reasoning-option--selected"
+                            : ""}"
+                          data-chat-speed-option=${speed.value}
+                          role="option"
+                          aria-selected=${speedSelected ? "true" : "false"}
+                          type="button"
+                          ?disabled=${fastMode.disabled}
+                          @click=${async (event: MouseEvent) => {
+                            event.stopPropagation();
+                            if (fastMode.disabled) {
+                              event.preventDefault();
+                              return;
+                            }
+                            (event.currentTarget as HTMLElement)
+                              .closest("details")
+                              ?.removeAttribute("open");
+                            await onFastModeSelect(speedValue);
+                          }}
+                        >
+                          <span>${speed.label}</span>
+                          ${speedSelected
+                            ? html`<span
+                                class="chat-controls__inline-select-check"
+                                aria-hidden="true"
+                              >
+                                ${icons.check}
+                              </span>`
+                            : ""}
+                        </button>
+                      `;
+                    },
+                  )}
+                </div>
+              `
+            : ""}
+        </div>
+      </div>
+    </details>
   `;
+}
+
+function patchSessionFastMode(
+  state: AppViewState,
+  sessionKey: string,
+  fastMode: boolean | undefined,
+) {
+  const current = state.sessionsResult;
+  if (!current) {
+    return;
+  }
+  state.sessionsResult = {
+    ...current,
+    sessions: current.sessions.map((row) =>
+      row.key === sessionKey ? Object.assign({}, row, { fastMode }) : row,
+    ),
+  };
+}
+
+async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off") {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const targetSessionKey = state.sessionKey;
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const previousFastMode = activeRow?.fastMode;
+  const next = nextFastMode === "" ? undefined : nextFastMode === "on";
+  if (previousFastMode === next) {
+    return;
+  }
+  setChatError(state, null);
+  patchSessionFastMode(state, targetSessionKey, next);
+  try {
+    await state.client.request("sessions.patch", {
+      key: targetSessionKey,
+      ...scopedAgentParamsForSession(state, targetSessionKey),
+      fastMode: next ?? null,
+    });
+    await refreshSessionOptions(state);
+    patchSessionFastMode(state, targetSessionKey, next);
+  } catch (err) {
+    patchSessionFastMode(state, targetSessionKey, previousFastMode);
+    setChatError(state, `Failed to set speed: ${String(err)}`);
+  }
 }
 
 async function switchChatModel(state: AppViewState, nextModel: string): Promise<boolean> {
@@ -1013,7 +1359,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
-  state.lastError = null;
+  setChatError(state, null);
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
   state.chatModelOverrides = {
     ...state.chatModelOverrides,
@@ -1032,6 +1378,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     try {
       await client.request("sessions.patch", {
         key: targetSessionKey,
+        ...scopedAgentParamsForSession(state, targetSessionKey),
         model: nextModel || null,
       });
       void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
@@ -1040,7 +1387,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     } catch (err) {
       // Roll back so the picker reflects the actual server model.
       state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
-      state.lastError = `Failed to set model: ${String(err)}`;
+      setChatError(state, `Failed to set model: ${String(err)}`);
       return false;
     } finally {
       clearPendingSwitch();
@@ -1087,19 +1434,22 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
     return;
   }
-  state.lastError = null;
+  setChatError(state, null);
   patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
   state.chatThinkingLevel = normalizedNext ?? null;
   try {
     await state.client.request("sessions.patch", {
       key: targetSessionKey,
+      ...scopedAgentParamsForSession(state, targetSessionKey),
       thinkingLevel: normalizedNext ?? null,
     });
     await refreshSessionOptions(state);
+    patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
+    state.chatThinkingLevel = normalizedNext ?? null;
   } catch (err) {
     patchSessionThinkingLevel(state, targetSessionKey, previousThinkingLevel);
     state.chatThinkingLevel = normalizedPrev ?? null;
-    state.lastError = `Failed to set thinking level: ${String(err)}`;
+    setChatError(state, `Failed to set thinking level: ${String(err)}`);
   }
 }
 

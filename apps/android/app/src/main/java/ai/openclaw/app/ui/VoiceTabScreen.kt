@@ -75,6 +75,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlin.math.max
 
+/**
+ * Voice tab that switches between push-to-send mic capture and continuous Talk Mode.
+ */
 @Composable
 fun VoiceTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
@@ -115,7 +118,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
     lifecycleOwner.lifecycle.addObserver(observer)
     onDispose {
       lifecycleOwner.lifecycle.removeObserver(observer)
-      // Manual mic is tied to the Voice tab; Talk Mode is explicit and can continue.
+      // Manual mic is tab-scoped; Talk Mode is user-enabled and can continue elsewhere.
       viewModel.setVoiceScreenActive(false)
     }
   }
@@ -402,11 +405,17 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   }
 }
 
+/**
+ * Permission continuation captured before Android's runtime permission dialog suspends the action.
+ */
 private enum class PendingVoicePermissionAction {
   ManualMic,
   TalkMode,
 }
 
+/**
+ * Renders one transcript turn, preserving side and color by speaker role.
+ */
 @Composable
 private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
   val isUser = entry.role == VoiceConversationRole.User
@@ -439,6 +448,9 @@ private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
   }
 }
 
+/**
+ * Placeholder assistant turn shown while a manual mic request is queued but not streaming yet.
+ */
 @Composable
 private fun VoiceThinkingBubble() {
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
@@ -460,6 +472,9 @@ private fun VoiceThinkingBubble() {
   }
 }
 
+/**
+ * Static dot cluster used by VoiceThinkingBubble to avoid starting another animation loop.
+ */
 @Composable
 private fun ThinkingDots(color: Color) {
   Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -481,12 +496,18 @@ private fun ThinkingDot(
   ) {}
 }
 
+/**
+ * Checks RECORD_AUDIO using ContextCompat so wrapped activity contexts behave the same.
+ */
 private fun Context.hasRecordAudioPermission(): Boolean =
   (
     ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
   )
 
+/**
+ * Walks ContextWrappers until an Activity is found for permission rationale checks.
+ */
 private fun Context.findActivity(): Activity? =
   when (this) {
     is Activity -> this
@@ -494,6 +515,9 @@ private fun Context.findActivity(): Activity? =
     else -> null
   }
 
+/**
+ * Opens this app's settings page after Android reports the mic permission as blocked.
+ */
 private fun openAppSettings(context: Context) {
   val intent =
     Intent(

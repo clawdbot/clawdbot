@@ -1,12 +1,11 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
   advanceIMessageCatchupCursor,
   capFailureRetriesMap,
   loadIMessageCatchupCursor,
   performIMessageCatchup,
+  resetIMessageCatchupCursorStoreForTest,
   resolveCatchupConfig,
   saveIMessageCatchupCursor,
   type CatchupDispatchFn,
@@ -14,27 +13,9 @@ import {
   type IMessageCatchupRow,
 } from "./catchup.js";
 
-let tempStateDir: string;
-let priorStateDir: string | undefined;
-
-beforeAll(() => {
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-catchup-"));
-  priorStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
-});
-
-afterAll(() => {
-  if (priorStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = priorStateDir;
-  }
-  fs.rmSync(tempStateDir, { recursive: true, force: true });
-});
-
 beforeEach(() => {
-  // Wipe per-account cursor state between tests so each test starts clean.
-  fs.rmSync(path.join(tempStateDir, "imessage", "catchup"), { recursive: true, force: true });
+  installIMessageStateRuntimeForTest();
+  resetIMessageCatchupCursorStoreForTest();
 });
 
 describe("resolveCatchupConfig", () => {
@@ -216,6 +197,17 @@ describe("capFailureRetriesMap", () => {
     const capped = capFailureRetriesMap(map, 2);
     // Both b and d at 9; tiebreak by guid string (alphabetical) → b, d
     expect(Object.keys(capped).toSorted()).toEqual(["b", "d"]);
+  });
+
+  it("keeps the persisted retry map under the plugin-state value budget", () => {
+    const map = Object.fromEntries(
+      Array.from({ length: 800 }, (_, index) => [`GUID-${index}-${"x".repeat(120)}`, index + 1]),
+    );
+
+    const capped = capFailureRetriesMap(map);
+
+    expect(Object.keys(capped).length).toBeLessThanOrEqual(512);
+    expect(new TextEncoder().encode(JSON.stringify(capped)).byteLength).toBeLessThanOrEqual(48_000);
   });
 });
 
@@ -419,9 +411,9 @@ describe("performIMessageCatchup", () => {
     // clamped to `earliestHeldFailureRow.rowid - 1` (== 9) so the next pass
     // refetches row 10.
     let dispatchCount = 0;
-    const dispatch = vi.fn<CatchupDispatchFn>(async (row) => {
+    const dispatch = vi.fn<CatchupDispatchFn>(async (rowLocal) => {
       dispatchCount += 1;
-      if (row.guid === "A") {
+      if (rowLocal.guid === "A") {
         return { ok: false };
       }
       return { ok: true };
@@ -446,6 +438,33 @@ describe("performIMessageCatchup", () => {
     // cursor lands at rowid 9 so the next pass refetches row 10.
     expect(summary.cursorAfter.lastSeenRowid).toBe(9);
     expect(dispatchCount).toBe(2);
+
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenRowid).toBe(9);
+    expect(cursor?.failureRetries?.A).toBe(1);
+  });
+
+  it("keeps held failure state when a live monitor advances the same cursor mid-pass", async () => {
+    const dispatch = vi.fn<CatchupDispatchFn>(async () => {
+      await advanceIMessageCatchupCursor(
+        "primary",
+        { lastSeenMs: now - 10_000, lastSeenRowid: 50 },
+        config,
+      );
+      return { ok: false };
+    });
+    const fetch = fetchOf([row({ guid: "A", rowid: 10, date: now - 40_000 })]);
+
+    const summary = await performIMessageCatchup({
+      accountId: "primary",
+      config,
+      now,
+      fetch,
+      dispatch,
+    });
+
+    expect(summary.failed).toBe(1);
+    expect(summary.cursorAfter.lastSeenRowid).toBe(9);
 
     const cursor = await loadIMessageCatchupCursor("primary");
     expect(cursor?.lastSeenRowid).toBe(9);

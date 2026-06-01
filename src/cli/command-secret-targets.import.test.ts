@@ -165,6 +165,10 @@ describe("command secret targets module import", () => {
     expect(targets.has("channels.discord.token")).toBe(false);
     expect(targets.has("channels.telegram.gatewayToken")).toBe(false);
     expect(targets.has("channels.telegram.gatewayTokenRef")).toBe(false);
+    expect(targets.has("gateway.auth.token")).toBe(true);
+    expect(targets.has("gateway.auth.password")).toBe(true);
+    expect(targets.has("gateway.remote.token")).toBe(true);
+    expect(targets.has("gateway.remote.password")).toBe(true);
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     const pluginCall = listReadOnlyChannelPluginsForConfig.mock.calls[0] as unknown as
       | [unknown, { includePersistedAuthState?: boolean }]
@@ -202,6 +206,10 @@ describe("command secret targets module import", () => {
     );
 
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(targets.has("gateway.auth.token")).toBe(true);
+    expect(targets.has("gateway.auth.password")).toBe(true);
+    expect(targets.has("gateway.remote.token")).toBe(true);
+    expect(targets.has("gateway.remote.password")).toBe(true);
     expect(targets.has("channels.telegram.botToken")).toBe(false);
     expect(listReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();

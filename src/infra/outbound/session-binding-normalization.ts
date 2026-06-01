@@ -4,6 +4,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
+/**
+ * Minimal conversation shape normalized before binding lookup or storage.
+ */
 export type ConversationRefShape = {
   channel: string;
   accountId: string;
@@ -16,6 +19,9 @@ type ConversationTargetRefShape = {
   parentConversationId?: string | null;
 };
 
+/**
+ * Normalizes conversation ids and drops self-referential parent ids.
+ */
 export function normalizeConversationTargetRef<T extends ConversationTargetRefShape>(ref: T): T {
   const conversationId = normalizeOptionalString(ref.conversationId) ?? "";
   const parentConversationId = normalizeOptionalString(ref.parentConversationId);
@@ -29,6 +35,9 @@ export function normalizeConversationTargetRef<T extends ConversationTargetRefSh
   } as T;
 }
 
+/**
+ * Normalizes a full conversation reference for stable binding keys.
+ */
 export function normalizeConversationRef<T extends ConversationRefShape>(ref: T): T {
   const normalizedTarget = normalizeConversationTargetRef(ref);
   return {
@@ -38,6 +47,9 @@ export function normalizeConversationRef<T extends ConversationRefShape>(ref: T)
   };
 }
 
+/**
+ * Builds the adapter registry key shared by channel/account scoped bindings.
+ */
 export function buildChannelAccountKey(params: { channel: string; accountId: string }): string {
   return `${normalizeLowercaseStringOrEmpty(params.channel)}:${normalizeAccountId(params.accountId)}`;
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const home = os.homedir();
 
@@ -26,8 +27,7 @@ function readRequiredJson(file) {
 }
 
 function records() {
-  const index = readJson(openclawPath("plugins", "installs.json"));
-  return index.installRecords ?? index.records ?? {};
+  return readPluginInstallRecords();
 }
 
 function recordFor(pluginId) {

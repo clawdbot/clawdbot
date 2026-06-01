@@ -319,7 +319,9 @@ describe("deleteTelegramUpdateOffset", () => {
         accountId: "default",
         botToken: "111111:rotated",
         onRotationDetected: async () => {
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           cleaned = true;
         },
       });

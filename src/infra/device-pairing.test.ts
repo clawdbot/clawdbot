@@ -789,6 +789,95 @@ describe("device pairing tokens", () => {
     });
   });
 
+  test("approval access metadata initializes paired device last-seen fields", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+        displayName: "pending-name",
+        remoteIp: "127.0.0.1",
+      },
+      baseDir,
+    );
+    const firstSeenAtMs = Date.now();
+
+    const approved = await approveDevicePairing(
+      request.request.requestId,
+      {
+        callerScopes: [],
+        accessMetadata: {
+          displayName: "connected-name",
+          remoteIp: "10.0.0.1",
+          lastSeenAtMs: firstSeenAtMs,
+          lastSeenReason: "connect",
+        },
+      },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      displayName: "connected-name",
+      remoteIp: "10.0.0.1",
+      lastSeenAtMs: firstSeenAtMs,
+      lastSeenReason: "connect",
+    });
+  });
+
+  test("repair approvals preserve paired device last-seen fields without access metadata", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    await updatePairedDeviceMetadata(
+      "node-1",
+      {
+        lastSeenAtMs: 1234,
+        lastSeenReason: "bg_app_refresh",
+      },
+      baseDir,
+    );
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      lastSeenAtMs: 1234,
+      lastSeenReason: "bg_app_refresh",
+    });
+  });
+
+  test("device token verification refreshes paired device last-seen metadata", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+    const beforeVerifyAtMs = Date.now();
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.lastSeenReason).toBe("device-token-auth");
+    expect(typeof paired?.lastSeenAtMs).toBe("number");
+    expect(paired?.lastSeenAtMs ?? 0).toBeGreaterThanOrEqual(beforeVerifyAtMs);
+  });
+
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
@@ -1247,6 +1336,44 @@ describe("device pairing tokens", () => {
     expect(paired?.approvedScopes).toStrictEqual([]);
     expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator).toBeUndefined();
+  });
+
+  test("bootstrap approval access metadata initializes paired device last-seen fields", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-seen",
+        publicKey: "bootstrap-public-key-seen",
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+        silent: true,
+        remoteIp: "127.0.0.1",
+      },
+      baseDir,
+    );
+    const firstSeenAtMs = Date.now();
+
+    const approved = await approveBootstrapDevicePairing(
+      request.request.requestId,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      {
+        accessMetadata: {
+          remoteIp: "10.0.0.2",
+          lastSeenAtMs: firstSeenAtMs,
+          lastSeenReason: "connect",
+        },
+      },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("bootstrap-device-seen", baseDir);
+    expectRecordFields(paired, "paired device", {
+      remoteIp: "10.0.0.2",
+      lastSeenAtMs: firstSeenAtMs,
+      lastSeenReason: "connect",
+    });
   });
 
   test("baseline bootstrap pairing issues bounded operator token when requested by QR handoff", async () => {

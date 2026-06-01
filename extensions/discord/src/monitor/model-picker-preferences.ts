@@ -1,23 +1,16 @@
 import { createHash } from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
-  timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 
 const DEFAULT_RECENT_LIMIT = 5;
 const PREFERENCE_MAX_ENTRIES = 2_000;
-const MAX_PLUGIN_STATE_KEY_BYTES = 512;
-const textEncoder = new TextEncoder();
 let lastPreferenceTimestampMs = 0;
 let lastPreferenceOrder = 0;
 
@@ -27,18 +20,6 @@ type ModelPickerPreferencesEntry = {
   updatedAt: string;
   updatedOrder?: number;
 };
-
-type LegacyModelPickerPreferencesEntry = {
-  recent: string[];
-  updatedAt: string;
-};
-
-type LegacyModelPickerPreferencesStore = {
-  version?: unknown;
-  entries?: unknown;
-};
-
-const legacyPreferenceImports = new Map<string, Promise<void>>();
 
 function openPreferenceStore(env?: NodeJS.ProcessEnv) {
   return getDiscordRuntime().state.openKeyedStore<ModelPickerPreferencesEntry>({
@@ -107,23 +88,6 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
   return deduped;
 }
 
-function sanitizeLegacyPreferenceEntry(
-  value: unknown,
-): LegacyModelPickerPreferencesEntry | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const typedValue = value as {
-    recent?: unknown;
-    updatedAt?: unknown;
-  };
-  const recent = Array.isArray(typedValue.recent)
-    ? typedValue.recent.filter((item: unknown): item is string => typeof item === "string")
-    : [];
-  const updatedAt = typeof typedValue.updatedAt === "string" ? typedValue.updatedAt : "";
-  return { recent, updatedAt };
-}
-
 function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEntry | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -180,18 +144,6 @@ function comparePreferenceEntries(
   );
 }
 
-function legacyUpdatedAtForIndex(updatedAt: string, index: number, total: number): string {
-  const baseMs = timestampMs(updatedAt);
-  const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
-  const shiftedMs = anchorMs - Math.max(0, index);
-  return (
-    timestampMsToIsoString(shiftedMs) ??
-    timestampMsToIsoString(baseMs) ??
-    timestampMsToIsoString(Math.max(0, total - index)) ??
-    "1970-01-01T00:00:00.000Z"
-  );
-}
-
 function nextPreferenceTimestamp(existingEntries: ModelPickerPreferencesEntry[]): {
   updatedAt: string;
   updatedOrder: number;
@@ -219,67 +171,6 @@ function nextPreferenceTimestamp(existingEntries: ModelPickerPreferencesEntry[])
   };
 }
 
-function normalizeLegacyPreferenceKey(key: string): string | undefined {
-  const trimmed = key.trim();
-  if (!trimmed || textEncoder.encode(trimmed).length > MAX_PLUGIN_STATE_KEY_BYTES) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function resolveLegacyPreferencesPath(env?: NodeJS.ProcessEnv): string {
-  return path.join(
-    resolveStateDir(env ?? process.env, os.homedir),
-    "discord",
-    "model-picker-preferences.json",
-  );
-}
-
-async function importLegacyPreferences(env?: NodeJS.ProcessEnv): Promise<void> {
-  const legacyPath = resolveLegacyPreferencesPath(env);
-  const stateDir = path.dirname(path.dirname(legacyPath));
-  const existingImport = legacyPreferenceImports.get(stateDir);
-  if (existingImport) {
-    await existingImport;
-    return;
-  }
-
-  const importPromise = (async () => {
-    const { value, exists } =
-      await readJsonFileWithFallback<LegacyModelPickerPreferencesStore | null>(legacyPath, null);
-    if (!exists || !value || typeof value.entries !== "object" || value.entries == null) {
-      return;
-    }
-
-    const store = openPreferenceStore(env);
-    for (const [rawKey, rawEntry] of Object.entries(value.entries as Record<string, unknown>)) {
-      const key = normalizeLegacyPreferenceKey(rawKey);
-      if (!key) {
-        continue;
-      }
-      const entry = sanitizeLegacyPreferenceEntry(rawEntry);
-      if (!entry || (entry.recent.length === 0 && !entry.updatedAt)) {
-        continue;
-      }
-      const recent = sanitizeRecentModels(entry.recent, 10);
-      for (const [index, modelRef] of recent.entries()) {
-        await store.registerIfAbsent(buildPreferenceModelKey(key, modelRef), {
-          scopeKey: key,
-          modelRef,
-          updatedAt: legacyUpdatedAtForIndex(entry.updatedAt, index, recent.length),
-        });
-      }
-    }
-  })();
-  legacyPreferenceImports.set(stateDir, importPromise);
-  try {
-    await importPromise;
-  } catch (error) {
-    legacyPreferenceImports.delete(stateDir);
-    throw error;
-  }
-}
-
 export async function readDiscordModelPickerRecentModels(params: {
   scope: DiscordModelPickerPreferenceScope;
   limit?: number;
@@ -292,7 +183,6 @@ export async function readDiscordModelPickerRecentModels(params: {
   }
   const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
   try {
-    await importLegacyPreferences(params.env);
     const store = openPreferenceStore(params.env);
     const recent = (await store.entries())
       .map((entry) => ({ key: entry.key, value: sanitizeStoredPreferenceEntry(entry.value) }))
@@ -327,7 +217,6 @@ export async function recordDiscordModelPickerRecentModel(params: {
   }
 
   try {
-    await importLegacyPreferences(params.env);
     const store = openPreferenceStore(params.env);
     const existingEntries = (await store.entries())
       .map((entry) => sanitizeStoredPreferenceEntry(entry.value))

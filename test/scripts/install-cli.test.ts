@@ -974,7 +974,7 @@ describe("install-cli.sh", () => {
     writeNpmFreshnessConflictFixture(join(nodeBin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallCliShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallCliShell(
         [
@@ -1012,7 +1012,7 @@ describe("install-cli.sh", () => {
     writeNpmBeforePolicyFixture(join(nodeBin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallCliShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallCliShell(
         [

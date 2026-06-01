@@ -3,7 +3,7 @@
 // to bare/functional images, and runs lanes through weighted resource pools.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -37,6 +37,7 @@ const DEFAULT_LANE_START_STAGGER_MS = 2_000;
 const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
 export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
+export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
@@ -533,7 +534,7 @@ export function dockerPreflightContainerNames(raw) {
     );
 }
 
-function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
+export function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
   return new Promise((resolve) => {
     const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
     const child = spawn("bash", ["-c", command], {
@@ -609,6 +610,9 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
+      if (timedOut) {
+        terminateChild(child, "SIGKILL");
+      }
       if (killTimer) {
         clearTimeout(killTimer);
       }
@@ -635,7 +639,7 @@ export function appendBoundedShellCapture(current, chunk, maxChars = SHELL_CAPTU
   return { text: combined.slice(-maxChars), truncated: true };
 }
 
-function runShellCaptureCommand({ command, env, label, timeoutMs }) {
+export function runShellCaptureCommand({ command, env, label, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
@@ -649,12 +653,14 @@ function runShellCaptureCommand({ command, env, label, timeoutMs }) {
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    let killTimer;
     const timeoutTimer =
       timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             terminateChild(child, "SIGTERM");
-            setTimeout(() => terminateChild(child, "SIGKILL"), 10_000).unref?.();
+            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+            killTimer.unref?.();
           }, timeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
@@ -671,6 +677,12 @@ function runShellCaptureCommand({ command, env, label, timeoutMs }) {
     child.on("close", (status, signal) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
+      }
+      if (timedOut) {
+        terminateChild(child, "SIGKILL");
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
       }
       activeChildren.delete(child);
       const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
@@ -1078,8 +1090,21 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   return { failures, results };
 }
 
-async function tailFile(file, lines) {
-  const content = await readFile(file, "utf8").catch(() => "");
+export async function tailFile(file, lines, maxBytes = LOG_TAIL_MAX_BYTES) {
+  let handle;
+  let content;
+  try {
+    handle = await open(file, "r");
+    const stat = await handle.stat();
+    const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
+    const buffer = Buffer.alloc(bytesToRead);
+    await handle.read(buffer, 0, bytesToRead, stat.size - bytesToRead);
+    content = buffer.toString("utf8");
+  } catch {
+    content = "";
+  } finally {
+    await handle?.close().catch(() => {});
+  }
   const tail = content.split(/\r?\n/).slice(-lines).join("\n");
   return tail.trimEnd();
 }
@@ -1457,8 +1482,10 @@ async function main() {
 }
 
 if (IS_MAIN) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

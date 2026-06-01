@@ -10,6 +10,7 @@ import { describePluginInstallSource } from "./install-source-info.js";
 import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
+  InstalledPluginContributionInfo,
   InstalledPluginIndexRecord,
   InstalledPluginInstallRecordInfo,
   InstalledPluginPackageChannelInfo,
@@ -31,6 +32,35 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
       ...(record.activation?.onAgentHarnesses ?? []),
       ...(record.cliBackends ?? []),
     ]),
+    configPaths: normalizeSortedUniqueStringEntries(record.activation?.onConfigPaths),
+  };
+}
+
+function buildContributionInfo(record: PluginManifestRecord): InstalledPluginContributionInfo {
+  const contracts = Object.fromEntries(
+    Object.entries(record.contracts ?? {}).map(([key, values]) => [
+      key,
+      normalizeSortedUniqueStringEntries(values),
+    ]),
+  );
+  return {
+    channels: normalizeSortedUniqueStringEntries(record.channels),
+    channelConfigs: normalizeSortedUniqueStringEntries(Object.keys(record.channelConfigs ?? {})),
+    providers: normalizeSortedUniqueStringEntries(record.providers),
+    modelCatalogProviders: normalizeSortedUniqueStringEntries([
+      ...Object.keys(record.modelCatalog?.providers ?? {}),
+      ...Object.keys(record.modelCatalog?.aliases ?? {}),
+      ...(record.modelCatalog?.suppressions ?? []).map((entry) => entry.provider),
+    ]),
+    modelSupportPrefixes: normalizeSortedUniqueStringEntries(record.modelSupport?.modelPrefixes),
+    modelSupportPatterns: normalizeSortedUniqueStringEntries(record.modelSupport?.modelPatterns),
+    autoEnableProviderIds: normalizeSortedUniqueStringEntries(
+      record.autoEnableWhenConfiguredProviders,
+    ),
+    commandAliases: normalizeSortedUniqueStringEntries(
+      record.commandAliases?.map((alias) => alias.name),
+    ),
+    contracts,
   };
 }
 
@@ -255,6 +285,7 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       enabled,
       startup: buildStartupInfo(record),
+      contributions: buildContributionInfo(record),
       compat: collectPluginManifestCompatCodes(record),
     };
     if (record.format && record.format !== "openclaw") {

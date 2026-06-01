@@ -20,7 +20,7 @@ function collectFilesSync(rootDir, options) {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {

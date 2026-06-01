@@ -432,7 +432,7 @@ export class VoiceCallWebhookServer {
         const callMode = call.metadata?.mode as string | undefined;
         const shouldRespond = call.direction === "inbound" || callMode === "conversation";
         if (shouldRespond) {
-          this.handleInboundResponse(call.callId, transcript).catch((err) => {
+          this.handleInboundResponse(call.callId, transcript).catch((err: unknown) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
           });
         }
@@ -467,7 +467,7 @@ export class VoiceCallWebhookServer {
         }
       },
       onTranscriptionReady: (callId) => {
-        this.manager.speakInitialMessage(callId).catch((err) => {
+        this.manager.speakInitialMessage(callId).catch((err: unknown) => {
           console.warn(`[voice-call] Failed to speak initial message:`, err);
         });
       },
@@ -495,7 +495,7 @@ export class VoiceCallWebhookServer {
           console.log(
             `[voice-call] Auto-ending call ${disconnectedCall.callId} after stream disconnect grace`,
           );
-          void this.manager.endCall(disconnectedCall.callId).catch((err) => {
+          void this.manager.endCall(disconnectedCall.callId).catch((err: unknown) => {
             console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
           });
         }, STREAM_DISCONNECT_HANGUP_GRACE_MS);
@@ -533,7 +533,7 @@ export class VoiceCallWebhookServer {
 
     this.startPromise = new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
-        this.handleRequest(req, res, webhookPath).catch((err) => {
+        this.handleRequest(req, res, webhookPath).catch((err: unknown) => {
           console.error("[voice-call] Webhook error:", err);
           res.statusCode = 500;
           res.end("Internal Server Error");
@@ -860,7 +860,7 @@ export class VoiceCallWebhookServer {
 
     const response = buildResponse()
       .then(cloneWebhookResponsePayload)
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.replayResponses.delete(key);
         throw err;
       });
@@ -958,7 +958,6 @@ export class VoiceCallWebhookServer {
           normalizePhoneNumber(params.get("From") ?? undefined),
           this.config.allowFrom,
         );
-      case "disabled":
       default:
         return false;
     }

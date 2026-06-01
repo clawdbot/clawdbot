@@ -29,6 +29,67 @@ describe("normalizeOAuthExpires", () => {
 });
 
 describe("loginMiniMaxPortalOAuth", () => {
+  it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
+    for (const [region, expectedHosts] of [
+      [
+        "global",
+        [
+          "https://account.minimax.io/oauth2/device/code",
+          "https://account.minimax.io/oauth2/token",
+        ],
+      ],
+      [
+        "cn",
+        [
+          "https://account.minimaxi.com/oauth2/device/code",
+          "https://account.minimaxi.com/oauth2/token",
+        ],
+      ],
+    ] as const) {
+      const requestedUrls: string[] = [];
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrls.push(input instanceof Request ? input.url : String(input));
+        const body =
+          init?.body instanceof URLSearchParams
+            ? init.body
+            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+        if (requestedUrls.length === 1) {
+          return new Response(
+            JSON.stringify({
+              user_code: "CODE",
+              verification_uri: "https://example.com/device",
+              expired_in: Date.now() + 10_000,
+              state: body.get("state"),
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            status: "success",
+            access_token: "access",
+            refresh_token: "refresh",
+            expired_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        loginMiniMaxPortalOAuth({
+          region,
+          openUrl: vi.fn(async () => undefined),
+          note: vi.fn(async () => undefined),
+          progress: { update: vi.fn(), stop: vi.fn() },
+        }),
+      ).resolves.toMatchObject({ access: "access", refresh: "refresh" });
+      expect(requestedUrls).toEqual(expectedHosts);
+
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects Date-invalid authorization expiries before formatting instructions", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body =

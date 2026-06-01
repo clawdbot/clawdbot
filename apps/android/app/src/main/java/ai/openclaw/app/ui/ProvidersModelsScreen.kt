@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Android providers/models browser backed by the gateway catalog. */
 @Composable
 internal fun ProvidersModelsScreen(
   viewModel: MainViewModel,
@@ -190,6 +191,7 @@ private data class ProviderRow(
   val modelCount: Int,
 )
 
+/** Combines auth-provider readiness rows with catalog-only providers. */
 private fun providerRows(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
@@ -206,6 +208,8 @@ private fun providerRows(
         modelCount = modelCounts[provider.id] ?: 0,
       )
     }
+  // Static/catalog-only providers may expose models without a matching auth
+  // provider row; keep them visible as ready providers.
   val missingAuthRows =
     modelCounts.keys
       .filter { provider -> authRows.none { it.id == provider } }
@@ -245,6 +249,7 @@ private fun providerSetupSubtitle(
     else -> "Add provider credentials on your Gateway"
   }
 
+/** Normalizes gateway provider status strings into a ready/not-ready boolean. */
 internal fun modelProviderReady(status: String): Boolean {
   val normalized = status.trim().lowercase()
   return normalized == "ok" ||
@@ -254,6 +259,7 @@ internal fun modelProviderReady(status: String): Boolean {
     normalized == "static"
 }
 
+/** Groups models by provider using the same display priority as provider rows. */
 private fun sortedModelGroups(models: List<GatewayModelSummary>): List<Pair<String, List<GatewayModelSummary>>> =
   models
     .groupBy { it.provider }
@@ -483,6 +489,7 @@ private fun ModelRow(model: GatewayModelSummary) {
   }
 }
 
+/** Derives compact capability chips for model catalog rows. */
 private fun modelCapabilityLabels(model: GatewayModelSummary): List<String> =
   buildList {
     if (model.supportsReasoning) add("Reasoning")

@@ -19,7 +19,9 @@ type MockIncomingMessage = IncomingMessage & {
 };
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 async function expectRequestBodyLimitError(

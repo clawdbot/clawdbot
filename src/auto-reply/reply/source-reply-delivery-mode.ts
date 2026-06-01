@@ -27,7 +27,7 @@ export function isExplicitSourceReplyCommand(
   return isExplicitCommandTurnContext(ctx, cfg);
 }
 
-function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+export function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
   return (
     commandTurn.kind === "text-slash" &&

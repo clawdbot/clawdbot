@@ -18,6 +18,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -40,10 +41,18 @@ export {
   resetPluginToolDescriptorCache as resetPluginToolFactoryCache,
 } from "./tool-descriptor-cache.js";
 
+export type PluginToolMcpMeta = {
+  serverName: string;
+  safeServerName: string;
+  toolName: string;
+  operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+};
+
 export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   trustedLocalMedia?: boolean;
+  mcp?: PluginToolMcpMeta;
 };
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
@@ -66,6 +75,7 @@ const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
 
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
   pluginToolMeta.set(tool, meta);
@@ -80,6 +90,109 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
   if (meta) {
     pluginToolMeta.set(target, meta);
   }
+}
+
+function pluginToolScopeKey(entry: PluginToolRegistration): string {
+  return JSON.stringify([entry.pluginId, entry.source]);
+}
+
+function runWithPluginToolScope<T>(entry: PluginToolRegistration, run: () => T): T {
+  return withPluginRuntimePluginScope(
+    {
+      pluginId: entry.pluginId,
+      ...(entry.source ? { pluginSource: entry.source } : {}),
+    },
+    run,
+  );
+}
+
+function isAgentTool(value: unknown): value is AnyAgentTool {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { execute?: unknown }).execute === "function"
+  );
+}
+
+function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTool): AnyAgentTool {
+  const key = pluginToolScopeKey(entry);
+  const scopedByKey = scopedPluginTools.get(tool);
+  const cached = scopedByKey?.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const prepareArguments = tool.prepareArguments;
+  const scopedPrepareArguments = prepareArguments
+    ? (args: unknown) =>
+        runWithPluginToolScope(entry, () => Reflect.apply(prepareArguments, tool, [args]))
+    : undefined;
+  const scopedExecute = (
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+    onUpdate?: unknown,
+  ) =>
+    runWithPluginToolScope(
+      entry,
+      () =>
+        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
+          AnyAgentTool["execute"]
+        >,
+    );
+  const wrapped = new Proxy<AnyAgentTool>(tool, {
+    get(target, prop) {
+      if (prop === "prepareArguments" && scopedPrepareArguments) {
+        return scopedPrepareArguments;
+      }
+      if (prop === "execute") {
+        return scopedExecute;
+      }
+      return Reflect.get(target, prop, target);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (prop === "prepareArguments" && scopedPrepareArguments) {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: scopedPrepareArguments,
+          writable: true,
+        };
+      }
+      if (prop === "execute") {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: scopedExecute,
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+  });
+
+  copyPluginToolMeta(tool, wrapped);
+  const nextScopedByKey = scopedByKey ?? new Map<string, AnyAgentTool>();
+  nextScopedByKey.set(key, wrapped);
+  scopedPluginTools.set(tool, nextScopedByKey);
+  return wrapped;
+}
+
+function wrapPluginToolFactoryResult(
+  entry: PluginToolRegistration,
+  result: PluginToolFactoryResult,
+): PluginToolFactoryResult {
+  if (Array.isArray(result)) {
+    return result.map((tool) => (isAgentTool(tool) ? wrapPluginToolCallbacks(entry, tool) : tool));
+  }
+  return isAgentTool(result) ? wrapPluginToolCallbacks(entry, result) : result;
+}
+
+function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPluginToolContext) {
+  return runWithPluginToolScope(entry, () =>
+    wrapPluginToolFactoryResult(entry, entry.factory(ctx)),
+  );
 }
 
 /**
@@ -263,7 +376,7 @@ function resolvePluginToolFactoryEntry(params: {
   const factoryStartedAt = Date.now();
 
   try {
-    resolved = params.entry.factory(params.ctx);
+    resolved = resolvePluginToolFactory(params.entry, params.ctx);
   } catch (err) {
     failed = true;
     params.logError(`plugin tool failed (${params.entry.pluginId}): ${String(err)}`);
@@ -574,15 +687,15 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
-        const resolved = candidate.factory(params.ctx);
+        const resolved = resolvePluginToolFactory(candidate, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
           const malformedReason = describeMalformedPluginTool(toolRaw);
           if (malformedReason) {
-            throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
+            continue;
           }
           const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(runtimeTool.name) === requestedToolName) {
+          if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
             return runtimeTool;
           }
         }

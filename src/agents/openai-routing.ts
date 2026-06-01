@@ -23,8 +23,25 @@ function isOfficialOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+function resolveOpenAIProviderConfig(config: OpenClawConfig | undefined) {
+  const providers = config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const direct = providers.openai;
+  if (direct) {
+    return direct;
+  }
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (normalizeProviderId(providerId) === OPENAI_PROVIDER_ID) {
+      return providerConfig;
+    }
+  }
+  return undefined;
+}
+
 function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): boolean {
-  return !isOfficialOpenAIBaseUrl(config?.models?.providers?.openai?.baseUrl);
+  return !isOfficialOpenAIBaseUrl(resolveOpenAIProviderConfig(config)?.baseUrl);
 }
 
 export function isOpenAIProvider(provider: string | undefined): boolean {

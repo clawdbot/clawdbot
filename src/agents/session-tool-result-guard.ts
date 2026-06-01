@@ -745,8 +745,15 @@ export function installSessionToolResultGuard(
     ) {
       flushPendingToolResults();
     }
-    // If new tool calls arrive while older ones are pending, flush the old ones first.
-    if (pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) {
+    // If synthetic results are disabled, a new assistant tool-call turn is a safe
+    // boundary to drop older pending ids. When synthetic results are enabled,
+    // do not synthesize here: parallel tool-result appends can still be racing
+    // this assistant append, and transcript repair can move late real results
+    // back into strict provider order before the next replay.
+    if (
+      !allowSyntheticToolResults &&
+      pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)
+    ) {
       flushPendingToolResults();
     }
 

@@ -1,15 +1,18 @@
 import { resetToolStream } from "../app-tool-stream.ts";
-import {
-  getChatAttachmentDataUrl,
-  getChatAttachmentPreviewUrl,
-} from "../chat/attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
 import { formatConnectError } from "../connect-error.ts";
+import {
+  controlUiNowMs,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+} from "../control-ui-performance.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -17,6 +20,7 @@ import {
   parseAgentSessionKey,
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { GatewaySessionRow, GatewaySessionsDefaults } from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -28,7 +32,6 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
-const CHAT_HISTORY_REQUEST_MAX_CHARS = 4_000;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -49,7 +52,7 @@ function shouldApplyChatHistoryResult(
   state: ChatState,
   version: number,
   sessionKey: string,
-  agentId?: string | null,
+  agentId?: string,
 ): boolean {
   if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
     return false;
@@ -194,6 +197,36 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
+function messageTimestampMs(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
+  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+}
+
+function historyHasSameOrNewerDisplayMessage(
+  historyMessages: unknown[],
+  signature: string,
+  message: unknown,
+): boolean {
+  const timestamp = messageTimestampMs(message);
+  if (timestamp == null) {
+    return false;
+  }
+  return historyMessages.some((historyMessage) => {
+    if (messageDisplaySignature(historyMessage) !== signature) {
+      return false;
+    }
+    const historyTimestamp = messageTimestampMs(historyMessage);
+    return historyTimestamp != null && historyTimestamp >= timestamp;
+  });
+}
+
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
@@ -247,6 +280,34 @@ export function preserveOptimisticTailMessages(
   return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
+function collectLateOptimisticTailMessages(
+  previousMessages: unknown[],
+  currentMessages: unknown[],
+  historyMessages: unknown[],
+): unknown[] {
+  if (currentMessages === previousMessages || currentMessages.length <= previousMessages.length) {
+    return [];
+  }
+  if (previousMessages.some((message, index) => currentMessages[index] !== message)) {
+    return [];
+  }
+  const lateTail: unknown[] = [];
+  for (const message of currentMessages.slice(previousMessages.length)) {
+    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+      return [];
+    }
+    const signature = messageDisplaySignature(message);
+    if (!signature) {
+      return [];
+    }
+    if (historyHasSameOrNewerDisplayMessage(historyMessages, signature, message)) {
+      continue;
+    }
+    lateTail.push(message);
+  }
+  return lateTail;
+}
+
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
   if (!(err instanceof GatewayRequestError)) {
     return false;
@@ -269,7 +330,9 @@ function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type ChatState = {
@@ -287,10 +350,19 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  chatError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
   hello?: GatewayHelloOk | null;
+};
+
+export type ChatHistoryResult = {
+  messages?: Array<unknown>;
+  sessionId?: string;
+  thinkingLevel?: string;
+  defaults?: GatewaySessionsDefaults;
+  sessionInfo?: GatewaySessionRow;
 };
 
 export type ChatEventPayload = {
@@ -299,8 +371,15 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
+
+function setChatError(state: ChatState, error: string | null) {
+  state.lastError = error;
+  state.chatError = error;
+}
 
 function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
@@ -394,46 +473,140 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+function resolveDeltaChatStreamText(
+  currentStream: string | null,
+  payload: ChatEventPayload,
+): string | null {
+  const snapshot = payload.message == null ? null : extractText(payload.message);
+  if (typeof payload.deltaText === "string") {
+    if (payload.replace === true) {
+      return payload.deltaText;
+    }
+    if (currentStream === null) {
+      return typeof snapshot === "string" ? snapshot : payload.deltaText;
+    }
+    if (typeof snapshot === "string") {
+      const prefixLength = snapshot.length - payload.deltaText.length;
+      if (
+        prefixLength !== currentStream.length ||
+        snapshot.slice(0, prefixLength) !== currentStream
+      ) {
+        return snapshot;
+      }
+    }
+    return `${currentStream}${payload.deltaText}`;
+  }
+  return typeof snapshot === "string" ? snapshot : null;
+}
+
+type InFlightChatHistoryRequest = {
+  client: NonNullable<ChatState["client"]>;
+  key: string;
+  messages: unknown[];
+  promise: Promise<ChatHistoryResult | undefined>;
+};
+
+const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
+
+function recordChatHistoryTiming(
+  state: ChatState,
+  phase: "start" | "applied" | "stream-reset" | "stale" | "error",
+  startedAtMs: number,
+  extra: Record<string, unknown> = {},
+) {
+  recordControlUiPerformanceEvent(
+    state as ChatState & Parameters<typeof recordControlUiPerformanceEvent>[0],
+    "control-ui.chat.history",
+    {
+      phase,
+      durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
+      sessionKey: state.sessionKey,
+      activeRunId: state.chatRunId,
+      ...extra,
+    },
+    { console: false, maxBufferedEventsForType: 30 },
+  );
+}
+
+export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
-    return;
+    return undefined;
   }
   const sessionKey = state.sessionKey;
-  const requestVersion = beginChatHistoryRequest(state);
   const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
     ? resolveSelectedAgentId(state)
-    : null;
+    : undefined;
+  const requestKey = `${sessionKey}\0${requestAgentId ?? ""}`;
+  const inFlight = inFlightChatHistoryRequests.get(state);
+  if (
+    inFlight?.key === requestKey &&
+    inFlight.client === state.client &&
+    inFlight.messages === state.chatMessages
+  ) {
+    return inFlight.promise;
+  }
+  const promise = loadChatHistoryUncached(state, state.client, sessionKey, requestAgentId).finally(
+    () => {
+      if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
+        inFlightChatHistoryRequests.delete(state);
+      }
+    },
+  );
+  inFlightChatHistoryRequests.set(state, {
+    client: state.client,
+    key: requestKey,
+    messages: state.chatMessages,
+    promise,
+  });
+  return promise;
+}
+
+async function loadChatHistoryUncached(
+  state: ChatState,
+  client: NonNullable<ChatState["client"]>,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+): Promise<ChatHistoryResult | undefined> {
+  const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
+  const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
+  const previousRunId = state.chatRunId;
+  recordChatHistoryTiming(state, "start", startedAtMs, {
+    requestSessionKey: sessionKey,
+    requestAgentId,
+    previousRunId,
+  });
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  state.lastError = null;
+  setChatError(state, null);
   try {
-    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
+    let res: ChatHistoryResult;
     for (;;) {
       try {
-        res = await state.client.request<{
-          messages?: Array<unknown>;
-          sessionId?: string;
-          thinkingLevel?: string;
-        }>("chat.history", {
+        res = await client.request<ChatHistoryResult>("chat.history", {
           sessionKey,
           ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
-          maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
         });
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-          return;
+          recordChatHistoryTiming(state, "stale", startedAtMs, {
+            requestSessionKey: sessionKey,
+            requestAgentId,
+            previousRunId,
+            reason: "request-version",
+          });
+          return undefined;
         }
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
         if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
           await sleep(resolveStartupRetryDelayMs(err));
           if (!state.client || !state.connected) {
-            return;
+            return undefined;
           }
           continue;
         }
@@ -441,35 +614,84 @@ export async function loadChatHistory(state: ChatState) {
       }
     }
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-      return;
+      recordChatHistoryTiming(state, "stale", startedAtMs, {
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        reason: "apply-version",
+      });
+      return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const lateOptimisticTail = collectLateOptimisticTailMessages(
+      previousMessages,
+      state.chatMessages,
+      visibleMessages,
+    );
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    if (lateOptimisticTail.length > 0) {
+      state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
+    }
     state.currentSessionId =
-      typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
-    state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+      typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
+        ? res.sessionInfo.sessionId
+        : typeof res.sessionId === "string" && res.sessionId.trim()
+          ? res.sessionId
+          : null;
+    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
+    const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
+    if (resetStream) {
+      // Clear all streaming state — history includes tool results and text
+      // inline, so keeping streaming artifacts would cause duplicates.
+      maybeResetToolStream(state);
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        messageCount: messages.length,
+        visibleMessageCount: visibleMessages.length,
+      });
+    }
+    recordChatHistoryTiming(state, "applied", startedAtMs, {
+      requestSessionKey: sessionKey,
+      requestAgentId,
+      previousRunId,
+      messageCount: messages.length,
+      visibleMessageCount: visibleMessages.length,
+      resetStream,
+    });
+    return res;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-      return;
+      recordChatHistoryTiming(state, "stale", startedAtMs, {
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        reason: "error-version",
+      });
+      return undefined;
     }
+    recordChatHistoryTiming(state, "error", startedAtMs, {
+      requestSessionKey: sessionKey,
+      requestAgentId,
+      previousRunId,
+    });
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
-      state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
+      setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
-      state.lastError = String(err);
+      setChatError(state, String(err));
     }
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
     }
   }
+  return undefined;
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -478,15 +700,6 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
     return null;
   }
   return { mimeType: match[1], content: match[2] };
-}
-
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {
@@ -657,7 +870,7 @@ export async function sendChatMessage(
   appendUserChatMessage(state, msg, attachments, now);
 
   state.chatSending = true;
-  state.lastError = null;
+  setChatError(state, null);
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
   });
@@ -686,7 +899,7 @@ export async function sendChatMessage(
       clearLocalRun: true,
       clearChatStream: true,
     });
-    state.lastError = error;
+    setChatError(state, error);
     state.chatMessages = [
       ...state.chatMessages,
       {
@@ -707,57 +920,11 @@ export function appendUserChatMessage(
   attachments?: ChatAttachment[],
   timestamp = Date.now(),
 ) {
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  const contentBlocks: Array<{
-    type: string;
-    text?: string;
-    url?: string;
-    source?: unknown;
-    attachment?: {
-      url: string;
-      kind: "audio" | "document";
-      label: string;
-      mimeType?: string;
-    };
-  }> = [];
-  if (msg) {
-    contentBlocks.push({ type: "text", text: msg });
-  }
-  if (hasAttachments) {
-    for (const att of attachments) {
-      const previewUrl = getChatAttachmentPreviewUrl(att);
-      if (!previewUrl) {
-        continue;
-      }
-      if (att.mimeType.startsWith("image/")) {
-        if (isInlineDataUrl(previewUrl)) {
-          contentBlocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(att) });
-          continue;
-        }
-        contentBlocks.push({
-          type: "image",
-          url: previewUrl,
-          source: { type: "url", url: previewUrl },
-        });
-        continue;
-      }
-      contentBlocks.push({
-        type: "attachment",
-        attachment: {
-          url: previewUrl,
-          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
-          label: att.fileName?.trim() || "Attached file",
-          mimeType: att.mimeType,
-        },
-      });
-    }
-  }
   state.chatMessages = [
     ...state.chatMessages,
     {
       role: "user",
-      content: contentBlocks,
+      content: buildUserChatMessageContentBlocks(message, attachments),
       timestamp,
     },
   ];
@@ -776,13 +943,13 @@ async function sendChatMessageWithGeneratedRunId(
   if (!msg && !hasAttachments) {
     return null;
   }
-  state.lastError = null;
+  setChatError(state, null);
   const runId = generateUUID();
   try {
     const ack = await requestChatSend(state, { message: msg, attachments, runId });
     return ack.runId;
   } catch (err) {
-    state.lastError = formatConnectError(err);
+    setChatError(state, formatConnectError(err));
     return null;
   }
 }
@@ -830,7 +997,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
     );
     return true;
   } catch (err) {
-    state.lastError = formatConnectError(err);
+    setChatError(state, formatConnectError(err));
     return false;
   }
 }
@@ -881,10 +1048,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
       clearLocalRun: true,
       clearChatStream: true,
+      armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
 
   if (payload.state === "delta") {
-    const next = extractText(payload.message);
+    const next = resolveDeltaChatStreamText(state.chatStream, payload);
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&
@@ -939,7 +1107,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = [...state.chatMessages, errorMessage];
     }
     reconcileTerminalRun("interrupted", "failed");
-    state.lastError = payload.errorMessage ?? "chat error";
+    setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
 }

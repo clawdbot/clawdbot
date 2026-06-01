@@ -172,6 +172,92 @@ function createAgenticCommandSplitShards() {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
+function resolveAgentCoreShardName(file) {
+  const name = relative("src/agents", file).replaceAll("\\", "/");
+  if (
+    name.startsWith("auth") ||
+    name.includes("auth") ||
+    name.includes("oauth") ||
+    name.includes("credential") ||
+    name.includes("api-key") ||
+    name.includes("token")
+  ) {
+    return "agentic-agents-core-auth";
+  }
+  if (
+    name.startsWith("model") ||
+    name.includes("provider") ||
+    name.includes("openai") ||
+    name.includes("anthropic") ||
+    name.includes("gemini") ||
+    name.includes("moonshot") ||
+    name.includes("minimax") ||
+    name.includes("xai") ||
+    name.includes("zai") ||
+    name.includes("chutes") ||
+    name.includes("catalog")
+  ) {
+    return "agentic-agents-core-models";
+  }
+  if (
+    name.startsWith("agent-tools") ||
+    name.startsWith("openclaw-tools") ||
+    name.startsWith("bash-tools") ||
+    name.startsWith("tool") ||
+    name.startsWith("apply-patch") ||
+    name.startsWith("exec") ||
+    name.startsWith("sandbox")
+  ) {
+    return "agentic-agents-core-tools";
+  }
+  if (
+    name.startsWith("subagent") ||
+    name.startsWith("spawn") ||
+    name.startsWith("embedded-agent-subscribe")
+  ) {
+    return "agentic-agents-core-subagents";
+  }
+  if (
+    name.startsWith("embedded-agent-runner") ||
+    name.startsWith("cli-runner") ||
+    name.startsWith("agent-command") ||
+    name.startsWith("command") ||
+    name.includes("compaction") ||
+    name.includes("session")
+  ) {
+    return "agentic-agents-core-runner";
+  }
+  return "agentic-agents-core-runtime";
+}
+
+function createAgentCoreSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/agents")) {
+    const name = relative("src/agents", file).replaceAll("\\", "/");
+    if (name.includes("/")) {
+      continue;
+    }
+    const shardName = resolveAgentCoreShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+
+  return [
+    "agentic-agents-core-auth",
+    "agentic-agents-core-models",
+    "agentic-agents-core-tools",
+    "agentic-agents-core-subagents",
+    "agentic-agents-core-runner",
+    "agentic-agents-core-runtime",
+  ]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.agents-core.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
 const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
@@ -193,6 +279,26 @@ function isGatewayServerTestFile(file) {
     !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
     (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
   );
+}
+
+function resolveGatewayStartupShardName(file) {
+  const name = relative("src/gateway", file).replaceAll("\\", "/");
+  if (name.startsWith("server-startup-config") || name.startsWith("server-startup-early")) {
+    return "agentic-control-plane-startup-config";
+  }
+  if (
+    name.startsWith("server-runtime") ||
+    name.startsWith("server.health") ||
+    name.startsWith("server.lazy") ||
+    name.startsWith("server/health-state") ||
+    name.startsWith("server/readiness")
+  ) {
+    return "agentic-control-plane-startup-health-runtime";
+  }
+  if (name.startsWith("server-restart") || name === "server-close.test.ts") {
+    return "agentic-control-plane-startup-restart-close";
+  }
+  return "agentic-control-plane-startup-core";
 }
 
 function resolveGatewayServerShardName(file) {
@@ -232,7 +338,13 @@ function resolveGatewayServerShardName(file) {
     name.startsWith("server/readiness") ||
     name === "server-close.test.ts"
   ) {
-    return "agentic-control-plane-startup-runtime";
+    return resolveGatewayStartupShardName(file);
+  }
+  if (name.includes("cron")) {
+    return "agentic-control-plane-runtime-cron";
+  }
+  if (name.includes("network")) {
+    return "agentic-control-plane-runtime-network";
   }
   if (
     name.includes("plugin") ||
@@ -241,6 +353,29 @@ function resolveGatewayServerShardName(file) {
     name.includes("ws-connection")
   ) {
     return "agentic-control-plane-http-plugin-ws";
+  }
+  if (name.startsWith("server-")) {
+    return "agentic-control-plane-runtime-server";
+  }
+  if (name.startsWith("server.config-patch")) {
+    return "agentic-control-plane-runtime-config";
+  }
+  if (name.startsWith("server.shared-token")) {
+    return "agentic-control-plane-runtime-shared-token";
+  }
+  if (
+    name.startsWith("server.control-ui-root") ||
+    name.startsWith("server.ios-client-id") ||
+    name.startsWith("server.minimal-channel-pin") ||
+    name.startsWith("server.tools-catalog")
+  ) {
+    return "agentic-control-plane-runtime-ui-tools";
+  }
+  if (name.startsWith("server/")) {
+    return "agentic-control-plane-runtime-events";
+  }
+  if (name.startsWith("server.") || name.startsWith("server/")) {
+    return "agentic-control-plane-runtime-state";
   }
   return "agentic-control-plane-runtime";
 }
@@ -257,7 +392,18 @@ function createGatewayServerSplitShards() {
     "agentic-control-plane-http-models",
     "agentic-control-plane-http-plugin-ws",
     "agentic-control-plane-runtime",
-    "agentic-control-plane-startup-runtime",
+    "agentic-control-plane-runtime-config",
+    "agentic-control-plane-runtime-cron",
+    "agentic-control-plane-runtime-events",
+    "agentic-control-plane-runtime-network",
+    "agentic-control-plane-runtime-server",
+    "agentic-control-plane-runtime-shared-token",
+    "agentic-control-plane-runtime-state",
+    "agentic-control-plane-runtime-ui-tools",
+    "agentic-control-plane-startup-config",
+    "agentic-control-plane-startup-core",
+    "agentic-control-plane-startup-health-runtime",
+    "agentic-control-plane-startup-restart-close",
   ]
     .map((shardName) => ({
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
@@ -662,11 +808,7 @@ const SPLIT_NODE_SHARDS = new Map([
         requiresDist: false,
       },
       ...createAgenticCommandSplitShards(),
-      {
-        shardName: "agentic-agents-core",
-        configs: ["test/vitest/vitest.agents-core.config.ts"],
-        requiresDist: false,
-      },
+      ...createAgentCoreSplitShards(),
       {
         shardName: "agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],

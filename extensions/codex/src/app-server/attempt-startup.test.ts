@@ -121,12 +121,14 @@ async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number
 
 describe("startCodexAttemptThread", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     clearSharedCodexAppServerClient();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     clearSharedCodexAppServerClient();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();

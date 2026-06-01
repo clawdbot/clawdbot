@@ -114,7 +114,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   };
 
   const spawn = (label: string, promise: Promise<void>) => {
-    void promise.catch((error) => {
+    void promise.catch((error: unknown) => {
       logger.error(`${label}: ${String(error)}`);
     });
   };

@@ -35,6 +35,7 @@ type GatewayCredentialSecretInputOptions = {
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
+/** Internal options after explicit auth has been trimmed to real credential values. */
 type NormalizedGatewayCredentialSecretInputOptions = Omit<
   GatewayCredentialSecretInputOptions,
   "explicitAuth"
@@ -159,6 +160,8 @@ function canGatewaySecretInputPathWin(params: {
       value: undefined,
     });
   }
+  // Inject one path at a time so normal credential precedence decides whether
+  // that secret ref is on the active auth path without resolving real secrets.
   assignResolvedGatewaySecretInput({
     config: probeConfig,
     path: params.path,
@@ -186,6 +189,7 @@ function canGatewaySecretInputPathWin(params: {
   }
 }
 
+/** Test whether resolving a configured secret-ref path could affect selected credentials. */
 export function gatewaySecretInputPathCanWin(
   params: GatewayCredentialSecretInputOptions & { path: SupportedGatewaySecretInputPath },
 ): boolean {
@@ -254,6 +258,7 @@ async function resolvePreferredGatewaySecretInputs(params: {
   return nextConfig;
 }
 
+/** Resolve only secret refs that can win, then select Gateway credentials. */
 async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
   options: NormalizedGatewayCredentialSecretInputOptions;
   env: NodeJS.ProcessEnv;
@@ -284,6 +289,8 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
       if (resolvedConfig === params.options.config) {
         resolvedConfig = structuredClone(params.options.config);
       }
+      // Resolve refs lazily on demand as a backstop for precedence cases the
+      // optimistic scan skipped, but stop if the same path loops.
       const resolvedValue = await resolveConfiguredGatewaySecretInput({
         config: resolvedConfig,
         path,
@@ -299,6 +306,7 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
   }
 }
 
+/** Resolve Gateway credentials after materializing winning configured secret refs. */
 export async function resolveGatewayCredentialsWithSecretInputs(
   params: GatewayCredentialSecretInputOptions,
 ): Promise<{ token?: string; password?: string }> {

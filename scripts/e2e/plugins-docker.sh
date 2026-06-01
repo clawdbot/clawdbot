@@ -37,6 +37,10 @@ if [[ "${OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB:-0}" = "1" ]]; then
 fi
 
 echo "Running plugins Docker E2E..."
-docker_e2e_run_logged_with_harness plugins-run "${DOCKER_ENV_ARGS[@]}" "$IMAGE_NAME" bash scripts/e2e/lib/plugins/sweep.sh
+docker_e2e_run_logged_print_with_harness \
+  plugins-run \
+  "${DOCKER_ENV_ARGS[@]}" \
+  "$IMAGE_NAME" \
+  bash scripts/e2e/lib/plugins/sweep.sh
 
 echo "OK"

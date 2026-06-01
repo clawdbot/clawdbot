@@ -227,16 +227,17 @@
   padding: 10px 16px;
 }
 
-.update-banner__btn {
+.update-banner .update-banner__btn {
   margin-left: 8px;
-  border-color: var(--danger);
-  color: var(--danger);
+  border-color: currentColor;
+  color: currentColor;
   font-size: 12px;
   padding: 4px 12px;
 }
 
-.update-banner__btn:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.15);
+.update-banner .update-banner__btn:hover:not(:disabled) {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
 .update-banner__close {
@@ -250,7 +251,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  color: var(--danger);
+  color: currentColor;
   opacity: 0.7;
   transition: opacity 0.15s;
 }
@@ -1788,9 +1789,13 @@
 }
 
 .callout.danger {
-  border-color: rgba(239, 68, 68, 0.25);
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
-  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--danger) 14%, var(--bg-elevated)) 0%,
+    color-mix(in srgb, var(--danger) 8%, var(--bg-elevated)) 100%
+  );
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
 }
 
 .callout.info {
@@ -4343,13 +4348,6 @@ td.data-table-key-col {
   margin-top: 0;
   padding-top: 12px;
   background: linear-gradient(180deg, transparent 0%, var(--bg) 40%);
-}
-
-.shell--chat-focus .chat-compose {
-  bottom: calc(var(--shell-pad) + 8px);
-  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  border-bottom-left-radius: var(--radius-lg);
-  border-bottom-right-radius: var(--radius-lg);
 }
 
 .chat-compose__field {

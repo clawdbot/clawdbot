@@ -1,7 +1,11 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
 
 const BROWSER_DEBUG_TIMEOUT_MS = 20000;
@@ -75,7 +79,7 @@ export function registerBrowserDebugCommands(
     .command("highlight")
     .description("Highlight an element by ref")
     .argument("<ref>", "Ref id from snapshot")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (ref: string, opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest(parent, {
@@ -98,7 +102,7 @@ export function registerBrowserDebugCommands(
     .command("errors")
     .description("Get recent page errors")
     .option("--clear", "Clear stored errors after reading", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{
@@ -132,7 +136,7 @@ export function registerBrowserDebugCommands(
     .description("Get recent network requests (best-effort)")
     .option("--filter <text>", "Only show URLs that contain this substring")
     .option("--clear", "Clear stored requests after reading", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{
@@ -179,7 +183,7 @@ export function registerBrowserDebugCommands(
   trace
     .command("start")
     .description("Start trace recording")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--no-screenshots", "Disable screenshots")
     .option("--no-snapshots", "Disable snapshots")
     .option("--sources", "Include sources (bigger traces)", false)
@@ -210,7 +214,7 @@ export function registerBrowserDebugCommands(
       "--out <path>",
       "Output path within openclaw temp dir (e.g. trace.zip or /tmp/openclaw/trace.zip)",
     )
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{ path: string }>(parent, {

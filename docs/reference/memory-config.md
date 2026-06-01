@@ -58,6 +58,11 @@ explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
 Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
+If OpenAI embeddings are unreachable from your network, memory recall fails open
+instead of blocking the turn. Set the existing `memorySearch.provider` field to a
+reachable local, Ollama, regional, or OpenAI-compatible provider to restore
+semantic ranking.
+
 ### Custom provider ids
 
 `memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:

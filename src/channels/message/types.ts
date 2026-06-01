@@ -5,8 +5,10 @@ import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 
+/** Delivery durability requested by core when a channel sends agent output. */
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
 
+/** Capability names a channel must advertise before core can rely on durable final delivery. */
 export const durableFinalDeliveryCapabilities = [
   "text",
   "media",
@@ -23,12 +25,15 @@ export const durableFinalDeliveryCapabilities = [
   "afterCommit",
 ] as const;
 
+/** Durable final delivery capability key understood by message-channel adapters. */
 export type DurableFinalDeliveryCapability = (typeof durableFinalDeliveryCapabilities)[number];
 
+/** Capability map used by adapters to declare which final-send guarantees they support. */
 export type DurableFinalDeliveryRequirementMap = Partial<
   Record<DurableFinalDeliveryCapability, boolean>
 >;
 
+/** Minimal payload facts used to derive required durable-delivery capabilities. */
 export type DurableFinalDeliveryPayloadShape = {
   text?: string | null;
   replyToId?: string | null;
@@ -36,6 +41,7 @@ export type DurableFinalDeliveryPayloadShape = {
   mediaUrls?: readonly (string | null | undefined)[] | null;
 };
 
+/** Raw platform result shape normalized into a message receipt. */
 export type MessageReceiptSourceResult = {
   channel?: string;
   messageId?: string;
@@ -49,6 +55,7 @@ export type MessageReceiptSourceResult = {
   meta?: Record<string, unknown>;
 };
 
+/** Logical part kind for multi-part rendered messages. */
 export type MessageReceiptPartKind =
   | "text"
   | "media"
@@ -58,6 +65,7 @@ export type MessageReceiptPartKind =
   | "preview"
   | "unknown";
 
+/** One platform message produced by a logical outbound send. */
 export type MessageReceiptPart = {
   platformMessageId: string;
   kind: MessageReceiptPartKind;
@@ -67,6 +75,7 @@ export type MessageReceiptPart = {
   raw?: MessageReceiptSourceResult;
 };
 
+/** Normalized receipt for all platform messages that make up a logical send. */
 export type MessageReceipt = {
   primaryPlatformMessageId?: string;
   platformMessageIds: string[];
@@ -79,6 +88,7 @@ export type MessageReceipt = {
   raw?: readonly MessageReceiptSourceResult[];
 };
 
+/** Render-plan item category used before adapter-specific send execution. */
 export type RenderedMessageBatchPlanKind =
   | "text"
   | "media"
@@ -88,6 +98,7 @@ export type RenderedMessageBatchPlanKind =
   | "channelData"
   | "empty";
 
+/** Render plan for a single reply payload after text/media/presentation splitting. */
 export type RenderedMessageBatchPlanItem = {
   index: number;
   kinds: readonly RenderedMessageBatchPlanKind[];
@@ -99,6 +110,7 @@ export type RenderedMessageBatchPlanItem = {
   hasChannelData?: boolean;
 };
 
+/** Aggregate render plan for a batch of reply payloads. */
 export type RenderedMessageBatchPlan = {
   payloadCount: number;
   textCount: number;
@@ -110,13 +122,16 @@ export type RenderedMessageBatchPlan = {
   items: readonly RenderedMessageBatchPlanItem[];
 };
 
+/** Rendered payload batch paired with the plan core uses for send routing and recovery. */
 export type RenderedMessageBatch<TPayload = unknown> = {
   payloads: TPayload[];
   plan: RenderedMessageBatchPlan;
 };
 
+/** Lifecycle phase for a live preview or streaming message send. */
 export type LiveMessagePhase = "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
 
+/** Mutable state snapshot for live preview/finalization flows. */
 export type LiveMessageState<TPayload = unknown> = {
   phase: LiveMessagePhase;
   canFinalizeInPlace: boolean;
@@ -124,6 +139,7 @@ export type LiveMessageState<TPayload = unknown> = {
   lastRendered?: RenderedMessageBatch<TPayload>;
 };
 
+/** Durable send context passed through render, preview, send, edit, commit, and failure steps. */
 export type MessageSendContext<TPayload = unknown, TSendResult = unknown> = {
   id: string;
   channel: string;
@@ -144,6 +160,7 @@ export type MessageSendContext<TPayload = unknown, TSendResult = unknown> = {
   fail(error: unknown): Promise<void>;
 };
 
+/** Common text-send context shared by text, media, payload, and poll adapter calls. */
 export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   to: string;
@@ -159,6 +176,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   gatewayClientScopes?: readonly string[];
 };
 
+/** Media send context with validated access hooks and media presentation hints. */
 export type ChannelMessageSendMediaContext<TConfig = OpenClawConfig> =
   ChannelMessageSendTextContext<TConfig> & {
     mediaUrl: string;
@@ -170,6 +188,7 @@ export type ChannelMessageSendMediaContext<TConfig = OpenClawConfig> =
     forceDocument?: boolean;
   };
 
+/** Rich reply payload send context used when adapters can consume structured payloads. */
 export type ChannelMessageSendPayloadContext<TConfig = OpenClawConfig> =
   ChannelMessageSendTextContext<TConfig> & {
     payload: ReplyPayload;
@@ -182,6 +201,7 @@ export type ChannelMessageSendPayloadContext<TConfig = OpenClawConfig> =
     forceDocument?: boolean;
   };
 
+/** Poll send context; thread ids stay string-like because poll APIs do not accept numeric ids. */
 export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
   ChannelMessageSendTextContext<TConfig>,
   "text" | "threadId"
@@ -191,19 +211,23 @@ export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
   isAnonymous?: boolean;
 };
 
+/** Adapter send result normalized to a receipt plus optional legacy message id. */
 export type ChannelMessageSendResult = {
   receipt: MessageReceipt;
   messageId?: string;
 };
 
+/** Discriminator for lifecycle hooks around a concrete adapter send attempt. */
 export type ChannelMessageSendAttemptKind = "text" | "media" | "payload" | "poll";
 
+/** Send-attempt context tagged with the adapter method core is about to call. */
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
   | (ChannelMessageSendTextContext<TConfig> & { kind: "text" })
   | (ChannelMessageSendMediaContext<TConfig> & { kind: "media" })
   | (ChannelMessageSendPayloadContext<TConfig> & { kind: "payload" })
   | (ChannelMessageSendPollContext<TConfig> & { kind: "poll" });
 
+/** Lifecycle context emitted after an adapter send succeeds but before commit finishes. */
 export type ChannelMessageSendSuccessContext<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
@@ -212,17 +236,20 @@ export type ChannelMessageSendSuccessContext<
   attemptToken?: unknown;
 };
 
+/** Lifecycle context emitted after an adapter send throws or rejects. */
 export type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
   ChannelMessageSendAttemptContext<TConfig> & {
     error: unknown;
     attemptToken?: unknown;
   };
 
+/** Lifecycle context emitted when a successful send is being durably committed. */
 export type ChannelMessageSendCommitContext<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = ChannelMessageSendSuccessContext<TConfig, TSendResult>;
 
+/** Durable queue context used to reconcile a send whose platform state is unknown. */
 export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   queueId: string;
@@ -240,6 +267,7 @@ export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   silent?: boolean;
 };
 
+/** Adapter verdict for whether an unknown queued send reached the platform. */
 export type ChannelMessageUnknownSendReconciliationResult =
   | {
       status: "sent";
@@ -255,6 +283,7 @@ export type ChannelMessageUnknownSendReconciliationResult =
       retryable?: boolean;
     };
 
+/** Optional hooks around adapter send attempts, platform success/failure, and commit. */
 export type ChannelMessageSendLifecycleAdapter<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
@@ -269,6 +298,7 @@ export type ChannelMessageSendLifecycleAdapter<
   ) => Promise<void> | void;
 };
 
+/** Adapter methods a message channel can implement for outbound text/media/payload/poll sends. */
 export type ChannelMessageSendAdapter<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
@@ -280,6 +310,7 @@ export type ChannelMessageSendAdapter<
   lifecycle?: ChannelMessageSendLifecycleAdapter<TConfig, TSendResult>;
 };
 
+/** Durable final-delivery extension for queue reconciliation and capability declaration. */
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   reconcileUnknownSend?: (
@@ -290,6 +321,7 @@ export type ChannelMessageDurableFinalAdapter = {
     | null;
 };
 
+/** Live-message feature key declared by adapters that support preview or streaming behavior. */
 export type ChannelMessageLiveCapability =
   | "draftPreview"
   | "previewFinalization"
@@ -297,6 +329,7 @@ export type ChannelMessageLiveCapability =
   | "nativeStreaming"
   | "quietFinalization";
 
+/** Canonical ordered list of live-message feature keys. */
 export const channelMessageLiveCapabilities = [
   "draftPreview",
   "previewFinalization",
@@ -305,6 +338,7 @@ export const channelMessageLiveCapabilities = [
   "quietFinalization",
 ] as const satisfies readonly ChannelMessageLiveCapability[];
 
+/** Capability keys for turning a preview into a final platform message. */
 export const livePreviewFinalizerCapabilities = [
   "finalEdit",
   "normalFallback",
@@ -313,27 +347,33 @@ export const livePreviewFinalizerCapabilities = [
   "retainOnAmbiguousFailure",
 ] as const;
 
+/** Finalizer capability key understood by live-message adapters. */
 export type LivePreviewFinalizerCapability = (typeof livePreviewFinalizerCapabilities)[number];
 
+/** Capability map for preview finalization behavior. */
 export type LivePreviewFinalizerCapabilityMap = Partial<
   Record<LivePreviewFinalizerCapability, boolean>
 >;
 
+/** Adapter shape for finalizing live previews. */
 export type ChannelMessageLiveFinalizerAdapterShape = {
   capabilities?: LivePreviewFinalizerCapabilityMap;
 };
 
+/** Adapter shape for live preview and streaming message features. */
 export type ChannelMessageLiveAdapterShape = {
   capabilities?: Partial<Record<ChannelMessageLiveCapability, boolean>>;
   finalizer?: ChannelMessageLiveFinalizerAdapterShape;
 };
 
+/** Receive acknowledgement timing policy for durable inbound message records. */
 export type ChannelMessageReceiveAckPolicy =
   | "after_receive_record"
   | "after_agent_dispatch"
   | "after_durable_send"
   | "manual";
 
+/** Canonical ordered list of receive acknowledgement policies. */
 export const channelMessageReceiveAckPolicies = [
   "after_receive_record",
   "after_agent_dispatch",
@@ -341,11 +381,13 @@ export const channelMessageReceiveAckPolicies = [
   "manual",
 ] as const satisfies readonly ChannelMessageReceiveAckPolicy[];
 
+/** Adapter receive shape for default and supported inbound acknowledgement policies. */
 export type ChannelMessageReceiveAdapterShape = {
   defaultAckPolicy?: ChannelMessageReceiveAckPolicy;
   supportedAckPolicies?: readonly ChannelMessageReceiveAckPolicy[];
 };
 
+/** Full message adapter shape composed from send, durable-final, live, and receive facets. */
 export type ChannelMessageAdapterShape<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
@@ -357,12 +399,15 @@ export type ChannelMessageAdapterShape<
   receive?: ChannelMessageReceiveAdapterShape;
 };
 
+/** Concrete message adapter type, preserving channel-specific adapter refinements. */
 export type ChannelMessageAdapter<
   TAdapter extends ChannelMessageAdapterShape = ChannelMessageAdapterShape,
 > = TAdapter;
 
+/** Extra durable-final requirement map for caller-derived capability checks. */
 export type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
 
+/** Inputs used to derive durable final-delivery requirements for a planned send. */
 export type DeriveDurableFinalDeliveryRequirementsParams = {
   payload: DurableFinalDeliveryPayloadShape;
   replyToId?: string | null;
@@ -377,6 +422,7 @@ export type DeriveDurableFinalDeliveryRequirementsParams = {
   extraCapabilities?: DurableFinalRequirementExtras;
 };
 
+/** Stable intent record for a durable outbound message send. */
 export type DurableMessageSendIntent<TPayload = unknown> = {
   id: string;
   channel: string;

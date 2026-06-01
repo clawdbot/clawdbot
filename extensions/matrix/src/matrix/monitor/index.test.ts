@@ -64,7 +64,7 @@ const hoisted = vi.hoisted(() => {
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
   const createDirectRoomTracker = vi.fn(
-    (clientForTest: unknown, _opts?: DirectRoomTrackerOptions) => ({
+    (_clientForTest: unknown, _opts?: DirectRoomTrackerOptions) => ({
       isDirectMessage: vi.fn(async () => false),
     }),
   );

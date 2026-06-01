@@ -41,6 +41,9 @@ const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
+const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
+};
 
 function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -221,7 +224,10 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   if (!classified) {
     return null;
   }
-  const provider = classified.provider ?? params.provider;
+  const rawProvider = classified.provider ?? params.provider;
+  const provider = rawProvider
+    ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
+    : null;
   const command = buildOAuthRefreshFailureLoginCommand(provider);
   if (classified.reason) {
     return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;

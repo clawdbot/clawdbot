@@ -293,7 +293,7 @@ function queueSessionStoreTouch(params: {
     entry: params.entry,
     sessionId: params.sessionId,
     now: params.now,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
@@ -431,7 +431,7 @@ export const handleNodeEvent = async (
         },
         defaultRuntime,
         ctx.deps,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
       return undefined;
@@ -459,7 +459,7 @@ export const handleNodeEvent = async (
         key?: string | null;
       };
 
-      let link: AgentDeepLink | null = null;
+      let link: AgentDeepLink | null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
@@ -574,7 +574,7 @@ export const handleNodeEvent = async (
           channel: deliveryChannel,
           to: deliveryTo,
           text: receiptText,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -602,7 +602,7 @@ export const handleNodeEvent = async (
         },
         defaultRuntime,
         ctx.deps,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
       return undefined;
@@ -743,7 +743,7 @@ export const handleNodeEvent = async (
         (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
       );
 
-      let text = "";
+      let text;
       if (evt.event === "exec.started") {
         text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
         if (command) {

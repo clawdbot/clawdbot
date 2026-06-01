@@ -26,7 +26,7 @@ export async function loginWeb(
       .then((output) => {
         runtime.log(output.endsWith("\n") ? output.slice(0, -1) : output);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
       });
   };

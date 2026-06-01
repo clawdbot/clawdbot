@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -49,30 +50,8 @@ vi.mock("../../skills/security/clawhub-verdicts.js", () => ({
 
 const { skillsHandlers } = await import("./skills.js");
 
-function makeContext() {
-  return {
-    getRuntimeConfig: () => ({}),
-    logGateway: vi.fn(),
-  };
-}
-
-async function callHandler(method: string, params: Record<string, unknown>) {
-  let ok: boolean | null = null;
-  let response: unknown;
-  let error: unknown;
-  await skillsHandlers[method]({
-    params,
-    req: {} as never,
-    client: null as never,
-    isWebchatConnect: () => false,
-    context: makeContext() as never,
-    respond: (success, result, err) => {
-      ok = success;
-      response = result;
-      error = err;
-    },
-  });
-  return { ok, response, error };
+function callHandler(method: string, params: Record<string, unknown>) {
+  return callGatewayHandler(skillsHandlers, method, params);
 }
 
 describe("skills proposal gateway handlers", () => {

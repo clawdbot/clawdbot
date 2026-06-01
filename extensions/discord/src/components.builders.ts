@@ -94,6 +94,9 @@ function createButtonComponent(params: {
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
       ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+      ...(params.spec.callbackDataKind !== undefined
+        ? { callbackDataKind: params.spec.callbackDataKind }
+        : {}),
       ...(params.modalId !== undefined ? { modalId: params.modalId } : {}),
       ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
       ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
@@ -127,6 +130,9 @@ function createSelectComponent(params: {
     kind: "select",
     label,
     ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+    ...(params.spec.callbackDataKind !== undefined
+      ? { callbackDataKind: params.spec.callbackDataKind }
+      : {}),
     selectType,
     ...(options ? { options } : {}),
     ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
@@ -384,7 +390,7 @@ export function buildDiscordComponentMessage(params: {
     const lastChild = containerChildren.at(-1);
     if (lastChild instanceof Row) {
       const row = lastChild;
-      const hasSelect = row.components.some((entry) => isSelectComponent(entry));
+      const hasSelect = row.components.some((entryLocal) => isSelectComponent(entryLocal));
       if (row.components.length < 5 && !hasSelect) {
         row.addComponent(component as Button);
       } else {

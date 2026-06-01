@@ -280,7 +280,7 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
   const firstReadableDescendantByRejectedId = new Map<string, string>();
   const rejectedAncestorsByAcceptedId = new Map<string, string[]>();
   const acceptedPath = (leafId: string | null | undefined): SessionEntry[] => {
-    const path: SessionEntry[] = [];
+    const pathLocal: SessionEntry[] = [];
     let id = leafId ?? null;
     const seen = new Set<string>();
     while (id !== null) {
@@ -292,10 +292,10 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
       if (!entry) {
         break;
       }
-      path.unshift(entry);
+      pathLocal.unshift(entry);
       id = entry.parentId;
     }
-    return path;
+    return pathLocal;
   };
   const firstReadableDescendantOnBranch = (
     rejectedId: string,

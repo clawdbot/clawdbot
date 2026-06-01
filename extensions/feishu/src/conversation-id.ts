@@ -37,7 +37,6 @@ export function buildFeishuConversationId(params: {
         return `${chatId}:topic:${topicId}`;
       }
       return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
-    case "group":
     default:
       return chatId;
   }

@@ -117,6 +117,8 @@ const FeishuToolsConfigSchema = z
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    bitable: z.boolean().optional(), // Bitable/Base operations (default: true)
+    base: z.boolean().optional(), // Alias for bitable tools (default: true)
   })
   .strict()
   .optional();

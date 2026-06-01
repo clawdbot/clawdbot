@@ -695,11 +695,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId: post.root_id,
         }).sessionKey;
       },
-      dispatchButtonClick: async (opts) => {
-        const channelInfo = await resolveChannelInfo(opts.channelId);
+      dispatchButtonClick: async (optsLocal) => {
+        const channelInfo = await resolveChannelInfo(optsLocal.channelId);
         if (!channelInfo?.type) {
           logVerboseMessage(
-            `mattermost: drop interaction dispatch (cannot resolve channel type for ${opts.channelId})`,
+            `mattermost: drop interaction dispatch (cannot resolve channel type for ${optsLocal.channelId})`,
           );
           return;
         }
@@ -707,7 +707,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const chatType = channelChatType(kind);
         const teamId = channelInfo?.team_id ?? undefined;
         const channelName = channelInfo?.name ?? undefined;
-        const channelDisplay = channelInfo?.display_name ?? channelName ?? opts.channelId;
+        const channelDisplay = channelInfo?.display_name ?? channelName ?? optsLocal.channelId;
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
           channel: "mattermost",
@@ -715,19 +715,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           peer: {
             kind,
-            id: kind === "direct" ? opts.userId : opts.channelId,
+            id: kind === "direct" ? optsLocal.userId : optsLocal.channelId,
           },
         });
         const replyToMode = resolveMattermostReplyToMode(account, kind);
         const threadContext = resolveMattermostThreadSessionContext({
           baseSessionKey: route.sessionKey,
           kind,
-          postId: opts.post.id || opts.postId,
+          postId: optsLocal.post.id || optsLocal.postId,
           replyToMode,
-          threadRootId: opts.post.root_id,
+          threadRootId: optsLocal.post.root_id,
         });
-        const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
-        const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
+        const to =
+          kind === "direct" ? `user:${optsLocal.userId}` : `channel:${optsLocal.channelId}`;
+        const bodyText = `[Button click: user @${optsLocal.userName} selected "${optsLocal.actionName}"]`;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: bodyText,
           BodyForAgent: bodyText,
@@ -735,24 +736,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           CommandBody: bodyText,
           From:
             kind === "direct"
-              ? `mattermost:${opts.userId}`
+              ? `mattermost:${optsLocal.userId}`
               : kind === "group"
-                ? `mattermost:group:${opts.channelId}`
-                : `mattermost:channel:${opts.channelId}`,
+                ? `mattermost:group:${optsLocal.channelId}`
+                : `mattermost:channel:${optsLocal.channelId}`,
           To: to,
           SessionKey: threadContext.sessionKey,
           ParentSessionKey: threadContext.parentSessionKey,
           AccountId: route.accountId,
           ChatType: chatType,
-          ConversationLabel: `mattermost:${opts.userName}`,
+          ConversationLabel: `mattermost:${optsLocal.userName}`,
           GroupSubject: kind !== "direct" ? channelDisplay : undefined,
           GroupChannel: channelName ? `#${channelName}` : undefined,
           GroupSpace: teamId,
-          SenderName: opts.userName,
-          SenderId: opts.userId,
+          SenderName: optsLocal.userName,
+          SenderId: optsLocal.userId,
           Provider: "mattermost" as const,
           Surface: "mattermost" as const,
-          MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
+          MessageSid: `interaction:${optsLocal.postId}:${optsLocal.actionId}`,
           ReplyToId: threadContext.effectiveReplyToId,
           MessageThreadId: threadContext.effectiveReplyToId,
           WasMentioned: true,
@@ -779,12 +780,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             channel: "mattermost",
             accountId: account.accountId,
             typing: {
-              start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+              start: () =>
+                sendTypingIndicator(optsLocal.channelId, threadContext.effectiveReplyToId),
               onStartError: (err) => {
                 logTypingFailure({
                   log: (message) => logger.debug?.(message),
                   channel: "mattermost",
-                  target: opts.channelId,
+                  target: optsLocal.channelId,
                   error: err,
                 });
               },
@@ -1742,9 +1744,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ...replyPipeline,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
-            deliver: async (payload: ReplyPayload, info) => {
+            deliver: async (payloadEntry: ReplyPayload, info) => {
               await deliverMattermostReplyWithDraftPreview({
-                payload,
+                payload: payloadEntry,
                 info,
                 kind,
                 client,
@@ -1883,9 +1885,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             ? { suppressDefaultToolProgressMessages: true }
                             : {}),
                           onModelSelected,
-                          onPartialReply: (payload) => {
+                          onPartialReply: (payloadResult) => {
                             if (account.streamingMode !== "progress") {
-                              updateDraftFromPartial(payload.text);
+                              updateDraftFromPartial(payloadResult.text);
                             }
                           },
                           onAssistantMessageStart: () => {
@@ -1899,18 +1901,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               draftStream.update("Thinking…");
                             }
                           },
-                          onToolStart: async (payload) => {
+                          onToolStart: async (payloadValue) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
                             draftStream.update(
                               buildMattermostToolStatusText({
-                                ...payload,
+                                ...payloadValue,
                                 config: account.config,
                               }),
                             );
                           },
-                          onItemEvent: async (payload) => {
+                          onItemEvent: async (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
@@ -1918,15 +1920,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               account.config,
                               {
                                 event: "item",
-                                itemId: payload.itemId,
-                                itemKind: payload.kind,
-                                title: payload.title,
-                                name: payload.name,
-                                phase: payload.phase,
-                                status: payload.status,
-                                summary: payload.summary,
-                                progressText: payload.progressText,
-                                meta: payload.meta,
+                                itemId: payloadLocal.itemId,
+                                itemKind: payloadLocal.kind,
+                                title: payloadLocal.title,
+                                name: payloadLocal.name,
+                                phase: payloadLocal.phase,
+                                status: payloadLocal.status,
+                                summary: payloadLocal.summary,
+                                progressText: payloadLocal.progressText,
+                                meta: payloadLocal.meta,
                               },
                             );
                             if (progressText) {
@@ -2163,7 +2165,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         client,
         commands,
         log: (msg) => runtime.log?.(msg),
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
       });
     };

@@ -320,6 +320,20 @@ export function setupGatewaySessionsTestHarness() {
     return { dir, storePath };
   }
 
+  async function createSelectedGlobalSessionStore() {
+    const { dir } = await createSessionStoreDir();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = { scope: "global" };
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    return {
+      dir,
+      storeTemplate,
+      mainStorePath: storeTemplate.replace("{agentId}", "main"),
+      workStorePath: storeTemplate.replace("{agentId}", "work"),
+    };
+  }
+
   async function seedActiveMainSession() {
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -333,6 +347,7 @@ export function setupGatewaySessionsTestHarness() {
 
   return {
     createSessionStoreDir,
+    createSelectedGlobalSessionStore,
     getHarness: requireHarness,
     openClient,
     seedActiveMainSession,

@@ -137,6 +137,27 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
   return crabboxPath;
 }
 
+function makeSlowVersionCrabbox(helpText: string): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-crabbox-"));
+  tempDirs.push(binDir);
+  const crabboxPath = path.join(binDir, "crabbox");
+
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 6_000); }',
+    `else if (args[0] === "run" && args[1] === "--help") { process.stdout.write(${JSON.stringify(helpText)}); }`,
+  ].join("\n");
+  writeFileSync(crabboxPath, `${script}\n`, "utf8");
+  writeFileSync(
+    `${crabboxPath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0crabbox" %*\r\n`,
+    "utf8",
+  );
+  chmodSync(crabboxPath, 0o755);
+  return binDir;
+}
+
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -289,6 +310,10 @@ function expectGroupedShellCommand(remoteCommand: string, command: string): void
     expect(remoteCommand).toContain(`${command}\n}`);
   }
 }
+
+const remoteChangedGateEnvPrefix =
+  "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
+const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
 
 afterAll(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -904,7 +929,10 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(remoteCommand).toContain("pnpm --version >&2");
-    expectGroupedShellCommand(remoteCommand, "node scripts/check-changed.mjs");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} node scripts/check-changed.mjs`,
+    );
   });
 
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
@@ -918,7 +946,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} pnpm check:changed`);
   });
 
   it("bootstraps raw AWS macOS shell scripts that set up before JavaScript commands", () => {
@@ -1120,7 +1148,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("bootstraps raw AWS macOS shell scripts with command-prefixed JavaScript commands", () => {
@@ -1441,7 +1469,10 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "pnpm check:changed || true");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `${remoteChangedGateExport} pnpm check:changed || true`,
+    );
   });
 
   it("does not bootstrap non-macOS AWS JavaScript commands", () => {
@@ -1462,6 +1493,60 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       "pnpm",
       "--version",
     ]);
+  });
+
+  it("restores hydrated node_modules before AWS native Windows shell commands", () => {
+    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "normal",
+      "--id",
+      "cbx_test",
+      "--shell",
+      "--",
+      "corepack pnpm check:changed",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
+    expect(remoteCommand).toContain(
+      'mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"',
+    );
+    expect(remoteCommand).toContain("corepack pnpm check:changed");
+  });
+
+  it("restores hydrated node_modules before AWS native Windows direct commands", () => {
+    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "normal",
+      "--id",
+      "cbx_test",
+      "--",
+      "pnpm",
+      "--filter",
+      "@openclaw/discord",
+      "test",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain("pnpm --filter '@openclaw/discord' test");
   });
 
   const itWithPosixLinkedWorktreeFixture = process.platform === "win32" ? it.skip : it;
@@ -1599,6 +1684,18 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected binary does not advertise provider bogus");
   });
 
+  it("times out hung sanity probes before rejecting the selected binary", () => {
+    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    const result = runWrapper(helpText, ["--version"], {
+      extraPathEntries: [makeSlowVersionCrabbox(helpText)],
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("version=unknown");
+    expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
+  });
+
   it("parses provider choices from the --provider flag help format", () => {
     const result = runWrapper(
       "Usage: crabbox run [options]\n  --provider hetzner|aws|local-container|blacksmith-testbox|cloudflare\n",
@@ -1714,7 +1811,74 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("git add -A");
     expect(remoteCommand).toContain("git diff --cached --quiet");
     expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
-    expect(remoteCommand).toMatch(/&& corepack pnpm check:changed$/u);
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("bootstraps Git metadata for env-prefixed sparse changed gates", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "env",
+        "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+        "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+        "CI=1",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
   });
 
   it("preserves macOS JS bootstrapping for sparse changed gates on remote raw syncs", () => {
@@ -1738,7 +1902,10 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} pnpm check:changed`,
+    );
   });
 
   it("preserves macOS JS and Git bootstraps for sparse shell changed gates with setup", () => {
@@ -1761,7 +1928,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves macOS JS and Git bootstraps for shell-wrapped sparse changed gates", () => {
@@ -1783,7 +1950,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for assignment-prefix command substitutions", () => {
@@ -1804,7 +1971,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for command-prefixed shell commands", () => {
@@ -1825,7 +1992,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for bash -lc shell commands", () => {
@@ -1850,7 +2017,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(
+      `&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; ${shellScript}`,
+    );
   });
 
   it("preserves sparse changed-gate Git bootstrap for shell option values before -c", () => {
@@ -1871,7 +2040,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for attached shell option values before -c", () => {
@@ -1892,7 +2061,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for grouped shell options before -c", () => {
@@ -1913,7 +2082,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for absolute time-prefixed shell commands", () => {
@@ -1934,7 +2103,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for timeout-wrapped shell commands", () => {
@@ -1959,7 +2128,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped node commands", () => {
@@ -1994,7 +2163,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toMatch(
-      /&& timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
     );
   });
 
@@ -2016,7 +2185,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toMatch(/&& timeout 1200s bash -lc 'pnpm check:changed'$/u);
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s bash -lc 'pnpm check:changed'$/u,
+    );
   });
 
   it("does not treat quoted sparse shell text as a changed gate", () => {
@@ -2158,7 +2329,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toMatch(/&& env CI=1 pnpm check:changed$/u);
+    expect(remoteCommand).toMatch(
+      /&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; env CI=1 pnpm check:changed$/u,
+    );
   });
 
   it("does not inject the POSIX changed-gate bootstrap for Windows targets", () => {

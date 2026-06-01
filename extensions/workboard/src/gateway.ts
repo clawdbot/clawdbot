@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../api.js";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardStore } from "./store.js";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
@@ -383,7 +384,10 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.dispatch",
     async ({ respond }) => {
       try {
-        const result = await store.dispatch();
+        const result = await dispatchAndStartWorkboardCards({
+          store,
+          subagent: api.runtime.subagent,
+        });
         respond(true, {
           ...result,
           promoted: result.promoted.map(redactClaimToken),

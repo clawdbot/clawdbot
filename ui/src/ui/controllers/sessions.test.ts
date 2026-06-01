@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
+  applyChatHistorySessionInfo,
   applySessionsChangedEvent,
   branchSessionFromCheckpoint,
   createSessionAndRefresh,
@@ -2041,6 +2042,671 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions[0]?.totalTokens).toBeUndefined();
     expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(false);
     expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
+  });
+
+  it("keeps richer token metadata when applying lightweight chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: 200_000 },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            totalTokens: 190_000,
+            totalTokensFresh: true,
+            contextTokens: 200_000,
+          },
+        ],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      contextTokens: undefined,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "agent:main:main",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+      totalTokens: 190_000,
+      totalTokensFresh: true,
+      contextTokens: 200_000,
+    });
+  });
+
+  it("does not create visible rows from synthetic chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:missing",
+      kind: "direct",
+      updatedAt: null,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(false);
+    expect(state.sessionsResult).toBeNull();
+  });
+
+  it("keeps history defaults when ignoring synthetic chat history session rows", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:missing",
+        kind: "direct",
+        updatedAt: null,
+        status: "done",
+        hasActiveRun: false,
+      },
+      {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        contextTokens: 200_000,
+        thinkingLevels: [{ id: "medium", label: "Medium" }],
+        thinkingDefault: "medium",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult).toMatchObject({
+      count: 0,
+      sessions: [],
+      defaults: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        contextTokens: 200_000,
+        thinkingDefault: "medium",
+      },
+    });
+  });
+
+  it("updates catalog-backed thinking metadata from chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: {
+          modelProvider: "custom",
+          model: "catalog-model",
+          contextTokens: 200_000,
+          thinkingLevels: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+          thinkingOptions: ["Low", "Medium", "High"],
+          thinkingDefault: "medium",
+        },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevels: [
+              { id: "low", label: "Low" },
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High" },
+            ],
+            thinkingOptions: ["Low", "Medium", "High"],
+            thinkingDefault: "medium",
+          },
+        ],
+      },
+    });
+
+    const catalogThinkingLevels = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra high" },
+    ];
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        thinkingLevels: catalogThinkingLevels,
+        thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+        thinkingDefault: "medium",
+      },
+      {
+        modelProvider: "custom",
+        model: "catalog-model",
+        contextTokens: 200_000,
+        thinkingLevels: catalogThinkingLevels,
+        thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+        thinkingDefault: "medium",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevels?.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(state.sessionsResult?.defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("keeps richer catalog-backed thinking metadata when chat history is lightweight", () => {
+    const catalogThinkingLevels = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra high" },
+    ];
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: {
+          modelProvider: "custom",
+          model: "catalog-model",
+          contextTokens: 200_000,
+          thinkingLevels: catalogThinkingLevels,
+          thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+          thinkingDefault: "medium",
+        },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevels: catalogThinkingLevels,
+            thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+            thinkingDefault: "medium",
+          },
+        ],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        thinkingOptions: ["Low", "Medium", "High"],
+        thinkingDefault: "medium",
+      },
+      {
+        modelProvider: "custom",
+        model: "catalog-model",
+        contextTokens: 200_000,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        thinkingOptions: ["Low", "Medium", "High"],
+        thinkingDefault: "medium",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevels?.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(state.sessionsResult?.defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("uses incoming thinking metadata when chat history changes models", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: {
+          modelProvider: "custom",
+          model: "extended-model",
+          contextTokens: 200_000,
+          thinkingLevels: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra high" },
+          ],
+          thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+          thinkingDefault: "medium",
+        },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            modelProvider: "custom",
+            model: "extended-model",
+            thinkingLevels: [
+              { id: "low", label: "Low" },
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High" },
+              { id: "xhigh", label: "Extra high" },
+            ],
+            thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+            thinkingDefault: "medium",
+          },
+        ],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        modelProvider: "custom",
+        model: "basic-model",
+        thinkingLevels: [{ id: "off", label: "Off" }],
+        thinkingOptions: ["Off"],
+        thinkingDefault: "off",
+      },
+      {
+        modelProvider: "custom",
+        model: "basic-model",
+        contextTokens: 200_000,
+        thinkingLevels: [{ id: "off", label: "Off" }],
+        thinkingOptions: ["Off"],
+        thinkingDefault: "off",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      model: "basic-model",
+      thinkingLevels: [{ id: "off", label: "Off" }],
+      thinkingOptions: ["Off"],
+    });
+    expect(state.sessionsResult?.defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+    ]);
+  });
+
+  it("applies chat history session info for the selected non-default global agent", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "running" }],
+      },
+      chatRunId: "run-work",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("does not clear newer active runs from stale chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:main:main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+            startedAt: 90,
+            status: "running",
+            hasActiveRun: true,
+          },
+        ],
+      },
+      chatRunId: "run-active",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 50,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.chatRunId).toBe("run-active");
+    expect(state.chatStream).toBe("streaming");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      updatedAt: 100,
+      status: "running",
+      hasActiveRun: true,
+    });
+  });
+
+  it("does not clear equal-timestamp active runs from stale chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:main:main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+            startedAt: 100,
+            status: "running",
+            hasActiveRun: true,
+          },
+        ],
+      },
+      chatRunId: "run-active",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 100,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.chatRunId).toBe("run-active");
+    expect(state.chatStream).toBe("streaming");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      updatedAt: 100,
+      status: "running",
+      hasActiveRun: true,
+    });
+  });
+
+  it("clears current runs from canonical chat history rows outside the visible list", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "main",
+      sessionsResultAgentId: "work",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:work:main", kind: "direct", updatedAt: 1, status: "done" }],
+      },
+      chatRunId: "run-main",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["agent:work:main"]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("clears alias-selected runs from first-load canonical chat history rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "main",
+      sessionsResult: null,
+      chatRunId: "run-main",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:main");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("preserves first-load chat history scope for selected global agent rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:global",
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResultAgentId).toBe("work");
+
+    const crossAgentApplied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      session: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 3,
+      },
+    });
+
+    expect(crossAgentApplied).toEqual({ applied: true, change: "inserted" });
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["global"]);
+  });
+
+  it("preserves first-load chat history scope for canonical agent rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:main",
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:work:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResultAgentId).toBe("work");
+  });
+
+  it("merges canonical chat history rows into visible legacy alias rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "main", kind: "direct", updatedAt: 1, status: "running" }],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions).toEqual([
+      expect.objectContaining({
+        key: "main",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: false,
+      }),
+    ]);
+  });
+
+  it("merges canonical global chat history rows into selected global alias rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:work:main", kind: "global", updatedAt: 1, status: "running" }],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions).toEqual([
+      expect.objectContaining({
+        key: "agent:work:main",
+        kind: "global",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: false,
+      }),
+    ]);
+  });
+
+  it("merges canonical global chat history rows into configured main-key alias rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:inbox",
+      agentsList: { defaultId: "main", mainKey: "inbox" },
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:work:inbox", kind: "global", updatedAt: 1, status: "running" }],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions).toEqual([
+      expect.objectContaining({
+        key: "agent:work:inbox",
+        kind: "global",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: false,
+      }),
+    ]);
+  });
+
+  it("clears current global runs even when the visible list is scoped elsewhere", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResultAgentId: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1, status: "done" }],
+      },
+      chatRunId: "run-work-global",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["agent:main:main"]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
   });
 
   it("keeps updated existing rows sorted like sessions.list", () => {

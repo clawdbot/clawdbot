@@ -293,9 +293,9 @@ async function resolveVerificationSasNoticeForSignal(
     };
   }
 
-  await new Promise((resolve) =>
-    setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS),
-  );
+  await new Promise((resolve) => {
+    setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
+  });
   const retriedSummary = await resolveVerificationSummaryForSignal(client, params);
   return {
     summary: retriedSummary,
@@ -628,7 +628,7 @@ export function createMatrixVerificationEventRouter(params: {
         routeTask,
       );
     } else {
-      void routeTask().catch((err) => {
+      void routeTask().catch((err: unknown) => {
         params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
       });
     }

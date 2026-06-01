@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { win32 } from "node:path";
@@ -16,6 +16,41 @@ function makeTempDir(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(filePath)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error(`timeout waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error(`process still alive: ${pid}`);
 }
 
 afterEach(() => {
@@ -108,6 +143,43 @@ setInterval(() => {}, 1000);
         expect(existsSync(terminatedPath)).toBe(true);
       } finally {
         await runPromise.catch(() => {});
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out child process groups",
+    async () => {
+      const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
+      const childPidPath = path.join(dir, "child.pid");
+      let childPid: number | undefined;
+
+      try {
+        const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const fs = require('node:fs');",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+          "setInterval(() => {}, 1000);",
+        ].join("");
+
+        const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
+          timeoutKillGraceMs: 25,
+          timeoutMs: 100,
+        });
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+
+        await expect(runPromise).rejects.toMatchObject({
+          code: "ETIMEDOUT",
+          message: expect.stringContaining("timed out after 100ms"),
+        });
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
       }
     },
   );

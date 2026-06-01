@@ -20,7 +20,7 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const CGROUP_MEMORY_LIMIT_PATHS = [
@@ -109,7 +109,7 @@ function hasProtectedChild({ rootPath, protectedPaths }) {
 }
 
 function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   } catch {
@@ -162,7 +162,7 @@ function listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }) {
 }
 
 function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   } catch {
@@ -184,7 +184,7 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const fsImpl = params.fs ?? fs;
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
-    let entries = [];
+    let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });
     } catch {

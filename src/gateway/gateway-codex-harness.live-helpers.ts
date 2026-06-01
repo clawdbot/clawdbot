@@ -272,3 +272,17 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     isInteractiveTuiSummary
   );
 }
+
+export function isRetryableCodexHarnessLiveError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("gateway request timeout for sessions.list");
+}
+
+export function shouldSkipRetryableCodexHarnessLiveError(
+  error: unknown,
+  params: { subagentProbe: boolean },
+): boolean {
+  return isRetryableCodexHarnessLiveError(error) && !params.subagentProbe;
+}

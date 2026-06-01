@@ -6,6 +6,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
+import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
@@ -110,7 +111,8 @@ export function normalizePluginDiscoveryResult(params: {
     return {};
   }
 
-  if ("provider" in result) {
+  const projection = copyProviderCatalogResultProjection(result);
+  if (projection.kind === "provider") {
     const normalized = createProviderConfigRecord();
     for (const providerId of [
       params.provider.id,
@@ -121,13 +123,16 @@ export function normalizePluginDiscoveryResult(params: {
       if (!isSafeProviderConfigKey(normalizedKey)) {
         continue;
       }
-      normalized[normalizedKey] = result.provider;
+      normalized[normalizedKey] = projection.provider;
     }
     return normalized;
   }
 
   const normalized = createProviderConfigRecord();
-  for (const [key, value] of Object.entries(result.providers)) {
+  if (projection.kind !== "providers") {
+    return normalized;
+  }
+  for (const [key, value] of projection.providers) {
     const normalizedKey = normalizeProviderId(key);
     if (!isSafeProviderConfigKey(normalizedKey) || !value) {
       continue;

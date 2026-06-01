@@ -145,6 +145,9 @@ const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
 export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
 export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
+export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
+export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
+export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
 export function readTelegramUserProofLogTailBytes(env: NodeJS.ProcessEnv = process.env): number {
@@ -561,7 +564,46 @@ function commandFailureOutput(stdout: string, stderr: string): string {
   return `${stdoutTail}${stderr}`;
 }
 
-function runCommand(params: {
+function timedOutError(message: string) {
+  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+const activeCommandChildren = new Set<ChildProcess>();
+let commandCleanupHandlersInstalled = false;
+
+function signalCommandTree(child: ChildProcess, signal: NodeJS.Signals) {
+  if (child.pid && process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
+}
+
+function signalActiveCommandChildren(signal: NodeJS.Signals) {
+  for (const child of activeCommandChildren) {
+    signalCommandTree(child, signal);
+  }
+}
+
+function installCommandCleanupHandlers() {
+  if (commandCleanupHandlersInstalled) {
+    return;
+  }
+  commandCleanupHandlersInstalled = true;
+  process.once("exit", () => {
+    signalActiveCommandChildren("SIGTERM");
+  });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      signalActiveCommandChildren(signal);
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
+export function runCommand(params: {
   args: string[];
   command: string;
   cwd: string;
@@ -569,6 +611,8 @@ function runCommand(params: {
   outputFile?: string;
   stdio?: "inherit" | "pipe";
   stdin?: string;
+  timeoutKillGraceMs?: number;
+  timeoutMs?: number;
 }) {
   return new Promise<CommandResult>((resolve, reject) => {
     if (params.outputFile) {
@@ -576,12 +620,43 @@ function runCommand(params: {
     }
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
+      detached: process.platform !== "win32",
       env: params.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    activeCommandChildren.add(child);
+    installCommandCleanupHandlers();
     let stdout = "";
     let stderr = "";
+    let settled = false;
     let stdoutLimitError: string | null = null;
+    let timeoutError: Error | null = null;
+    let killTimer: NodeJS.Timeout | undefined;
+    const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
+    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
+    const clearTimers = () => {
+      clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+    };
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      timeoutError = timedOutError(
+        `${params.command} ${params.args.join(" ")} timed out after ${timeoutMs}ms\n${commandFailureOutput(
+          stdout,
+          stderr,
+        )}`,
+      );
+      signalCommandTree(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        signalCommandTree(child, "SIGKILL");
+      }, timeoutKillGraceMs);
+      killTimer.unref?.();
+    }, timeoutMs);
+    timeout.unref?.();
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       if (params.outputFile) {
@@ -593,7 +668,7 @@ function runCommand(params: {
         const appended = appendCommandStdout(stdout, chunk);
         if (!appended.ok) {
           stdoutLimitError = appended.message;
-          child.kill("SIGKILL");
+          signalCommandTree(child, "SIGKILL");
         } else {
           stdout = appended.value;
         }
@@ -612,8 +687,28 @@ function runCommand(params: {
         process.stderr.write(text);
       }
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeCommandChildren.delete(child);
+      clearTimers();
+      reject(error);
+    });
     child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeCommandChildren.delete(child);
+      if (timeoutError) {
+        signalCommandTree(child, "SIGKILL");
+        clearTimers();
+        reject(timeoutError);
+        return;
+      }
+      clearTimers();
       if (stdoutLimitError) {
         reject(new Error(`${params.command} ${params.args.join(" ")} failed: ${stdoutLimitError}`));
         return;
@@ -765,7 +860,7 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
   const buffer = Buffer.alloc(bytesToRead);
   const fd = fs.openSync(logPath, "r");
-  let bytesRead = 0;
+  let bytesRead;
   try {
     bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
   } finally {
@@ -786,7 +881,9 @@ export async function waitForLog(
     if (pattern.test(text)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
@@ -1210,6 +1307,7 @@ async function runRemoteCommand(params: {
   cwd: string;
   outputFile?: string;
   stdio?: "inherit" | "pipe";
+  timeoutMs?: number;
 }) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 4; attempt += 1) {
@@ -1220,7 +1318,9 @@ async function runRemoteCommand(params: {
       if (attempt === 4 || !isTransientSshFailure(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 3000);
+      });
     }
   }
   throw lastError;
@@ -1250,7 +1350,7 @@ async function sshRun(
   root: string,
   inspect: CrabboxInspect,
   remoteCommand: string,
-  options: { outputFile?: string } = {},
+  options: { outputFile?: string; timeoutMs?: number } = {},
 ) {
   const ssh = sshArgs(inspect);
   return await runRemoteCommand({
@@ -1259,6 +1359,7 @@ async function sshRun(
     cwd: root,
     outputFile: options.outputFile,
     stdio: "inherit",
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -1709,7 +1810,9 @@ async function writeRemoteSessionScripts(params: {
     selectChatScript,
     `${REMOTE_ROOT}/select-desktop-chat.sh`,
   );
-  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, {
+    timeoutMs: REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+  });
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
@@ -2383,7 +2486,9 @@ async function main() {
     await scpToRemote(root, inspect, authorizeScript, `${REMOTE_ROOT}/authorize-desktop.sh`);
     await scpToRemote(root, inspect, selectChatScript, `${REMOTE_ROOT}/select-desktop-chat.sh`);
     await scpToRemote(root, inspect, probeScript, `${REMOTE_ROOT}/remote-probe.sh`);
-    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, {
+      timeoutMs: REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+    });
 
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
@@ -2425,9 +2530,13 @@ async function main() {
       ],
       { cwd: root, stdio: "inherit" },
     );
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 3_000);
+    });
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
-    const recordCode = await new Promise<number | null>((resolve) => recording.on("exit", resolve));
+    const recordCode = await new Promise<number | null>((resolve) => {
+      recording.on("exit", resolve);
+    });
     if (recordCode !== 0) {
       throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
     }

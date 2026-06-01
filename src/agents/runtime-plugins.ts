@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
@@ -32,6 +33,9 @@ export function ensureRuntimePluginsLoaded(params: {
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
 }): void {
+  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+    return;
+  }
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)

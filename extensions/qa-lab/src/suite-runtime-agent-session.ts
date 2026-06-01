@@ -35,8 +35,11 @@ function isSessionStoreLockTimeout(error: unknown) {
   const text = formatErrorMessage(error);
   return (
     text.includes("OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT") ||
+    text.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE") ||
     text.includes("SessionWriteLockTimeoutError") ||
-    text.includes("session file locked")
+    text.includes("SessionWriteLockStaleError") ||
+    text.includes("session file locked") ||
+    text.includes("session file lock stale")
   );
 }
 

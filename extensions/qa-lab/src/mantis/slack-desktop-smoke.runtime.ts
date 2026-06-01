@@ -1396,7 +1396,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw remoteRunError;
+      throw toErrorObject(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1510,4 +1510,8 @@ export async function runMantisSlackDesktopSmoke(
       });
     }
   }
+}
+
+function toErrorObject(error: unknown): Error {
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }

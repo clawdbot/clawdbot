@@ -94,9 +94,11 @@ export function createCodexUserInputBridge(params: {
           resolvePending(emptyUserInputResponse());
           return;
         }
-        void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch((error) => {
-          embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
-        });
+        void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch(
+          (error: unknown) => {
+            embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
+          },
+        );
       });
     },
     handleQueuedMessage(text) {

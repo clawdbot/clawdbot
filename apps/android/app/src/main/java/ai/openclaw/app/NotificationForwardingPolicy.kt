@@ -3,6 +3,7 @@ package ai.openclaw.app
 import java.time.Instant
 import java.time.ZoneId
 
+/** Package-filter mode used before notification events are forwarded to the gateway. */
 enum class NotificationPackageFilterMode(
   val rawValue: String,
 ) {
@@ -11,10 +12,12 @@ enum class NotificationPackageFilterMode(
   ;
 
   companion object {
+    /** Parses persisted filter mode text, defaulting to blocklist for safer forwarding. */
     fun fromRawValue(raw: String?): NotificationPackageFilterMode = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Blocklist
   }
 }
 
+/** Runtime policy used before forwarding notification events to a node session. */
 internal data class NotificationForwardingPolicy(
   val enabled: Boolean,
   val mode: NotificationPackageFilterMode,
@@ -26,6 +29,7 @@ internal data class NotificationForwardingPolicy(
   val sessionKey: String?,
 )
 
+/** Applies the operator-configured package allow/block list after trimming input. */
 internal fun NotificationForwardingPolicy.allowsPackage(packageName: String): Boolean {
   val normalized = packageName.trim()
   if (normalized.isEmpty()) {
@@ -37,6 +41,7 @@ internal fun NotificationForwardingPolicy.allowsPackage(packageName: String): Bo
   }
 }
 
+/** Returns true for both same-day and overnight quiet-hour windows. */
 internal fun NotificationForwardingPolicy.isWithinQuietHours(
   nowEpochMs: Long,
   zoneId: ZoneId = ZoneId.systemDefault(),
@@ -64,12 +69,14 @@ internal fun NotificationForwardingPolicy.isWithinQuietHours(
 
 private val localHourMinuteRegex = Regex("""^([01]\d|2[0-3]):([0-5]\d)$""")
 
+/** Normalizes persisted or user-entered local times to strict HH:mm form. */
 internal fun normalizeLocalHourMinute(raw: String): String? {
   val trimmed = raw.trim()
   val match = localHourMinuteRegex.matchEntire(trimmed) ?: return null
   return "${match.groupValues[1]}:${match.groupValues[2]}"
 }
 
+/** Converts strict local HH:mm text to minutes since midnight for window checks. */
 internal fun parseLocalHourMinute(raw: String): Int? {
   val normalized = normalizeLocalHourMinute(raw) ?: return null
   val parts = normalized.split(':')
@@ -78,11 +85,13 @@ internal fun parseLocalHourMinute(raw: String): Int? {
   return hour * 60 + minute
 }
 
+/** Fixed-window limiter that bounds notification bursts per wall-clock minute. */
 internal class NotificationBurstLimiter {
   private val lock = Any()
   private var windowStartMs: Long = -1L
   private var eventsInWindow: Int = 0
 
+  /** Returns true when the current minute bucket still has forwarding capacity. */
   fun allow(
     nowEpochMs: Long,
     maxEventsPerMinute: Int,
@@ -90,6 +99,8 @@ internal class NotificationBurstLimiter {
     if (maxEventsPerMinute <= 0) {
       return false
     }
+    // Align all callers to the same minute bucket so concurrent notifications
+    // share the quota even when they arrive with slightly different timestamps.
     val currentWindow = nowEpochMs - (nowEpochMs % 60_000L)
     synchronized(lock) {
       if (currentWindow != windowStartMs) {

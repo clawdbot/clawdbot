@@ -17,16 +17,12 @@ export type ProviderAuthAliasLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 };
 
 type ProviderAuthAliasCandidate = {
   origin?: PluginOrigin;
   target: string;
-};
-
-const RETIRED_PROVIDER_AUTH_ALIASES: Readonly<Record<string, string>> = {
-  [["openai", "codex"].join("-")]: "openai",
 };
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
@@ -207,9 +203,5 @@ export function resolveProviderIdForAuth(
   if (!normalized) {
     return normalized;
   }
-  return (
-    resolveProviderAuthAliasMap(params)[normalized] ??
-    RETIRED_PROVIDER_AUTH_ALIASES[normalized] ??
-    normalized
-  );
+  return resolveProviderAuthAliasMap(params)[normalized] ?? normalized;
 }

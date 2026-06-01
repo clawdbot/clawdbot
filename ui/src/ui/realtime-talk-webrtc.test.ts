@@ -642,7 +642,9 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       }),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(request).not.toHaveBeenCalledWith("talk.client.steer", expect.any(Object));
     transport.stop();
   });

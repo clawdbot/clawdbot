@@ -192,6 +192,30 @@ describe("normalizePubkey", () => {
       expect(() => normalizePubkey("invalid")).toThrow("Pubkey must be 64 hex characters");
     });
   });
+
+  describe("normalizePubkey npub format", () => {
+    // Regression: pre-fix this returned a 128-char garbage string because the
+    // implementation treated nip19.decode(npub).data as a Uint8Array, but
+    // nostr-tools >=2.0 returns it as the hex string directly. allowFrom
+    // entries written as npubs therefore never matched any hex sender pubkey.
+    const HEX = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const NPUB = pubkeyToNpub(HEX);
+
+    it("decodes npub to the original 64-char hex pubkey", () => {
+      const result = normalizePubkey(NPUB);
+      expect(result).toBe(HEX);
+      expect(result).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.length).toBe(64);
+    });
+
+    it("survives a hex→npub→normalizePubkey roundtrip", () => {
+      expect(normalizePubkey(pubkeyToNpub(HEX))).toBe(HEX);
+    });
+
+    it("trims surrounding whitespace before decoding", () => {
+      expect(normalizePubkey(`  ${NPUB}  `)).toBe(HEX);
+    });
+  });
 });
 
 describe("getPublicKeyFromPrivate", () => {

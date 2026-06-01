@@ -192,11 +192,13 @@ export async function handleQaBusRequest(params: {
 }
 
 export function createQaBusServer(state: QaBusState): Server {
-  return createServer(async (req, res) => {
-    const handled = await handleQaBusRequest({ req, res, state });
-    if (!handled) {
-      writeError(res, 404, "not found");
-    }
+  return createServer((req, res) => {
+    void (async () => {
+      const handled = await handleQaBusRequest({ req, res, state });
+      if (!handled) {
+        writeError(res, 404, "not found");
+      }
+    })();
   });
 }
 

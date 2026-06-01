@@ -14,6 +14,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
+/** Session route produced for an outbound message target. */
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -24,6 +25,7 @@ export type OutboundSessionRoute = {
   threadId?: string | number;
 };
 
+/** Inputs required to resolve an outbound target into a session route. */
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -177,6 +179,7 @@ function resolveFallbackSession(
   };
 }
 
+/** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -188,11 +191,13 @@ export async function resolveOutboundSessionRoute(
   const resolver = resolveOutboundChannelPlugin(params.channel)?.messaging
     ?.resolveOutboundSessionRoute;
   if (resolver) {
+    // Channel plugins can provide richer route semantics than the generic target parser.
     return await resolver(nextParams);
   }
   return resolveFallbackSession(nextParams);
 }
 
+/** Persists best-effort session metadata for an outbound-only route. */
 export async function ensureOutboundSessionEntry(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

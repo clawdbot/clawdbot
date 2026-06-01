@@ -2,7 +2,7 @@
 // Secret scanning alert handler for OpenClaw maintainers.
 // Usage: node secret-scanning.mjs <command> [options]
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,7 +39,9 @@ function gh(args, { json = true, allowFailure = false } = {}) {
       stderr: proc.stderr,
     };
   }
-  if (!json) return proc.stdout;
+  if (!json) {
+    return proc.stdout;
+  }
   try {
     return JSON.parse(proc.stdout);
   } catch {
@@ -70,7 +72,9 @@ export function loadBodyRedactionResult(locationType, resultFile) {
   if (!resultFile) {
     fail("Body notifications require a redaction result file from redact-body-if-needed");
   }
-  if (!fs.existsSync(resultFile)) fail(`File not found: ${resultFile}`);
+  if (!fs.existsSync(resultFile)) {
+    fail(`File not found: ${resultFile}`);
+  }
 
   const result = JSON.parse(fs.readFileSync(resultFile, "utf8"));
   if (typeof result.notify_required !== "boolean") {
@@ -182,10 +186,11 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
     failOnGraphQLFailure(gql, `Failed to fetch discussion #${discussionNumber}`);
 
     const discussion = gql?.data?.repository?.discussion;
-    if (!discussion)
+    if (!discussion) {
       fail(
         `Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`,
       );
+    }
 
     discussionId = discussion.id;
 
@@ -205,15 +210,18 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
           `Failed to fetch replies for discussion comment ${topLevelComment.id}`,
         );
         const replies = replyPage?.data?.node?.replies;
-        if (!replies)
+        if (!replies) {
           fail(`Failed to paginate replies for discussion comment ${topLevelComment.id}`);
+        }
 
         reply = findDiscussionCommentNode(replies.nodes, discussionCommentDbId);
         hasMoreReplies = replies.pageInfo.hasNextPage;
         replyCursor = replies.pageInfo.endCursor;
       }
 
-      if (reply) return { discussionId, comment: reply };
+      if (reply) {
+        return { discussionId, comment: reply };
+      }
     }
 
     hasNextPage = discussion.comments.pageInfo.hasNextPage;
@@ -241,7 +249,9 @@ function createDiscussionComment(discussionNodeId, body, replyToNodeId) {
  * Fetch alert metadata + locations. Never exposes .secret.
  */
 function cmdFetchAlert(alertNumber) {
-  if (!alertNumber) fail("Usage: fetch-alert <number>");
+  if (!alertNumber) {
+    fail("Usage: fetch-alert <number>");
+  }
 
   const alert = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}?hide_secret=true`]);
 
@@ -280,17 +290,23 @@ function cmdFetchAlert(alertNumber) {
  * Saves full body to a temp file. Prints metadata + file path to stdout.
  */
 function cmdFetchContent(locationJson) {
-  if (!locationJson) fail("Usage: fetch-content '<location-json>'");
+  if (!locationJson) {
+    fail("Usage: fetch-content '<location-json>'");
+  }
   const location = JSON.parse(locationJson);
   const type = location.type;
   const details = location.details;
 
   if (type === "discussion_comment") {
     const commentUrl = details.discussion_comment_url;
-    if (!commentUrl) fail("No discussion_comment_url in location details");
+    if (!commentUrl) {
+      fail("No discussion_comment_url in location details");
+    }
 
     const urlMatch = commentUrl.match(/discussions\/(\d+)#discussioncomment-(\d+)/);
-    if (!urlMatch) fail(`Cannot parse discussion comment URL: ${commentUrl}`);
+    if (!urlMatch) {
+      fail(`Cannot parse discussion comment URL: ${commentUrl}`);
+    }
     const discussionNumber = urlMatch[1];
     const discussionCommentDbId = urlMatch[2];
 
@@ -298,10 +314,11 @@ function cmdFetchContent(locationJson) {
       discussionNumber,
       discussionCommentDbId,
     );
-    if (!comment)
+    if (!comment) {
       fail(
         `Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`,
       );
+    }
 
     const bodyFile = tmpFile("body.md");
     fs.writeFileSync(bodyFile, comment.body || "");
@@ -334,7 +351,9 @@ function cmdFetchContent(locationJson) {
       details.issue_comment_url ||
       details.pull_request_comment_url ||
       details.pull_request_review_comment_url;
-    if (!commentUrl) fail(`No comment URL in location details`);
+    if (!commentUrl) {
+      fail(`No comment URL in location details`);
+    }
 
     const comment = gh(["api", commentUrl]);
     const bodyFile = tmpFile("body.md");
@@ -378,7 +397,9 @@ function cmdFetchContent(locationJson) {
     );
   } else if (type === "issue_body") {
     const issueUrl = details.issue_body_url || details.issue_url;
-    if (!issueUrl) fail("No issue URL in location details");
+    if (!issueUrl) {
+      fail("No issue URL in location details");
+    }
 
     const issue = gh(["api", issueUrl]);
     const bodyFile = tmpFile("body.md");
@@ -414,7 +435,9 @@ function cmdFetchContent(locationJson) {
     );
   } else if (type === "pull_request_body") {
     const prUrl = details.pull_request_body_url || details.pull_request_url;
-    if (!prUrl) fail("No PR URL in location details");
+    if (!prUrl) {
+      fail("No PR URL in location details");
+    }
 
     const pr = gh(["api", prUrl]);
     const bodyFile = tmpFile("body.md");
@@ -490,7 +513,9 @@ function cmdRedactBody(kind, number, bodyFile) {
   if (!kind || !number || !bodyFile) {
     fail("Usage: redact-body <issue|pr> <number> <redacted-body-file>");
   }
-  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+  if (!fs.existsSync(bodyFile)) {
+    fail(`File not found: ${bodyFile}`);
+  }
 
   const endpoint =
     kind === "pr" ? `repos/${REPO}/pulls/${number}` : `repos/${REPO}/issues/${number}`;
@@ -509,8 +534,12 @@ function cmdRedactBodyIfNeeded(kind, number, currentBodyFile, redactedBodyFile, 
       "Usage: redact-body-if-needed <issue|pr> <number> <current-body-file> <redacted-body-file> <result-file>",
     );
   }
-  if (!fs.existsSync(currentBodyFile)) fail(`File not found: ${currentBodyFile}`);
-  if (!fs.existsSync(redactedBodyFile)) fail(`File not found: ${redactedBodyFile}`);
+  if (!fs.existsSync(currentBodyFile)) {
+    fail(`File not found: ${currentBodyFile}`);
+  }
+  if (!fs.existsSync(redactedBodyFile)) {
+    fail(`File not found: ${redactedBodyFile}`);
+  }
 
   const currentBody = fs.readFileSync(currentBodyFile, "utf8");
   const redactedBody = fs.readFileSync(redactedBodyFile, "utf8");
@@ -541,7 +570,9 @@ function cmdRedactBodyIfNeeded(kind, number, currentBodyFile, redactedBodyFile, 
  * Delete a comment (and all its edit history).
  */
 function cmdDeleteComment(commentId) {
-  if (!commentId) fail("Usage: delete-comment <comment-id>");
+  if (!commentId) {
+    fail("Usage: delete-comment <comment-id>");
+  }
   gh(["api", `repos/${REPO}/issues/comments/${commentId}`, "-X", "DELETE"], { json: false });
   console.log(JSON.stringify({ ok: true, deleted_comment_id: Number(commentId) }));
 }
@@ -551,7 +582,9 @@ function cmdDeleteComment(commentId) {
  * Delete a discussion comment via GraphQL (and all its edit history).
  */
 function cmdDeleteDiscussionComment(nodeId) {
-  if (!nodeId) fail("Usage: delete-discussion-comment <node-id>");
+  if (!nodeId) {
+    fail("Usage: delete-discussion-comment <node-id>");
+  }
   const result = ghGraphQL(
     `mutation { deleteDiscussionComment(input: { id: "${nodeId}" }) { comment { id } } }`,
   );
@@ -566,9 +599,12 @@ function cmdDeleteDiscussionComment(nodeId) {
  * Create a new discussion comment via GraphQL.
  */
 function cmdRecreateDiscussionComment(discussionNodeId, bodyFile, replyToNodeId) {
-  if (!discussionNodeId || !bodyFile)
+  if (!discussionNodeId || !bodyFile) {
     fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file> [reply-to-node-id]");
-  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+  }
+  if (!fs.existsSync(bodyFile)) {
+    fail(`File not found: ${bodyFile}`);
+  }
 
   const body = fs.readFileSync(bodyFile, "utf8");
   const newComment = createDiscussionComment(discussionNodeId, body, replyToNodeId);
@@ -586,8 +622,12 @@ function cmdRecreateDiscussionComment(discussionNodeId, bodyFile, replyToNodeId)
  * Create a new comment from a file.
  */
 function cmdRecreateComment(issueNumber, bodyFile) {
-  if (!issueNumber || !bodyFile) fail("Usage: recreate-comment <issue-number> <body-file>");
-  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+  if (!issueNumber || !bodyFile) {
+    fail("Usage: recreate-comment <issue-number> <body-file>");
+  }
+  if (!fs.existsSync(bodyFile)) {
+    fail(`File not found: ${bodyFile}`);
+  }
 
   const result = gh([
     "api",
@@ -715,7 +755,9 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
  * Close a secret scanning alert.
  */
 function cmdResolve(alertNumber, resolution, comment) {
-  if (!alertNumber) fail("Usage: resolve <alert-number> [resolution] [comment]");
+  if (!alertNumber) {
+    fail("Usage: resolve <alert-number> [resolution] [comment]");
+  }
 
   const res = resolution || "revoked";
   const resComment = comment || "Content redacted and author notified to rotate credentials.";
@@ -773,8 +815,12 @@ function cmdListOpen() {
  * Print a formatted summary table from a JSON results file.
  */
 function cmdSummary(jsonFile) {
-  if (!jsonFile) fail("Usage: summary <json-file>");
-  if (!fs.existsSync(jsonFile)) fail(`File not found: ${jsonFile}`);
+  if (!jsonFile) {
+    fail("Usage: summary <json-file>");
+  }
+  if (!fs.existsSync(jsonFile)) {
+    fail(`File not found: ${jsonFile}`);
+  }
 
   const results = JSON.parse(fs.readFileSync(jsonFile, "utf8"));
   const lines = [];

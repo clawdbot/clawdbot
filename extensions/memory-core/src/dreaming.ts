@@ -860,7 +860,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           }
           scheduleStartupCronRetry();
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (disposed) {
             return;
           }
@@ -877,7 +877,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       return;
     }
     runtimeCronReconcileTimer = setInterval(() => {
-      void reconcileManagedDreamingCron({ reason: "runtime" }).catch((err) => {
+      void reconcileManagedDreamingCron({ reason: "runtime" }).catch((err: unknown) => {
         api.logger.error(`memory-core: dreaming cron reconcile failed: ${formatErrorMessage(err)}`);
       });
     }, RUNTIME_CRON_RECONCILE_INTERVAL_MS);

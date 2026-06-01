@@ -439,6 +439,62 @@ describe("googlechatPlugin threading", () => {
       googlechatThreadingAdapter.scopedAccountReplyToMode.resolveReplyToMode(defaultAccount),
     ).toBe("all");
   });
+
+  it("uses the inbound thread resource as the current tool reply target", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+        },
+      },
+    } as OpenClawConfig;
+    const hasRepliedRef = { value: false };
+
+    const context = googlechatThreadingAdapter.buildToolContext({
+      cfg,
+      accountId: "default",
+      context: {
+        To: "googlechat:spaces/AAA",
+        CurrentMessageId: "spaces/AAA/messages/msg-1",
+        ReplyToId: "spaces/AAA/threads/thread-1",
+      },
+      hasRepliedRef,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "spaces/AAA",
+      currentMessageId: "spaces/AAA/threads/thread-1",
+      currentThreadTs: "spaces/AAA/threads/thread-1",
+      replyToMode: "all",
+      hasRepliedRef,
+    });
+  });
+
+  it("does not use message resources as implicit Google Chat reply targets", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+        },
+      },
+    } as OpenClawConfig;
+
+    const context = googlechatThreadingAdapter.buildToolContext({
+      cfg,
+      accountId: "default",
+      context: {
+        To: "googlechat:spaces/AAA",
+        CurrentMessageId: "spaces/AAA/messages/msg-1",
+      },
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "spaces/AAA",
+      replyToMode: "all",
+    });
+    expect(context.currentMessageId).toBeUndefined();
+    expect(context.currentThreadTs).toBeUndefined();
+  });
 });
 
 const resolveTarget = googlechatOutboundAdapter.base.resolveTarget;

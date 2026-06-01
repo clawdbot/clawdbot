@@ -93,6 +93,27 @@ describe("provider-usage.format", () => {
     );
   });
 
+  it("formats provider summary text for balance-only providers", () => {
+    const summary: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          windows: [],
+          summary: "Balance ¥42.50",
+        },
+      ],
+    };
+
+    expect(formatUsageWindowSummary(summary.providers[0], { now })).toBe("Balance ¥42.50");
+    expect(formatUsageSummaryLine(summary, { now })).toBe("📊 Usage: DeepSeek Balance ¥42.50");
+    expect(formatUsageReportLines(summary, { now })).toEqual([
+      "Usage:",
+      "  DeepSeek: Balance ¥42.50",
+    ]);
+  });
+
   it("returns null summary line when providers are errored or have no windows", () => {
     expect(
       formatUsageSummaryLine({
@@ -142,6 +163,23 @@ describe("provider-usage.format", () => {
       } as UsageSummary,
       opts: undefined,
       expected: ["Usage:", "  Codex (Plus): Token expired", "  Xiaomi: no data"],
+    },
+    {
+      name: "formats plan plus summary entries without windows",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "deepseek",
+            displayName: "DeepSeek",
+            windows: [],
+            summary: "Balance ¥0.00",
+            plan: "Unavailable",
+          },
+        ],
+      } as UsageSummary,
+      opts: undefined,
+      expected: ["Usage:", "  DeepSeek (Unavailable): Balance ¥0.00"],
     },
     {
       name: "formats detailed report lines with reset windows",

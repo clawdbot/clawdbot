@@ -154,7 +154,7 @@ export function findCommandByNativeName(
     (command) =>
       command.scope !== "text" &&
       [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
-        (name) => normalizeOptionalLowercaseString(name) === normalized,
+        (nameLocal) => normalizeOptionalLowercaseString(nameLocal) === normalized,
       ),
   );
 }
@@ -178,7 +178,6 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
     }
     if (definition.captureRemaining) {
       values[definition.name] = tokens.slice(index).join(" ");
-      index = tokens.length;
       break;
     }
     values[definition.name] = tokens[index];

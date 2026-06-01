@@ -8,6 +8,7 @@ const clearPendingQueueItemsForRunMock = vi.fn();
 const flushChatQueueForEventMock = vi.fn();
 const handleChatEventMock = vi.fn(() => "idle");
 const handleSessionOperationEventMock = vi.fn();
+const recordFirstAssistantChatTimingMock = vi.fn();
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
@@ -39,6 +40,7 @@ vi.mock("./app-chat.ts", () => ({
   },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
+  recordFirstAssistantChatTiming: recordFirstAssistantChatTimingMock,
   refreshChatAvatar: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
@@ -119,7 +121,6 @@ function createHost() {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,

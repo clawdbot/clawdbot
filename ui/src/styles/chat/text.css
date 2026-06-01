@@ -29,6 +29,14 @@
   margin: 0;
 }
 
+.markdown-plain-text-fallback {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: inherit;
+}
+
 .chat-text :where(table) {
   display: block;
   max-width: 100%;

@@ -6,6 +6,12 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import {
+  basenameFromAnyPath,
+  extnameFromAnyPath,
+  nameFromAnyPath,
+} from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
@@ -14,8 +20,6 @@ import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-h
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { basenameFromAnyPath, extnameFromAnyPath, nameFromAnyPath } from "./file-name.js";
-import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
@@ -283,9 +287,9 @@ async function downloadToFile(
                 size: total,
               });
             })
-            .catch(async (err) => {
+            .catch(async (err: unknown) => {
               await fs.rm(dest, { force: true }).catch(() => {});
-              reject(err);
+              reject(toLintErrorObject(err, "Non-Error rejection"));
             });
         });
         req.on("error", reject);
@@ -392,7 +396,7 @@ async function saveMediaSiblingTempFile(params: {
       mode: MEDIA_FILE_MODE,
       tempPrefix: params.tempPrefix,
       writeTemp: params.writeTemp,
-      resolveFinalPath: (result) => path.join(params.dir, result.id),
+      resolveFinalPath: (resultLocal) => path.join(params.dir, resultLocal.id),
     }),
   );
   return buildSavedMediaResult({ dir: params.dir, ...result });
@@ -501,7 +505,6 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
       return new SaveMediaSourceError("invalid-path", "Media path is outside workspace root", {
         cause: err,
       });
-    case "invalid-path":
     default:
       return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {
         cause: err,
@@ -725,4 +728,18 @@ export async function readMediaBuffer(
 export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

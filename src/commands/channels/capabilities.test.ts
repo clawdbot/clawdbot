@@ -184,6 +184,13 @@ describe("channelsCapabilitiesCommand", () => {
     ]);
   });
 
+  it("prints an empty all-channel report when no channels are configured", async () => {
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    expect(errors).toStrictEqual([]);
+    expect(logs).toStrictEqual([JSON.stringify({ channels: [] }, null, 2)]);
+  });
+
   it("rejects malformed timeouts before capability probes", async () => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
     const plugin = buildPlugin({

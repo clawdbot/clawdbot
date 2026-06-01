@@ -781,7 +781,7 @@ export async function runMantisTelegramDesktopBuilder(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted) {
-      throw remoteRunError;
+      throw toErrorObject(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Telegram desktop builder did not report a live OpenClaw gateway.");
@@ -884,4 +884,8 @@ export async function runMantisTelegramDesktopBuilder(
       });
     }
   }
+}
+
+function toErrorObject(error: unknown): Error {
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }

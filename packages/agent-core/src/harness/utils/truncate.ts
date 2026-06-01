@@ -1,17 +1,8 @@
-/**
- * Shared truncation utilities for tool outputs.
- *
- * Truncation is based on two independent limits - whichever is hit first wins:
- * - Line limit (default: 2000 lines)
- * - Byte limit (default: 50KB)
- *
- * Never returns partial lines (except bash tail truncation edge case).
- */
-
 export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
 
+/** Result metadata for content truncated by line count, byte count, or both. */
 export interface TruncationResult {
   /** The truncated content */
   content: string;
@@ -37,6 +28,7 @@ export interface TruncationResult {
   maxBytes: number;
 }
 
+/** Byte and line ceilings used by the truncation helpers. */
 export interface TruncationOptions {
   /** Maximum number of lines (default: 2000) */
   maxLines?: number;
@@ -134,7 +126,7 @@ function replaceUnpairedSurrogates(content: string): string {
 }
 
 /**
- * Format bytes as human-readable size.
+ * Format byte counts for compact tool-output diagnostics.
  */
 export function formatSize(bytes: number): string {
   if (bytes < 1024) {
@@ -190,11 +182,10 @@ function buildTruncationResult(
 }
 
 /**
- * Truncate content from the head (keep first N lines/bytes).
- * Suitable for file reads where you want to see the beginning.
+ * Keep the beginning of content while respecting independent line and byte ceilings.
  *
- * Never returns partial lines. If first line exceeds byte limit,
- * returns empty content with firstLineExceedsLimit=true.
+ * Head truncation preserves complete lines; a first line that exceeds the byte
+ * ceiling produces empty output and sets firstLineExceedsLimit.
  */
 export function truncateHead(content: string, options: TruncationOptions = {}): TruncationResult {
   const input = resolveTruncationInput(content, options);
@@ -257,10 +248,10 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 }
 
 /**
- * Truncate content from the tail (keep last N lines/bytes).
- * Suitable for bash output where you want to see the end (errors, final results).
+ * Keep the end of content while respecting independent line and byte ceilings.
  *
- * May return partial first line if the last line of original content exceeds byte limit.
+ * Tail truncation preserves recent output for command errors and may keep a
+ * partial first line when one final line alone exceeds the byte ceiling.
  */
 export function truncateTail(content: string, options: TruncationOptions = {}): TruncationResult {
   const input = resolveTruncationInput(content, options);
@@ -366,8 +357,7 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 }
 
 /**
- * Truncate a single line to max characters, adding [truncated] suffix.
- * Used for grep match lines.
+ * Trim a single display line and mark it with the grep-style truncation suffix.
  */
 export function truncateLine(
   line: string,

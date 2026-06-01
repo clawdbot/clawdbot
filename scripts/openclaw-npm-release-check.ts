@@ -648,7 +648,7 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
 
 function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
-  let stdout = "";
+  let stdout;
   try {
     stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
   } catch (error) {

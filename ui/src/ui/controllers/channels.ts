@@ -12,7 +12,9 @@ type LoadChannelsOptions = {
 };
 
 function delay(ms: number): Promise<"timeout"> {
-  return new Promise((resolve) => setTimeout(() => resolve("timeout"), ms));
+  return new Promise((resolve) => {
+    setTimeout(() => resolve("timeout"), ms);
+  });
 }
 
 export async function loadChannels(

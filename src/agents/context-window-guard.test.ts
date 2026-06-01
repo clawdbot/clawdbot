@@ -113,6 +113,61 @@ describe("context-window-guard", () => {
     });
   });
 
+  it("matches bare provider model config ids against provider-scoped runtime model ids", () => {
+    const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "openrouter/tiny",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 936_000,
+    });
+  });
+
+  it("matches provider-scoped config ids against bare runtime model ids", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "openrouter/tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_000_000,
+                contextTokens: 936_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "tiny",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 936_000,
+    });
+  });
+
   it("does not read models config context windows across provider id variants", () => {
     const cfg = {
       models: {

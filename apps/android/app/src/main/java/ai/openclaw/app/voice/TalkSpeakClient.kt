@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** Decoded talk.speak audio bytes plus provider metadata needed for Android playback. */
 internal data class TalkSpeakAudio(
   val bytes: ByteArray,
   val provider: String,
@@ -14,27 +15,33 @@ internal data class TalkSpeakAudio(
   val fileExtension: String?,
 )
 
+/** Result of requesting remote speech synthesis through the gateway. */
 internal sealed interface TalkSpeakResult {
+  /** Remote synthesis returned audio that Android can route to playback. */
   data class Success(
     val audio: TalkSpeakAudio,
   ) : TalkSpeakResult
 
+  /** Provider or config absence allows Android local TTS to handle the reply. */
   data class FallbackToLocal(
     val message: String,
   ) : TalkSpeakResult
 
+  /** Request, payload, or audio errors that should stay visible to the caller. */
   data class Failure(
     val message: String,
   ) : TalkSpeakResult
 }
 
 internal interface TalkSpeechSynthesizing {
+  /** Synthesizes assistant text using optional per-utterance talk directives. */
   suspend fun synthesize(
     text: String,
     directive: TalkDirective?,
   ): TalkSpeakResult
 }
 
+/** Gateway RPC client for talk.speak with local-TTS fallback classification. */
 internal class TalkSpeakClient(
   private val session: GatewaySession? = null,
   private val json: Json = Json { ignoreUnknownKeys = true },
@@ -93,6 +100,8 @@ internal class TalkSpeakClient(
   private fun isFallbackEligible(error: GatewaySession.ErrorShape?): Boolean {
     val reason = error?.details?.reason
     if (reason == null) return true
+    // Only provider/config absence should fall back to Android TTS; payload and
+    // transport errors should stay visible to the caller.
     return reason == "talk_unconfigured" ||
       reason == "talk_provider_unsupported" ||
       reason == "method_unavailable"
@@ -109,6 +118,7 @@ internal class TalkSpeakClient(
   }
 }
 
+/** Gateway talk.speak request payload assembled from text plus directive overrides. */
 @Serializable
 internal data class TalkSpeakRequest(
   val text: String,
@@ -127,6 +137,7 @@ internal data class TalkSpeakRequest(
   val latencyTier: Int? = null,
 ) {
   companion object {
+    /** Converts parsed inline talk directives into the gateway RPC payload shape. */
     fun from(
       text: String,
       directive: TalkDirective?,

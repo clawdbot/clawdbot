@@ -194,9 +194,9 @@ async function pollOpenAICodexDeviceCode(params: {
     }
 
     if (response.status === 403 || response.status === 404) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline));
+      });
       continue;
     }
 

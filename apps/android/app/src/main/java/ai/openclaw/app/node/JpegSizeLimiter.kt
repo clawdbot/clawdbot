@@ -4,6 +4,9 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+/**
+ * Result of a JPEG compression attempt after quality and scale reductions.
+ */
 internal data class JpegSizeLimiterResult(
   val bytes: ByteArray,
   val width: Int,
@@ -11,7 +14,11 @@ internal data class JpegSizeLimiterResult(
   val quality: Int,
 )
 
+/**
+ * Utility that searches quality/scale combinations until a JPEG fits a byte budget.
+ */
 internal object JpegSizeLimiter {
+  /** Compresses with the caller-provided encoder, reducing quality before image dimensions. */
   fun compressToLimit(
     initialWidth: Int,
     initialHeight: Int,

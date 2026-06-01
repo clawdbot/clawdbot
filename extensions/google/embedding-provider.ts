@@ -363,13 +363,13 @@ export async function createGeminiEmbeddingProvider(
 
   const embedBatch = async (
     texts: string[],
-    options?: { signal?: AbortSignal },
+    optionsLocal?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
     return await embedBatchInputs(
       texts.map((text) => ({
         text,
       })),
-      options,
+      optionsLocal,
     );
   };
 

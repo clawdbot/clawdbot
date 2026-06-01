@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
@@ -88,7 +88,6 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "web_search",
   "write",
 ]);
-const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
@@ -287,43 +286,15 @@ type CachedActiveRecallResult = {
 
 type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
 
-type ActiveMemoryToggleStore = {
-  sessions?: Record<string, { disabled?: boolean; updatedAt?: number }>;
+type ActiveMemoryToggleEntry = {
+  sessionKey: string;
+  disabled: true;
+  updatedAt: number;
 };
-
-type AsyncLock = <T>(task: () => Promise<T>) => Promise<T>;
-
-const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
 let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
-
-function createAsyncLock(): AsyncLock {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(task: () => Promise<T>): Promise<T> {
-    const previous = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await task();
-    } finally {
-      release?.();
-    }
-  };
-}
-
-function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Promise<T> {
-  let withLock = toggleStoreLocks.get(statePath);
-  if (!withLock) {
-    withLock = createAsyncLock();
-    toggleStoreLocks.set(statePath, withLock);
-  }
-  return withLock(task);
-}
 
 type ActiveMemoryThinkingLevel =
   | "off"
@@ -634,25 +605,25 @@ function resolveRecallRunChannelContext(params: {
     (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
-  const resolveReturnValue = (params: {
+  const resolveReturnValue = (paramsLocal: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
   }) => {
     const trustedResolvedChannel =
-      params.resolvedChannelStrength === "strong" ? params.resolvedChannel : undefined;
+      paramsLocal.resolvedChannelStrength === "strong" ? paramsLocal.resolvedChannel : undefined;
     return {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
-        params.resolvedChannel,
+        paramsLocal.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
-        params.resolvedChannel,
+        paramsLocal.resolvedChannel,
     };
   };
   const resolvedSessionKey =
@@ -696,54 +667,14 @@ function resolveRecallRunChannelContext(params: {
   }
 }
 
-function resolveToggleStatePath(api: OpenClawPluginApi): string {
-  return path.join(
-    api.runtime.state.resolveStateDir(),
-    "plugins",
-    "active-memory",
-    TOGGLE_STATE_FILE,
-  );
+function activeMemoryToggleKey(sessionKey: string): string {
+  return crypto.createHash("sha256").update(sessionKey, "utf8").digest("hex");
 }
 
-async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleStore> {
-  try {
-    const raw = await fs.readFile(statePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const sessions = (parsed as { sessions?: unknown }).sessions;
-    if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-      return {};
-    }
-    const nextSessions: NonNullable<ActiveMemoryToggleStore["sessions"]> = {};
-    for (const [sessionKey, value] of Object.entries(sessions)) {
-      if (!sessionKey.trim() || !value || typeof value !== "object" || Array.isArray(value)) {
-        continue;
-      }
-      const disabled = (value as { disabled?: unknown }).disabled === true;
-      const updatedAt =
-        typeof (value as { updatedAt?: unknown }).updatedAt === "number"
-          ? (value as { updatedAt: number }).updatedAt
-          : undefined;
-      if (disabled) {
-        nextSessions[sessionKey] = { disabled, updatedAt };
-      }
-    }
-    return Object.keys(nextSessions).length > 0 ? { sessions: nextSessions } : {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    return {};
-  }
-}
-
-async function writeToggleStore(statePath: string, store: ActiveMemoryToggleStore): Promise<void> {
-  await replaceFileAtomic({
-    filePath: statePath,
-    content: `${JSON.stringify(store, null, 2)}\n`,
-    tempPrefix: ".active-memory",
+function openActiveMemoryToggleStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStore<ActiveMemoryToggleEntry>({
+    namespace: "session-toggles",
+    maxEntries: 10_000,
   });
 }
 
@@ -756,8 +687,13 @@ async function isSessionActiveMemoryDisabled(params: {
     return false;
   }
   try {
-    const store = await readToggleStore(resolveToggleStatePath(params.api));
-    return store.sessions?.[sessionKey]?.disabled === true;
+    const store = openActiveMemoryToggleStore(params.api);
+    const key = activeMemoryToggleKey(sessionKey);
+    const stored = await store.lookup(key);
+    if (stored?.disabled === true) {
+      return true;
+    }
+    return false;
   } catch (error) {
     params.api.logger.debug?.(
       `active-memory: failed to read session toggle (${error instanceof Error ? error.message : String(error)})`,
@@ -771,17 +707,16 @@ async function setSessionActiveMemoryDisabled(params: {
   sessionKey: string;
   disabled: boolean;
 }): Promise<void> {
-  const statePath = resolveToggleStatePath(params.api);
-  await withToggleStoreLock(statePath, async () => {
-    const store = await readToggleStore(statePath);
-    const sessions = { ...store.sessions };
-    if (params.disabled) {
-      sessions[params.sessionKey] = { disabled: true, updatedAt: Date.now() };
-    } else {
-      delete sessions[params.sessionKey];
-    }
-    await writeToggleStore(statePath, Object.keys(sessions).length > 0 ? { sessions } : {});
-  });
+  const store = openActiveMemoryToggleStore(params.api);
+  if (params.disabled) {
+    await store.register(activeMemoryToggleKey(params.sessionKey), {
+      sessionKey: params.sessionKey,
+      disabled: true,
+      updatedAt: Date.now(),
+    });
+  } else {
+    await store.delete(activeMemoryToggleKey(params.sessionKey));
+  }
 }
 
 function resolveCommandSessionKey(params: {
@@ -1076,7 +1011,6 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
         "If relevant memory is mostly a stable user preference or recurring habit, lean toward returning it.",
         "If the strongest match is only a one-off historical fact and not a recurring preference or habit, prefer NONE unless the latest user message clearly asks for that fact.",
       ];
-    case "balanced":
     default:
       return [
         "Treat the latest user message as the primary query.",
@@ -1858,7 +1792,9 @@ function watchTerminalMemorySearchResult(params: {
     if (stopped) {
       return;
     }
-    timeoutId = setTimeout(tick, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
+    timeoutId = setTimeout(() => {
+      void tick();
+    }, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
     timeoutId.unref?.();
   };
   const tick = async () => {
@@ -2045,7 +1981,7 @@ async function waitForSubagentPartialTimeoutData(
       (await Promise.race([
         subagentPromise.then(
           () => undefined,
-          (error) => readPartialTimeoutData(error),
+          (error: unknown) => readPartialTimeoutData(error),
         ),
         timeoutPromise,
       ])) ?? {}

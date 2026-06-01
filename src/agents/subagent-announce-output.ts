@@ -511,7 +511,13 @@ function formatTokenCount(value?: number) {
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
   if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
+    const formattedThousands = (value / 1_000).toFixed(1);
+    // Keep the compact stats unit scheme stable when one-decimal rounding
+    // reaches the next unit, e.g. 999_999 -> 1000.0k.
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(value / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
   }
   return String(Math.round(value));
 }
@@ -535,7 +541,9 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestMode()) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
     }
     entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }

@@ -409,8 +409,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       }
     } else if (line === current.delimiter) {
       pendingHeredocs.shift();
-      unquotedHeredocLogicalChunks = [];
-      unquotedHeredocLogicalLength = 0;
       if (pendingHeredocs.length === 0) {
         inHeredocBody = false;
       }
@@ -1114,7 +1112,14 @@ function renderInlineChainSegmentArgv(params: {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "inlineChain" | "skills" | null)[];
+  segmentSatisfiedBy: (
+    | "allowlist"
+    | "safeBins"
+    | "safeBuiltins"
+    | "inlineChain"
+    | "skills"
+    | null
+  )[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;

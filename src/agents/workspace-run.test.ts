@@ -2,7 +2,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveRunWorkspaceDir } from "./workspace-run.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {

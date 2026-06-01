@@ -3,7 +3,7 @@
 // into runDueJob and executeJob. The manual-run path (cron.run() →
 // prepareManualRun + finishPreparedManualRun in src/cron/service/ops.ts) was
 // left without the mark/clear pair, so task-registry.maintenance.ts
-// hasBackingSession (cron branch under isCronRuntimeAuthoritative()=true)
+// hasBackingSession (cron branch under isRuntimeAuthoritative()=true)
 // returns false during manual-run executions and reconciles them as `lost`
 // after TASK_RECONCILE_GRACE_MS (5 min).
 //
@@ -60,7 +60,10 @@ function createManualIsolatedJob(id: string): CronJob {
 
 async function createManualRunHarness(jobId: string) {
   const store = await makeStorePath();
-  await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [createManualIsolatedJob(jobId)] });
+  await writeCronStoreSnapshot({
+    storePath: store.storePath,
+    jobs: [createManualIsolatedJob(jobId)],
+  });
 
   const entered = createDeferred<void>();
   const release = createDeferred<IsolatedRunResult>();
@@ -105,8 +108,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
   });
 
   it("clears the active marker even when the inner agent run throws", async () => {
-    const { cron, entered, release, store } =
-      await createManualRunHarness("manual-isolated-throw");
+    const { cron, entered, release, store } = await createManualRunHarness("manual-isolated-throw");
 
     try {
       await cron.start();

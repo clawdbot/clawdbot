@@ -5,6 +5,7 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
@@ -18,6 +19,10 @@ describe("formatAssistantErrorText", () => {
       errorMessage,
       content: [{ type: "text", text: errorMessage }],
     });
+  const authInvalidTokenCopy =
+    "Authentication failed (provider returned HTTP 401). " +
+    "Your provider token may have expired — try the request again in a moment. " +
+    "If the failure persists, re-authenticate this provider.";
 
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
@@ -111,6 +116,15 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("uses generic user-facing copy for escaped structured provider messages", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
@@ -232,6 +246,11 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
+  it("keeps plain HTTP rate-limit guidance user-facing", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    expect(formatAssistantErrorText(msg)).toContain("24 hours");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
+  });
 
   it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
     const msg = makeAssistantError(
@@ -250,6 +269,7 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("30 seconds");
     expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("30 seconds");
   });
 
   it("returns generic rate limit message when no specific details are present", () => {
@@ -422,6 +442,64 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("sanitizes raw HTTP 401 / Invalid token errors into a re-auth hint (#56197)", () => {
+    const reportedPayload = makeAssistantError('HTTP 401: "Invalid token"');
+    const friendly = formatAssistantErrorText(reportedPayload);
+    expect(friendly).toBe(authInvalidTokenCopy);
+    expect(friendly).not.toContain("Invalid token");
+  });
+
+  it("sanitizes Unauthorized / token-expired variants under HTTP 401", () => {
+    const variants = [
+      "401 Unauthorized",
+      "HTTP 401 Unauthorized: token expired",
+      "HTTP 401: Incorrect API key provided",
+      'status code: 401, message: "expired token"',
+      '401 {"type":"error","error":{"type":"permission_error","message":"Invalid token"}}',
+    ];
+    for (const raw of variants) {
+      const friendly = formatAssistantErrorText(makeAssistantError(raw));
+      expect(friendly, raw).toBe(authInvalidTokenCopy);
+    }
+  });
+
+  it("does not collapse 401 billing / permanent-auth errors into the generic re-auth hint", () => {
+    const billing = makeAssistantError(
+      '{"error":{"code":401,"message":"Key limit exceeded","metadata":{"raw":"insufficient credits"}}}',
+    );
+    const billingFriendly = formatAssistantErrorText(billing);
+    expect(billingFriendly).not.toBe(authInvalidTokenCopy);
+  });
+
+  it("does not claim HTTP 401 for plain 403 errors that fall through to the generic auth reason (#77394 review)", () => {
+    const plain403 = makeAssistantError("403 Forbidden");
+    const friendly = formatAssistantErrorText(plain403);
+    expect(friendly).toBeDefined();
+    expect(friendly).not.toContain("HTTP 401");
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+  });
+
+  it("does not claim HTTP 401 for message-only auth errors with no HTTP status prefix (#77394 review)", () => {
+    const messageOnly = makeAssistantError('{"error":{"code":"invalid_api_key"}}');
+    const friendly = formatAssistantErrorText(messageOnly);
+    expect(friendly).toBeDefined();
+    expect(friendly).not.toContain("HTTP 401");
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+  });
+
+  it("does not rewrite provider-less missing-scope 401 payloads as invalid-token errors", () => {
+    const raw =
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}';
+    const missingScope = makeAssistantMessageFixture({
+      provider: undefined,
+      errorMessage: raw,
+      content: [{ type: "text", text: raw }],
+    });
+    const friendly = formatAssistantErrorText(missingScope);
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+    expect(friendly).toContain("permission_error");
+  });
+
   it("returns a proxy-specific message for proxy misroutes", () => {
     const msg = makeAssistantError("407 Proxy Authentication Required");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -475,6 +553,9 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
 });

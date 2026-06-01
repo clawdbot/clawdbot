@@ -129,21 +129,6 @@
   box-shadow: var(--shadow-xl);
 }
 
-.workboard-game {
-  display: grid;
-  gap: 14px;
-  width: min(420px, calc(100vw - 44px));
-  padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--panel) 96%, var(--bg) 4%);
-  box-shadow: var(--shadow-xl);
-}
-
-.workboard-game:focus {
-  outline: none;
-}
-
 .workboard-modal__header {
   display: flex;
   justify-content: space-between;
@@ -233,127 +218,10 @@
 }
 
 .workboard-toolbar .btn,
-.workboard-draft .btn,
-.workboard-game .btn {
+.workboard-draft .btn {
   min-height: var(--workboard-control-height);
   padding: 0 12px;
   border-radius: var(--workboard-control-radius);
-}
-
-.workboard-game__stats {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.workboard-game__stats span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  border-radius: 6px;
-  padding: 2px 8px;
-  background: color-mix(in srgb, var(--border) 58%, transparent);
-  color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1;
-}
-
-.workboard-game__grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  aspect-ratio: 1;
-  min-width: 0;
-}
-
-.workboard-game__cell {
-  display: grid;
-  place-items: center;
-  min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--bg) 84%, var(--panel) 16%);
-  color: var(--muted);
-  font-size: 0.84rem;
-  font-weight: 750;
-  line-height: 1;
-}
-
-.workboard-game__cell--player {
-  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
-  color: var(--accent);
-}
-
-.workboard-game__cell--goal {
-  border-color: color-mix(in srgb, var(--ok) 48%, var(--border));
-  background: color-mix(in srgb, var(--ok) 14%, var(--bg));
-  color: var(--ok);
-}
-
-.workboard-game__cell--blocker {
-  background:
-    linear-gradient(
-      135deg,
-      transparent 0 45%,
-      color-mix(in srgb, var(--danger) 46%, transparent) 45% 55%,
-      transparent 55% 100%
-    ),
-    color-mix(in srgb, var(--danger) 10%, var(--bg));
-}
-
-.workboard-game__controls {
-  display: grid;
-  grid-template-columns: repeat(3, 38px);
-  grid-template-areas:
-    ". up ."
-    "left down right";
-  justify-content: center;
-  gap: 8px;
-}
-
-.workboard-game__arrow {
-  width: 38px;
-  height: 38px;
-  padding: 0;
-}
-
-.workboard-game__arrow svg {
-  width: 16px;
-  height: 16px;
-}
-
-.workboard-game__arrow--up {
-  grid-area: up;
-}
-
-.workboard-game__arrow--left {
-  grid-area: left;
-}
-
-.workboard-game__controls
-  .workboard-game__arrow:not(
-    .workboard-game__arrow--up,
-    .workboard-game__arrow--left,
-    .workboard-game__arrow--right
-  ) {
-  grid-area: down;
-}
-
-.workboard-game__arrow--right {
-  grid-area: right;
-}
-
-.workboard-game__arrow--up svg {
-  transform: rotate(180deg);
-}
-
-.workboard-game__arrow--left svg {
-  transform: rotate(90deg);
-}
-
-.workboard-game__arrow--right svg {
-  transform: rotate(-90deg);
 }
 
 .workboard-board {
@@ -634,6 +502,142 @@
   font-size: 0.86rem;
 }
 
+.workboard-detail-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 900;
+  display: flex;
+  justify-content: flex-end;
+  width: min(460px, 100vw);
+  pointer-events: none;
+}
+
+.workboard-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+  pointer-events: auto;
+  border-left: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  background: color-mix(in srgb, var(--panel) 98%, var(--bg) 2%);
+  box-shadow: var(--shadow-xl);
+}
+
+.workboard-detail__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workboard-detail__header h2 {
+  margin: 8px 0 0;
+  font-size: 1.04rem;
+  line-height: 1.25;
+}
+
+.workboard-detail__section {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.workboard-detail__section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.workboard-detail__section h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workboard-detail__section p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.workboard-detail__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workboard-detail__row {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+}
+
+.workboard-detail__row span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.workboard-detail__row strong {
+  display: block;
+  min-width: 0;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-detail__list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workboard-detail__list li {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.workboard textarea.input.workboard-detail__note {
+  width: 100%;
+  min-height: 84px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.workboard-detail__actions {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.workboard-detail__actions > .btn {
+  justify-content: center;
+}
+
 @media (max-width: 860px) {
   .workboard-toolbar {
     display: flex;
@@ -661,5 +665,20 @@
 
   .workboard-board {
     grid-auto-columns: minmax(260px, 82vw);
+  }
+
+  .workboard-detail-drawer {
+    inset: auto 0 0;
+    width: 100vw;
+    max-height: 82vh;
+  }
+
+  .workboard-detail {
+    border-top: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+    border-left: 0;
+  }
+
+  .workboard-detail__grid {
+    grid-template-columns: 1fr;
   }
 }

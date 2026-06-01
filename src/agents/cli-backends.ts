@@ -232,6 +232,33 @@ export function listCliRuntimeProviderIds(
   ].toSorted();
 }
 
+export function resolveCliRuntimeCanonicalProvider(params: {
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includeSetupRegistry?: boolean;
+}): string | undefined {
+  const runtime = normalizeBackendKey(params.runtime ?? "");
+  if (!runtime) {
+    return undefined;
+  }
+  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
+    (binding) => binding.runtime === runtime,
+  );
+  if (runtimeBinding) {
+    return runtimeBinding.provider;
+  }
+  if (params.includeSetupRegistry !== true) {
+    return undefined;
+  }
+  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+    backend: runtime,
+    config: params.config,
+    env: params.env,
+  });
+  return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
+}
+
 export function resolveCliRuntimeModelBackendBinding(params: {
   provider: string | undefined;
   runtime: string | undefined;
@@ -253,11 +280,22 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (!includeSetupRegistry) {
     return undefined;
   }
-  return listCliRuntimeModelBackendBindings({
+  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+    backend: runtime,
     config: params.config,
     env: params.env,
-    includeSetupRegistry: true,
-  }).find((binding) => binding.provider === provider && binding.runtime === runtime);
+  });
+  if (!setupBackend) {
+    return undefined;
+  }
+  const setupProvider = resolveCliBackendModelProvider(setupBackend.backend);
+  return setupProvider === provider
+    ? {
+        provider,
+        runtime,
+        ...(setupBackend.pluginId ? { pluginId: setupBackend.pluginId } : {}),
+      }
+    : undefined;
 }
 
 export function isCliRuntimeModelBackendForProvider(params: {

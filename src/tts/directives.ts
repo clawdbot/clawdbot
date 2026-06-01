@@ -342,8 +342,8 @@ export function parseTtsDirectives(
       }
 
       let handled = false;
-      const directiveProviders = getDirectiveProviders();
-      for (const provider of directiveProviders) {
+      const directiveProvidersLocal = getDirectiveProviders();
+      for (const provider of directiveProvidersLocal) {
         const genericSpeakerOverrides = parseGenericSpeakerDirective({
           key,
           value: rawValue,
@@ -387,7 +387,7 @@ export function parseTtsDirectives(
         handled = true;
         break;
       }
-      if (!handled && declaredProviderId && directiveProviders.length > 0) {
+      if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }

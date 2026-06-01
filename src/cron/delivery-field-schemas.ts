@@ -10,21 +10,25 @@ const DeliveryModeFieldSchema = z
   .preprocess(trimLowercaseStringPreprocess, z.enum(["deliver", "announce", "none", "webhook"]))
   .transform((value) => (value === "deliver" ? "announce" : value));
 
+/** Accepts non-empty string fields after trimming and lowercasing user-provided delivery input. */
 export const LowercaseNonEmptyStringFieldSchema = z.preprocess(
   trimLowercaseStringPreprocess,
   z.string().min(1),
 );
 
+/** Accepts non-empty string fields after trimming delivery input without changing case. */
 export const TrimmedNonEmptyStringFieldSchema = z.preprocess(
   trimStringPreprocess,
   z.string().min(1),
 );
 
+/** Accepts delivery thread identifiers as either trimmed strings or finite numeric ids. */
 export const DeliveryThreadIdFieldSchema = z.union([
   TrimmedNonEmptyStringFieldSchema,
   z.number().finite(),
 ]);
 
+/** Accepts non-negative finite timeout seconds from cron delivery payloads. */
 export const TimeoutSecondsFieldSchema = z.number().finite().nonnegative();
 
 type ParsedDeliveryInput = {
@@ -35,6 +39,7 @@ type ParsedDeliveryInput = {
   accountId?: string;
 };
 
+/** Parses optional cron delivery fields while dropping invalid values instead of throwing. */
 export function parseDeliveryInput(input: Record<string, unknown>): ParsedDeliveryInput {
   return {
     mode: parseOptionalField(DeliveryModeFieldSchema, input.mode),
@@ -45,6 +50,7 @@ export function parseDeliveryInput(input: Record<string, unknown>): ParsedDelive
   };
 }
 
+/** Returns a parsed field value only when the supplied schema accepts it. */
 export function parseOptionalField<T>(schema: ZodType<T>, value: unknown): T | undefined {
   const parsed = schema.safeParse(value);
   return parsed.success ? parsed.data : undefined;

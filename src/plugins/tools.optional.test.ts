@@ -40,6 +40,8 @@ let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRun
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
+let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
 function makeTool(name: string) {
   return {
@@ -382,6 +384,34 @@ function createXaiToolManifest() {
   };
 }
 
+function createFeishuToolManifest() {
+  return {
+    id: "feishu",
+    origin: "bundled",
+    enabledByDefault: true,
+    channels: ["feishu"],
+    providers: [],
+    contracts: {
+      tools: ["feishu_doc"],
+    },
+    toolMetadata: {
+      feishu_doc: {
+        configSignals: [
+          {
+            rootPath: "channels.feishu",
+            required: ["appId", "appSecret"],
+          },
+          {
+            rootPath: "channels.feishu",
+            overlayMapPath: "accounts",
+            required: ["appId", "appSecret"],
+          },
+        ],
+      },
+    },
+  };
+}
+
 function expectResolvedToolNames(
   tools: ReturnType<typeof resolvePluginTools>,
   expectedToolNames: readonly string[],
@@ -452,6 +482,8 @@ describe("resolvePluginTools optional tools", () => {
       resetPluginRuntimeStateForTest,
       setActivePluginRegistry,
     } = await import("./runtime.js"));
+    ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
+      await import("./runtime/gateway-request-scope.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
   });
@@ -480,6 +512,213 @@ describe("resolvePluginTools optional tools", () => {
     loggingState.rawConsole = null;
     resetLogger();
     vi.useRealTimers();
+  });
+
+  it("runs plugin tool factories, prepare callbacks, and execute callbacks under the owning plugin scope", async () => {
+    const context = createContext();
+    const observed: Array<{
+      phase: "factory" | "prepare" | "execute";
+      pluginId?: string;
+      pluginSource?: string;
+    }> = [];
+
+    setRegistry(
+      ["multi", "optional-demo"].map((pluginId) => ({
+        pluginId,
+        optional: false,
+        source: `/tmp/${pluginId}.js`,
+        names: [`${pluginId}_tool`],
+        factory: () => {
+          const scope = getPluginRuntimeGatewayRequestScope();
+          observed.push({
+            phase: "factory",
+            pluginId: scope?.pluginId,
+            pluginSource: scope?.pluginSource,
+          });
+          return {
+            name: `${pluginId}_tool`,
+            description: `${pluginId} tool`,
+            parameters: { type: "object", properties: {} },
+            prepareArguments(args: unknown) {
+              const prepareScope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                phase: "prepare",
+                pluginId: prepareScope?.pluginId,
+                pluginSource: prepareScope?.pluginSource,
+              });
+              return args;
+            },
+            async execute() {
+              const executeScope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                phase: "execute",
+                pluginId: executeScope?.pluginId,
+                pluginSource: executeScope?.pluginSource,
+              });
+              return { content: [{ type: "text", text: pluginId }] };
+            },
+          };
+        },
+      })),
+    );
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        pluginId: "outer",
+        pluginSource: "/tmp/outer.js",
+        isWebchatConnect: () => false,
+      },
+      async () => {
+        const tools = resolvePluginTools(createResolveToolsParams({ context }));
+        expect(tools.map((tool) => tool.name)).toEqual(["multi_tool", "optional-demo_tool"]);
+        for (const tool of tools) {
+          await tool.execute(`call-${tool.name}`, tool.prepareArguments?.({}) ?? {}, undefined);
+          expect(getPluginRuntimeGatewayRequestScope()).toMatchObject({
+            pluginId: "outer",
+            pluginSource: "/tmp/outer.js",
+          });
+        }
+      },
+    );
+
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    expect(observed).toEqual([
+      { phase: "factory", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "factory",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+      },
+      { phase: "prepare", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      { phase: "execute", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "prepare",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+      },
+      {
+        phase: "execute",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+      },
+    ]);
+  });
+
+  it("wraps every array tool callback and restores caller scope after errors", async () => {
+    const context = createContext();
+    const observed: Array<{ name: string; pluginId?: string; pluginSource?: string }> = [];
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["array_first", "array_second"],
+        factory: () =>
+          ["array_first", "array_second"].map((name) => ({
+            name,
+            description: `${name} tool`,
+            parameters: { type: "object", properties: {} },
+            prepareArguments() {
+              const scope = getPluginRuntimeGatewayRequestScope();
+              observed.push({ name: `${name}:prepare`, pluginId: scope?.pluginId });
+              if (name === "array_second") {
+                throw new Error("bad args");
+              }
+              return {};
+            },
+            async execute() {
+              const scope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                name,
+                pluginId: scope?.pluginId,
+                pluginSource: scope?.pluginSource,
+              });
+              return { content: [{ type: "text", text: name }] };
+            },
+          })),
+      },
+    ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        pluginId: "outer",
+        pluginSource: "/tmp/outer.js",
+        isWebchatConnect: () => false,
+      },
+      async () => {
+        const tools = resolvePluginTools(createResolveToolsParams({ context }));
+        await tools[0]?.execute("call-first", tools[0].prepareArguments?.({}) ?? {}, undefined);
+        expect(() => tools[1]?.prepareArguments?.({})).toThrow("bad args");
+        expect(getPluginRuntimeGatewayRequestScope()).toMatchObject({
+          pluginId: "outer",
+          pluginSource: "/tmp/outer.js",
+        });
+      },
+    );
+
+    expect(observed).toEqual([
+      { name: "array_first:prepare", pluginId: "multi" },
+      { name: "array_first", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      { name: "array_second:prepare", pluginId: "multi" },
+    ]);
+  });
+
+  it("preserves class-backed plugin tool shape while scoping callbacks", async () => {
+    const context = createContext();
+    const observed: Array<{ phase: string; pluginId?: string }> = [];
+
+    class AccessorTool {
+      #name = "class_tool";
+      #parameters = { type: "object", properties: {} };
+
+      get name() {
+        return this.#name;
+      }
+
+      get description() {
+        return "class backed tool";
+      }
+
+      get parameters() {
+        return this.#parameters;
+      }
+
+      prepareArguments(args: unknown) {
+        observed.push({
+          phase: "prepare",
+          pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+        });
+        return args;
+      }
+
+      async execute() {
+        observed.push({
+          phase: "execute",
+          pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+        });
+        return { content: [{ type: "text", text: "ok" }] };
+      }
+    }
+
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["class_tool"],
+        factory: () => new AccessorTool(),
+      },
+    ]);
+
+    const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
+    expect(tool?.name).toBe("class_tool");
+    expect(Object.getPrototypeOf(tool)).toBe(AccessorTool.prototype);
+    await tool?.execute("call-class", tool.prepareArguments?.({}) ?? {}, undefined);
+
+    expect(observed).toEqual([
+      { phase: "prepare", pluginId: "multi" },
+      { phase: "execute", pluginId: "multi" },
+    ]);
   });
 
   it("does not load plugin-owned tools whose manifest metadata has no available signal", () => {
@@ -511,6 +750,179 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolvePluginTools({
       context: {
         ...createContext(),
+        config,
+      } as never,
+      env: {},
+    });
+
+    expect(tools).toStrictEqual([]);
+    expect(factory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads manifest-gated tools when a named account supplies required config", () => {
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: [...context.config.plugins.allow, "feishu"],
+      },
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_main",
+              appSecret: "secret",
+            },
+          },
+        },
+      },
+    };
+    const factory = vi.fn(() => makeTool("feishu_doc"));
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: createFeishuToolManifest(),
+    });
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "feishu",
+          optional: false,
+          source: "/tmp/feishu.js",
+          names: ["feishu_doc"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...context,
+        config,
+      } as never,
+      env: {},
+    });
+
+    expectResolvedToolNames(tools, ["feishu_doc"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectLoaderSelectedOnlyPluginIds(["feishu"]);
+  });
+
+  it("applies capability overlays before named account config maps", () => {
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: [...context.config.plugins.allow, "account-demo"],
+        entries: {
+          "account-demo": {
+            config: {
+              image: {
+                accounts: {
+                  main: {
+                    apiKey: "secret",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const factory = vi.fn(() => makeTool("account_demo_image"));
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: {
+        id: "account-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["account_demo_image"],
+        },
+        toolMetadata: {
+          account_demo_image: {
+            configSignals: [
+              {
+                rootPath: "plugins.entries.account-demo.config",
+                overlayPath: "image",
+                overlayMapPath: "accounts",
+                required: ["apiKey"],
+              },
+            ],
+          },
+        },
+      },
+    });
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "account-demo",
+          optional: false,
+          source: "/tmp/account-demo.js",
+          names: ["account_demo_image"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...context,
+        config,
+      } as never,
+      env: {},
+    });
+
+    expectResolvedToolNames(tools, ["account_demo_image"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectLoaderSelectedOnlyPluginIds(["account-demo"]);
+  });
+
+  it("does not load manifest-gated tools when named accounts lack required config", () => {
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: [...context.config.plugins.allow, "feishu"],
+      },
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_main",
+            },
+          },
+        },
+      },
+    };
+    const factory = vi.fn(() => makeTool("feishu_doc"));
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: createFeishuToolManifest(),
+    });
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "feishu",
+          optional: false,
+          source: "/tmp/feishu.js",
+          names: ["feishu_doc"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...context,
         config,
       } as never,
       env: {},
@@ -1645,6 +2057,39 @@ describe("resolvePluginTools optional tools", () => {
 
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
       content: [{ type: "text", text: "same" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("executes cached healthy tools when a runtime sibling is malformed", async () => {
+    const factory = vi.fn(() => [
+      createMalformedTool("fuzz_move_angles"),
+      {
+        ...makeTool("mockplugin_status"),
+        async execute() {
+          return { content: [{ type: "text", text: "mock-status-ok" }] };
+        },
+      },
+    ]);
+    setRegistry([
+      {
+        pluginId: "fuzzplugin",
+        optional: false,
+        source: "/tmp/fuzzplugin.js",
+        names: ["mockplugin_status"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+    const statusTool = second.find((tool) => tool.name === "mockplugin_status");
+
+    expectResolvedToolNames(first, ["mockplugin_status"]);
+    expectResolvedToolNames(second, ["mockplugin_status"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    await expect(statusTool?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "mock-status-ok" }],
     });
     expect(factory).toHaveBeenCalledTimes(2);
   });

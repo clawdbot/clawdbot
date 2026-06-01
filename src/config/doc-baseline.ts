@@ -184,16 +184,16 @@ function asSchemaObject(value: unknown): JsonSchemaObject | null {
   return value as JsonSchemaObject;
 }
 
-function splitHintLookupPath(path: string): string[] {
-  const normalized = normalizeBaselinePath(path);
+function splitHintLookupPath(pathResult: string): string[] {
+  const normalized = normalizeBaselinePath(pathResult);
   return normalized ? normalized.split(".").filter(Boolean) : [];
 }
 
 function resolveUiHintMatch(
   uiHints: ConfigSchemaResponse["uiHints"],
-  path: string,
+  pathLocal: string,
 ): ConfigSchemaResponse["uiHints"][string] | undefined {
-  const targetParts = splitHintLookupPath(path);
+  const targetParts = splitHintLookupPath(pathLocal);
   if (targetParts.length === 0) {
     return undefined;
   }
@@ -229,9 +229,9 @@ function resolveUiHintMatch(
   for (const candidate of candidates) {
     let wildcardCount = 0;
     let matches = true;
-    for (let index = 0; index < candidate.parts.length; index += 1) {
-      const hintPart = candidate.parts[index];
-      const targetPart = targetParts[index];
+    for (let indexLocal = 0; indexLocal < candidate.parts.length; indexLocal += 1) {
+      const hintPart = candidate.parts[indexLocal];
+      const targetPart = targetParts[indexLocal];
       if (hintPart === targetPart) {
         continue;
       }

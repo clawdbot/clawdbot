@@ -296,8 +296,6 @@ function resolveCreateEndpoint(req: VideoGenerationRequest): string {
       return "/videos/edits";
     case "extend":
       return "/videos/extensions";
-    case "referenceToVideo":
-    case "generate":
     default:
       return "/videos/generations";
   }

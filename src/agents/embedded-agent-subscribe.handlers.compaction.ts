@@ -74,7 +74,7 @@ export function handleCompactionStart(
           sessionKey: ctx.params.sessionKey,
         },
       )
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.warn(`before_compaction hook failed: ${String(err)}`);
       });
   }
@@ -113,7 +113,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       agentId: ctx.params.agentId,
       configStore: ctx.params.config?.session?.store,
       observedCompactionCount,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
     });
   }
@@ -162,7 +162,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
           },
           { sessionKey: ctx.params.sessionKey },
         )
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
         });
     }

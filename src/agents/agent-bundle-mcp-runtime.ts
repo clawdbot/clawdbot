@@ -201,9 +201,9 @@ function connectWithTimeout(
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -376,14 +376,41 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
       : undefined,
   };
 }
+// Safety net for hung MCP servers, not a tuning parameter.
+const DISPOSE_TIMEOUT_MS = 5_000;
 
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
-  if (session.transportType === "streamable-http") {
-    await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  await Promise.race([
+    (async () => {
+      if (session.transportType === "streamable-http") {
+        await (session.transport as StreamableHTTPClientTransport)
+          .terminateSession()
+          .catch(() => {});
+      }
+      await session.transport.close().catch(() => {});
+      await session.client.close().catch(() => {});
+    })(),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, DISPOSE_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+  if (timedOut) {
+    // Force-close transport and client so a hung terminateSession() DELETE
+    // gets its AbortSignal triggered by the transport teardown.
+    await session.transport.close().catch(() => {});
+    await session.client.close().catch(() => {});
   }
-  await session.transport.close().catch(() => {});
-  await session.client.close().catch(() => {});
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
@@ -1125,3 +1152,17 @@ export const testing = {
   resolveSessionMcpRuntimeIdleTtlMs,
 };
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

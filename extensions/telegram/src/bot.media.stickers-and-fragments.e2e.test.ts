@@ -83,20 +83,6 @@ function resolveActiveScheduledTimersForDelay(
 describe("telegram stickers", () => {
   // Parallel Testbox shards can make these media-path e2e tests slower than standalone local runs.
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
-
-  async function createStaticStickerHarness() {
-    const proxyFetch = vi.fn().mockResolvedValue(
-      new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
-        status: 200,
-        headers: { "content-type": "image/webp" },
-      }),
-    );
-    const handlerContext = await createBotHandlerWithOptions({
-      proxyFetch: proxyFetch as unknown as typeof fetch,
-    });
-    return { proxyFetch, ...handlerContext };
-  }
-
   beforeEach(() => {
     cacheStickerSpy.mockClear();
     getCachedStickerSpy.mockClear();
@@ -286,7 +272,7 @@ describe("telegram text fragments", () => {
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
         );
 
-        expect(replySpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
         const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
@@ -362,9 +348,9 @@ describe("telegram text fragments", () => {
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
         );
 
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
         expect(readAllowFromStore).toHaveBeenCalledWith("telegram", process.env, "default");
         expect(upsertPairingRequest).not.toHaveBeenCalled();
-        expect(replySpy).toHaveBeenCalledTimes(1);
         expect(runtimeError).not.toHaveBeenCalled();
       } finally {
         setTimeoutSpy.mockRestore();
@@ -444,7 +430,7 @@ describe("telegram text fragments", () => {
           clearTimeout(timer.handle);
           await timer.callback();
         }
-        expect(replySpy).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
         const rawBodies = replySpy.mock.calls.map(
           (call) => (call[0] as { RawBody?: string }).RawBody,
         );

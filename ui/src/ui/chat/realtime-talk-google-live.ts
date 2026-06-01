@@ -228,7 +228,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           text: content.inputTranscription.text,
           emitTalkEvent: this.emitTalkEvent,
           onControlResult: (result) => this.stopOutputForSuppressedControl(result),
-          speakControlResult: (message) => this.sendControlSpeechMessage(message),
+          speakControlResult: (messageLocal) => this.sendControlSpeechMessage(messageLocal),
           suppressSpeechForModes: ["cancel"],
         });
       }

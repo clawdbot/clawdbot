@@ -73,12 +73,8 @@ function writePackageFixture(packagePath: string): void {
 
 function writeNodeShim(binDir: string): void {
   const nodePath = path.join(binDir, "node");
-  try {
-    fs.symlinkSync(process.execPath, nodePath);
-  } catch {
-    fs.writeFileSync(nodePath, `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
-    fs.chmodSync(nodePath, 0o755);
-  }
+  fs.writeFileSync(nodePath, `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+  fs.chmodSync(nodePath, 0o755);
 }
 
 function writeBashExecutable(filePath: string, lines: string[]): void {

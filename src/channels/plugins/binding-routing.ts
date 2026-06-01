@@ -189,7 +189,7 @@ export async function ensureConfiguredBindingRouteReady(params: {
         logVerbose(
           `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
         ),
-      (err) =>
+      (err: unknown) =>
         logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
     );
     return { ok: false, error: "Configured binding route ready check timed out" };

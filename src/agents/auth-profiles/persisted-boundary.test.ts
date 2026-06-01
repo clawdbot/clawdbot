@@ -8,14 +8,25 @@ describe("persisted auth profile boundary", () => {
       version: "not-a-version",
       profiles: {
         "openai:default": {
-          type: "api_key",
+          type: "apiKey",
           provider: " OpenAI ",
-          key: 42,
+          apiKey: "demo-openai-key",
           keyRef: { source: "env", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
           email: ["wrong"],
           displayName: "Work",
+        },
+        "openai:legacy-api-key": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-fallback-key",
+          keyRef: { source: "env", id: "" },
         },
         "minimax:default": {
           type: "token",
@@ -70,6 +81,16 @@ describe("persisted auth profile boundary", () => {
           metadata: { account: "acct_123" },
           displayName: "Work",
         },
+        "openai:legacy-api-key": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-fallback-key",
+        },
         "minimax:default": {
           type: "token",
           provider: "minimax",
@@ -98,7 +119,6 @@ describe("persisted auth profile boundary", () => {
       },
     });
     expect(store?.profiles["broken:array"]).toBeUndefined();
-    expect(store?.profiles["openai:default"]).not.toHaveProperty("key");
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
   });
@@ -192,6 +212,36 @@ describe("persisted auth profile boundary", () => {
     });
     expect(merged.order?.anthropic).toEqual([profileId]);
     expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+
+  it("preserves config-only order fallbacks during agent-store merges", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+        order: {
+          openai: ["openai:aws-sdk"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          openai: ["openai:new-login", "openai:aws-sdk"],
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
   });
 
   it("preserves inherited base runtime external profiles during agent-store merges", () => {

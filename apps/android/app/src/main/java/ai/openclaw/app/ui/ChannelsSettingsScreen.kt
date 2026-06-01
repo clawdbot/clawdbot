@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** Settings screen for gateway channel readiness and account status. */
 @Composable
 internal fun ChannelsSettingsScreen(
   viewModel: MainViewModel,
@@ -71,6 +72,8 @@ internal fun ChannelsSettingsScreen(
       }
     }
     if (summary.partial || summary.warnings.isNotEmpty()) {
+      // Partial channel scans still include useful rows; surface the warning
+      // without hiding successful channel status.
       ClawPanel {
         Text(text = channelsWarningText(summary), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
@@ -156,4 +159,5 @@ private fun channelBadge(label: String): String =
     .joinToString("")
     .ifBlank { "C" }
 
+/** Chooses the first gateway warning or a generic partial-scan message. */
 private fun channelsWarningText(summary: GatewayChannelsSummary): String = summary.warnings.firstOrNull()?.takeIf { it.isNotBlank() } ?: "Some channel status checks did not complete."

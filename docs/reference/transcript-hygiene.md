@@ -131,6 +131,8 @@ inter-session user turns that only have provenance metadata.
   reasoning fields such as `reasoning` or `reasoning_content`.
 - Current same-turn tool-call continuations keep the assistant reasoning block
   attached to the tool call until the tool result has been replayed.
+- Custom/self-hosted model entries with `reasoning: true` preserve replayed
+  reasoning metadata.
 - Provider-owned exceptions can opt out when their wire protocol requires
   replayed reasoning metadata.
 

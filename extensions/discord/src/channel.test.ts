@@ -548,8 +548,8 @@ describe("discordPlugin outbound", () => {
         }) => void)
       | undefined;
     probeDiscordMock.mockReturnValue(
-      new Promise((resolve) => {
-        resolveProbe = resolve;
+      new Promise((resolveLocal) => {
+        resolveProbe = resolveLocal;
       }),
     );
     monitorDiscordProviderMock.mockResolvedValue(undefined);

@@ -3,7 +3,6 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runWithModelFallback } from "./model-fallback.js";
 
@@ -73,11 +72,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       fallbacksOverride: contractFallbackOverride,
       run,
-      classifyResult: ({ provider, model, result }) =>
+      classifyResult: ({ provider, model, result: resultValue }) =>
         classifyEmbeddedAgentRunResultForModelFallback({
           provider,
           model,
-          result,
+          result: resultValue,
         }),
       skipAuthProfileRuntime: true,
     });
@@ -187,11 +186,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       fallbacksOverride: contractFallbackOverride,
       run,
-      classifyResult: ({ provider, model, result }) =>
+      classifyResult: ({ provider, model, result: resultLocal }) =>
         classifyEmbeddedAgentRunResultForModelFallback({
           provider,
           model,
-          result,
+          result: resultLocal,
           hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
           hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),

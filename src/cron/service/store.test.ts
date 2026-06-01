@@ -55,19 +55,6 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
     ...params,
   };
 }
-
-function expectWarnedJob(params: { storePath: string; jobId: string; message: string }) {
-  const warnCalls = logger.warn.mock.calls as unknown as Array<
-    [{ storePath?: string; jobId?: string }, string]
-  >;
-  const warning = warnCalls.find(
-    ([metadata, message]) => metadata.jobId === params.jobId && message.includes(params.message),
-  );
-  expect(warning?.[0].storePath).toBe(params.storePath);
-  expect(warning?.[0].jobId).toBe(params.jobId);
-  expect(warning?.[1]).toContain(params.message);
-}
-
 describe("cron service store seam coverage", () => {
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();
@@ -102,7 +89,7 @@ describe("cron service store seam coverage", () => {
     expect(job.delivery?.mode).toBe("announce");
     expect(job.delivery?.channel).toBe("telegram");
     expect(job.delivery?.to).toBe("123");
-    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW);
+    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW + 60_000);
 
     const persistedJob = (await loadCronStore(storePath)).jobs[0];
     const persistedPayload = persistedJob?.payload as
@@ -272,28 +259,6 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
-  });
-
-  it("keeps a force-reloaded legacy string schedule for runtime repair handling", async () => {
-    const { storePath } = await makeStorePath();
-    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
-
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        updatedAtMs: STORE_TEST_NOW,
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
-      schedule: "0 17 * * *",
-    });
-
-    const state = createStoreTestState(storePath);
-    await expect(ensureLoaded(state, { forceReload: true, skipRecompute: true })).resolves.toBe(
-      undefined,
-    );
-
-    const job = findJobOrThrow(state, "reload-cron-expr-job");
-    expect(job.schedule).toBe("0 17 * * *");
-    expect(job.state.nextRunAtMs).toBe(staleNextRunAtMs);
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {

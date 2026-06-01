@@ -5,13 +5,13 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { asRecord } from "@openclaw/acp-core/record-shared";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { asRecord } from "./record-shared.js";
 
 type GatewayAttachment = {
   type: string;

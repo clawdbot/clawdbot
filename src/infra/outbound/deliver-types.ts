@@ -1,6 +1,7 @@
 import type { MessageReceipt } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
+/** Successful channel send result normalized for core delivery accounting. */
 export type OutboundDeliveryResult = {
   channel: Exclude<ChannelId, "none">;
   messageId: string;
@@ -16,6 +17,7 @@ export type OutboundDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
+/** Reason a payload was intentionally not sent after normalization or hooks. */
 export type OutboundPayloadDeliverySuppressionReason =
   | "cancelled_by_message_sending_hook"
   | "cancelled_by_reply_payload_sending_hook"
@@ -24,8 +26,10 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "no_visible_payload"
   | "adapter_returned_no_identity";
 
+/** Delivery phase where a failure occurred. */
 export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
 
+/** Per-payload delivery status emitted to callers and channel send summaries. */
 export type OutboundPayloadDeliveryOutcome =
   | {
       index: number;
@@ -49,6 +53,7 @@ export type OutboundPayloadDeliveryOutcome =
       stage: OutboundDeliveryFailureStage;
     };
 
+/** Error carrying partial delivery results when an outbound send fails mid-batch. */
 export class OutboundDeliveryError extends Error {
   readonly results: OutboundDeliveryResult[];
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
@@ -73,6 +78,7 @@ export class OutboundDeliveryError extends Error {
   }
 }
 
+/** Narrows unknown failures to outbound delivery errors with partial-send metadata. */
 export function isOutboundDeliveryError(error: unknown): error is OutboundDeliveryError {
   return error instanceof OutboundDeliveryError;
 }

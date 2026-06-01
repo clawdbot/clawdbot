@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeForLog, splitGraphemes, stripAnsi, visibleWidth } from "./ansi.js";
+import {
+  sanitizeForLog,
+  splitGraphemes,
+  stripAnsi,
+  truncateToVisibleWidth,
+  visibleWidth,
+} from "./ansi.js";
 
 describe("terminal ansi helpers", () => {
   it("strips ANSI and OSC8 sequences", () => {
@@ -33,5 +39,24 @@ describe("terminal ansi helpers", () => {
   it("keeps emoji zwj sequences as single graphemes", () => {
     expect(splitGraphemes("👨‍👩‍👧‍👦")).toEqual(["👨‍👩‍👧‍👦"]);
     expect(visibleWidth("👨‍👩‍👧‍👦")).toBe(2);
+  });
+
+  it("truncates to a visible-width budget without splitting wide graphemes", () => {
+    expect(truncateToVisibleWidth("abc", 2)).toBe("ab");
+    expect(truncateToVisibleWidth("abc", 5)).toBe("abc");
+    expect(truncateToVisibleWidth("anything", 0)).toBe("");
+    // A wide grapheme that cannot fit the remaining budget is dropped whole,
+    // never emitted half-width, so the result never exceeds the budget.
+    expect(truncateToVisibleWidth("表文", 2)).toBe("表");
+    expect(truncateToVisibleWidth("表", 1)).toBe("");
+    expect(visibleWidth(truncateToVisibleWidth("📸📸", 1))).toBeLessThanOrEqual(1);
+  });
+
+  it("preserves ANSI sequences when truncating styled text", () => {
+    // Trailing reset is retained even when its grapheme is dropped, so the cell
+    // does not bleed styling into surrounding padding.
+    expect(truncateToVisibleWidth("[31mab[0m", 1)).toBe("[31ma[0m");
+    expect(truncateToVisibleWidth("[31m表文[0m", 1)).toBe("[31m[0m");
+    expect(visibleWidth(truncateToVisibleWidth("[31m表文[0m", 1))).toBe(0);
   });
 });

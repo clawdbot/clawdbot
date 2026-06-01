@@ -56,6 +56,9 @@ export type SubagentCompletionDeliveryState = {
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;
+  steeringLeaseId?: string;
+  steeringLeasedAt?: number;
+  steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "retry-limit" | "expiry";
   discardedAt?: number;
@@ -68,7 +71,12 @@ export type SubagentCompletionDeliveryState = {
     status?: string;
     lastError?: string | null;
   };
-  lastDropReason?: "queue_cap" | "parent_run_ended" | "sink_unavailable" | "dedupe";
+  lastDropReason?:
+    | "queue_cap"
+    | "parent_run_ended"
+    | "sink_unavailable"
+    | "dedupe"
+    | "waiting_for_requester_turn";
 };
 
 export type SubagentRunRecord = {

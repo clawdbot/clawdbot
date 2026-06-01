@@ -2,6 +2,7 @@
 summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/Signal/Slack/Telegram/WhatsApp/Zalo)"
 read_when:
   - Changing group chat behavior or mention gating
+  - Scoping mentionPatterns to specific group conversations
 title: "Groups"
 sidebarTitle: "Groups"
 ---
@@ -47,13 +48,17 @@ For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visi
 
 Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best for group rooms backed by latest-generation, tool-reliable models such as GPT 5.5. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
 
+Use `"automatic"` for weaker models or runtimes that do not reliably understand tool-only delivery. In automatic mode, the agent's final assistant text is the visible source reply path, so a model that cannot consistently call `message(action=send)` can still answer normally.
+
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
 
 For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
-This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
+This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, the prompt does not define a `NO_REPLY` contract. Doing nothing visible simply means not calling the message tool.
+
+Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
@@ -358,10 +363,91 @@ Replying to a bot message counts as an implicit mention when the channel support
 }
 ```
 
+## Scope configured mention patterns
+
+Configured `mentionPatterns` are regex fallback triggers. Use them when the
+platform does not expose a native bot mention, or when you want plain text such
+as `openclaw:` to count as a mention. Native platform mentions are separate:
+when Discord, Slack, Telegram, Matrix, or another channel can prove the message
+explicitly mentioned the bot, that native mention still triggers even if
+configured regex patterns are denied.
+
+By default, configured mention patterns apply everywhere that channel passes
+provider and conversation facts into mention detection. To keep broad patterns
+from waking the agent in every group, scope them per channel with
+`channels.<channel>.mentionPatterns`.
+
+Use `mode: "deny"` when regex mention patterns should be off by default for a
+channel, then opt in specific rooms with `allowIn`:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      mentionPatterns: ["\\bopenclaw\\b", "\\bops bot\\b"],
+    },
+  },
+  channels: {
+    slack: {
+      mentionPatterns: {
+        mode: "deny",
+        allowIn: ["C0123OPS"],
+      },
+    },
+  },
+}
+```
+
+Use the default `mode: "allow"` (or omit `mode`) when regex mention patterns
+should apply broadly, then turn them off in noisy rooms with `denyIn`:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      mentionPatterns: ["\\bopenclaw\\b"],
+    },
+  },
+  channels: {
+    telegram: {
+      mentionPatterns: {
+        denyIn: ["-1001234567890", "-1001234567890:topic:42"],
+      },
+    },
+  },
+}
+```
+
+Policy resolution:
+
+| Field           | Effect                                                                                                                |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `mode: "allow"` | Regex mention patterns are enabled unless the conversation ID is in `denyIn`. This is the default.                    |
+| `mode: "deny"`  | Regex mention patterns are disabled unless the conversation ID is in `allowIn`.                                       |
+| `allowIn`       | Conversation IDs where regex mention patterns are enabled in deny mode.                                               |
+| `denyIn`        | Conversation IDs where regex mention patterns are disabled. `denyIn` wins over `allowIn` if both include the same ID. |
+
+Supported scoped regex policy today:
+
+| Channel  | IDs used in `allowIn` / `denyIn`                             |
+| -------- | ------------------------------------------------------------ |
+| Discord  | Discord channel IDs.                                         |
+| Matrix   | Matrix room IDs.                                             |
+| Slack    | Slack channel IDs.                                           |
+| Telegram | Group chat IDs, or `chatId:topic:threadId` for forum topics. |
+| WhatsApp | WhatsApp conversation IDs such as `123@g.us`.                |
+
+Account-level channel configs can set the same policy under
+`channels.<channel>.accounts.<accountId>.mentionPatterns` when that channel
+supports multiple accounts. Account policy takes precedence over the top-level
+channel policy for that account.
+
 <AccordionGroup>
   <Accordion title="Mention gating notes">
     - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored.
-    - Surfaces that provide explicit mentions still pass; patterns are a fallback.
+    - Surfaces that provide explicit mentions still pass; configured regex patterns are a fallback.
+    - `channels.<channel>.mentionPatterns.mode: "deny"` disables configured mention patterns by default for that channel; opt selected conversations back in with `allowIn`.
+    - `channels.<channel>.mentionPatterns.denyIn` disables configured mention patterns for specific conversation IDs while native platform @mentions still pass.
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.

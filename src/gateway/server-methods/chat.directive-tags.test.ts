@@ -133,10 +133,17 @@ vi.mock("../session-utils.js", async () => {
     ...original,
     loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
       mockState.loadSessionEntryCalls.push({ rawKey, opts });
+      const canonicalKey =
+        typeof mockState.sessionEntry.canonicalKey === "string"
+          ? mockState.sessionEntry.canonicalKey
+          : rawKey || "main";
+      const entry = {
+        sessionId: mockState.sessionId,
+        sessionFile: mockState.transcriptPath,
+        ...mockState.sessionEntry,
+      };
       return {
-        ...(typeof mockState.sessionEntry.canonicalKey === "string"
-          ? { canonicalKey: mockState.sessionEntry.canonicalKey }
-          : {}),
+        ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
         cfg: {
           ...mockState.config,
           session: {
@@ -145,15 +152,9 @@ vi.mock("../session-utils.js", async () => {
           },
         },
         storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        entry: {
-          sessionId: mockState.sessionId,
-          sessionFile: mockState.transcriptPath,
-          ...mockState.sessionEntry,
-        },
-        canonicalKey:
-          typeof mockState.sessionEntry.canonicalKey === "string"
-            ? mockState.sessionEntry.canonicalKey
-            : rawKey || "main",
+        store: { [canonicalKey]: entry },
+        entry,
+        canonicalKey,
       };
     },
   };
@@ -4982,9 +4983,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("falls back to gateway user persistence when successful runtime persistence fails", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-success-runtime-persist-failed-");
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0),
-    );
+    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
+    });
     mockState.finalPayload = { text: "agent still answered" };
     const respond = vi.fn();
     const context = createChatContext();

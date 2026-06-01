@@ -105,6 +105,19 @@ export type TuiModelChoice = {
   reasoning?: boolean;
 };
 
+export type TuiSessionMutationResult = {
+  ok?: boolean;
+  key?: string;
+  entry?: Partial<SessionInfo> & {
+    sessionId?: string;
+    updatedAt?: number | null;
+  };
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
+  };
+};
+
 export type TuiBackend = {
   connection: {
     url: string;
@@ -131,7 +144,7 @@ export type TuiBackend = {
     key: string,
     reason?: "new" | "reset",
     opts?: { agentId?: string },
-  ) => Promise<unknown>;
+  ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;

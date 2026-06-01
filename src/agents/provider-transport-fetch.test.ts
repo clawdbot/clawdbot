@@ -20,27 +20,60 @@ const {
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,
-} = vi.hoisted(() => ({
-  buildProviderRequestDispatcherPolicyMock: vi.fn<
-    (_request?: unknown) => { mode: "direct" } | undefined
-  >(() => undefined),
-  fetchWithSsrFGuardMock: vi.fn(),
-  ensureModelProviderLocalServiceMock: vi.fn(),
-  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
-    ...current,
-    ...overrides,
-  })),
-  resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
-    () => ({
-      allowPrivateNetwork: false,
-    }),
-  ),
-  shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
-  withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  })),
-}));
+  managedStreamCleanupRegistrations,
+} = vi.hoisted(() => {
+  const managedStreamCleanupRegistrationsLocal: Array<{
+    callback: (held: { finalize: () => Promise<void> }) => void;
+    held: { finalize: () => Promise<void> };
+    token: object;
+  }> = [];
+
+  class MockFinalizationRegistry {
+    constructor(private callback: (held: { finalize: () => Promise<void> }) => void) {}
+
+    register(_target: object, held: { finalize: () => Promise<void> }, token?: object) {
+      managedStreamCleanupRegistrationsLocal.push({
+        callback: this.callback,
+        held,
+        token: token ?? {},
+      });
+    }
+
+    unregister(token: object) {
+      const index = managedStreamCleanupRegistrationsLocal.findIndex(
+        (entry) => entry.token === token,
+      );
+      if (index >= 0) {
+        managedStreamCleanupRegistrationsLocal.splice(index, 1);
+      }
+    }
+  }
+
+  vi.stubGlobal("FinalizationRegistry", MockFinalizationRegistry);
+
+  return {
+    buildProviderRequestDispatcherPolicyMock: vi.fn<
+      (_request?: unknown) => { mode: "direct" } | undefined
+    >(() => undefined),
+    fetchWithSsrFGuardMock: vi.fn(),
+    ensureModelProviderLocalServiceMock: vi.fn(),
+    mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
+      ...current,
+      ...overrides,
+    })),
+    resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
+      () => ({
+        allowPrivateNetwork: false,
+      }),
+    ),
+    shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
+    withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    })),
+    managedStreamCleanupRegistrations: managedStreamCleanupRegistrationsLocal,
+  };
+});
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -82,6 +115,7 @@ function latestTrustedEnvProxyParams(): Record<string, unknown> {
 
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
+    managedStreamCleanupRegistrations.length = 0;
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://api.openai.com/v1/responses",
@@ -149,6 +183,47 @@ describe("buildGuardedModelFetch", () => {
     expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("releases guarded fetch slots when streamed bodies are abandoned", async () => {
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("chunk-1"));
+            controller.enqueue(encoder.encode("chunk-2"));
+          },
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://api.anthropic.com/v1/messages",
+      release,
+    });
+    const model = {
+      id: "claude-sonnet-4-6",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    } as unknown as Model<"anthropic-messages">;
+
+    const fetcher = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
+    const response = await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"stream":true}',
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const firstChunk = await reader?.read();
+    expect(firstChunk?.done).toBe(false);
+    const registration = managedStreamCleanupRegistrations.at(-1);
+    expect(registration).toBeDefined();
+    await registration?.held.finalize();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(managedStreamCleanupRegistrations).toHaveLength(0);
   });
 
   it("passes model request headers to local service health probes", async () => {

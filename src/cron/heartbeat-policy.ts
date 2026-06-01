@@ -10,6 +10,7 @@ type HeartbeatDeliveryPayload = {
   channelData?: unknown;
 };
 
+/** Returns whether delivery output contains only heartbeat acknowledgement text. */
 export function shouldSkipHeartbeatOnlyDelivery(
   payloads: HeartbeatDeliveryPayload[],
   ackMaxChars: number,
@@ -32,6 +33,7 @@ export function shouldSkipHeartbeatOnlyDelivery(
   });
 }
 
+/** Returns whether an undelivered cron main-summary system event should be queued. */
 export function shouldEnqueueCronMainSummary(params: {
   summaryText: string | undefined;
   deliveryRequested: boolean;

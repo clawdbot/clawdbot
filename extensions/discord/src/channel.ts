@@ -314,8 +314,22 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       messaging: {
         targetPrefixes: ["discord"],
         normalizeTarget: normalizeDiscordMessagingTarget,
-        resolveInboundConversation: ({ from, to, conversationId, isGroup }) =>
-          resolveDiscordInboundConversation({ from, to, conversationId, isGroup }),
+        resolveInboundConversation: ({
+          from,
+          to,
+          conversationId,
+          threadId,
+          threadParentId,
+          isGroup,
+        }) =>
+          resolveDiscordInboundConversation({
+            from,
+            to,
+            conversationId,
+            threadId,
+            threadParentId,
+            isGroup,
+          }),
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
@@ -380,10 +394,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               token: account.token,
               inputs,
               missingTokenNote: "missing Discord token",
-              resolveWithToken: async ({ token, inputs }) =>
+              resolveWithToken: async ({ token, inputs: inputsValue }) =>
                 (await loadDiscordResolveChannelsModule()).resolveDiscordChannelAllowlist({
                   token,
-                  entries: inputs,
+                  entries: inputsValue,
                 }),
               mapResolved: (entry) => ({
                 input: entry.input,
@@ -401,10 +415,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             token: account.token,
             inputs,
             missingTokenNote: "missing Discord token",
-            resolveWithToken: async ({ token, inputs }) =>
+            resolveWithToken: async ({ token, inputs: inputsLocal }) =>
               (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({
                 token,
-                entries: inputs,
+                entries: inputsLocal,
               }),
             mapResolved: (entry) => ({
               input: entry.input,

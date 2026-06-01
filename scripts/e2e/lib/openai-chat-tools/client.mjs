@@ -123,7 +123,7 @@ if (toolCall?.type !== "function" || toolCall?.function?.name !== "get_weather")
   throw new Error(`unexpected tool call: ${JSON.stringify(toolCall)}`);
 }
 
-let args = {};
+let args;
 try {
   args = JSON.parse(toolCall.function.arguments || "{}");
 } catch {

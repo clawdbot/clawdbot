@@ -775,7 +775,7 @@ describe("session history HTTP endpoints", () => {
     await seedSession({ text: "scope-guarded history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");
-    const { server, ws, port, envSnapshot } = started;
+    const { server, ws, port: _port, envSnapshot } = started;
     try {
       const connect = await connectReq(ws, {
         token: "test-gateway-token-1234567890",

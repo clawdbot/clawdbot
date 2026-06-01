@@ -370,7 +370,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     // Remote-user verifications are only auto-accepted. The human-operated
     // client must explicitly choose "Verify by emoji" so we do not race a
     // second SAS start from the bot side and end up with mismatched keys.
-    crypto.on(CryptoEvent.VerificationRequestReceived, async (request) => {
+    crypto.on(CryptoEvent.VerificationRequestReceived, (request) => {
       const verificationRequest = request as MatrixVerificationRequestLike;
       try {
         this.deps.verificationManager.trackVerificationRequest(verificationRequest);

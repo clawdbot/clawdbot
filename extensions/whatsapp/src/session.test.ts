@@ -47,7 +47,9 @@ let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomic
 let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
 
 async function flushCredsUpdate() {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function emitCredsUpdate(authDir?: string) {

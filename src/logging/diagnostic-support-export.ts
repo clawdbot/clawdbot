@@ -99,6 +99,10 @@ type ConfigShape = {
     authMode?: unknown;
     tailscale?: unknown;
   };
+  discovery?: {
+    mdnsMode?: unknown;
+    bonjourEnvOverride: "unset" | "force-enabled" | "force-disabled" | "unrecognized";
+  };
   channels?: {
     count: number;
     ids: string[];
@@ -134,6 +138,21 @@ type FailedSanitizedLogTail = Omit<IncludedSanitizedLogTail, "status"> & {
 };
 
 type SanitizedLogTail = IncludedSanitizedLogTail | FailedSanitizedLogTail;
+
+type BonjourLogSummary = {
+  count: number;
+  warnings: number;
+  last?: {
+    time?: string;
+    level?: string;
+    kind: "disabled" | "restarted" | "ciao_suppressed" | "conflict" | "watchdog" | "other";
+  };
+  flags: {
+    disabled: boolean;
+    restarted: boolean;
+    ciaoSuppressed: boolean;
+  };
+};
 
 type SupportSnapshotStatus =
   | {
@@ -180,14 +199,44 @@ function safeScalar(value: unknown): unknown {
   return undefined;
 }
 
+function resolveBonjourEnvOverride(
+  env: NodeJS.ProcessEnv,
+): NonNullable<ConfigShape["discovery"]>["bonjourEnvOverride"] {
+  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim().toLowerCase();
+  if (!raw) {
+    return "unset";
+  }
+  switch (raw) {
+    case "1":
+    case "true":
+    case "yes":
+    case "on":
+      return "force-disabled";
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return "force-enabled";
+    default:
+      return "unrecognized";
+  }
+}
+
 function sortedObjectKeys(value: unknown): string[] {
   return Object.keys(asOptionalRecord(value) ?? {}).toSorted((a, b) => a.localeCompare(b));
 }
 
-function sanitizeConfigShape(parsed: unknown, configPath: string, stat: fs.Stats): ConfigShape {
+function sanitizeConfigShape(
+  parsed: unknown,
+  configPath: string,
+  stat: fs.Stats,
+  env: NodeJS.ProcessEnv,
+): ConfigShape {
   const root = asOptionalRecord(parsed) ?? {};
   const gateway = asOptionalRecord(root.gateway);
   const auth = asOptionalRecord(gateway?.auth);
+  const discovery = asOptionalRecord(root.discovery);
+  const mdns = asOptionalRecord(discovery?.mdns);
   const channels = asOptionalRecord(root.channels);
   const plugins = asOptionalRecord(root.plugins);
   const agents = Array.isArray(root.agents) ? root.agents : undefined;
@@ -208,6 +257,14 @@ function sanitizeConfigShape(parsed: unknown, configPath: string, stat: fs.Stats
       port: safeScalar(gateway.port),
       authMode: safeScalar(auth?.mode),
       tailscale: safeScalar(gateway.tailscale),
+    };
+  }
+
+  const bonjourEnvOverride = resolveBonjourEnvOverride(env);
+  if (mdns || bonjourEnvOverride !== "unset") {
+    shape.discovery = {
+      mdnsMode: safeScalar(mdns?.mode),
+      bonjourEnvOverride,
     };
   }
 
@@ -293,7 +350,7 @@ function readConfigExport(options: {
       };
     }
     return {
-      shape: sanitizeConfigShape(parsed.parsed, redactedConfigPath, stat),
+      shape: sanitizeConfigShape(parsed.parsed, redactedConfigPath, stat, options.env),
       sanitized: sanitizeConfigDetails(parsed.parsed, options),
     };
   } catch (error) {
@@ -397,6 +454,73 @@ function failedLogTail(error: unknown, redaction: SupportRedactionContext): Sani
   };
 }
 
+function logString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function isBonjourLogRecord(record: Record<string, unknown>): boolean {
+  const sourceFields = ["subsystem", "logger", "module", "pluginId", "component"];
+  if (sourceFields.some((field) => logString(record, field)?.toLowerCase().includes("bonjour"))) {
+    return true;
+  }
+  return logString(record, "msg")?.toLowerCase().startsWith("bonjour:") === true;
+}
+
+function classifyBonjourLogKind(
+  normalizedMsg: string,
+): NonNullable<BonjourLogSummary["last"]>["kind"] {
+  if (normalizedMsg.includes("disabling")) {
+    return "disabled";
+  }
+  if (normalizedMsg.includes("restarting")) {
+    return "restarted";
+  }
+  if (normalizedMsg.includes("suppressing ciao")) {
+    return "ciao_suppressed";
+  }
+  if (normalizedMsg.includes("conflict")) {
+    return "conflict";
+  }
+  if (normalizedMsg.includes("watchdog")) {
+    return "watchdog";
+  }
+  return "other";
+}
+
+function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
+  const summary: BonjourLogSummary = {
+    count: 0,
+    warnings: 0,
+    flags: {
+      disabled: false,
+      restarted: false,
+      ciaoSuppressed: false,
+    },
+  };
+  for (const record of logTail.lines) {
+    if (!isBonjourLogRecord(record)) {
+      continue;
+    }
+    summary.count += 1;
+    const level = logString(record, "level")?.toLowerCase();
+    if (level === "warn" || level === "error") {
+      summary.warnings += 1;
+    }
+    const msg = logString(record, "msg");
+    const normalizedMsg = msg?.toLowerCase() ?? "";
+    summary.flags.disabled ||= normalizedMsg.includes("disabling");
+    summary.flags.restarted ||= normalizedMsg.includes("restarting");
+    summary.flags.ciaoSuppressed ||= normalizedMsg.includes("suppressing ciao");
+    summary.last = {
+      ...(logString(record, "time") ? { time: logString(record, "time") } : {}),
+      ...(logString(record, "level") ? { level: logString(record, "level") } : {}),
+      kind: classifyBonjourLogKind(normalizedMsg),
+    };
+  }
+  return summary;
+}
+
 async function collectSupportLogTail(params: {
   readLogTail: typeof readConfiguredLogTail;
   limit: number;
@@ -492,7 +616,7 @@ function renderSummary(params: {
     "## Maintainer Quick Read",
     "",
     "- `manifest.json`: file inventory and privacy notes",
-    "- `diagnostics.json`: top-level summary of config, logs, stability, status, and health",
+    "- `diagnostics.json`: top-level summary of config, logs, Bonjour/mDNS, stability, status, and health",
     "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
     "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
     "- `health/gateway-health.json`: sanitized Gateway health snapshot",
@@ -596,6 +720,7 @@ export async function buildDiagnosticSupportExport(
       reset: logTail.reset,
     },
     stability: describeStabilityForDiagnostics(stability, redaction),
+    bonjour: summarizeBonjourLogs(logTail),
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
   };

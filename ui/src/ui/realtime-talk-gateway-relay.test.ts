@@ -108,7 +108,7 @@ function requestCallsFor(
   client: RealtimeTalkTransportContext["client"],
   method: string,
 ): Array<Parameters<RealtimeTalkTransportContext["client"]["request"]>> {
-  return vi.mocked(client.request).mock.calls.filter((call) => call[0] === method);
+  return vi.mocked(client["request"]).mock.calls.filter((call) => call[0] === method);
 }
 
 describe("GatewayRelayRealtimeTalkTransport", () => {
@@ -218,7 +218,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     expect(requestCallsFor(client, "talk.session.cancelOutput")).toHaveLength(0);
     const appendCall = vi
-      .mocked(client.request)
+      .mocked(client["request"])
       .mock.calls.find((call) => call[0] === "talk.session.appendAudio");
     expect((appendCall?.[1] as { sessionId?: string } | undefined)?.sessionId).toBe("relay-1");
     transport.stop();
@@ -227,7 +227,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("stops microphone pumping when the relay rejects appended audio", async () => {
     const onStatus = vi.fn();
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.session.appendAudio") {
         throw new Error("Unknown realtime relay session");
       }
@@ -248,10 +248,10 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
 
     const appendCalls = vi
-      .mocked(client.request)
+      .mocked(client["request"])
       .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
     const closeCalls = vi
-      .mocked(client.request)
+      .mocked(client["request"])
       .mock.calls.filter(([method]) => method === "talk.session.close");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(1);
@@ -281,10 +281,10 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
 
     const appendCalls = vi
-      .mocked(client.request)
+      .mocked(client["request"])
       .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
     const closeCalls = vi
-      .mocked(client.request)
+      .mocked(client["request"])
       .mock.calls.filter(([method]) => method === "talk.session.close");
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime relay closed");
     expect(appendCalls).toHaveLength(1);
@@ -347,7 +347,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(speech);
 
     const cancelCalls = vi
-      .mocked(client.request)
+      .mocked(client["request"])
       .mock.calls.filter(([method]) => method === "talk.session.cancelOutput");
     expect(cancelCalls).toEqual([
       [
@@ -364,7 +364,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("treats aborted consult chat events as cancellation", async () => {
     const onStatus = vi.fn();
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -389,7 +389,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
     await vi.waitFor(() => {
       const toolCall = vi
-        .mocked(client.request)
+        .mocked(client["request"])
         .mock.calls.find((call) => call[0] === "talk.client.toolCall");
       const params = toolCall?.[1] as { callId?: string; relaySessionId?: string } | undefined;
       expect(params?.callId).toBe("call-1");
@@ -405,7 +405,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
-    expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+    expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
       sessionId: "relay-1",
       callId: "call-1",
       result: {
@@ -418,7 +418,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("submits an interim working result for forced consult tool calls", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -444,7 +444,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+      expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
         sessionId: "relay-1",
         callId: "call-1",
         result: {
@@ -461,7 +461,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("treats server relay tool results as terminal for active consult calls", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -525,7 +525,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
         sessionKey: "main",
         runId: "run-1",
       }),
@@ -536,7 +536,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("submits a provider cancel result when a relay consult aborts without a server result", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -570,7 +570,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+      expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
         sessionId: "relay-1",
         callId: "call-1",
         result: {
@@ -584,7 +584,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("aborts in-flight consults when the relay transport stops", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method, params) => {
+    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
       if (method === "chat.abort") {
         expect(params).toEqual({ sessionKey: "main", runId: "run-1" });
         return { ok: true, aborted: true };
@@ -631,7 +631,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     transport.stop();
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
         sessionKey: "main",
         runId: "run-1",
       }),
@@ -640,7 +640,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
     });
-    expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+    expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
       sessionId: "relay-1",
       callId: "call-1",
       result: {

@@ -30,16 +30,15 @@ type ProviderAuthWarmWorkerResult =
     };
 
 function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
   return (
-    value !== null &&
-    typeof value === "object" &&
-    "cfg" in value &&
-    (!("runtimeAuthStores" in value) ||
-      Array.isArray((value as { runtimeAuthStores?: unknown }).runtimeAuthStores)) &&
-    (!("runtimeAuthLookups" in value) ||
-      Array.isArray((value as { runtimeAuthLookups?: unknown }).runtimeAuthLookups)) &&
-    (!("omitFalseProviderAuth" in value) ||
-      typeof (value as { omitFalseProviderAuth?: unknown }).omitFalseProviderAuth === "boolean")
+    "cfg" in record &&
+    (!("runtimeAuthStores" in record) || Array.isArray(record.runtimeAuthStores)) &&
+    (!("runtimeAuthLookups" in record) || Array.isArray(record.runtimeAuthLookups)) &&
+    (!("omitFalseProviderAuth" in record) || typeof record.omitFalseProviderAuth === "boolean")
   );
 }
 

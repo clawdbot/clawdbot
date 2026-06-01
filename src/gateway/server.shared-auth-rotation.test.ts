@@ -78,7 +78,7 @@ async function openDeviceTokenWsWithDetails(
   await approveDevicePairing(pending.request.requestId, {
     callerScopes: ["operator.admin"],
   });
-  let issuedDeviceToken = "";
+  let issuedDeviceToken;
   if (params.issuerGeneration) {
     const deviceToken = await ensureDeviceToken({
       deviceId: identity.deviceId,
@@ -106,7 +106,9 @@ async function openDeviceTokenWsWithDetails(
     params.browserClient ? { headers: { origin: `http://127.0.0.1:${port}` } } : undefined,
   );
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   const hello = (await connectOk(ws, {
     skipDefaultAuth: true,
     client,

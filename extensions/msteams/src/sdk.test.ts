@@ -14,8 +14,8 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const { mockGetToken } = vi.hoisted(() => {
-  const mockGetToken = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
-  return { mockGetToken };
+  const mockGetTokenLocal = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
+  return { mockGetToken: mockGetTokenLocal };
 });
 vi.mock("@azure/identity", () => {
   class ManagedIdentityCredential {

@@ -1,15 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  completeSimple,
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 
@@ -104,6 +99,8 @@ const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
 const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
+const RUN_PROCESS_TIMEOUT_MS = 120_000;
+const RUN_PROCESS_KILL_GRACE_MS = 5_000;
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
@@ -606,7 +603,9 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
 }
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function formatDuration(ms: number): string {
@@ -882,7 +881,7 @@ async function syncControlUiRawCopyBaseline(options: { checkOnly: boolean; write
     await writeFile(RAW_COPY_BASELINE_PATH, expected, "utf8");
   }
   if (options.checkOnly && current !== expected) {
-    let currentEntries: RawCopyBaselineEntry[] = [];
+    let currentEntries: RawCopyBaselineEntry[];
     try {
       const parsed = JSON.parse(current) as Partial<RawCopyBaseline>;
       currentEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
@@ -951,8 +950,10 @@ function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
 type RunProcessOptions = {
   cwd?: string;
   input?: string;
+  killGraceMs?: number;
   maxOutputChars?: number;
   rejectOnFailure?: boolean;
+  timeoutMs?: number;
 };
 
 type ProcessOutputCapture = {
@@ -994,47 +995,172 @@ export async function runProcess(
   options: RunProcessOptions = {},
 ): Promise<{ code: number; stderr: string; stdout: string }> {
   return await new Promise((resolve, reject) => {
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(executable, args, {
       cwd: options.cwd ?? ROOT,
+      detached: useProcessGroup,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
     const maxOutputChars = resolveRunProcessOutputLimit(options);
+    const timeoutMs = options.timeoutMs ?? RUN_PROCESS_TIMEOUT_MS;
+    const killGraceMs = options.killGraceMs ?? RUN_PROCESS_KILL_GRACE_MS;
     let stdout: ProcessOutputCapture = { text: "", truncatedChars: 0 };
     let stderr: ProcessOutputCapture = { text: "", truncatedChars: 0 };
+    let timedOut = false;
+    let settled = false;
+    let waitingForKillGrace = false;
+    let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const signalWindowsProcessTree = (force: boolean): boolean => {
+      if (process.platform !== "win32" || typeof child.pid !== "number") {
+        return false;
+      }
+      const taskkillArgs = ["/PID", String(child.pid), "/T"];
+      if (force) {
+        taskkillArgs.push("/F");
+      }
+      const result = spawnSync("taskkill.exe", taskkillArgs, { stdio: "ignore" });
+      return result.status === 0;
+    };
+    const signalChild = (signal: NodeJS.Signals) => {
+      if (useProcessGroup && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            stderr = appendBoundedProcessOutput(
+              stderr,
+              `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
+              maxOutputChars,
+            );
+          }
+        }
+      }
+      if (process.platform === "win32") {
+        const force = signal === "SIGKILL";
+        if (signalWindowsProcessTree(force) || (!force && signalWindowsProcessTree(true))) {
+          return;
+        }
+      }
+      child.kill(signal);
+    };
+    const relayParentSignal = (signal: NodeJS.Signals) => {
+      const handler = () => {
+        signalChild(signal);
+        cleanupParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.push({ handler, signal });
+      process.once(signal, handler);
+    };
+    const relayedSignals: NodeJS.Signals[] =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const signal of relayedSignals) {
+      relayParentSignal(signal);
+    }
+    const processGroupIsAlive = () => {
+      if (!useProcessGroup || typeof child.pid !== "number") {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    };
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      cleanupParentSignalHandlers();
+      callback();
+    };
+    const finishClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      settle(() => {
+        const stdoutText = formatProcessOutput(stdout);
+        const stderrText = formatProcessOutput(stderr);
+        if (timedOut) {
+          reject(new Error(`${executable} ${args.join(" ")} timed out after ${timeoutMs}ms`));
+          return;
+        }
+        if ((code ?? 1) !== 0 && options.rejectOnFailure) {
+          reject(
+            new Error(
+              `${executable} ${args.join(" ")} failed: ${
+                stderrText.trim() || stdoutText.trim() || (signal ? `terminated by ${signal}` : "")
+              }`,
+            ),
+          );
+          return;
+        }
+        if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
+          reject(
+            new Error(
+              `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
+            ),
+          );
+          return;
+        }
+        resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
+      });
+    };
+    const scheduleKill = () => {
+      if (waitingForKillGrace) {
+        return;
+      }
+      waitingForKillGrace = true;
+      killTimer = setTimeout(() => {
+        waitingForKillGrace = false;
+        killTimer = undefined;
+        signalChild("SIGKILL");
+        if (childClosedResult) {
+          finishClose(childClosedResult.code, childClosedResult.signal);
+        }
+      }, killGraceMs);
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      signalChild("SIGTERM");
+      scheduleKill();
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       stdout = appendBoundedProcessOutput(stdout, chunk, maxOutputChars);
     });
     child.stderr.on("data", (chunk) => {
       stderr = appendBoundedProcessOutput(stderr, chunk, maxOutputChars);
     });
-    child.once("error", reject);
+    child.once("error", (error) => {
+      settle(() => {
+        reject(error);
+      });
+    });
     if (options.input !== undefined) {
       child.stdin.end(options.input);
     } else {
       child.stdin.end();
     }
-    child.once("close", (code) => {
-      const stdoutText = formatProcessOutput(stdout);
-      const stderrText = formatProcessOutput(stderr);
-      if ((code ?? 1) !== 0 && options.rejectOnFailure) {
-        reject(
-          new Error(
-            `${executable} ${args.join(" ")} failed: ${stderrText.trim() || stdoutText.trim()}`,
-          ),
-        );
+    child.once("close", (code, signal) => {
+      if (waitingForKillGrace && processGroupIsAlive()) {
+        childClosedResult = { code, signal };
         return;
       }
-      if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
-        reject(
-          new Error(
-            `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
-          ),
-        );
-        return;
-      }
-      resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
+      finishClose(code, signal);
     });
   });
 }
@@ -1195,10 +1321,10 @@ class TranslationClient {
             clearInterval(heartbeat);
             resolve(extractTranslationResult(assistantMessage));
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
           });
       });
     });
@@ -1663,8 +1789,22 @@ function isCliEntrypoint() {
 }
 
 if (isCliEntrypoint()) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(formatErrorMessage(error));
     process.exit(1);
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

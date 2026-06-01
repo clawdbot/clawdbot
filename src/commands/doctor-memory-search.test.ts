@@ -175,10 +175,11 @@ describe("noteMemorySearchHealth", () => {
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
-    resolveActiveMemoryBackendConfig.mockImplementation(({ cfg }: { cfg: OpenClawConfig }) =>
-      cfg.memory?.backend === "qmd"
-        ? { backend: "qmd", qmd: cfg.memory.qmd ?? {} }
-        : { backend: "builtin" },
+    resolveActiveMemoryBackendConfig.mockImplementation(
+      ({ cfg: cfgLocal }: { cfg: OpenClawConfig }) =>
+        cfgLocal.memory?.backend === "qmd"
+          ? { backend: "qmd", qmd: cfgLocal.memory.qmd ?? {} }
+          : { backend: "builtin" },
     );
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {

@@ -108,6 +108,24 @@ function tarballFileName(manifest: PackageManifest): string {
   return `${manifest.name.replace(/^@/, "").replace("/", "-")}-${manifest.version}.tgz`;
 }
 
+async function createPackStagingRoot(packageRoot: string, destinationRoot: string): Promise<string> {
+  const manifest = await readPackageManifest(packageRoot);
+  const packageSlug = manifest.name.replace(/^@/, "").replace("/", "-");
+  const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
+  await fs.mkdir(stagingRoot, { recursive: true });
+  await fs.writeFile(path.join(stagingRoot, "package.json"), JSON.stringify(manifest, null, 2));
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  for (const entry of files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    await fs.cp(path.join(packageRoot, entry), path.join(stagingRoot, entry), {
+      recursive: true,
+    });
+  }
+  return stagingRoot;
+}
+
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
@@ -204,8 +222,9 @@ describe("OpenClaw SDK package e2e", () => {
       });
     }
     for (const packageRoot of packageRoots) {
-      await runCommand("pnpm", ["pack", "--pack-destination", tempDir], {
-        cwd: packageRoot,
+      const stagingRoot = await createPackStagingRoot(packageRoot, tempDir);
+      await runCommand("npm", ["pack", "--ignore-scripts", "--pack-destination", tempDir], {
+        cwd: stagingRoot,
       });
     }
 

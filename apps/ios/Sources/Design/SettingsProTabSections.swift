@@ -542,7 +542,7 @@ extension SettingsProTab {
                     {
                         Task { await self.applySetupCodeAndConnect() }
                     }
-                    .disabled(self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!self.canApplyGatewaySetup)
                 }
                 if let status = self.setupStatusLine {
                     Text(status)

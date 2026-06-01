@@ -1092,7 +1092,9 @@ describe("followup queue collect routing", () => {
       }
       calls.push(run);
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     expect(calls).toHaveLength(0);
     expect(cleaned.map((run) => run.prompt)).toEqual(["aborted"]);
@@ -1412,7 +1414,9 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
@@ -1461,7 +1465,9 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await firstAttempt.promise;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);

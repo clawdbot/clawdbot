@@ -6,7 +6,7 @@ import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../../../channels/config-presence.js";
-import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
+import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
@@ -178,7 +178,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEn
     return ids;
   }
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(cfg));
-  const candidateChannelIds = listChannelPluginCatalogEntries({
+  const candidateChannelIds = listRawChannelPluginCatalogEntries({
     env,
     excludeWorkspace: true,
   }).map((entry) => entry.id);
@@ -240,7 +240,7 @@ function collectDownloadableInstallCandidates(params: {
     params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg, params.env);
   const candidates = new Map<string, DownloadableInstallCandidate>();
 
-  for (const entry of listChannelPluginCatalogEntries({
+  for (const entry of listRawChannelPluginCatalogEntries({
     env: params.env,
     excludeWorkspace: true,
   })) {

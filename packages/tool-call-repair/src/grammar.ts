@@ -1,20 +1,28 @@
+/** Legacy marker some models emit after a serialized JSON tool request. */
 export const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
+/** Harmony stream marker that introduces the target channel before a tool call. */
 export const HARMONY_CHANNEL_MARKER = "<|channel|>";
+/** Harmony stream marker that may separate the header from the JSON payload. */
 export const HARMONY_MESSAGE_MARKER = "<|message|>";
+/** Harmony stream marker that may close a serialized tool-call payload. */
 export const HARMONY_CALL_MARKER = "<|call|>";
 
+/** Accepts either a complete literal or a still-streaming prefix of that literal. */
 export function matchesLiteralPrefix(text: string, literal: string): boolean {
   return literal.startsWith(text) || text.startsWith(literal);
 }
 
+/** Tool names in bracket/plain-text repairs intentionally match provider-safe ids only. */
 export function isPlainTextToolNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_-]/.test(char));
 }
 
+/** XML-ish function tags allow namespace punctuation used by some model families. */
 export function isXmlishNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_.:-]/.test(char));
 }
 
+/** Skips spaces and tabs only, preserving line boundaries for grammar decisions. */
 export function skipHorizontalWhitespace(text: string, start: number): number {
   let index = start;
   while (index < text.length && (text[index] === " " || text[index] === "\t")) {
@@ -23,6 +31,7 @@ export function skipHorizontalWhitespace(text: string, start: number): number {
   return index;
 }
 
+/** Skips all JavaScript whitespace when line structure is no longer meaningful. */
 export function skipWhitespace(text: string, start: number): number {
   let index = start;
   while (index < text.length && /\s/.test(text[index] ?? "")) {
@@ -31,6 +40,7 @@ export function skipWhitespace(text: string, start: number): number {
   return index;
 }
 
+/** Consumes either Unix or Windows line endings and returns the first offset after them. */
 export function consumeLineBreak(text: string, start: number): number | null {
   if (text[start] === "\r") {
     return text[start + 1] === "\n" ? start + 2 : start + 1;
@@ -41,6 +51,7 @@ export function consumeLineBreak(text: string, start: number): number | null {
   return null;
 }
 
+/** Finds the exclusive end offset of a balanced JSON object starting at `start`. */
 export function findJsonObjectEnd(
   text: string,
   start: number,
@@ -82,11 +93,13 @@ export function findJsonObjectEnd(
   return null;
 }
 
+/** Consumes one optional line break after a repaired serialized tool-call fragment. */
 export function skipSerializedToolCallTrailingLineBreak(text: string, cursor: number): number {
   const afterLineBreak = consumeLineBreak(text, cursor);
   return afterLineBreak ?? cursor;
 }
 
+/** Accepts the legacy closing markers models append after JSON tool-call payloads. */
 export function consumeJsonToolClosingMarker(text: string, cursor: number): number {
   let markerStart = cursor;
   while (markerStart < text.length && /\s/.test(text[markerStart] ?? "")) {
@@ -106,6 +119,7 @@ export function consumeJsonToolClosingMarker(text: string, cursor: number): numb
   return skipSerializedToolCallTrailingLineBreak(text, cursor);
 }
 
+/** Finds JSON after bracketed tool syntax such as `[tool_name]\n{...}`. */
 export function findBracketedJsonPayloadStart(text: string): number | null {
   if (!text.startsWith("[")) {
     return null;
@@ -121,6 +135,7 @@ export function findBracketedJsonPayloadStart(text: string): number | null {
   return text[cursor] === "{" ? cursor : null;
 }
 
+/** Finds JSON after Harmony channel/tool headers while tolerating optional message markers. */
 export function findHarmonyJsonPayloadStart(text: string): number | null {
   let cursor = 0;
   if (text.startsWith(HARMONY_CHANNEL_MARKER)) {
@@ -158,6 +173,7 @@ export function findHarmonyJsonPayloadStart(text: string): number | null {
   return text[cursor] === "{" ? cursor : null;
 }
 
+/** Case-insensitive marker compare for ASCII protocol tags without locale rules. */
 export function startsWithAsciiMarkerIgnoreCase(
   text: string,
   cursor: number,
@@ -166,6 +182,7 @@ export function startsWithAsciiMarkerIgnoreCase(
   return text.slice(cursor, cursor + marker.length).toLowerCase() === marker;
 }
 
+/** Case-insensitive marker search for ASCII protocol tags without allocating regexes. */
 export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start: number): number {
   let cursor = start;
   while (cursor < text.length) {
@@ -181,6 +198,7 @@ export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start
   return -1;
 }
 
+/** Returns the end offset for a complete XML-ish or bracketed plain-text tool call. */
 export function findXmlishToolCallEnd(text: string): number | null {
   let cursor: number;
   const xmlFunction = /^<function=[A-Za-z0-9_.:-]+>/i.exec(text);

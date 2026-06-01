@@ -372,6 +372,10 @@ preset and adapt the provider block:
   </Tab>
 </Tabs>
 
+For Xiaomi `mimo-v2.5-tts-voicedesign`, omit `speakerVoice` and set `style` to
+the voice-design prompt. OpenClaw sends that prompt as the TTS `user` message
+and does not send `audio.voice` for the voicedesign model.
+
 ### Per-agent voice overrides
 
 Use `agents.list[].tts` when one agent should speak with a different provider,
@@ -947,10 +951,10 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   <Accordion title="Xiaomi MiMo">
     <ParamField path="apiKey" type="string">Env: `XIAOMI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.xiaomimimo.com/v1`. Env: `XIAOMI_BASE_URL`.</ParamField>
-    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts`.</ParamField>
-    <ParamField path="speakerVoice" type="string">Default `mimo_default`. Env: `XIAOMI_TTS_VOICE`. Legacy alias: `voice`.</ParamField>
+    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts` and `mimo-v2.5-tts-voicedesign`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Default `mimo_default` for preset-voice models. Env: `XIAOMI_TTS_VOICE`. Legacy alias: `voice`. Not sent for `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
-    <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken.</ParamField>
+    <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. For `mimo-v2.5-tts-voicedesign`, this is the voice-design prompt; OpenClaw supplies a default when omitted.</ParamField>
   </Accordion>
 </AccordionGroup>
 

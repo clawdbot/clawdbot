@@ -65,7 +65,9 @@ async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<
       return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
     }
   }
   throw new Error(`timed out waiting for parseable JSON in ${filePath}`, { cause: lastError });

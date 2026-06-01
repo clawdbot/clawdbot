@@ -1684,11 +1684,11 @@ importers:
   extensions/whatsapp:
     dependencies:
       audio-decode:
-        specifier: 3.10.1
-        version: 3.10.1
+        specifier: 2.2.3
+        version: 2.2.3
       baileys:
         specifier: 7.0.0-rc13
-        version: 7.0.0-rc13(audio-decode@3.10.1)
+        version: 7.0.0-rc13(audio-decode@2.2.3)
       typebox:
         specifier: 1.1.39
         version: 1.1.39
@@ -1770,6 +1770,12 @@ importers:
         specifier: 2026.5.28
         version: 2026.5.28
 
+  packages/acp-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+
   packages/agent-core:
     dependencies:
       '@openclaw/llm-core':
@@ -1824,6 +1830,15 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/media-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+      file-type:
+        specifier: 22.0.1
+        version: 22.0.1
+
   packages/media-generation-core: {}
 
   packages/media-understanding-common: {}
@@ -1877,6 +1892,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@openclaw/media-core':
+        specifier: workspace:*
+        version: link:../packages/media-core
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core
@@ -2021,53 +2039,6 @@ packages:
 
   '@asamuzakjp/nwsapi@2.3.9':
     resolution: {integrity: sha512-n8GuYSrI9bF7FFZ/SjhwevlHc8xaVlb/7HmHelnc/PZXBD2ZR49NnN9sMMuDdEGPeeRQ5d0hqlSlEpgCX3Wl0Q==}
-
-  '@audio/decode-aac@1.1.3':
-    resolution: {integrity: sha512-emyA+pFa+o9N728t5HpcInT6FZZtaFtl68ex7UW7iBOTv6DrN4jxASj1D9KQO0S86cpu6t2u9hW9X/99Srfjog==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-aiff@1.1.1':
-    resolution: {integrity: sha512-Q4hH7tNtoTnVVwaT/XWUITfDeG9Y0KVRFkeWa1Ksl8FkUgutemVASiIoT7PvIchlhseq4haDdvQGu5cuLHdbNw==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-amr@1.1.1':
-    resolution: {integrity: sha512-iIiY4YHaJ30isZVejhB/taO/jy7NVIveK/j6xPITqz/M/5JXC1tK5PMZ5PJ+Kni0LKGB+QN2BBonefKNkKr/VA==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-caf@1.1.1':
-    resolution: {integrity: sha512-svwj9ZJ9k89T0O4t7Ca5G6AeCusJQOQo4gdJsDlCHw01E4XJm4ok3Oqu2vorgT7BoS1l1Sm2Ef4ib3cr1M9Gbw==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-flac@1.1.0':
-    resolution: {integrity: sha512-d47Cxf91m1A7G0ketvWDmnn+qI9UaqEuZF0JpdVgGjjnfZQZ/3C8U3MM6nSsRaz4JZ904HtMkLUMF0yNEHXbJQ==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-mp3@1.1.0':
-    resolution: {integrity: sha512-eOBqdICwjQ0P9z6ei0wXmXVTW/tIiQ4YGsG3QMFJsdrGORhNQh6paQz53utIcVndmri9xfQStqerxMGt+82ygQ==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-opus@1.0.0':
-    resolution: {integrity: sha512-IwoBu72t09g/T5QKiOSJ1bPBE0fGQkhGh0LwVFH7Uj1xgZ18hVywoA9dCIWxlpnPqz/ZFnAdY7qaKbeEPfGJ+g==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-qoa@1.0.0':
-    resolution: {integrity: sha512-4O57YMprL+AZtxPVOgyDhUr2C+bVcp2cHrMKzBc4zo1ZJgITLZtfVA8TklTJEiLbvVfG2F0j44xHOTqCFhqvbA==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-vorbis@1.0.0':
-    resolution: {integrity: sha512-8TR9V0GQuExgUMHOSYmBE/OreJ9D7YQH78ntPhCxxWM0IeV3qTE3To+cxZVSRg8bMXl6rB7GEGWMmJ8uLbkZlg==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-wav@1.2.0':
-    resolution: {integrity: sha512-Q6VicCGHeoqCiLnTDAaZI3kHCZGd24km/BVLZMBF2vOSbknwnqUEkWs4RRtKUfMX+KBtwAgihkzF0Aw4Y3DkBw==}
-
-  '@audio/decode-webm@1.2.1':
-    resolution: {integrity: sha512-UnlDUaPI7PF+I9neTF5LJ7NNrFgvi0zj8PsPcvkSf+NWW08UnbxgsN9WgtpY731R8MPMM10cZKGEoN0kqxT15Q==}
-    engines: {node: '>=16'}
-
-  '@audio/decode-wma@1.1.2':
-    resolution: {integrity: sha512-zjmvnuhjSx6i8C8xPLxoNwfLxBvTeo2zf8L0Z8LM1H3HlwyWZEEfAlIppNf794f/mhsnbRAnwCpwQ1HklMIJrg==}
-    engines: {node: '>=16'}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -4435,8 +4406,11 @@ packages:
     resolution: {integrity: sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==}
     engines: {node: '>=8.0.0'}
 
-  audio-decode@3.10.1:
-    resolution: {integrity: sha512-aIMSNFtZaZeSq1mYFXga7ZRglguLQq8WpQv1CDiLmqnkIrtrTYUO56XrxfkwGdQ/+Ek0VJ91TKGRdpARa1NJaQ==}
+  audio-buffer@5.0.0:
+    resolution: {integrity: sha512-gsDyj1wwUp8u7NBB+eW6yhLb9ICf+0eBmDX8NGaAS00w8/fLqFdxUlL5Ge/U8kB64DlQhdonxYC59dXy1J7H/w==}
+
+  audio-decode@2.2.3:
+    resolution: {integrity: sha512-Z0lHvMayR/Pad9+O9ddzaBJE0DrhZkQlStrC1RwcAHF3AhQAsdwKHeLGK8fYKyp2DDU6xHxzGb4CLMui12yVrg==}
 
   audio-type@2.4.1:
     resolution: {integrity: sha512-dK9Z/P83C/rBfTrXXgPD3jZ+aXxx2o/P4rq8+H1JqxbXklitEeJw4CrcwMC5CkON3CX3yy2gaWnIEVYejYh0zQ==}
@@ -6021,6 +5995,10 @@ packages:
     resolution: {integrity: sha512-tGnJW6OKRii9u/b2WiUViTJS+h7Apxx17qsMUjsUeNDiMMX5ZFf8F8Fcz7PAQ6omvOxHZtvDTmOYKJQwmfpjeg==}
     engines: {node: '>=20'}
 
+  node-wav@0.0.2:
+    resolution: {integrity: sha512-M6Rm/bbG6De/gKGxOpeOobx/dnGuP0dz40adqx38boqHhlWssBJZgLCPBNtb9NkrmnKYiV04xELq+R6PFOnoLA==}
+    engines: {node: '>=4.4.0'}
+
   nostr-tools@2.23.5:
     resolution: {integrity: sha512-Fa7ZlUdjfUW1P4E7H3yBexhOHYi18XNyvd2n7eNHkYR085xADX6Y8V8Vm7nT/XQajaFOBrptXmVIGkJ2E4vfVw==}
     peerDependencies:
@@ -7392,43 +7370,6 @@ snapshots:
   '@asamuzakjp/generational-cache@1.0.1': {}
 
   '@asamuzakjp/nwsapi@2.3.9': {}
-
-  '@audio/decode-aac@1.1.3': {}
-
-  '@audio/decode-aiff@1.1.1': {}
-
-  '@audio/decode-amr@1.1.1': {}
-
-  '@audio/decode-caf@1.1.1': {}
-
-  '@audio/decode-flac@1.1.0':
-    dependencies:
-      '@wasm-audio-decoders/flac': 0.2.10
-
-  '@audio/decode-mp3@1.1.0':
-    dependencies:
-      mpg123-decoder: 1.0.3
-
-  '@audio/decode-opus@1.0.0':
-    dependencies:
-      ogg-opus-decoder: 1.7.3
-
-  '@audio/decode-qoa@1.0.0':
-    dependencies:
-      qoa-format: 1.0.1
-
-  '@audio/decode-vorbis@1.0.0':
-    dependencies:
-      '@wasm-audio-decoders/ogg-vorbis': 0.1.20
-
-  '@audio/decode-wav@1.2.0': {}
-
-  '@audio/decode-webm@1.2.1':
-    dependencies:
-      '@wasm-audio-decoders/ogg-vorbis': 0.1.20
-      opus-decoder: 0.7.11
-
-  '@audio/decode-wma@1.1.2': {}
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:
@@ -9969,21 +9910,18 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  audio-decode@3.10.1:
+  audio-buffer@5.0.0: {}
+
+  audio-decode@2.2.3:
     dependencies:
-      '@audio/decode-aac': 1.1.3
-      '@audio/decode-aiff': 1.1.1
-      '@audio/decode-amr': 1.1.1
-      '@audio/decode-caf': 1.1.1
-      '@audio/decode-flac': 1.1.0
-      '@audio/decode-mp3': 1.1.0
-      '@audio/decode-opus': 1.0.0
-      '@audio/decode-qoa': 1.0.0
-      '@audio/decode-vorbis': 1.0.0
-      '@audio/decode-wav': 1.2.0
-      '@audio/decode-webm': 1.2.1
-      '@audio/decode-wma': 1.1.2
+      '@wasm-audio-decoders/flac': 0.2.10
+      '@wasm-audio-decoders/ogg-vorbis': 0.1.20
+      audio-buffer: 5.0.0
       audio-type: 2.4.1
+      mpg123-decoder: 1.0.3
+      node-wav: 0.0.2
+      ogg-opus-decoder: 1.7.3
+      qoa-format: 1.0.1
 
   audio-type@2.4.1: {}
 
@@ -10005,7 +9943,7 @@ snapshots:
 
   bail@2.0.2: {}
 
-  baileys@7.0.0-rc13(audio-decode@3.10.1):
+  baileys@7.0.0-rc13(audio-decode@2.2.3):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
@@ -10019,7 +9957,7 @@ snapshots:
       whatsapp-rust-bridge: 0.5.4
       ws: 8.21.0
     optionalDependencies:
-      audio-decode: 3.10.1
+      audio-decode: 2.2.3
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -11818,6 +11756,8 @@ snapshots:
     dependencies:
       '@types/sarif': 2.1.7
       fs-extra: 11.3.5
+
+  node-wav@0.0.2: {}
 
   nostr-tools@2.23.5(typescript@6.0.3):
     dependencies:

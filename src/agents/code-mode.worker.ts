@@ -43,12 +43,19 @@ type CodeModeNamespaceDescriptor = {
   scope: SerializedCodeModeNamespaceValue;
 };
 
+type CodeModeApiVirtualFile = {
+  path: string;
+  description?: string;
+  content: string;
+};
+
 type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
       config: CodeModeConfig;
       catalog: unknown[];
+      apiFiles?: CodeModeApiVirtualFile[];
       namespaces: CodeModeNamespaceDescriptor[];
     }
   | {
@@ -185,6 +192,7 @@ const CONTROLLER_SOURCE = String.raw`
   const output = [];
   const pending = new Map();
   const catalog = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
+  const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
 
   function safe(value) {
@@ -269,6 +277,47 @@ const CONTROLLER_SOURCE = String.raw`
     call: { value: (id, input) => request("call", [id, input]), enumerable: true },
   });
 
+  function normalizeApiPath(value) {
+    const text = String(value ?? "").trim().replace(/^\/+/, "");
+    if (!text || text.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+      throw new Error("invalid API file path");
+    }
+    return text;
+  }
+
+  const apiFileMap = new Map();
+  for (const file of apiFiles) {
+    if (!file || typeof file !== "object") continue;
+    const path = typeof file.path === "string" ? file.path : "";
+    const content = typeof file.content === "string" ? file.content : "";
+    if (!path || !content) continue;
+    apiFileMap.set(path, Object.freeze({
+      path,
+      content,
+      description: typeof file.description === "string" ? file.description : undefined,
+      bytes: content.length,
+    }));
+  }
+  const api = Object.freeze({
+    list: async (prefix = "") => {
+      const normalizedPrefix = prefix == null || String(prefix).trim() === "" ? "" : normalizeApiPath(prefix);
+      const files = [...apiFileMap.values()]
+        .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
+        .map((file) => Object.freeze({
+          path: file.path,
+          description: file.description,
+          bytes: file.bytes,
+        }));
+      return { files };
+    },
+    read: async (path) => {
+      const normalizedPath = normalizeApiPath(path);
+      const file = apiFileMap.get(normalizedPath);
+      if (!file) throw new Error("Unknown API file: " + normalizedPath);
+      return file;
+    },
+  });
+
   const safeNameCounts = new Map();
   for (const tool of catalog) {
     const name = typeof tool?.name === "string" ? tool.name : "";
@@ -308,6 +357,7 @@ const CONTROLLER_SOURCE = String.raw`
 
   Object.defineProperties(globalThis, {
     ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
+    API: { value: api, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
@@ -342,7 +392,7 @@ function createHostRequestHandler(params: {
     ) {
       throw new Error("unsupported code mode bridge method");
     }
-    let args: unknown = [];
+    let args: unknown;
     try {
       args = JSON.parse(argsHandle.toString()) as unknown;
     } catch {
@@ -360,6 +410,7 @@ function createHostRequestHandler(params: {
 
 async function createVm(params: {
   catalog: unknown[];
+  apiFiles: CodeModeApiVirtualFile[];
   namespaces: CodeModeNamespaceDescriptor[];
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
@@ -388,6 +439,12 @@ async function createVm(params: {
     vm.setProp(vm.global, "__openclawNamespaces", namespacesHandle);
   } finally {
     namespacesHandle.dispose();
+  }
+  const apiFilesHandle = vm.hostToHandle(params.apiFiles);
+  try {
+    vm.setProp(vm.global, "__openclawApiFiles", apiFilesHandle);
+  } finally {
+    apiFilesHandle.dispose();
   }
   const hostRequest = vm.newFunction(
     "__openclawHostRequest",
@@ -548,6 +605,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
   const pendingRequests: PendingBridgeRequest[] = [];
   const { vm, didTimeout } = await createVm({
     catalog: input.catalog,
+    apiFiles: input.apiFiles ?? [],
     namespaces: input.namespaces,
     config: input.config,
     pendingRequests,
@@ -656,6 +714,7 @@ async function main(): Promise<CodeModeWorkerResult> {
         source: input.source,
         config: input.config as CodeModeConfig,
         catalog: Array.isArray(input.catalog) ? input.catalog : [],
+        apiFiles: Array.isArray(input.apiFiles) ? (input.apiFiles as CodeModeApiVirtualFile[]) : [],
         namespaces: Array.isArray(input.namespaces)
           ? (input.namespaces as CodeModeNamespaceDescriptor[])
           : [],
@@ -687,5 +746,8 @@ async function main(): Promise<CodeModeWorkerResult> {
   }
 }
 
-// oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads MessagePort, not window.postMessage.
-parentPort?.postMessage(await main());
+if (parentPort) {
+  Reflect.apply(Reflect.get(parentPort, "postMessage") as (message: unknown) => void, parentPort, [
+    await main(),
+  ]);
+}

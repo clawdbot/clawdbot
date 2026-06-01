@@ -98,26 +98,36 @@ function createBoundTaskFlowRuntime(params: {
   const requesterOrigin = params.requesterOrigin
     ? normalizeDeliveryContext(params.requesterOrigin)
     : undefined;
+  const tryCreateManaged: BoundTaskFlowRuntime["tryCreateManaged"] = (input) => {
+    const flow = createManagedTaskFlow({
+      ownerKey,
+      controllerId: input.controllerId,
+      requesterOrigin,
+      status: input.status,
+      notifyPolicy: input.notifyPolicy,
+      goal: input.goal,
+      currentStep: input.currentStep,
+      stateJson: input.stateJson,
+      waitJson: input.waitJson,
+      cancelRequestedAt: input.cancelRequestedAt,
+      createdAt: input.createdAt,
+      updatedAt: input.updatedAt,
+      endedAt: input.endedAt,
+    });
+    return asManagedTaskFlowRecord(flow ?? undefined) ?? null;
+  };
 
   return {
     sessionKey: ownerKey,
     ...(requesterOrigin ? { requesterOrigin } : {}),
-    createManaged: (input) =>
-      createManagedTaskFlow({
-        ownerKey,
-        controllerId: input.controllerId,
-        requesterOrigin,
-        status: input.status,
-        notifyPolicy: input.notifyPolicy,
-        goal: input.goal,
-        currentStep: input.currentStep,
-        stateJson: input.stateJson,
-        waitJson: input.waitJson,
-        cancelRequestedAt: input.cancelRequestedAt,
-        createdAt: input.createdAt,
-        updatedAt: input.updatedAt,
-        endedAt: input.endedAt,
-      }) as ManagedTaskFlowRecord,
+    createManaged: (input) => {
+      const flow = tryCreateManaged(input);
+      if (!flow) {
+        throw new Error("TaskFlow persistence failed.");
+      }
+      return flow;
+    },
+    tryCreateManaged,
     get: (flowId) =>
       getTaskFlowByIdForOwner({
         flowId,

@@ -25,9 +25,9 @@ async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => 
       if (!listening) {
         return;
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

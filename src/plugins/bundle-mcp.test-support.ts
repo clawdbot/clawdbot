@@ -20,8 +20,21 @@ export function createBundleMcpTempHarness() {
   };
 }
 
-function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
+export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
   return path.join(homeDir, ".openclaw", "extensions", pluginId);
+}
+
+export async function writeBundleTextFiles(
+  pluginRoot: string,
+  files: Record<string, string>,
+): Promise<void> {
+  await Promise.all(
+    Object.entries(files).map(async ([relativePath, content]) => {
+      const filePath = path.join(pluginRoot, relativePath);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, content, "utf-8");
+    }),
+  );
 }
 
 export async function writeClaudeBundleManifest(params: {

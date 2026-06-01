@@ -1,10 +1,8 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
   buildIMessageInboundContext,
   describeIMessageEchoDropLog,
@@ -12,6 +10,11 @@ import {
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
+
+beforeEach(() => {
+  installIMessageStateRuntimeForTest();
+  resetIMessageShortIdState();
+});
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   const cfg = {} as OpenClawConfig;
@@ -543,56 +546,42 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
-    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-reaction-cache-"));
-    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    try {
-      resetIMessageShortIdState();
-      rememberIMessageReplyCache({
-        accountId: "default",
-        messageId: "p:0/imsg-production",
-        chatGuid: "any;-;+15555550123",
-        chatIdentifier: "+15555550123",
-        chatId: 3,
-        timestamp: Date.now(),
-        isFromMe: true,
-      });
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "p:0/imsg-production",
+      chatGuid: "any;-;+15555550123",
+      chatIdentifier: "+15555550123",
+      chatId: 3,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
 
-      const decision = await resolveDecision({
-        message: {
-          guid: "reaction-guid",
-          is_reaction: true,
-          reaction_emoji: "❤️",
-          is_reaction_add: true,
-          associated_message_guid: "p:0/imsg-production",
-          associated_message_type: 2000,
-          text: "Loved “tapback target”",
-          chat_id: 3,
-          chat_guid: "any;-;+15555550123",
-          chat_identifier: "+15555550123",
-        },
-        messageText: "Loved “tapback target”",
-        bodyText: "Loved “tapback target”",
-        echoCache: { has: () => false },
-        isKnownFromMeMessageId: undefined,
-      });
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "❤️",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/imsg-production",
+        associated_message_type: 2000,
+        text: "Loved “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Loved “tapback target”",
+      bodyText: "Loved “tapback target”",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: undefined,
+    });
 
-      expect(decision.kind).toBe("reaction");
-      if (decision.kind !== "reaction") {
-        throw new Error("expected reaction decision");
-      }
-      expect(decision.text).toBe(
-        "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
-      );
-    } finally {
-      resetIMessageShortIdState();
-      if (priorStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = priorStateDir;
-      }
-      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
     }
+    expect(decision.text).toBe(
+      "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
+    );
   });
 
   it("matches prefixed tapback targets against prefixed echo-cache ids in own mode", async () => {
@@ -988,30 +977,6 @@ describe("resolveIMessageInboundDecision command auth", () => {
 });
 
 describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression)", () => {
-  let tempStateDir: string;
-  let priorStateDir: string | undefined;
-  beforeAll(() => {
-    tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-inbound-"));
-    priorStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-  });
-  afterAll(() => {
-    if (priorStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = priorStateDir;
-    }
-    fs.rmSync(tempStateDir, { recursive: true, force: true });
-  });
-  beforeEach(() => {
-    resetIMessageShortIdState();
-    try {
-      fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
-    } catch {
-      // best-effort
-    }
-  });
-
   function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
     const decision = {
       kind: "dispatch" as const,

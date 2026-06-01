@@ -185,6 +185,7 @@ describe("gateway hot reload model state", () => {
         activeChannels: new Set(),
       };
     });
+    const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createGatewayReloadHandlers({
       deps: {} as never,
       broadcast: vi.fn(),
@@ -206,7 +207,7 @@ describe("gateway hot reload model state", () => {
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
-      logReload: { info: vi.fn(), warn: vi.fn() },
+      logReload,
       createHealthMonitor: () => null,
     });
 
@@ -279,6 +280,7 @@ describe("gateway restart deferral preflight", () => {
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     const startChannel = vi.fn(async () => {});
     const stopChannel = vi.fn(async () => {});
+    const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createGatewayReloadHandlers({
       deps: {} as never,
       broadcast: vi.fn(),
@@ -305,7 +307,7 @@ describe("gateway restart deferral preflight", () => {
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
-      logReload: { info: vi.fn(), warn: vi.fn() },
+      logReload,
       createHealthMonitor: () => null,
     });
     hoisted.activeEmbeddedRunCount.value = 1;
@@ -550,6 +552,7 @@ describe("gateway restart deferral preflight", () => {
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     const startChannel = vi.fn(async () => {});
     const stopChannel = vi.fn(async () => {});
+    const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createGatewayReloadHandlers({
       deps: {} as never,
       broadcast: vi.fn(),
@@ -576,7 +579,7 @@ describe("gateway restart deferral preflight", () => {
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
-      logReload: { info: vi.fn(), warn: vi.fn() },
+      logReload,
       createHealthMonitor: () => null,
     });
     hoisted.activeEmbeddedRunCount.value = 1;
@@ -604,9 +607,12 @@ describe("gateway restart deferral preflight", () => {
     );
     try {
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await vi.advanceTimersByTimeAsync(500);
       expect(stopChannel).not.toHaveBeenCalled();
       expect(startChannel).not.toHaveBeenCalled();
+      expect(logReload.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("channel reload timeout after"),
+      );
 
       hoisted.activeEmbeddedRunCount.value = 0;
       await vi.advanceTimersByTimeAsync(500);
@@ -1273,7 +1279,9 @@ describe("gateway Gmail hot reload handlers", () => {
     const stopPromise = reloader.stop();
     releaseSecrets?.();
     await stopPromise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(hoisted.stopGmailWatcher).not.toHaveBeenCalled();
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();

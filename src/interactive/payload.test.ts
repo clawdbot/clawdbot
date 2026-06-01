@@ -165,6 +165,63 @@ describe("interactive payload helpers", () => {
     );
   });
 
+  it("normalizes typed presentation actions and bridges them to legacy values", () => {
+    const normalized = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(presentationToInteractiveReply(normalized!)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+              value: "/codex plugins menu",
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+              value: "/approve req allow-once",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("converts only presentation controls for native component renderers", () => {
     const presentation = {
       title: "Deploy approval",

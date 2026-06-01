@@ -12,6 +12,12 @@ const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
 );
+const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
+  vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
+    await writeConfigFileMock(params.nextConfig);
+    return { config: params.nextConfig };
+  }),
+);
 const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
   vi.fn(
     async (params: {
@@ -56,6 +62,16 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
 }));
+const authChoiceMocks = vi.hoisted(() => ({
+  applyAuthChoice: vi.fn(),
+  warnIfModelConfigLooksOff: vi.fn(async () => {}),
+}));
+const onboardChannelsMocks = vi.hoisted(() => ({
+  setupChannels: vi.fn(async (config: Record<string, unknown>) => config),
+}));
+const onboardHelpersMocks = vi.hoisted(() => ({
+  ensureWorkspaceAndSessions: vi.fn(async () => {}),
+}));
 
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
@@ -68,11 +84,25 @@ vi.mock("../cli/plugins-install-record-commit.js", async () => ({
   ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
     "../cli/plugins-install-record-commit.js",
   )),
+  commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
   transformConfigWithPendingPluginInstalls: transformConfigWithPendingPluginInstallsMock,
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
+}));
+
+vi.mock("./auth-choice.js", () => ({
+  applyAuthChoice: authChoiceMocks.applyAuthChoice,
+  warnIfModelConfigLooksOff: authChoiceMocks.warnIfModelConfigLooksOff,
+}));
+
+vi.mock("./onboard-channels.js", () => ({
+  setupChannels: onboardChannelsMocks.setupChannels,
+}));
+
+vi.mock("./onboard-helpers.js", () => ({
+  ensureWorkspaceAndSessions: onboardHelpersMocks.ensureWorkspaceAndSessions,
 }));
 
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -85,8 +115,13 @@ describe("agents add command", () => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     replaceConfigFileMock.mockClear();
+    commitConfigWithPendingPluginInstallsMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
     wizardMocks.createClackPrompter.mockClear();
+    authChoiceMocks.applyAuthChoice.mockClear();
+    authChoiceMocks.warnIfModelConfigLooksOff.mockClear();
+    onboardChannelsMocks.setupChannels.mockClear();
+    onboardHelpersMocks.ensureWorkspaceAndSessions.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -134,6 +169,33 @@ describe("agents add command", () => {
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("skips catalog validation when checking the interactive wizard model config", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { list: [] } },
+      sourceConfig: { agents: { list: [] } },
+    });
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce("Jon").mockResolvedValueOnce("/tmp/openclaw-jon"),
+      confirm: vi.fn().mockResolvedValue(false),
+      note: vi.fn(),
+      outro: vi.fn(),
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledOnce();
+    expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: expect.any(Object) }),
+      expect.any(Object),
+      expect.objectContaining({
+        agentId: "jon",
+        validateCatalog: false,
+      }),
+    );
   });
 
   it("copies only portable auth profiles when seeding a new agent store", async () => {

@@ -1239,7 +1239,7 @@ async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     );
   };
 
-  let patchedGateway = false;
+  let patchedGateway;
   let client: MatrixQaE2eeScenarioClient | undefined;
   try {
     await applyPatch({

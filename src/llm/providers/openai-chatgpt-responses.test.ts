@@ -150,6 +150,101 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("Request timed out after 5ms");
   });
 
+  it("does not replay Responses item ids for store-disabled ChatGPT requests", async () => {
+    let capturedPayload:
+      | {
+          store?: unknown;
+          input?: Array<Record<string, unknown>>;
+        }
+      | undefined;
+    const stream = streamOpenAICodexResponses(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-chatgpt-responses",
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "lookup",
+                arguments: {},
+              },
+            ],
+          },
+        ],
+      },
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload as typeof capturedPayload;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("stop after payload");
+    expect(capturedPayload?.store).toBe(false);
+    const reasoningItem = capturedPayload?.input?.find((item) => item.type === "reasoning");
+    expect(reasoningItem).toMatchObject({
+      type: "reasoning",
+      encrypted_content: "ciphertext",
+      summary: [],
+    });
+    expect(reasoningItem).not.toHaveProperty("id");
+    const messageItem = capturedPayload?.input?.find((item) => item.type === "message");
+    expect(messageItem).toMatchObject({
+      type: "message",
+      phase: "commentary",
+    });
+    expect(messageItem).not.toHaveProperty("id");
+    const functionCall = capturedPayload?.input?.find((item) => item.type === "function_call");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall).not.toHaveProperty("id");
+  });
+
   it("caps oversized timeoutMs before creating request abort signals", async () => {
     stubHangingFetch(MAX_TIMER_TIMEOUT_MS);
 

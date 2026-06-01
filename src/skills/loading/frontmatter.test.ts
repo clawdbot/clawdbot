@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  parseFrontmatter,
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
 
 describe("resolveSkillInvocationPolicy", () => {
   it("defaults to enabled behaviors", () => {
@@ -63,5 +67,54 @@ describe("resolveOpenClawMetadata install validation", () => {
       metadata: '{"openclaw":{"install":[{"kind":"download","url":"file:///tmp/payload.tgz"}]}}',
     });
     expect(install).toBeUndefined();
+  });
+
+  it("parses Link-style YAML metadata with node install hints", () => {
+    const frontmatter = parseFrontmatter(`---
+name: create-payment-credential
+description: |
+  Gets secure, one-time-use payment credentials from a Link wallet so agents can complete purchases.
+allowed-tools:
+  - Bash(link-cli:*)
+  - Bash(npx:*)
+version: 0.0.1
+metadata:
+  author: stripe
+  url: link.com/agents
+  openclaw:
+    homepage: https://link.com/agents
+    requires:
+      bins:
+        - link-cli
+    install:
+      - kind: node
+        package: "@stripe/link-cli"
+        bins: [link-cli]
+user-invocable: true
+---
+# Creating Payment Credentials
+`);
+
+    const metadata = resolveOpenClawMetadata(frontmatter);
+
+    expect(frontmatter.name).toBe("create-payment-credential");
+    expect(frontmatter.description).toContain("one-time-use payment credentials");
+    expect(resolveSkillInvocationPolicy(frontmatter).userInvocable).toBe(true);
+    expect(metadata).toEqual({
+      homepage: "https://link.com/agents",
+      requires: {
+        bins: ["link-cli"],
+        anyBins: [],
+        env: [],
+        config: [],
+      },
+      install: [
+        {
+          kind: "node",
+          package: "@stripe/link-cli",
+          bins: ["link-cli"],
+        },
+      ],
+    });
   });
 });

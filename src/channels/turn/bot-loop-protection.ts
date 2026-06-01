@@ -6,6 +6,7 @@ import {
   type PairLoopGuardSnapshotEntry,
 } from "../../plugin-sdk/pair-loop-guard-runtime.js";
 
+/** Facts used to detect repeated bot-to-bot channel reply loops. */
 export type ChannelBotLoopProtectionFacts = {
   scopeId: string;
   conversationId: string;
@@ -19,6 +20,7 @@ export type ChannelBotLoopProtectionFacts = {
 
 const channelBotPairLoopGuard = createPairLoopGuard({ pruneIntervalMs: 60_000 });
 
+/** Records a bot pair interaction and returns whether the loop guard should suppress it. */
 export function recordChannelBotPairLoopAndCheckSuppression(
   params: ChannelBotLoopProtectionFacts,
 ): PairLoopGuardResult {
@@ -36,10 +38,12 @@ export function recordChannelBotPairLoopAndCheckSuppression(
   });
 }
 
+/** Clears channel bot-loop state for isolated tests. */
 export function clearChannelBotPairLoopGuardForTests(): void {
   channelBotPairLoopGuard.clear();
 }
 
+/** Lists tracked bot-loop pairs for isolated tests. */
 export function listTrackedChannelBotPairsForTests(): PairLoopGuardSnapshotEntry[] {
   return channelBotPairLoopGuard.snapshot();
 }

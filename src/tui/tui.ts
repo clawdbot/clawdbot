@@ -29,7 +29,6 @@ import {
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { GatewayChatClient } from "./gateway-chat.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -476,9 +475,16 @@ export function resolveTuiCtrlCAction(params: {
   return resolveCtrlCAction(params);
 }
 
+function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
+  return {
+    verboseLevel: config.agents?.defaults?.verboseDefault,
+  };
+}
+
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -510,11 +516,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
-  let sessionInfo: SessionInfo = {};
+  let sessionInfo: SessionInfo = { ...emptySessionInfoDefaults };
   let dynamicSlashCommands: CommandEntry[] = [];
   let dynamicSlashCommandsKey: string | null = null;
   let dynamicSlashCommandsInFlightKey: string | null = null;
   let dynamicSlashCommandsRequestId = 0;
+  let dynamicSlashCommandsReady = false;
+  let dynamicSlashCommandsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let exitResult: TuiResult = { exitReason: "exit" };
@@ -707,6 +715,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     client = new EmbeddedTuiBackend();
   } else {
+    const { GatewayChatClient } = await import("./gateway-chat.js");
     client = await GatewayChatClient.connect({
       url: opts.url,
       token: opts.token,
@@ -762,9 +771,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     );
   };
 
+  const clearDynamicSlashCommandsRefreshTimer = () => {
+    if (!dynamicSlashCommandsRefreshTimer) {
+      return;
+    }
+    clearTimeout(dynamicSlashCommandsRefreshTimer);
+    dynamicSlashCommandsRefreshTimer = null;
+  };
+
   const refreshDynamicSlashCommands = () => {
+    clearDynamicSlashCommandsRefreshTimer();
     const key = resolveDynamicSlashCommandsKey();
     if (
+      !dynamicSlashCommandsReady ||
       !isConnected ||
       !client.listCommands ||
       dynamicSlashCommandsKey === key ||
@@ -800,9 +819,21 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       });
   };
 
+  const scheduleDynamicSlashCommandsRefresh = () => {
+    if (
+      !dynamicSlashCommandsReady ||
+      dynamicSlashCommandsRefreshTimer ||
+      dynamicSlashCommandsKey === resolveDynamicSlashCommandsKey()
+    ) {
+      return;
+    }
+    dynamicSlashCommandsRefreshTimer = setTimeout(refreshDynamicSlashCommands, 0);
+    dynamicSlashCommandsRefreshTimer.unref?.();
+  };
+
   const updateAutocompleteProvider = () => {
     applyAutocompleteProvider();
-    refreshDynamicSlashCommands();
+    scheduleDynamicSlashCommandsRefresh();
   };
 
   tui.addChild(root);
@@ -1209,13 +1240,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey: rememberCurrentSessionKey,
+    emptySessionInfoDefaults,
   });
   const {
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,
+    applySessionMutationResult,
     loadHistory,
     setSession,
+    setEmptySession,
     abortActive,
   } = sessionActions;
 
@@ -1225,6 +1259,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleBtwEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
+    consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle,
   } = createEventHandlers({
     chatLog,
     btw,
@@ -1274,7 +1310,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         clearTimeout(hardExitTimer);
         stopStatusTimeout();
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!isTuiTerminalLossError(err)) {
           try {
             process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
@@ -1304,8 +1340,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       closeOverlay,
       refreshSessionInfo,
       applySessionInfoFromPatch,
+      applySessionMutationResult,
       loadHistory,
       setSession,
+      setEmptySession,
       refreshAgents,
       abortActive,
       setActivityStatus,
@@ -1314,6 +1352,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       noteLocalBtwRunId,
       forgetLocalRunId,
       forgetLocalBtwRunId,
+      consumeCompletedRunForPendingSend,
+      flushPendingHistoryRefreshIfIdle,
       runAuthFlow,
       requestExit,
     });
@@ -1458,13 +1498,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         4000,
       );
       tui.requestRender();
+      dynamicSlashCommandsReady = true;
+      scheduleDynamicSlashCommandsRefresh();
       if (!autoMessageSent && autoMessage) {
         autoMessageSent = true;
         await sendMessage(autoMessage);
       }
       updateFooter();
       tui.requestRender();
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       chatLog.addSystem(`startup failed: ${String(err)}`);
       setConnectionStatus("startup failed", 5000);
       tui.requestRender();
@@ -1478,6 +1520,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     dynamicSlashCommands = [];
     dynamicSlashCommandsKey = null;
     dynamicSlashCommandsInFlightKey = null;
+    dynamicSlashCommandsReady = false;
+    clearDynamicSlashCommandsRefreshTimer();
     dynamicSlashCommandsRequestId += 1;
     updateAutocompleteProvider();
     pauseStreamingWatchdog();

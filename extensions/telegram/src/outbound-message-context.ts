@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { createTelegramMessageCache, resolveTelegramMessageCachePath } from "./message-cache.js";
+import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
 
 export type TelegramOutboundPromptContextMessage = {
   message_id?: number;
@@ -67,9 +67,7 @@ export async function recordOutboundMessageForPromptContext(params: {
 }): Promise<void> {
   try {
     const cache = createTelegramMessageCache({
-      legacyPersistedPath: resolveTelegramMessageCachePath(
-        resolveStorePath(params.cfg.session?.store),
-      ),
+      scope: resolveTelegramMessageCacheScope(resolveStorePath(params.cfg.session?.store)),
     });
     await cache.record({
       accountId: params.account.accountId,

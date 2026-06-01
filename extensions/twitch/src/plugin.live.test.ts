@@ -100,7 +100,9 @@ maybeDescribe("twitch live IRC lifecycle (skipped unless TWITCH_LIVE_TEST=1)", (
     // Wait long enough that the original bug would have manifested.
     // The reported time-to-restart in #60071 is ~2ms after connect.
     const WATCH_MS = 15_000;
-    await new Promise((resolve) => setTimeout(resolve, WATCH_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, WATCH_MS);
+    });
 
     expect(connectedAt, "expected onConnect within the watch window").not.toBeNull();
     expect(settled, "task must not have settled before abort").toBe(false);

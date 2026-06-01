@@ -1,8 +1,3 @@
-/**
- * Agent loop that works with AgentMessage throughout.
- * Transforms to Message[] only at the LLM call boundary.
- */
-
 // Keep the runtime class on the package specifier so built agent-core shares
 // constructor identity with @openclaw/llm-core; source types keep SDK d.ts bundled.
 import { EventStream as LlmEventStream } from "@openclaw/llm-core";
@@ -26,6 +21,7 @@ import type {
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
+/** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 const EMPTY_USAGE = {
@@ -67,7 +63,7 @@ export function agentLoop(
     .then((messages) => {
       stream.end(messages);
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       pushLoopFailure(stream, config, error, signal?.aborted === true);
     });
 
@@ -112,13 +108,14 @@ export function agentLoopContinue(
     .then((messages) => {
       stream.end(messages);
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       pushLoopFailure(stream, config, error, signal?.aborted === true);
     });
 
   return stream;
 }
 
+/** Run a prompt-started loop and emit events through a caller-owned sink. */
 export async function runAgentLoop(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -145,6 +142,7 @@ export async function runAgentLoop(
   return newMessages;
 }
 
+/** Continue an existing loop context and emit only newly produced messages. */
 export async function runAgentLoopContinue(
   context: AgentContext,
   config: AgentLoopConfig,
@@ -247,7 +245,6 @@ async function runLoop(
           currentContext.messages.push(message);
           newMessages.push(message);
         }
-        pendingMessages = [];
       }
 
       // Stream assistant response
@@ -326,10 +323,10 @@ async function runLoop(
       pendingMessages = (await config.getSteeringMessages?.()) || [];
     }
 
-    // Agent would stop here. Check for follow-up messages.
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
     if (followUpMessages.length > 0) {
-      // Set as pending so inner loop processes them
+      // Follow-up messages arrive after a turn would otherwise end; route them through the
+      // same pending-message path so event ordering matches steering messages.
       pendingMessages = followUpMessages;
       continue;
     }

@@ -15,6 +15,40 @@ import {
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
+type PairingLocalityParams = Parameters<typeof resolvePairingLocality>[0];
+type PairingLocalityOverrides = {
+  connectParams?: ConnectParams;
+  isLocalClient?: boolean;
+  requestHost?: string;
+  requestOrigin?: string;
+  remoteAddress?: string;
+  hasProxyHeaders?: boolean;
+  hasBrowserOriginHeader?: boolean;
+  sharedAuthOk?: boolean;
+  authMethod?: PairingLocalityParams["authMethod"];
+};
+
+const CONTROL_UI_WEBCHAT_CONNECT_PARAMS = {
+  client: {
+    id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+  },
+} as ConnectParams;
+
+const GATEWAY_BACKEND_CONNECT_PARAMS = {
+  client: {
+    id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+  },
+} as ConnectParams;
+
+const NODE_HOST_CONNECT_PARAMS = {
+  client: {
+    id: GATEWAY_CLIENT_IDS.NODE_HOST,
+    mode: GATEWAY_CLIENT_MODES.NODE,
+  },
+} as ConnectParams;
+
 function createRateLimiter(): AuthRateLimiter {
   return {
     check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
@@ -24,6 +58,34 @@ function createRateLimiter(): AuthRateLimiter {
     prune: () => {},
     dispose: () => {},
   };
+}
+
+function resolveDockerPublishedBrowserLocality(overrides: PairingLocalityOverrides = {}) {
+  return resolvePairingLocality({
+    connectParams: overrides.connectParams ?? CONTROL_UI_WEBCHAT_CONNECT_PARAMS,
+    isLocalClient: overrides.isLocalClient ?? false,
+    requestHost: overrides.requestHost ?? "127.0.0.1:18789",
+    requestOrigin: overrides.requestOrigin ?? "http://127.0.0.1:18789",
+    remoteAddress: overrides.remoteAddress ?? "172.17.0.1",
+    hasProxyHeaders: overrides.hasProxyHeaders ?? false,
+    hasBrowserOriginHeader: overrides.hasBrowserOriginHeader ?? true,
+    sharedAuthOk: overrides.sharedAuthOk ?? true,
+    authMethod: overrides.authMethod ?? "token",
+  });
+}
+
+function resolveNodeLoopbackLocality(overrides: PairingLocalityOverrides = {}) {
+  return resolvePairingLocality({
+    connectParams: overrides.connectParams ?? NODE_HOST_CONNECT_PARAMS,
+    isLocalClient: overrides.isLocalClient ?? false,
+    requestHost: overrides.requestHost ?? "127.0.0.1:18789",
+    requestOrigin: overrides.requestOrigin,
+    remoteAddress: overrides.remoteAddress ?? "127.0.0.1",
+    hasProxyHeaders: overrides.hasProxyHeaders ?? false,
+    hasBrowserOriginHeader: overrides.hasBrowserOriginHeader ?? false,
+    sharedAuthOk: overrides.sharedAuthOk ?? true,
+    authMethod: overrides.authMethod ?? "token",
+  });
 }
 
 describe("handshake auth helpers", () => {
@@ -222,107 +284,44 @@ describe("handshake auth helpers", () => {
   });
 
   it("classifies Docker-published loopback Control UI as browser-container-local", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    } as ConnectParams;
+    expect(resolveDockerPublishedBrowserLocality()).toBe("browser_container_local");
     expect(
-      resolvePairingLocality({
-        connectParams,
-        isLocalClient: false,
-        requestHost: "127.0.0.1:18789",
-        requestOrigin: "http://127.0.0.1:18789",
-        remoteAddress: "172.17.0.1",
-        hasProxyHeaders: false,
-        hasBrowserOriginHeader: true,
-        sharedAuthOk: true,
-        authMethod: "token",
-      }),
-    ).toBe("browser_container_local");
-    expect(
-      resolvePairingLocality({
-        connectParams,
-        isLocalClient: false,
+      resolveDockerPublishedBrowserLocality({
         requestHost: "localhost:18789",
         requestOrigin: "http://localhost:18789",
-        remoteAddress: "172.17.0.1",
-        hasProxyHeaders: false,
-        hasBrowserOriginHeader: true,
-        sharedAuthOk: true,
         authMethod: "password",
       }),
     ).toBe("browser_container_local");
   });
 
   it("keeps Docker-published non-loopback Control UI origins remote", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    } as ConnectParams;
-    const base = {
-      connectParams,
-      isLocalClient: false,
-      remoteAddress: "172.17.0.1",
-      hasProxyHeaders: false,
-      hasBrowserOriginHeader: true,
-      sharedAuthOk: true,
-      authMethod: "token" as const,
-    };
-
     expect(
-      resolvePairingLocality({
-        ...base,
+      resolveDockerPublishedBrowserLocality({
         requestHost: "192.168.1.10:18789",
         requestOrigin: "http://192.168.1.10:18789",
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
-        requestHost: "127.0.0.1:18789",
+      resolveDockerPublishedBrowserLocality({
         requestOrigin: "https://app.example",
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
-        requestHost: "127.0.0.1:18789",
-        requestOrigin: "http://127.0.0.1:18789",
+      resolveDockerPublishedBrowserLocality({
         hasProxyHeaders: true,
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
-        requestHost: "127.0.0.1:18789",
-        requestOrigin: "http://127.0.0.1:18789",
+      resolveDockerPublishedBrowserLocality({
         sharedAuthOk: false,
       }),
     ).toBe("remote");
   });
 
   it("keeps non-Control-UI clients remote for browser-container-local conditions", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-    } as ConnectParams;
     expect(
-      resolvePairingLocality({
-        connectParams,
-        isLocalClient: false,
-        requestHost: "127.0.0.1:18789",
-        requestOrigin: "http://127.0.0.1:18789",
-        remoteAddress: "172.17.0.1",
-        hasProxyHeaders: false,
-        hasBrowserOriginHeader: true,
-        sharedAuthOk: true,
-        authMethod: "token",
+      resolveDockerPublishedBrowserLocality({
+        connectParams: GATEWAY_BACKEND_CONNECT_PARAMS,
       }),
     ).toBe("remote");
   });
@@ -572,75 +571,38 @@ describe("handshake auth helpers", () => {
   });
 
   it("classifies non-CLI loopback + shared-secret clients as shared_secret_loopback_local", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
-    } as ConnectParams;
-    expect(
-      resolvePairingLocality({
-        connectParams,
-        isLocalClient: false,
-        requestHost: "127.0.0.1:18789",
-        remoteAddress: "127.0.0.1",
-        hasProxyHeaders: false,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
-      }),
-    ).toBe("shared_secret_loopback_local");
+    expect(resolveNodeLoopbackLocality()).toBe("shared_secret_loopback_local");
   });
 
   it("keeps non-CLI loopback clients remote without shared-secret auth", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
-    } as ConnectParams;
-    const base = {
-      connectParams,
-      isLocalClient: false,
-      requestHost: "127.0.0.1:18789",
-      remoteAddress: "127.0.0.1",
-      hasProxyHeaders: false,
-      hasBrowserOriginHeader: false,
-    } as const;
-
     expect(
-      resolvePairingLocality({
-        ...base,
+      resolveNodeLoopbackLocality({
         sharedAuthOk: false,
         authMethod: "token",
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
+      resolveNodeLoopbackLocality({
         sharedAuthOk: true,
         authMethod: "device-token",
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
+      resolveNodeLoopbackLocality({
         remoteAddress: "192.168.1.10",
         sharedAuthOk: true,
         authMethod: "token",
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
+      resolveNodeLoopbackLocality({
         hasProxyHeaders: true,
         sharedAuthOk: true,
         authMethod: "token",
       }),
     ).toBe("remote");
     expect(
-      resolvePairingLocality({
-        ...base,
+      resolveNodeLoopbackLocality({
         hasBrowserOriginHeader: true,
         sharedAuthOk: true,
         authMethod: "token",
@@ -649,23 +611,9 @@ describe("handshake auth helpers", () => {
   });
 
   it("keeps shared-secret loopback clients remote when forwarded headers were present", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
-    } as ConnectParams;
-
     expect(
-      resolvePairingLocality({
-        connectParams,
-        isLocalClient: false,
-        requestHost: "127.0.0.1:18789",
-        remoteAddress: "127.0.0.1",
+      resolveNodeLoopbackLocality({
         hasProxyHeaders: true,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
       }),
     ).toBe("remote");
   });

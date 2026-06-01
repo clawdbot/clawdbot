@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
+/** Voice home screen that routes between talk mode, dictation, and idle setup. */
 @Composable
 fun VoiceScreen(
   viewModel: MainViewModel,
@@ -113,6 +114,8 @@ fun VoiceScreen(
       pendingAction = null
     }
 
+  // Talk mode and dictation use different managers, so choose the transcript
+  // from the mode the user is actually seeing.
   val activeConversation = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) talkModeConversation else micConversation
   val voiceActive = micEnabled || micIsSending || talkModeEnabled
   val gatewayReady = gatewayStatus.isVoiceGatewayReady()
@@ -141,6 +144,8 @@ fun VoiceScreen(
   }
 
   if (voiceCaptureMode == VoiceCaptureMode.ManualMic || micEnabled || micIsSending) {
+    // Manual mic mode owns the whole screen while a turn is being captured or
+    // delivered, even after the user releases the mic.
     DictationScreen(
       liveTranscript = micLiveTranscript,
       conversation = micConversation,
@@ -222,6 +227,7 @@ fun VoiceScreen(
   }
 }
 
+/** Full-screen dictation capture and send state. */
 @Composable
 private fun DictationScreen(
   liveTranscript: String?,

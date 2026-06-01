@@ -8,7 +8,9 @@ import {
 
 const waitForAsyncCallbacks = async () => {
   await Promise.resolve();
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 };
 
 describe("subscribeEmbeddedAgentSession block reply rejections", () => {

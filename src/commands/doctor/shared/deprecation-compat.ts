@@ -196,6 +196,22 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-webchat-channel-config",
+    status: "removed",
+    owner: "channel",
+    introduced: "2026-05-18",
+    deprecated: "2026-05-31",
+    warningStarts: "2026-05-31",
+    removeAfter: "2026-08-31",
+    source: "channels.webchat",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.channels.ts",
+    replacement: "chat.history maxChars per-request override when a custom client needs it",
+    docsPath: "/web/webchat",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "WebChat is an internal control surface, not a configurable outbound channel. Runtime ignores the retired channel key; doctor removes stale config.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-tts-provider-aliases",
     owner: "tts",
     introduced: "2026-04-26",
@@ -233,7 +249,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     source: "plugins.installs in authored config",
     migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "state-managed plugins/installs.json install ledger",
+    replacement: "shared SQLite installed_plugin_index install ledger",
     docsPath: "/cli/plugins#registry",
     tests: [
       "src/config/io.write-config.test.ts",

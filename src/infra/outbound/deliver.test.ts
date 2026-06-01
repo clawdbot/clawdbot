@@ -257,7 +257,9 @@ async function deliverSingleMatrixForHookTest(params?: { sessionKey?: string }) 
 }
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean }) {

@@ -7,7 +7,7 @@ import {
   resetCommandQueueStateForTest,
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
-import { createQueuedTaskRun } from "../../tasks/task-executor.js";
+import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
   getTaskById,
@@ -16,6 +16,7 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-registry.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveSessionLane } from "./lanes.js";
@@ -33,6 +34,14 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
 let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.js").resetDeferredTurnMaintenanceStateForTest;
+
+function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
+  const task = createQueuedTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected queued task creation to succeed");
+  }
+  return task;
+}
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
@@ -267,7 +276,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise?.then).toBeTypeOf("function");
+      expect(rewritePromise?.["then"]).toBeTypeOf("function");
 
       await flushAsyncWork();
       expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
@@ -861,7 +870,9 @@ describe("runContextEngineMaintenance", () => {
             if (Date.now() - startedAt >= 2_000) {
               throw error;
             }
-            await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 5);
+            });
           }
         }
       };
@@ -939,7 +950,7 @@ describe("runContextEngineMaintenance", () => {
       }
       releaseFirstMaintenance();
       await waitForRealAssertion(() => expect(events).toContain("maintain:second"));
-      expect(secondEngine.dispose).not.toHaveBeenCalled();
+      expect(secondEngine["dispose"]).not.toHaveBeenCalled();
 
       if (!releaseSecondMaintenance) {
         throw new Error("Expected second maintenance release callback to be initialized");
@@ -947,8 +958,8 @@ describe("runContextEngineMaintenance", () => {
       releaseSecondMaintenance();
       await deferredPromises[1];
 
-      expect(firstEngine.dispose).toHaveBeenCalledTimes(1);
-      expect(secondEngine.dispose).toHaveBeenCalledTimes(1);
+      expect(firstEngine["dispose"]).toHaveBeenCalledTimes(1);
+      expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
         "maintain:first",
         "dispose:first",

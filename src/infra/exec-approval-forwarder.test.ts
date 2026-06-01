@@ -602,7 +602,7 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("🔒 Exec approval required");
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
   it("includes command analysis warnings in fallback delivery text", () => {
@@ -639,7 +639,7 @@ describe("exec approval forwarder", () => {
     ).resolves.toBe(true);
     await Promise.resolve();
     const text = getFirstDeliveryText(deliver);
-    expect(text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
     expect(text).not.toContain("allow-once|allow-always|deny");
     expect(text).toContain("Allow Always is unavailable");
   });
@@ -763,8 +763,8 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       const expiryText =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]
-          ?.text ?? "";
+        (deliver.mock.calls[0][0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]?.text ??
+        "";
       expect(expiryText).toContain("expired");
 
       // After expiry, the pending entry should be cleaned up.
@@ -791,7 +791,7 @@ describe("exec approval forwarder", () => {
             // During expiry delivery, try to resolve the same request.
             // If pending.delete happened before delivery, handleResolved
             // will not find the entry and will not deliver a resolved notice.
-            const resolveResult = await forwarder.handleResolved({
+            await forwarder.handleResolved({
               id: baseRequest.id,
               decision: "allow-once",
               resolvedBy: "slack:U123",

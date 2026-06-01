@@ -658,7 +658,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
             attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
           }
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (attempt < maxRetries) {
             log.warn(`main-session restart recovery failed: ${String(err)}`);
             attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);

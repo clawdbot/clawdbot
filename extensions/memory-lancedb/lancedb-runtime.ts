@@ -51,7 +51,7 @@ export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoad
   return {
     async load(_logger?: LanceDbRuntimeLogger): Promise<LanceDbModule> {
       if (!loadPromise) {
-        loadPromise = deps.importBundled().catch((error) => {
+        loadPromise = deps.importBundled().catch((error: unknown) => {
           loadPromise = null;
           if (isUnsupportedNativePlatform({ platform: deps.platform, arch: deps.arch })) {
             throw new Error(

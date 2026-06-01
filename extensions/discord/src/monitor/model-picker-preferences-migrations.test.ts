@@ -147,4 +147,143 @@ describe("Discord model picker preference migration", () => {
       }),
     ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
   });
+
+  it("plans legacy thread bindings JSON import into plugin state", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const boundAt = Date.now() - 10_000;
+    const expiresAt = boundAt + 60_000;
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        bindings: {
+          "legacy-thread": {
+            accountId: "default",
+            channelId: "parent-1",
+            threadId: "legacy-thread",
+            targetKind: "subagent",
+            targetSessionKey: "agent:main:subagent:legacy",
+            agentId: "main",
+            boundBy: "system",
+            boundAt,
+            expiresAt,
+          },
+        },
+      }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    expect(plans).toHaveLength(1);
+    const plan = plans?.[0];
+    expect(plan?.kind).toBe("plugin-state-import");
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(plan.pluginId).toBe("discord");
+    expect(plan.namespace).toBe("thread-bindings");
+    const entries = await plan.readEntries();
+    expect(entries).toEqual([
+      {
+        key: "default:legacy-thread",
+        value: {
+          accountId: "default",
+          channelId: "parent-1",
+          threadId: "legacy-thread",
+          targetKind: "subagent",
+          targetSessionKey: "agent:main:subagent:legacy",
+          agentId: "main",
+          boundBy: "system",
+          boundAt,
+          lastActivityAt: boundAt,
+          idleTimeoutMs: 0,
+          maxAgeMs: expiresAt - boundAt,
+        },
+      },
+    ]);
+  });
+
+  it("detects model picker and thread binding legacy JSON together", async () => {
+    const stateDir = await makeStateDir();
+    const discordDir = path.join(stateDir, "discord");
+    await fs.mkdir(discordDir, { recursive: true });
+    await fs.writeFile(
+      path.join(discordDir, "model-picker-preferences.json"),
+      JSON.stringify({ version: 1, entries: {} }),
+    );
+    await fs.writeFile(
+      path.join(discordDir, "thread-bindings.json"),
+      JSON.stringify({ version: 1, bindings: {} }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    expect(plans?.map((plan) => plan.label)).toEqual([
+      "Discord model picker preferences",
+      "Discord thread bindings",
+    ]);
+  });
+
+  it("archives valid empty legacy thread bindings after an empty import", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify({ version: 1, bindings: {} }));
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.[0];
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(plan.cleanupWhenEmpty).toBe(true);
+    expect(plan.readEntries()).toEqual([]);
+  });
+
+  it("keeps malformed legacy thread bindings for doctor warning", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify({ version: 2, bindings: {} }));
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.[0];
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(() => plan.readEntries()).toThrow(
+      "legacy Discord thread bindings store must have version 1 bindings",
+    );
+  });
 });

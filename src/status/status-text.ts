@@ -343,7 +343,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         }
       });
       const usageEntry = usageSummary.providers[0];
-      if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
+      if (
+        usageEntry &&
+        !usageEntry.error &&
+        (usageEntry.windows.length > 0 || Boolean(usageEntry.summary?.trim()))
+      ) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),
           maxWindows: 2,

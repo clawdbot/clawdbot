@@ -2969,12 +2969,12 @@ describe("matrix live qa scenarios", () => {
           since: "driver-sync-preview",
         },
         {
-          event: ({ sendTextMessage }) =>
+          event: ({ sendTextMessage: sendTextMessageItem }) =>
             matrixQaMessageEvent({
               kind: "message",
               eventId: "$partial-final",
               body: readMatrixQaReplyDirective(
-                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                mockMessageBody(sendTextMessageItem, "sendTextMessage"),
                 fallbackFinalText,
               ),
               relatesTo: {
@@ -3012,12 +3012,12 @@ describe("matrix live qa scenarios", () => {
       driverEventId: "$partial-stream-trigger",
       events: [
         {
-          event: ({ sendTextMessage }) =>
+          event: ({ sendTextMessage: sendTextMessageCandidate }) =>
             matrixQaMessageEvent({
               kind: "message",
               eventId: "$partial-final-only",
               body: readMatrixQaReplyDirective(
-                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                mockMessageBody(sendTextMessageCandidate, "sendTextMessage"),
                 fallbackFinalText,
               ),
             }),
@@ -3053,12 +3053,12 @@ describe("matrix live qa scenarios", () => {
       driverEventId: "$quiet-stream-trigger",
       events: [
         {
-          event: ({ sendTextMessage }) =>
+          event: ({ sendTextMessage: sendTextMessageEntry }) =>
             matrixQaMessageEvent({
               kind: "message",
               eventId: "$quiet-final-only",
               body: readMatrixQaReplyDirective(
-                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                mockMessageBody(sendTextMessageEntry, "sendTextMessage"),
                 fallbackFinalText,
               ),
             }),
@@ -3758,12 +3758,12 @@ describe("matrix live qa scenarios", () => {
           since: "driver-sync-preview",
         },
         {
-          event: ({ sendTextMessage }) =>
+          event: ({ sendTextMessage: sendTextMessageResult }) =>
             matrixQaMessageEvent({
               kind: "notice",
               eventId: "$tool-progress-error-final",
               body: readMatrixQaReplyDirective(
-                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                mockMessageBody(sendTextMessageResult, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_ERROR_FIXED",
               ),
               relatesTo: {
@@ -3898,12 +3898,12 @@ describe("matrix live qa scenarios", () => {
           since: "driver-sync-progress",
         },
         {
-          event: ({ sendTextMessage }) =>
+          event: ({ sendTextMessage: sendTextMessageValue }) =>
             matrixQaMessageEvent({
               kind: "message",
               eventId: "$tool-progress-mention-final",
               body: readMatrixQaReplyDirective(
-                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                mockMessageBody(sendTextMessageValue, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE_FIXED",
               ),
               relatesTo: {
@@ -3941,12 +3941,12 @@ describe("matrix live qa scenarios", () => {
       driverEventId: "$tool-progress-mention-final-first-trigger",
       events: [
         {
-          event: ({ sendTextMessage }) =>
+          event: ({ sendTextMessage: sendTextMessageLocal }) =>
             matrixQaMessageEvent({
               kind: "message",
               eventId: "$tool-progress-mention-final-first-final",
               body: readMatrixQaReplyDirective(
-                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                mockMessageBody(sendTextMessageLocal, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE_FIXED",
               ),
             }),

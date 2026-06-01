@@ -77,13 +77,10 @@ export function shouldPassWithNoTestsForCliIncludes(
   if (cliIncludePatterns === null) {
     return false;
   }
-  return (
-    cliIncludePatterns.length === 0 ||
-    cliIncludePatterns.every((includePattern) =>
-      excludePatterns.some((excludePattern) =>
-        includePatternIsFullyExcluded(includePattern, excludePattern),
-      ),
-    )
+  return cliIncludePatterns.every((includePattern) =>
+    excludePatterns.some((excludePattern) =>
+      includePatternIsFullyExcluded(includePattern, excludePattern),
+    ),
   );
 }
 

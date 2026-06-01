@@ -4,12 +4,15 @@ import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 
 export type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 export type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+
+/** Legacy raw send result shape accepted from channel SDK adapters. */
 export type ChannelSendRawResult = {
   ok: boolean;
   messageId?: string | null;
   error?: string | null;
 };
 
+/** Attaches the channel id to a single outbound send result. */
 export function attachChannelToResult<T extends object>(channel: string, result: T) {
   return {
     channel,
@@ -17,16 +20,19 @@ export function attachChannelToResult<T extends object>(channel: string, result:
   };
 }
 
+/** Attaches the channel id to each outbound send result in order. */
 export function attachChannelToResults<T extends object>(channel: string, results: readonly T[]) {
   return results.map((result) => attachChannelToResult(channel, result));
 }
 
+/** Creates an empty outbound delivery result for send paths that produced no platform id. */
 export function createEmptyChannelResult(
   channel: string,
   result: Partial<Omit<OutboundDeliveryResult, "channel" | "messageId">> & {
     messageId?: string;
   } = {},
 ): OutboundDeliveryResult {
+  // Empty message ids are the legacy "no platform id" sentinel expected by outbound callers.
   return attachChannelToResult(channel, {
     messageId: "",
     ...result,
@@ -38,6 +44,7 @@ type SendTextParams = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>
 type SendMediaParams = Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0];
 type SendPollParams = Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0];
 
+/** Wraps outbound send methods that already return delivery-shaped results without channel ids. */
 export function createAttachedChannelResultAdapter(params: {
   channel: string;
   sendText?: (ctx: SendTextParams) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
@@ -57,6 +64,7 @@ export function createAttachedChannelResultAdapter(params: {
   };
 }
 
+/** Wraps legacy raw text/media send methods and normalizes their results. */
 export function createRawChannelSendResultAdapter(params: {
   channel: string;
   sendText?: (ctx: SendTextParams) => MaybePromise<ChannelSendRawResult>;

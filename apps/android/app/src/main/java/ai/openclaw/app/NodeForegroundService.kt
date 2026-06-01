@@ -19,6 +19,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
+/** Foreground service that keeps the Android node connection and voice capture visible to the OS. */
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
@@ -36,6 +37,8 @@ class NodeForegroundService : Service() {
       stopSelf()
       return
     }
+    // Split connection and capture flows before combining so notification text
+    // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
         combine(
@@ -181,6 +184,7 @@ class NodeForegroundService : Service() {
   private fun startForegroundWithTypes(notification: Notification) {
     val serviceTypes = foregroundServiceTypesForVoiceMode(voiceCaptureMode)
     if (didStartForeground) {
+      // Re-issue startForeground when Talk mode toggles so Android sees the microphone service type.
       ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
       return
     }
@@ -196,16 +200,19 @@ class NodeForegroundService : Service() {
     private const val ACTION_SET_VOICE_CAPTURE_MODE = "ai.openclaw.app.action.SET_VOICE_CAPTURE_MODE"
     private const val EXTRA_VOICE_CAPTURE_MODE = "ai.openclaw.app.extra.VOICE_CAPTURE_MODE"
 
+    /** Starts the persistent node foreground service from UI lifecycle code. */
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
       context.startForegroundService(intent)
     }
 
+    /** Requests disconnect through the service action path so notification actions and UI share behavior. */
     fun stop(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
     }
 
+    /** Updates Android's foreground-service type before voice capture mode changes require microphone access. */
     fun setVoiceCaptureMode(
       context: Context,
       mode: VoiceCaptureMode,
@@ -215,6 +222,7 @@ class NodeForegroundService : Service() {
           .setAction(ACTION_SET_VOICE_CAPTURE_MODE)
           .putExtra(EXTRA_VOICE_CAPTURE_MODE, mode.name)
       if (mode == VoiceCaptureMode.TalkMode) {
+        // Microphone foreground service type must be declared before Talk capture starts.
         ContextCompat.startForegroundService(context, intent)
       } else {
         context.startService(intent)
@@ -223,6 +231,9 @@ class NodeForegroundService : Service() {
   }
 }
 
+/**
+ * Foreground-service type mask required by Android for the current voice capture mode.
+ */
 internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
   val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
   return if (mode == VoiceCaptureMode.TalkMode) {
@@ -232,6 +243,9 @@ internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
   }
 }
 
+/**
+ * Compact notification suffix for voice state; kept pure for service-notification tests.
+ */
 internal fun voiceNotificationSuffix(
   mode: VoiceCaptureMode,
   manualMicEnabled: Boolean,
@@ -260,6 +274,7 @@ private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =
     it.name == this
   } ?: VoiceCaptureMode.Off
 
+/** Connection fields that drive foreground notification title/body text. */
 private data class VoiceNotificationBase(
   val status: String,
   val server: String?,
@@ -267,6 +282,7 @@ private data class VoiceNotificationBase(
   val mode: VoiceCaptureMode,
 )
 
+/** Voice capture fields that affect foreground-service type and suffix. */
 private data class VoiceNotificationCapture(
   val micEnabled: Boolean,
   val micListening: Boolean,
@@ -274,6 +290,7 @@ private data class VoiceNotificationCapture(
   val talkSpeaking: Boolean,
 )
 
+/** Aggregated notification state from runtime flows. */
 private data class VoiceNotificationState(
   val base: VoiceNotificationBase,
   val capture: VoiceNotificationCapture,

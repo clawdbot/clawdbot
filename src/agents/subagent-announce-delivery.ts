@@ -43,7 +43,7 @@ import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/r
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -398,12 +398,13 @@ function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
 }
 
 function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
-  if (isSessionWriteLockTimeoutError(error)) {
+  if (isSessionWriteLockAcquireError(error)) {
     return true;
   }
   const message = summarizeDeliveryError(error);
   return (
-    /\bSessionWriteLockTimeoutError\b/.test(message) || /\bsession file locked\b/i.test(message)
+    /\bSessionWriteLock(?:Timeout|Stale)Error\b/.test(message) ||
+    /\bsession file lock(?:ed| stale)\b/i.test(message)
   );
 }
 
@@ -425,7 +426,9 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
     return;
   }
   if (!signal) {
-    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
     return;
   }
   if (signal.aborted) {
@@ -451,16 +454,14 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
-  let retryIndex = 0;
-  for (;;) {
+  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
     if (params.signal?.aborted) {
       throw new Error("announce delivery aborted");
     }
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
+      if (!isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
@@ -468,10 +469,13 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       defaultRuntime.log(
         `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
-      retryIndex += 1;
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
   }
+  if (params.signal?.aborted) {
+    throw new Error("announce delivery aborted");
+  }
+  return await params.run();
 }
 
 export async function resolveSubagentCompletionOrigin(params: {
@@ -1472,22 +1476,21 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal || requiresMessageToolDelivery
         ? getGatewayAgentCommandDeliveryFailure(directAnnounceResponse)
         : undefined;
-    const missingExpectedMediaUrls =
-      agentMediatedCompletion && expectedMediaUrls.length > 0
-        ? resolveGeneratedMediaDirectFallbackUrls({
-            expectedMediaUrls,
-            announceResponse: directAnnounceResponse,
-            requiresMessageToolDelivery,
-            automaticDeliveryRequested: shouldDeliverAgentFinal,
-            automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
-            deliveryTarget,
-          })
-        : [];
-    if (
+    const shouldRequireGeneratedMediaDelivery =
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
-      missingExpectedMediaUrls.length > 0
-    ) {
+      (params.requesterIsSubagent || shouldDeliverAgentFinal || requiresMessageToolDelivery);
+    const missingExpectedMediaUrls = shouldRequireGeneratedMediaDelivery
+      ? resolveGeneratedMediaDirectFallbackUrls({
+          expectedMediaUrls,
+          announceResponse: directAnnounceResponse,
+          requiresMessageToolDelivery,
+          automaticDeliveryRequested: shouldDeliverAgentFinal,
+          automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
+          deliveryTarget,
+        })
+      : [];
+    if (shouldRequireGeneratedMediaDelivery && missingExpectedMediaUrls.length > 0) {
       const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(
         directAnnounceResponse,
         missingExpectedMediaUrls,

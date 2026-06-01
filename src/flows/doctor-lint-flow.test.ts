@@ -59,9 +59,9 @@ describe("runDoctorLintChecks", () => {
         };
       },
     };
-    const check = normalizeHealthCheck(runnable);
+    const checkLocal = normalizeHealthCheck(runnable);
 
-    const result = await runDoctorLintChecks(ctx, { checks: [check] });
+    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
   });

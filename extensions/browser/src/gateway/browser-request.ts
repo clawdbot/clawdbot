@@ -171,7 +171,7 @@ export async function handleBrowserGatewayRequest({
   }
 
   const cfg = getRuntimeConfig();
-  let nodeTarget: NodeSession | null = null;
+  let nodeTarget: NodeSession | null;
   try {
     nodeTarget = resolveBrowserNodeTarget({
       cfg,

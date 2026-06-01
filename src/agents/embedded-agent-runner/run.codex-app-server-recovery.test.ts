@@ -98,7 +98,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as {
+        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -127,7 +127,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as {
+        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,

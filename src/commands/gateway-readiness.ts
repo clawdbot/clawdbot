@@ -185,7 +185,9 @@ async function waitForGatewayReady(params: {
     !gatewayIsReady(latest, { readyWhenReachable: params.readyWhenReachable });
     attempt += 1
   ) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     latest = await params.gatherStatus();
   }
   return latest;

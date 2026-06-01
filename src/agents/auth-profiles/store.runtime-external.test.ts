@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import { testing as externalAuthTesting } from "./external-auth.js";
-import { resolveAuthStorePath } from "./paths.js";
+import { resolveAuthStatePath, resolveAuthStorePath } from "./paths.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -90,8 +90,12 @@ describe("auth profile store runtime external snapshots", () => {
     const persisted = JSON.parse(
       await fs.readFile(resolveAuthStorePath(agentDir), "utf8"),
     ) as AuthProfileStore;
+    const persistedState = JSON.parse(
+      await fs.readFile(resolveAuthStatePath(agentDir), "utf8"),
+    ) as AuthProfileStore;
     expect(persisted.profiles[externalProfileId]).toBeUndefined();
     expect(persisted.order?.["claude-cli"]).toBeUndefined();
+    expect(persistedState.order?.["claude-cli"]).toBeUndefined();
 
     const snapshot = getRuntimeAuthProfileStoreSnapshot(agentDir);
     expect(snapshot?.profiles[externalProfileId]).toEqual(externalCredential);

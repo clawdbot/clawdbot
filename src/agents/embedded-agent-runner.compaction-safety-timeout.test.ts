@@ -31,7 +31,10 @@ describe("compactWithSafetyTimeout", () => {
   it("returns result and clears timer when compaction settles first", async () => {
     vi.useFakeTimers();
     const compactPromise = compactWithSafetyTimeout(
-      () => new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 10)),
+      () =>
+        new Promise<string>((resolve) => {
+          setTimeout(() => resolve("ok"), 10);
+        }),
       30,
     );
 

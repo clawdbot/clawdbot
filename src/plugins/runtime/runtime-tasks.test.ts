@@ -34,6 +34,13 @@ function requireRecordById(items: readonly unknown[], id: string): Record<string
   throw new Error(`Missing record ${id}`);
 }
 
+function requireCreatedFlow<T>(flow: T | null): T {
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
 describe("runtime tasks", () => {
   beforeEach(() => {
     installRuntimeTaskDeliveryMock();
@@ -60,12 +67,14 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:other",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Review inbox",
-      currentStep: "triage",
-      stateJson: { lane: "priority" },
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Review inbox",
+        currentStep: "triage",
+        stateJson: { lane: "priority" },
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -142,10 +151,12 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:main",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Cancel active task",
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Cancel active task",
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -186,10 +197,12 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:main",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Cancel through runtime seam",
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Cancel through runtime seam",
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -233,10 +246,12 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:other",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Keep owner isolation",
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Keep owner isolation",
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",

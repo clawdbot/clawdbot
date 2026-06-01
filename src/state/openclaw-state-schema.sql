@@ -524,6 +524,28 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
 
+CREATE TABLE IF NOT EXISTS acp_sessions (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT,
+  backend TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  runtime_session_name TEXT NOT NULL,
+  identity_json TEXT,
+  mode TEXT NOT NULL,
+  runtime_options_json TEXT,
+  cwd TEXT,
+  state TEXT NOT NULL,
+  last_activity_at INTEGER NOT NULL,
+  last_error TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_state_activity
+  ON acp_sessions(state, last_activity_at DESC, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
+  ON acp_sessions(agent, last_activity_at DESC, session_key);
+
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
@@ -579,6 +601,39 @@ CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
 
 CREATE INDEX IF NOT EXISTS idx_plugin_state_listing
   ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
+
+CREATE TABLE IF NOT EXISTS channel_ingress_events (
+  queue_name TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lane_key TEXT,
+  payload_json TEXT NOT NULL,
+  metadata_json TEXT,
+  received_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  claim_token TEXT,
+  claim_owner TEXT,
+  claimed_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  failed_reason TEXT,
+  failed_at INTEGER,
+  completed_at INTEGER,
+  completed_metadata_json TEXT,
+  PRIMARY KEY (queue_name, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_pending
+  ON channel_ingress_events(queue_name, status, received_at, event_id);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_claims
+  ON channel_ingress_events(queue_name, status, claimed_at);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_lane
+  ON channel_ingress_events(queue_name, status, lane_key);
 
 CREATE TABLE IF NOT EXISTS plugin_blob_entries (
   plugin_id TEXT NOT NULL,
@@ -830,6 +885,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   delivery_thread_id TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
+  delivery_completion_mode TEXT,
+  delivery_completion_to TEXT,
   failure_delivery_mode TEXT,
   failure_delivery_channel TEXT,
   failure_delivery_to TEXT,

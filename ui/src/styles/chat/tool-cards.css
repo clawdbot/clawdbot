@@ -928,6 +928,98 @@
   animation-delay: 0.4s;
 }
 
+.chat-group--activity .chat-group-messages {
+  max-width: min(760px, 100%);
+}
+
+.chat-activity-group {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 88%, var(--secondary) 12%);
+}
+
+.chat-activity-group__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-activity-group__summary:hover,
+.chat-activity-group__summary:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+}
+
+.chat-activity-group__summary--error {
+  color: var(--destructive, var(--danger, #c0392b));
+}
+
+.chat-activity-group__icon,
+.chat-activity-group__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chat-activity-group__icon svg,
+.chat-activity-group__badge svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-activity-group__label {
+  flex-shrink: 0;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.chat-activity-group__preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-group__badge {
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
+  color: var(--destructive, var(--danger, #c0392b));
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.chat-activity-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
 @keyframes reading-pulse {
   0%,
   60%,

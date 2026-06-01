@@ -10,6 +10,7 @@ import androidx.compose.ui.tooling.preview.Preview
 )
 @Composable
 private fun ClawComponentShowcasePreview() {
+  // Preview uses the design-system theme directly so token regressions show up in isolation.
   ClawDesignTheme {
     ClawComponentShowcase()
   }

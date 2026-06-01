@@ -4,7 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readCronRunLogEntriesSync } from "../../../cron/run-log.js";
-import { loadCronStore, resolveCronQuarantinePath, saveCronStore } from "../../../cron/store.js";
+import {
+  loadCronQuarantineFile,
+  loadCronStore,
+  resolveCronQuarantinePath,
+  saveCronStore,
+} from "../../../cron/store.js";
+import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
@@ -105,6 +111,43 @@ async function writeCurrentCronStore(storePath: string, jobs: Array<Record<strin
   await saveCronStore(storePath, {
     version: 1,
     jobs: jobs as never,
+  });
+}
+
+function insertEarlySQLiteCronRow(
+  storePath: string,
+  job: Record<string, unknown>,
+  options: { payloadMessage?: string | null } = {},
+) {
+  const schedule = requireRecord(job.schedule, "cron schedule");
+  const payload = requireRecord(job.payload, "cron payload");
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db.prepare(
+      `INSERT INTO cron_jobs (
+        store_key, job_id, name, enabled, created_at_ms, updated_at,
+        schedule_kind, every_ms, session_target, wake_mode, payload_kind, payload_message,
+        job_json, state_json
+      ) VALUES (
+        $storeKey, $jobId, $name, $enabled, $createdAtMs, $updatedAt,
+        $scheduleKind, $everyMs, $sessionTarget, $wakeMode, $payloadKind, $payloadMessage,
+        $jobJson, $stateJson
+      )`,
+    ).run({
+      $storeKey: path.resolve(storePath),
+      $jobId: String(job.id),
+      $name: String(job.name),
+      $enabled: job.enabled === false ? 0 : 1,
+      $createdAtMs: Number(job.createdAtMs),
+      $updatedAt: Number(job.updatedAtMs),
+      $scheduleKind: String(schedule.kind),
+      $everyMs: Number(schedule.everyMs),
+      $sessionTarget: String(job.sessionTarget),
+      $wakeMode: String(job.wakeMode),
+      $payloadKind: String(payload.kind),
+      $payloadMessage: options.payloadMessage ?? null,
+      $jobJson: JSON.stringify(job),
+      $stateJson: JSON.stringify(job.state ?? {}),
+    });
   });
 }
 
@@ -415,6 +458,75 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
   });
 
+  it("backfills early SQLite rows from job_json before runtime relies on split columns", async () => {
+    const storePath = await makeTempStorePath();
+    insertEarlySQLiteCronRow(storePath, {
+      id: "early-sqlite-agent-turn",
+      name: "Early SQLite agent turn",
+      enabled: true,
+      createdAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
+      schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 0 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "use config json" },
+      state: {},
+    });
+
+    expect(await readPersistedJobs(storePath)).toEqual([]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.id).toBe("early-sqlite-agent-turn");
+    expect(job.payload).toEqual({ kind: "agentTurn", message: "use config json" });
+    expectNoteContaining("1 SQLite cron row will be backfilled", "Cron");
+  });
+
+  it("backfills parseable SQLite rows when optional config fields only exist in job_json", async () => {
+    const storePath = await makeTempStorePath();
+    insertEarlySQLiteCronRow(
+      storePath,
+      {
+        id: "early-sqlite-model",
+        name: "Early SQLite model",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 0 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "use split text", model: "openai/gpt-5.5" },
+        state: {},
+      },
+      { payloadMessage: "use split text" },
+    );
+
+    expect(requirePersistedJob(await readPersistedJobs(storePath), 0).payload).toEqual({
+      kind: "agentTurn",
+      message: "use split text",
+    });
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    expect(job.payload).toEqual({
+      kind: "agentTurn",
+      message: "use split text",
+      model: "openai/gpt-5.5",
+    });
+    expectNoteContaining("1 SQLite cron row will be backfilled", "Cron");
+  });
+
   it("migrates legacy run logs even when the legacy job store was already archived", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, [createCurrentCronJob()]);
@@ -480,7 +592,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("missing a canonical string `id`", "Cron");
   });
 
-  it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
+  it("migrates notify fallback alongside announce delivery without replacing it", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
@@ -499,7 +611,7 @@ describe("maybeRepairLegacyCronStore", () => {
               sessionTarget: "isolated",
               wakeMode: "now",
               payload: { kind: "agentTurn", message: "Status" },
-              delivery: { mode: "announce", channel: "telegram", to: "123" },
+              delivery: { to: "telegram:123" },
               state: {},
             },
           ],
@@ -523,9 +635,17 @@ describe("maybeRepairLegacyCronStore", () => {
 
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBe(true);
-    expectNoteContaining(
-      'uses legacy notify fallback alongside delivery mode "announce"',
+    expect(job.notify).toBeUndefined();
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBeUndefined();
+    expect(delivery.to).toBe("telegram:123");
+    expect(delivery.completionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+    expectNoNoteContaining(
+      "uses legacy notify fallback alongside delivery mode",
       "Doctor warnings",
     );
   });
@@ -605,6 +725,109 @@ describe("maybeRepairLegacyCronStore", () => {
     const delivery = requireRecord(job.delivery, "cron delivery");
     expect(delivery.mode).toBe("webhook");
     expect(delivery.to).toBe("https://example.invalid/cron-finished");
+  });
+
+  it("migrates invalid legacy notify webhook delivery jobs to cron.webhook", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "notify-invalid-webhook",
+              name: "Notify invalid webhook",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: {
+                kind: "systemEvent",
+                text: "Status",
+              },
+              delivery: { mode: "webhook", to: "ftp://example.invalid/cron" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "https://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBeUndefined();
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
+  });
+
+  it("warns when cron.webhook is invalid for a legacy notify fallback", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "notify-invalid-config",
+        jobId: undefined,
+        delivery: undefined,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "ftp://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBeUndefined();
+    expect(job.delivery).toBeUndefined();
+    expectNoteContaining(
+      "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
+      "Doctor warnings",
+    );
+  });
+
+  it("quarantines invalid legacy rows before saving the repaired store", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "invalid-legacy-cron",
+        jobId: undefined,
+        schedule: { kind: "cron" },
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expect(await readPersistedJobs(storePath)).toEqual([]);
+    const quarantine = await loadCronQuarantineFile(resolveCronQuarantinePath(storePath));
+    expect(quarantine.jobs[0]?.reason).toBe("invalid-schedule");
+    expect(quarantine.jobs[0]?.job?.id).toBe("invalid-legacy-cron");
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {

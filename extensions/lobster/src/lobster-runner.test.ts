@@ -583,7 +583,12 @@ describe("createEmbeddedLobsterRunner", () => {
             );
             ctx?.signal?.addEventListener("abort", () => {
               clearTimeout(timeout);
-              reject(ctx.signal?.reason ?? new Error("aborted"));
+              reject(
+                toLintErrorObject(
+                  ctx.signal?.reason ?? new Error("aborted"),
+                  "Non-Error rejection",
+                ),
+              );
             });
           }),
       ),
@@ -605,3 +610,17 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/timed out|aborted/);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

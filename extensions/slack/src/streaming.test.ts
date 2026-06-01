@@ -78,7 +78,7 @@ describe("stopSlackStream finalize error handling", () => {
 
     await appendSlackStream({ session, chunks });
 
-    expect(session.streamer.append).toHaveBeenCalledWith({ chunks });
+    expect(session.streamer["append"]).toHaveBeenCalledWith({ chunks });
     expect(session.delivered).toBe(true);
     expect(session.pendingText).toBe("");
   });

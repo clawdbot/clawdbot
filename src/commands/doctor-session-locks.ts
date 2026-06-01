@@ -48,7 +48,7 @@ export async function noteSessionLockHealth(params?: {
 }) {
   const shouldRepair = params?.shouldRepair === true;
   const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
-  let sessionDirs: string[] = [];
+  let sessionDirs: string[];
   try {
     sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {

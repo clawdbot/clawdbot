@@ -183,7 +183,7 @@ async function wakeSubagentRunAfterDescendants(params: {
     taskLabel: params.taskLabel,
   });
 
-  let wakeRunId = "";
+  let wakeRunId;
   try {
     const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
       operation: "descendant wake agent call",

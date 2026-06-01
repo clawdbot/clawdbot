@@ -439,7 +439,7 @@ export async function sendExecApprovalFollowupResult(
           idempotencyKey: runtimeHandoff.idempotencyKey,
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

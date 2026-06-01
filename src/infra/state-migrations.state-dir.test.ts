@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   autoMigrateLegacyStateDir,
@@ -65,6 +66,44 @@ describe("legacy state dir auto-migration", () => {
     });
   });
 
+  it("migrates the legacy plugin install index from an explicit state dir", async () => {
+    await withStateDirFixture(async (root) => {
+      const legacyDir = path.join(root, ".clawdbot");
+      const stateDir = path.join(root, "custom-state");
+      const sourcePath = path.join(stateDir, "plugins", "installs.json");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(
+        sourcePath,
+        JSON.stringify({
+          records: {
+            demo: {
+              source: "npm",
+              spec: "demo@1.0.0",
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const result = await autoMigrateLegacyStateDir({
+        env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(true);
+      expect(result.skipped).toBe(false);
+      expect(result.changes).toContain(
+        "Migrated plugin install index 1 record → shared SQLite state",
+      );
+      expect(fs.existsSync(legacyDir)).toBe(true);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+        installRecords: { demo: { source: "npm", spec: "demo@1.0.0" } },
+      });
+    });
+  });
+
   it("only runs once per process until reset", async () => {
     await withStateDirFixture(async (root) => {
       const legacyDir = path.join(root, ".clawdbot");
@@ -86,6 +125,40 @@ describe("legacy state dir auto-migration", () => {
         skipped: true,
         changes: [],
         warnings: [],
+      });
+    });
+  });
+
+  it("migrates the legacy plugin install index before config reads", async () => {
+    await withStateDirFixture(async (root) => {
+      const stateDir = path.join(root, ".openclaw");
+      const sourcePath = path.join(stateDir, "plugins", "installs.json");
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(
+        sourcePath,
+        JSON.stringify({
+          records: {
+            demo: {
+              source: "npm",
+              spec: "demo@1.0.0",
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(true);
+      expect(result.changes).toContain(
+        "Migrated plugin install index 1 record → shared SQLite state",
+      );
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+        installRecords: { demo: { source: "npm", spec: "demo@1.0.0" } },
       });
     });
   });

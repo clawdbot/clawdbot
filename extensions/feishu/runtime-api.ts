@@ -18,7 +18,11 @@ export type {
   ReplyPayload,
 } from "openclaw/plugin-sdk/core";
 export type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/core";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+export type RuntimeEnv = {
+  log: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  exit: (code: number) => void;
+};
 export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
 export {
   DEFAULT_ACCOUNT_ID,

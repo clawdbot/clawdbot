@@ -167,6 +167,24 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(dmCommandAuthorized(result)).toBe(true);
   });
 
+  it("authorizes PluralKit senders from prefixed pairing-store allowlist entries", async () => {
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "pairing",
+      configuredAllowFrom: [],
+      sender: {
+        id: "pk-member-1",
+        name: "Echo",
+        tag: "Echo",
+      },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => ["pk:pk-member-1"],
+    });
+
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(dmCommandAuthorized(result)).toBe(true);
+  });
+
   it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
     canViewDiscordGuildChannelMock.mockResolvedValueOnce(true);
 

@@ -489,7 +489,7 @@ export class SettingsManager {
         task();
         this.clearModifiedScope(scope);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.recordError(scope, error);
       });
   }

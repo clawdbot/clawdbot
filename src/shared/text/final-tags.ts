@@ -76,6 +76,7 @@ function parseAttributeList(text: string): boolean {
   return true;
 }
 
+/** Parses a candidate `<final>` tag while rejecting lookalike names and malformed attributes. */
 export function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | null {
   if (!text.startsWith("<") || !text.endsWith(">")) {
     return null;
@@ -110,6 +111,7 @@ export function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text
   return { isClose: false, isSelfClosing };
 }
 
+/** Finds valid `<final>` control tags so callers can strip only actual model markers. */
 export function findFinalTagMatches(text: string): FinalTagMatch[] {
   const matches: FinalTagMatch[] = [];
   for (const match of text.matchAll(FINAL_TAG_CANDIDATE_RE)) {
@@ -127,10 +129,12 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
   return matches;
 }
 
+/** Returns true when text contains at least one valid `<final>` control tag. */
 export function containsFinalTag(text: string): boolean {
   return findFinalTagMatches(text).length > 0;
 }
 
+/** Removes valid `<final>` tags while preserving their enclosed visible answer text. */
 export function stripFinalTags(text: string): string {
   let output = "";
   let lastIndex = 0;

@@ -97,6 +97,22 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(20);
   });
 
+  it("clears visible tool entries and stale tool references", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
+
+    let rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Read File");
+
+    chatLog.clearTools();
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "stale" }] });
+
+    rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("Read File");
+    expect(rendered).not.toContain("stale");
+  });
+
   it("prunes system messages atomically when a non-system entry overflows the log", () => {
     const chatLog = new ChatLog(20);
     for (let i = 1; i <= 20; i++) {

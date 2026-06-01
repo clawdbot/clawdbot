@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -215,10 +215,10 @@ vi.mock("../model-auth.js", () => ({
 }));
 
 vi.mock("../openclaw-tools.js", async () => {
-  const { createImageTool } = await import("./image-tool.js");
+  const { createImageTool: createImageToolLocal } = await import("./image-tool.js");
   return {
     createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
-      const imageTool = createImageTool({
+      const imageTool = createImageToolLocal({
         config: options?.config,
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
@@ -800,17 +800,17 @@ async function withMinimaxImageToolFromTempAgentDir(
   });
 }
 
-function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
+function findSchemaUnionKeywords(schema: unknown, pathLocal = "root"): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
   if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${path}[${index}]`));
+    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${pathLocal}[${index}]`));
   }
   const record = schema as Record<string, unknown>;
   const out: string[] = [];
   for (const [key, value] of Object.entries(record)) {
-    const nextPath = `${path}.${key}`;
+    const nextPath = `${pathLocal}.${key}`;
     if (key === "anyOf" || key === "oneOf" || key === "allOf") {
       out.push(nextPath);
     }

@@ -303,7 +303,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const early = await Promise.race([
       task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 50)),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 50);
+      }),
     ]);
     expect(early).toBe("pending");
 

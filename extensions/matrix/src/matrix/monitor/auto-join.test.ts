@@ -4,7 +4,13 @@ import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 
-type InviteHandler = (roomId: string, inviteEvent: unknown) => Promise<void>;
+type InviteHandler = (roomId: string, inviteEvent: unknown) => void;
+
+async function flushInviteTasks() {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 function createClientStub() {
   let inviteHandler: InviteHandler | null = null;
@@ -62,7 +68,8 @@ async function triggerInvite(
   if (!inviteHandler) {
     throw new Error("expected Matrix invite handler");
   }
-  await inviteHandler("!room:example.org", inviteEvent);
+  inviteHandler("!room:example.org", inviteEvent);
+  await flushInviteTasks();
 }
 
 describe("registerMatrixAutoJoin", () => {
@@ -149,7 +156,8 @@ describe("registerMatrixAutoJoin", () => {
     if (!inviteHandler) {
       throw new Error("expected Matrix invite handler");
     }
-    await expect(inviteHandler("!room:example.org", {})).resolves.toBeUndefined();
+    inviteHandler("!room:example.org", {});
+    await flushInviteTasks();
 
     expect(joinRoom).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(

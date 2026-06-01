@@ -30,7 +30,12 @@ describe("resolveCliAuthEpoch", () => {
       }),
     });
 
-    await expect(resolveCliAuthEpoch({ provider: "claude-cli" })).resolves.toBeUndefined();
+    await expect(
+      resolveCliAuthEpoch({
+        provider: "claude-cli",
+        authProfileId: "anthropic:work",
+      }),
+    ).resolves.toBeUndefined();
     await expect(
       resolveCliAuthEpoch({
         provider: "google-gemini-cli",
@@ -63,7 +68,7 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).toBe(first);
   });
 
-  it("changes claude cli token epochs when the static token changes", async () => {
+  it("keeps claude cli token epochs stable across token rotation", async () => {
     let token = "token-a";
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => ({
@@ -79,8 +84,65 @@ describe("resolveCliAuthEpoch", () => {
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
     expectCliAuthEpoch(first);
-    expectCliAuthEpoch(second);
-    expect(second).not.toBe(first);
+    // Static-token rotation is an authorized credential refresh, not an
+    // identity change. After #74312 the hash is identity-only for both
+    // OAuth and token branches, so rotation does not invalidate the epoch.
+    expect(second).toBe(first);
+  });
+
+  it("matches claude cli token and oauth epochs so partial keychain reads do not flip", async () => {
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: 1,
+      }),
+    });
+    const oauthEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "token",
+        provider: "anthropic",
+        token: "access",
+        expires: 1,
+      }),
+    });
+    const tokenEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    expectCliAuthEpoch(oauthEpoch);
+    expectCliAuthEpoch(tokenEpoch);
+    // The macOS Claude keychain rewrite is not atomic. A transient read with
+    // `refreshToken` missing falls into the parser's token branch; the OAuth
+    // and token encodings must produce the same hash so the auth-epoch does
+    // not flip during a token rotation. Regression for #74312.
+    expect(tokenEpoch).toBe(oauthEpoch);
+  });
+
+  it("drops the claude cli epoch when the credential read is absent", async () => {
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: 1,
+      }),
+    });
+    const successfulRead = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    // A null read can mean the credential was removed or logout left no
+    // readable auth state. Keep that absence visible so reusable sessions do
+    // not survive a true auth-state loss.
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => null,
+    });
+    const nullRead = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    expectCliAuthEpoch(successfulRead);
+    expect(nullRead).toBeUndefined();
   });
 
   it("keeps gemini cli oauth epochs stable through token rotation and flips on account change", async () => {
@@ -268,6 +330,143 @@ describe("resolveCliAuthEpoch", () => {
 
     expectCliAuthEpoch(first);
     expectCliAuthEpoch(second);
+    expect(second).not.toBe(first);
+  });
+
+  it("keeps token auth-profile epochs stable across credential.token rotation when identity is present", async () => {
+    let store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "token",
+          provider: "anthropic",
+          token: "token-a",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+          email: "user@example.com",
+          displayName: "Work",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    store = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "token",
+          provider: "anthropic",
+          token: "token-b",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+          email: "user@example.com",
+          displayName: "Work",
+        },
+      },
+    };
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+
+    expectCliAuthEpoch(first);
+    // Ref-backed token rotation must not flip the epoch; the token material is
+    // only a refreshable secret when the profile has a stable secret owner.
+    expect(second).toBe(first);
+  });
+
+  it("changes token auth-profile epochs when token-only credentials change", async () => {
+    let store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:token-only": {
+          type: "token",
+          provider: "anthropic",
+          token: "token-a",
+          displayName: "Manual token",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:token-only",
+    });
+    store = {
+      version: 1,
+      profiles: {
+        "anthropic:token-only": {
+          type: "token",
+          provider: "anthropic",
+          token: "token-b",
+          displayName: "Manual token",
+        },
+      },
+    };
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:token-only",
+    });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    // Token-only profiles have no stable account/ref identity, so the token
+    // remains the session owner and manual replacement still invalidates.
+    expect(second).not.toBe(first);
+  });
+
+  it("changes token auth-profile epochs when the email identity changes", async () => {
+    let store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "token",
+          provider: "anthropic",
+          token: "token",
+          email: "user-a@example.com",
+          displayName: "Work",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    store = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "token",
+          provider: "anthropic",
+          token: "token",
+          email: "user-b@example.com",
+          displayName: "Work",
+        },
+      },
+    };
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    // A real account switch on a static-token profile must still invalidate
+    // the epoch so reusable CLI sessions don't outlive the identity change.
     expect(second).not.toBe(first);
   });
 

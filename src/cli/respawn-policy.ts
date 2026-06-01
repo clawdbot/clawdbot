@@ -37,9 +37,12 @@ function isForegroundGatewayRunArgv(argv: string[]): boolean {
   if (!positionals) {
     return false;
   }
+  // Foreground gateway owns the terminal/process environment itself; respawning would
+  // add an extra parent process around the long-lived server.
   return positionals.length === 0 || (positionals.length === 1 && positionals[0] === "run");
 }
 
+/** Returns whether CLI startup should avoid the general respawn wrapper for this argv. */
 export function shouldSkipRespawnForArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return (
@@ -49,6 +52,7 @@ export function shouldSkipRespawnForArgv(argv: string[]): boolean {
   );
 }
 
+/** Returns whether startup-environment respawn should be skipped without suppressing TUI respawn policy. */
 export function shouldSkipStartupEnvironmentRespawnForArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return (

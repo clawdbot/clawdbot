@@ -432,7 +432,16 @@ function mergeServicePath(
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 
-function collectPreservedExistingServiceEnvVars(
+// Operator opt-in env vars that should survive service regeneration even though
+// they share the OPENCLAW_ prefix that is otherwise stripped from preserved
+// environments. These represent intentional, user-placed configuration on the
+// service definition that the install/repair flow should not silently revert.
+const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
+  "OPENCLAW_CLI_CONTAINER_BYPASS",
+  "OPENCLAW_CONTAINER_HINT",
+]);
+
+export function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
   managedServiceEnvKeys: Set<string>,
 ): Record<string, string | undefined> {
@@ -450,7 +459,7 @@ function collectPreservedExistingServiceEnvVars(
       upper === "HOME" ||
       upper === "PATH" ||
       upper === "TMPDIR" ||
-      upper.startsWith("OPENCLAW_")
+      (upper.startsWith("OPENCLAW_") && !PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS.has(upper))
     ) {
       continue;
     }

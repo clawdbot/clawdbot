@@ -64,7 +64,9 @@ async function pollOperation(
   headers: Record<string, string>,
 ): Promise<{ done?: boolean; response?: { cloudaicompanionProject?: { id?: string } } }> {
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5000);
+    });
     const response = await fetchWithTimeout(`${endpoint}/v1internal/${operationName}`, {
       headers,
     });

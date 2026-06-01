@@ -264,7 +264,7 @@ async function main() {
   console.log("Crestodian rescue Docker E2E passed");
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });

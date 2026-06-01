@@ -10,6 +10,7 @@ const MARKDOWN_STYLE_MARKERS = {
   code_block: { open: "```\n", close: "```" },
 } as const;
 
+/** Converts markdown tables into the configured plaintext/code rendering mode. */
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
   if (!markdown || mode === "off") {
     return markdown;

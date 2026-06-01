@@ -212,7 +212,9 @@ describe("pw-session ensurePageState", () => {
 
     try {
       handlers.get("download")?.[0]?.(download);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(unhandled).toStrictEqual([]);
       await expect(download.path?.()).rejects.toThrow("save failed");

@@ -10,6 +10,10 @@ import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeSession } from "./node-registry.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
+const DEMO_PLUGIN_ID = "demo";
+const DEMO_COMMAND = "demo.read";
+const DEMO_PARAMS = { path: "/tmp/x" };
+
 const registryState = vi.hoisted(() => ({
   current: null as PluginRegistry | null,
 }));
@@ -94,35 +98,102 @@ function createOperatorClient(): GatewayClient {
   });
 }
 
+type NodeInvokePolicyRegistration = NonNullable<PluginRegistry["nodeInvokePolicies"]>[number];
+type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
+type PluginApprovalRecord = ReturnType<
+  ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]
+>[number];
+
+function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegistration {
+  return {
+    pluginId: DEMO_PLUGIN_ID,
+    policy: {
+      commands: [DEMO_COMMAND],
+      handle,
+    },
+    pluginConfig: { enabled: true },
+    source: "test",
+  };
+}
+
+function createApprovalRequestPolicy(params?: {
+  timeoutMs?: number;
+}): NodeInvokePolicyRegistration {
+  return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
+    const approval = await ctx.approvals?.request({
+      title: "Sensitive action",
+      description: "Needs approval",
+      ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+    });
+    return { ok: true, payload: approval ?? null };
+  });
+}
+
+function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
+  registryState.current = {
+    nodeHostCommands: [
+      {
+        pluginId: DEMO_PLUGIN_ID,
+        command: {
+          command: DEMO_COMMAND,
+          dangerous: true,
+          handle: async () => "{}",
+        },
+        source: "test",
+      },
+    ],
+    nodeInvokePolicies: policies,
+  } as unknown as PluginRegistry;
+}
+
+async function invokeDemoPolicy(
+  context: GatewayRequestContext,
+  client: GatewayClient | null = null,
+) {
+  return await applyPluginNodeInvokePolicy({
+    context,
+    client,
+    nodeSession: createNodeSession(),
+    command: DEMO_COMMAND,
+    params: DEMO_PARAMS,
+  });
+}
+
+async function expectSinglePendingApproval(
+  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
+): Promise<PluginApprovalRecord> {
+  await vi.waitFor(() => {
+    expect(manager.listPendingRecords()).toHaveLength(1);
+  });
+  const [record] = manager.listPendingRecords();
+  if (!record) {
+    throw new Error("expected pending approval");
+  }
+  return record;
+}
+
+async function expectApprovalResolution(
+  resultPromise: ReturnType<typeof applyPluginNodeInvokePolicy>,
+  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
+  record: PluginApprovalRecord,
+) {
+  expect(manager.resolve(record.id, "allow-once")).toBe(true);
+  await expect(resultPromise).resolves.toStrictEqual({
+    ok: true,
+    payload: { id: record.id, decision: "allow-once" },
+  });
+}
+
 describe("applyPluginNodeInvokePolicy", () => {
   beforeEach(() => {
     registryState.current = null;
   });
 
   it("fails closed for dangerous plugin node commands without a policy", async () => {
-    registryState.current = {
-      nodeHostCommands: [
-        {
-          pluginId: "demo",
-          command: {
-            command: "demo.read",
-            dangerous: true,
-            handle: async () => "{}",
-          },
-          source: "test",
-        },
-      ],
-      nodeInvokePolicies: [],
-    } as unknown as PluginRegistry;
+    setDangerousDemoCommandRegistry();
     const { context, invoke } = createContext();
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: "demo.read",
-      params: { path: "/tmp/x" },
-    });
+    const result = await invokeDemoPolicy(context);
 
     if (result === null) {
       throw new Error("expected plugin policy failure");
@@ -136,45 +207,18 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("uses a matching plugin policy when one is registered", async () => {
-    registryState.current = {
-      nodeHostCommands: [
-        {
-          pluginId: "demo",
-          command: {
-            command: "demo.read",
-            dangerous: true,
-            handle: async () => "{}",
-          },
-          source: "test",
-        },
-      ],
-      nodeInvokePolicies: [
-        {
-          pluginId: "demo",
-          policy: {
-            commands: ["demo.read"],
-            handle: (ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode(),
-          },
-          pluginConfig: { enabled: true },
-          source: "test",
-        },
-      ],
-    } as unknown as PluginRegistry;
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
     const { context, invoke } = createContext();
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: "demo.read",
-      params: { path: "/tmp/x" },
-    });
+    const result = await invokeDemoPolicy(context);
 
     expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
-      command: "demo.read",
-      params: { path: "/tmp/x" },
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
       timeoutMs: undefined,
       idempotencyKey: undefined,
     });
@@ -195,103 +239,33 @@ describe("applyPluginNodeInvokePolicy", () => {
         deviceId: "device-other",
       }),
     ]);
-    registryState.current = {
-      nodeHostCommands: [
-        {
-          pluginId: "demo",
-          command: {
-            command: "demo.read",
-            dangerous: true,
-            handle: async () => "{}",
-          },
-          source: "test",
-        },
-      ],
-      nodeInvokePolicies: [
-        {
-          pluginId: "demo",
-          policy: {
-            commands: ["demo.read"],
-            handle: async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
-              const approval = await ctx.approvals?.request({
-                title: "Sensitive action",
-                description: "Needs approval",
-              });
-              return { ok: true, payload: approval ?? null };
-            },
-          },
-          pluginConfig: { enabled: true },
-          source: "test",
-        },
-      ],
-    } as unknown as PluginRegistry;
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds,
     });
-    const resultPromise = applyPluginNodeInvokePolicy({
-      context,
-      client: createOperatorClient(),
-      nodeSession: createNodeSession(),
-      command: "demo.read",
-      params: { path: "/tmp/x" },
-    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
 
-    await vi.waitFor(() => {
-      expect(manager.listPendingRecords()).toHaveLength(1);
-    });
-    const [record] = manager.listPendingRecords();
-    expect(record?.requestedByConnId).toBe("conn-requester");
-    expect(record?.requestedByDeviceId).toBe("device-owner");
-    expect(record?.requestedByClientId).toBe("client-owner");
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.requestedByConnId).toBe("conn-requester");
+    expect(record.requestedByDeviceId).toBe("device-owner");
+    expect(record.requestedByClientId).toBe("client-owner");
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "plugin.approval.requested",
-      expect.objectContaining({ id: record?.id }),
+      expect.objectContaining({ id: record.id }),
       visibleConnIds,
       { dropIfSlow: true },
     );
 
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
-    await expect(resultPromise).resolves.toStrictEqual({
-      ok: true,
-      payload: { id: record?.id, decision: "allow-once" },
-    });
+    await expectApprovalResolution(resultPromise, manager, record);
   });
 
   it("caps plugin policy approval timeouts through the shared approval policy", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    registryState.current = {
-      nodeHostCommands: [
-        {
-          pluginId: "demo",
-          command: {
-            command: "demo.read",
-            dangerous: true,
-            handle: async () => "{}",
-          },
-          source: "test",
-        },
-      ],
-      nodeInvokePolicies: [
-        {
-          pluginId: "demo",
-          policy: {
-            commands: ["demo.read"],
-            handle: async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
-              const approval = await ctx.approvals?.request({
-                title: "Sensitive action",
-                description: "Needs approval",
-                timeoutMs: Number.MAX_SAFE_INTEGER,
-              });
-              return { ok: true, payload: approval ?? null };
-            },
-          },
-          pluginConfig: { enabled: true },
-          source: "test",
-        },
-      ],
-    } as unknown as PluginRegistry;
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({ timeoutMs: Number.MAX_SAFE_INTEGER }),
+    ]);
     const { context } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([
@@ -302,25 +276,12 @@ describe("applyPluginNodeInvokePolicy", () => {
         }),
       ]),
     });
-    const resultPromise = applyPluginNodeInvokePolicy({
-      context,
-      client: createOperatorClient(),
-      nodeSession: createNodeSession(),
-      command: "demo.read",
-      params: { path: "/tmp/x" },
-    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
 
-    await vi.waitFor(() => {
-      expect(manager.listPendingRecords()).toHaveLength(1);
-    });
-    const [record] = manager.listPendingRecords();
+    const record = await expectSinglePendingApproval(manager);
     expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
 
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
-    await expect(resultPromise).resolves.toStrictEqual({
-      ok: true,
-      payload: { id: record.id, decision: "allow-once" },
-    });
+    await expectApprovalResolution(resultPromise, manager, record);
   });
 
   it("leaves commands without a dangerous plugin registration to normal allowlist handling", async () => {

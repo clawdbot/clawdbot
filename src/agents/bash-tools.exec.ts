@@ -35,6 +35,7 @@ import {
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -75,6 +76,30 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+type ExecToolArgs = Record<string, unknown> & {
+  command: string;
+  workdir?: string;
+  env?: Record<string, string>;
+  yieldMs?: number;
+  background?: boolean;
+  timeout?: number;
+  pty?: boolean;
+  elevated?: boolean;
+  host?: string;
+  security?: string;
+  ask?: string;
+  node?: string;
+};
+
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
+  "command",
+  "workdir",
+  "host",
+  "security",
+  "ask",
+  "node",
+] as const;
 
 function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
@@ -863,37 +888,39 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasInterpreterInvocationInSegment = (rawSegment: string): boolean =>
     isInterpreterExecutable(resolveLeadingShellSegmentExecutable(rawSegment));
   const isScriptExecutingInterpreterCommand = (rawCommand: string): boolean => {
-    const argv = splitShellArgs(rawCommand.trim());
-    if (!argv || argv.length === 0) {
+    const argvLocal = splitShellArgs(rawCommand.trim());
+    if (!argvLocal || argvLocal.length === 0) {
       return false;
     }
-    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
-      ? argv.slice(1)
-      : argv;
+    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(
+      argvLocal[0] ?? "",
+    )
+      ? argvLocal.slice(1)
+      : argvLocal;
     if (withoutLeadingKeyword.length === 0) {
       return false;
     }
     const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
-    let commandIdx = 0;
+    let commandIdxLocal = 0;
     while (
-      commandIdx < normalizedArgv.length &&
-      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdx] ?? "")
+      commandIdxLocal < normalizedArgv.length &&
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdxLocal] ?? "")
     ) {
-      commandIdx += 1;
+      commandIdxLocal += 1;
     }
-    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
+    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdxLocal]);
     if (!executable) {
       return false;
     }
-    const args = normalizedArgv.slice(commandIdx + 1);
+    const argsLocal = normalizedArgv.slice(commandIdxLocal + 1);
 
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
-      if (args.some((arg) => pythonInfoOnlyFlags.has(arg))) {
+      if (argsLocal.some((arg) => pythonInfoOnlyFlags.has(arg))) {
         return false;
       }
       if (
-        args.some(
+        argsLocal.some(
           (arg) =>
             arg === "-c" ||
             arg === "-m" ||
@@ -909,11 +936,11 @@ function shouldFailClosedInterpreterPreflight(command: string): {
 
     if (executable === "node") {
       const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
-      if (args.some((arg) => nodeInfoOnlyFlags.has(arg))) {
+      if (argsLocal.some((arg) => nodeInfoOnlyFlags.has(arg))) {
         return false;
       }
       if (
-        args.some(
+        argsLocal.some(
           (arg) =>
             arg === "-e" ||
             arg === "-p" ||
@@ -1306,20 +1333,10 @@ export function createExecTool(
     },
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const params = args as {
-        command: string;
-        workdir?: string;
-        env?: Record<string, string>;
-        yieldMs?: number;
-        background?: boolean;
-        timeout?: number;
-        pty?: boolean;
-        elevated?: boolean;
-        host?: string;
-        security?: string;
-        ask?: string;
-        node?: string;
-      };
+      const params = stripMalformedXmlArgValueSuffixFromKeys(
+        args as ExecToolArgs,
+        XML_ARG_VALUE_EXEC_PARAM_KEYS,
+      );
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
@@ -1799,7 +1816,7 @@ export function createExecTool(
               }),
             );
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;

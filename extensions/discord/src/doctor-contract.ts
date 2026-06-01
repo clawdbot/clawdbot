@@ -478,8 +478,8 @@ export function normalizeCompatibilityConfig({
   }
 
   const changes: string[] = [];
-  let updated = rawEntry;
-  let changed = false;
+  let updated;
+  let changed;
   const bindingsToAdd: AgentBindingConfig[] = [];
 
   const aliases = normalizeLegacyChannelAliases({

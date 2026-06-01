@@ -3,8 +3,10 @@ import {
   collectPluginNpmPublishedRuntimeErrors,
   findPackedPackageReadmePath,
   parseNpmReadmeMetadata,
+  readPluginNpmCommandOptions,
   readPositiveIntEnv,
   resolveNpmPackFilename,
+  runPluginNpmCommand,
 } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
 
 describe("plugin npm publish verifier retry limits", () => {
@@ -33,6 +35,72 @@ describe("plugin npm publish verifier retry limits", () => {
         OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS: "2500",
       }),
     ).toBe(2500);
+  });
+});
+
+describe("plugin npm publish verifier command limits", () => {
+  it("bounds npm command runtime and captured output by default", () => {
+    expect(readPluginNpmCommandOptions({})).toStrictEqual({
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5 * 60 * 1000,
+    });
+  });
+
+  it("accepts strict npm command timeout and buffer overrides", () => {
+    expect(
+      readPluginNpmCommandOptions({
+        OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: "33554432",
+        OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: "120000",
+      }),
+    ).toMatchObject({
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 120000,
+    });
+  });
+
+  it("rejects loose npm command timeout and buffer overrides", () => {
+    expect(() =>
+      readPluginNpmCommandOptions({
+        OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: "60s",
+      }),
+    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: 60s");
+    expect(() =>
+      readPluginNpmCommandOptions({
+        OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: "16mb",
+      }),
+    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: 16mb");
+  });
+
+  it("runs npm metadata commands with bounded exec options", () => {
+    const calls: unknown[] = [];
+    const output = runPluginNpmCommand(["view", "@openclaw/discord", "readme"], {
+      env: {
+        OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: "1024",
+        OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: "2500",
+      },
+      execFileSyncImpl(command: string, args: string[], options: unknown) {
+        calls.push({ args, command, options });
+        return JSON.stringify("# Discord");
+      },
+    });
+
+    expect(output).toBe(JSON.stringify("# Discord"));
+    expect(calls).toStrictEqual([
+      {
+        args: ["view", "@openclaw/discord", "readme"],
+        command: "npm",
+        options: {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 2500,
+        },
+      },
+    ]);
   });
 });
 

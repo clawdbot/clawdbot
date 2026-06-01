@@ -45,7 +45,9 @@ import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function requireFirstCommandRegistration(
@@ -335,6 +337,114 @@ describe("host-hook fixture plugin contract", () => {
     expectRecordFields(policyResult, {
       block: true,
       blockReason: "blocked by fixture policy",
+    });
+  });
+
+  it("fails closed when a trusted policy throws during evaluation", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          evaluate: () => {
+            throw new Error("fuzzplugin trusted policy failed");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy evaluation failed",
+    });
+  });
+
+  it("fails closed when a trusted policy registration is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableRegistration = {
+      pluginId: "fuzzplugin",
+      pluginName: "Fuzz Plugin",
+      source: "test",
+    };
+    Object.defineProperty(unreadableRegistration, "policy", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [unreadableRegistration as never];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzplugin: policy is unreadable",
+    });
+  });
+
+  it("fails closed when a trusted policy owner id is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableOwnerRegistration = {
+      pluginName: "Fuzz Plugin",
+      source: "test",
+      policy: {
+        id: "fuzzpolicy",
+        description: "synthetic trusted policy",
+        evaluate: () => undefined,
+      },
+    };
+    Object.defineProperty(unreadableOwnerRegistration, "pluginId", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy owner is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [unreadableOwnerRegistration as never];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy owner is unreadable",
+    });
+  });
+
+  it("fails closed when a trusted policy decision is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          evaluate: () =>
+            Object.defineProperty({}, "allow", {
+              enumerable: true,
+              get() {
+                throw new Error("fuzzplugin trusted policy allow is unreadable");
+              },
+            }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy decision is unreadable",
     });
   });
 

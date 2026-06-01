@@ -65,6 +65,21 @@ describe("ensureRuntimePluginsLoaded", () => {
     });
   });
 
+  it("does not load runtime plugins when plugins are globally disabled", () => {
+    ensureRuntimePluginsLoaded({
+      config: {
+        plugins: {
+          enabled: false,
+        },
+      } as never,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(hoisted.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).not.toHaveBeenCalled();
+  });
+
   it("scopes runtime plugin loading to the current gateway startup plan", () => {
     const config = {} as never;
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({

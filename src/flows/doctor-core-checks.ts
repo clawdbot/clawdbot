@@ -13,6 +13,12 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
+import {
+  detectUiProtocolFreshnessIssues,
+  uiProtocolFreshnessIssueToHealthFinding,
+  uiProtocolFreshnessIssueToRepairEffects,
+} from "../commands/doctor-ui.js";
+import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -24,6 +30,7 @@ import { registerHealthCheck } from "./health-check-registry.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
+const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 
 const loadDoctorCoreChecksRuntimeModule = async () =>
@@ -35,6 +42,9 @@ export type CoreHealthCheckDeps = {
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
+  readonly collectProviderCatalogProjectionFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
 };
@@ -74,11 +84,19 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
   return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
 }
 
+async function collectProviderCatalogProjectionFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
+  collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -416,6 +434,18 @@ function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
   };
 }
 
+function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/provider-catalog-projection",
+    kind: "core",
+    description: "Provider catalog hooks project into unified text model catalog rows.",
+    source: "doctor",
+    async detect(ctx) {
+      return deps.collectProviderCatalogProjectionFindings(ctx);
+    },
+  };
+}
+
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
 }
@@ -588,6 +618,37 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   },
 };
 
+const codexSessionRoutesCheck: HealthCheck = {
+  id: CODEX_SESSION_ROUTES_CHECK_ID,
+  kind: "core",
+  description: "Codex runtime routes have a registered Codex plugin harness before sessions run.",
+  source: "doctor",
+  async detect(ctx) {
+    return collectDisabledCodexPluginRouteIssues(ctx.cfg).map(
+      (issue): HealthFinding => ({
+        checkId: CODEX_SESSION_ROUTES_CHECK_ID,
+        severity: "warning",
+        message: [
+          `${issue.path} routes ${issue.modelRef} to ${issue.canonicalModel}`,
+          "with Codex runtime, but the Codex plugin is disabled by config.",
+        ].join(" "),
+        path: issue.path,
+        target: issue.canonicalModel,
+        requirement: "Codex plugin enabled for routes that use the Codex runtime.",
+        fixHint: issue.blockedOutsideEntry
+          ? [
+              "Enable plugin loading and remove codex from plugins.deny,",
+              "or set the affected OpenAI models to an OpenClaw runtime policy.",
+            ].join(" ")
+          : [
+              "Run `openclaw doctor --fix`: it enables plugins.entries.codex,",
+              "or set the affected OpenAI models to an OpenClaw runtime policy.",
+            ].join(" "),
+      }),
+    );
+  },
+};
+
 const gatewayPlatformNotesCheck: HealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
@@ -697,7 +758,9 @@ function filterUnavailableSkillsForScope(
   unavailable: readonly SkillStatusEntry[],
   paths: readonly (string | undefined)[] | undefined,
 ): SkillStatusEntry[] {
-  const scopedPaths = new Set(paths?.filter((path): path is string => path !== undefined) ?? []);
+  const scopedPaths = new Set(
+    paths?.filter((pathLocal): pathLocal is string => pathLocal !== undefined) ?? [],
+  );
   if (scopedPaths.size === 0) {
     return [...unavailable];
   }
@@ -832,6 +895,30 @@ const shellCompletionCheck: HealthCheck = {
   },
 };
 
+const uiProtocolFreshnessCheck: HealthCheck = {
+  id: "core/doctor/ui-protocol-freshness",
+  kind: "core",
+  description: "Control UI assets are present and current with the Gateway protocol schema.",
+  source: "doctor",
+  async detect() {
+    return (await detectUiProtocolFreshnessIssues()).map(uiProtocolFreshnessIssueToHealthFinding);
+  },
+  async repair(ctx) {
+    const effects = (await detectUiProtocolFreshnessIssues()).flatMap(
+      uiProtocolFreshnessIssueToRepairEffects,
+    );
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor UI freshness repair owns real mutations",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
     id: "core/doctor/workspace-suggestions",
@@ -859,13 +946,16 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    codexSessionRoutesCheck,
     shellCompletionCheck,
+    uiProtocolFreshnessCheck,
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createProviderCatalogProjectionCheck(deps),
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
   ];

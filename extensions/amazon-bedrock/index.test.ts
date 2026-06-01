@@ -272,7 +272,7 @@ describe("amazon-bedrock provider plugin", () => {
     setBedrockAppProfileControlPlaneForTest((region) => ({
       async getInferenceProfile(input) {
         class GetInferenceProfileCommand {
-          constructor(readonly input: Record<string, unknown> = {}) {}
+          constructor(readonly inputLocal: Record<string, unknown> = {}) {}
         }
         bedrockClientConfigs.push(region ? { region } : {});
         return await sendBedrockCommand(new GetInferenceProfileCommand(input));

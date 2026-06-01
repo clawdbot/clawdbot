@@ -88,7 +88,7 @@ export async function runAgentCleanupStep(params: {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);
-  const observedCleanupPromise = cleanupPromise.catch((error) => {
+  const observedCleanupPromise = cleanupPromise.catch((error: unknown) => {
     if (!timedOut) {
       params.log.warn(
         `agent cleanup failed: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,
@@ -114,7 +114,7 @@ export async function runAgentCleanupStep(params: {
     params.log.warn(
       `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${details}`,
     );
-    void cleanupPromise.catch((error) => {
+    void cleanupPromise.catch((error: unknown) => {
       params.log.warn(
         `agent cleanup rejected after timeout: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,
       );

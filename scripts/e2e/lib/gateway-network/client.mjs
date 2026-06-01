@@ -12,7 +12,9 @@ if (!url || !token) {
 const deadline = Date.now() + readGatewayNetworkClientConnectTimeoutMs();
 
 function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function openSocket(timeoutMs = 10_000) {
@@ -90,10 +92,7 @@ while (Date.now() < deadline) {
       }
     } else {
       ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
-      const healthRes = await onceFrame(
-        ws,
-        (frame) => frame?.type === "res" && frame?.id === "h1",
-      );
+      const healthRes = await onceFrame(ws, (frame) => frame?.type === "res" && frame?.id === "h1");
       if (healthRes.ok) {
         ws.close();
         console.log("ok");

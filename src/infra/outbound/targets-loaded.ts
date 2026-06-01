@@ -18,6 +18,7 @@ function resolveLoadedOutboundChannelPlugin(channel: string): ChannelPlugin | un
   return getLoadedChannelPluginForRead(normalized);
 }
 
+/** Resolves targets through an already-loaded channel plugin without bootstrap discovery. */
 export function tryResolveLoadedOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;

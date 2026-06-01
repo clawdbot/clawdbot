@@ -440,8 +440,8 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
   }
   const text = content
     .flatMap((part) => {
-      const text = stringifyStructuredContentPart(part);
-      return text ? [text] : [];
+      const textLocal = stringifyStructuredContentPart(part);
+      return textLocal ? [textLocal] : [];
     })
     .join("\n")
     .trim();
@@ -500,22 +500,21 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-export function resolveAttemptPrependSystemContext(params: {
+// Per-turn media-generation task hints depend on live session state, so they must
+// be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
+// rather than placed in the static prepend slot — keeping them above the boundary
+// shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
+export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
-  hookPrependSystemContext?: string;
 }): string | undefined {
-  const activeMediaTaskPromptContexts =
-    params.trigger === "user" || params.trigger === "manual"
-      ? [
-          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
-        ]
-      : [];
+  if (params.trigger !== "user" && params.trigger !== "manual") {
+    return undefined;
+  }
   return joinPresentTextSegments([
-    ...activeMediaTaskPromptContexts,
-    params.hookPrependSystemContext,
+    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
   ]);
 }
 

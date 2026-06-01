@@ -8,6 +8,7 @@ import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js"
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
@@ -20,11 +21,6 @@ export type GatewaySessionsDefaults = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
-};
-
-type GatewayThinkingLevelOption = {
-  id: string;
-  label: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";

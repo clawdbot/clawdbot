@@ -1117,7 +1117,7 @@ async function maybeProbeGateway(params: {
   });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
-    .catch((err) => ({
+    .catch((err: unknown) => ({
       ok: false,
       url,
       connectLatencyMs: null,

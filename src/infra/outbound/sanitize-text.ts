@@ -1,16 +1,3 @@
-/**
- * Sanitize model output for plain-text messaging surfaces.
- *
- * LLMs occasionally produce HTML tags (`<br>`, `<b>`, `<i>`, etc.) that render
- * correctly on web but appear as literal text on WhatsApp, Signal, SMS, and IRC.
- *
- * Converts common inline HTML to lightweight-markup equivalents used by
- * WhatsApp/Signal/Telegram and strips any remaining tags.
- *
- * @see https://github.com/openclaw/openclaw/issues/31884
- * @see https://github.com/openclaw/openclaw/issues/18558
- */
-
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
@@ -60,6 +47,8 @@ function stripDelimitedRuntimeBlock(text: string, begin: string, end: string): s
     `${standaloneLinePattern(begin)}[\\s\\S]*?${standaloneLinePattern(end)}`,
     "g",
   );
+  // If the closing delimiter is missing, drop the rest rather than leaking
+  // internal runtime context to user-visible outbound text.
   const unmatchedBeginRe = new RegExp(`${standaloneLinePattern(begin)}[\\s\\S]*$`, "g");
   return stripStandaloneMarkerLine(
     text.replace(closedBlockRe, "").replace(unmatchedBeginRe, ""),
@@ -102,6 +91,7 @@ function unwrapPromptDataWrapperLines(text: string): string {
   return changed ? output.join("\n") : text;
 }
 
+/** Removes prompt/runtime scaffolding that must never leak to plain-text channels. */
 export function stripInternalRuntimeScaffolding(text: string): string {
   let stripped = unwrapPromptDataWrapperLines(text)
     .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")

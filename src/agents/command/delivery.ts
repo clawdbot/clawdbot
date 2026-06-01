@@ -660,7 +660,7 @@ export async function deliverAgentCommandResult(
   };
   if (strictPreDeliveryError) {
     emitJsonEnvelope(deliveryStatus);
-    throw strictPreDeliveryError;
+    throw toLintErrorObject(strictPreDeliveryError, "Non-Error thrown");
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
@@ -747,4 +747,18 @@ export async function deliverAgentCommandResult(
     deliverySucceeded,
     deliveryStatus,
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

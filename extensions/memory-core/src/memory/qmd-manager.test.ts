@@ -91,6 +91,18 @@ function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: strin
   });
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => {
+      scheduleNativeTimeout(resolve, 10);
+    });
+  }
+}
+
 function isMcporterCommand(cmd: unknown): boolean {
   if (typeof cmd !== "string") {
     return false;
@@ -107,9 +119,25 @@ function firstWatchOptions(): WatchOptions {
 }
 
 function firstEmbedLockCall(): EmbedLockCall {
-  const call = withFileLockMock.mock.calls[0] as EmbedLockCall | undefined;
+  const call = withFileLockMock.mock.calls.find((entry) =>
+    entry[0].endsWith(path.join("qmd", "embed.lock")),
+  ) as EmbedLockCall | undefined;
   if (!call) {
     throw new Error("Expected qmd embed lock call");
+  }
+  return call;
+}
+
+function writeLockCalls(): EmbedLockCall[] {
+  return withFileLockMock.mock.calls.filter((entry) =>
+    entry[0].endsWith("qmd-write.lock"),
+  ) as EmbedLockCall[];
+}
+
+function firstWriteLockCall(): EmbedLockCall {
+  const call = writeLockCalls()[0];
+  if (!call) {
+    throw new Error("Expected qmd store write lock call");
   }
   return call;
 }
@@ -247,13 +275,15 @@ describe("QmdMemoryManager", () => {
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
+    agentId?: string;
   }) {
     const cfgToUse = params?.cfg ?? cfg;
-    const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId });
+    const selectedAgentId = params?.agentId ?? agentId;
+    const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId: selectedAgentId });
     const manager = trackManager(
       await QmdMemoryManager.create({
         cfg: cfgToUse,
-        agentId,
+        agentId: selectedAgentId,
         resolved,
         mode: params?.mode ?? "status",
       }),
@@ -270,10 +300,18 @@ describe("QmdMemoryManager", () => {
   });
 
   beforeEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY];
     spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
-    withFileLockMock.mockClear();
+    withFileLockMock.mockReset();
+    withFileLockMock.mockImplementation(
+      async <T>(_filePath: string, _options: unknown, fn: () => Promise<T>) => await fn(),
+    );
     logWarnMock.mockClear();
     logDebugMock.mockClear();
     logInfoMock.mockClear();
@@ -692,7 +730,9 @@ describe("QmdMemoryManager", () => {
     void createPromise.then(() => {
       created = true;
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(created).toBe(false);
     (releaseUpdate as (() => void) | null)?.();
     const manager = await createPromise;
@@ -4089,6 +4129,112 @@ describe("QmdMemoryManager", () => {
     await second.manager.close();
   });
 
+  it("serializes both the qmd update and embed writes on one per-store lock (issue #66339)", async () => {
+    // Regression for #66339: the update AND embed phases both write the same
+    // qmd index.sqlite. A foreground `memory search` dirty-sync and a background
+    // gateway update/embed run in separate processes, which the in-process queues
+    // cannot serialize, so the writers collided with SQLITE_BUSY. Both writes now
+    // take one per-store cross-process write lock; embed additionally keeps the
+    // global embed lock for ML-resource serialization.
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation(() => createMockChild());
+
+    const { manager } = await createManager({ mode: "status" });
+    await expect(manager.sync({ reason: "manual", force: true })).resolves.toBeUndefined();
+
+    const [lockPath, lockOptions, lockTask] = firstWriteLockCall();
+    // Per-store lock beside the agent qmd dir, distinct from the global embed lock.
+    expect(lockPath.endsWith("qmd-write.lock")).toBe(true);
+    expect(lockPath.endsWith(path.join("qmd", "embed.lock"))).toBe(false);
+    expect(lockOptions.retries.factor).toBe(1.2);
+    expect(lockOptions.retries.maxTimeout).toBe(10_000);
+    expect(lockOptions.retries.randomize).toBe(true);
+    expect(lockOptions.retries.retries).toBeGreaterThanOrEqual(60);
+    expect(lockOptions.stale).toBeGreaterThanOrEqual(5 * 60 * 1000);
+    expect(typeof lockTask).toBe("function");
+
+    // A forced sync runs both the update and the embed write, so both acquire the
+    // shared per-store write lock; the embed also still takes the global embed lock.
+    expect(writeLockCalls().length).toBeGreaterThanOrEqual(2);
+    const embedLockTaken = withFileLockMock.mock.calls.some((entry) =>
+      entry[0].endsWith(path.join("qmd", "embed.lock")),
+    );
+    expect(embedLockTaken).toBe(true);
+
+    await manager.close();
+  });
+
+  it("does not hold the per-store write lock while waiting for embed capacity", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [
+          { id: agentId, default: true, workspace: workspaceDir },
+          { id: "other", workspace: workspaceDir },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation(() => createMockChild());
+
+    let releaseFirstEmbed!: () => void;
+    const firstEmbedLocked = new Promise<void>((resolve) => {
+      withFileLockMock.mockImplementation(
+        async <T>(filePath: string, _options: unknown, fn: () => Promise<T>) => {
+          if (filePath.endsWith(path.join("qmd", "embed.lock")) && !releaseFirstEmbed) {
+            resolve();
+            await new Promise<void>((release) => {
+              releaseFirstEmbed = release;
+            });
+          }
+          return await fn();
+        },
+      );
+    });
+
+    const first = await createManager({ mode: "status" });
+    const second = await createManager({ mode: "status", agentId: "other" });
+    const firstSync = first.manager.sync({ reason: "manual", force: true });
+    await firstEmbedLocked;
+
+    const secondSync = second.manager.sync({ reason: "manual", force: true });
+    try {
+      await waitUntil(() => writeLockCalls().length >= 2);
+
+      // The second manager may run its update, but its embed must not take a store
+      // write lock while it is still queued behind the first embed.
+      expect(writeLockCalls().length).toBe(2);
+    } finally {
+      releaseFirstEmbed();
+    }
+
+    await Promise.all([firstSync, secondSync]);
+    expect(writeLockCalls().length).toBeGreaterThanOrEqual(4);
+
+    await first.manager.close();
+    await second.manager.close();
+  });
+
   it("serializes session exports across managers for the same agent", async () => {
     cfg = {
       ...cfg,
@@ -5179,6 +5325,94 @@ describe("QmdMemoryManager", () => {
       | undefined;
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
     expect(busyTimeout).toBe(1000);
+    await manager.close();
+  });
+
+  it("uses the configured qmd timeout for status probes", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          limits: { timeoutMs: 6000 },
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let statusKill: Mock | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "status") {
+        const child = createMockChild({ autoClose: false });
+        statusKill = vi.fn();
+        child.kill = statusKill;
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    const probe = manager.probeVectorAvailability();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statusKill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(probe).resolves.toBe(false);
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: false,
+      semanticAvailable: false,
+      loadError: expect.stringContaining("timed out after 6000ms"),
+    });
+    await manager.close();
+  });
+
+  it("exports valid session transcripts whose IDs contain checkpoint words", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          sessions: { enabled: true },
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: true,
+            waitForBootSync: true,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "live-session.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "live" } })}\n`,
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "team.checkpoint.notes.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "notes" } })}\n`,
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "live-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "checkpoint" } })}\n`,
+    );
+
+    const { manager } = await createManager({ mode: "full" });
+    const sessionExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exported = (await fs.readdir(sessionExportDir)).toSorted();
+
+    expect(exported).toEqual(["live-session.md", "team.checkpoint.notes.md"]);
+    await expect(
+      fs.readFile(path.join(sessionExportDir, "team.checkpoint.notes.md"), "utf-8"),
+    ).resolves.toContain("notes");
     await manager.close();
   });
 

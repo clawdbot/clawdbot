@@ -1,3 +1,4 @@
+/** Splits text into bounded chunks using caller-owned soft-break selection. */
 export function chunkTextByBreakResolver(
   text: string,
   limit: number,
@@ -14,6 +15,7 @@ export function chunkTextByBreakResolver(
   while (remaining.length > limit) {
     const window = remaining.slice(0, limit);
     const candidateBreak = resolveBreakIndex(window);
+    // Invalid or zero-width soft breaks would stall the loop, so fall back to the hard limit.
     const breakIdx =
       Number.isFinite(candidateBreak) && candidateBreak > 0 && candidateBreak <= limit
         ? candidateBreak
@@ -23,6 +25,7 @@ export function chunkTextByBreakResolver(
     if (chunk.length > 0) {
       chunks.push(chunk);
     }
+    // If the break lands before whitespace, consume one separator and trim the rest for the next chunk.
     const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
     const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
     remaining = remaining.slice(nextStart).trimStart();

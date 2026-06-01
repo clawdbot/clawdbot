@@ -174,6 +174,8 @@ const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill 
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
+const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -1807,6 +1809,70 @@ async function buildResponsesPayload(
     }
   }
   if (
+    QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
+    QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
+  ) {
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      const useApiFiles = QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText);
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        code: useApiFiles
+          ? [
+              'const files = await API.list("mcp");',
+              'const root = await API.read("mcp/index.d.ts");',
+              'const api = await API.read("mcp/fixture.d.ts");',
+              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "return {",
+              '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
+              "  files: files.files.map((file) => file.path),",
+              "  rootHasFixture: root.content.includes('fixture'),",
+              "  headerHasLookup: api.content.includes('function lookupNote'),",
+              "  resultText: result.content?.[0]?.text,",
+              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "};",
+            ].join("\n")
+          : [
+              "const rootApi = await MCP.$api();",
+              'const api = await MCP.fixture.$api("lookupNote", { schema: true });',
+              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "return {",
+              '  marker: "MCP_CODE_MODE_TOOL_RESULT",',
+              "  rootServers: rootApi.servers,",
+              "  headerHasLookup: api.header.includes('function lookupNote'),",
+              "  schemaKeys: Object.keys(api.schemas),",
+              "  resultText: result.content?.[0]?.text,",
+              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "};",
+            ].join("\n"),
+      });
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (
+      toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") &&
+      toolOutput.includes("fixture-note-alpha")
+    ) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none improvement=virtual-api-files-were-clear-and-needed-one-exec",
+      );
+    }
+    if (toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT")) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    }
+    if (/MCP_CODE_MODE_TOOL_RESULT|fixture-note-alpha/.test(toolOutput)) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_OK unclear=none improvement=virtual-header-files-would-avoid-the-first-api-call",
+      );
+    }
+  }
+  if (
     allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
     /Internal task completion event/i.test(allInputText)
   ) {
@@ -3013,163 +3079,165 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      writeJson(res, 200, { ok: true, status: "live" });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/v1/models") {
-      writeJson(res, 200, {
-        data: [
-          { id: "gpt-5.5", object: "model" },
-          { id: "gpt-5.5-alt", object: "model" },
-          { id: "gpt-image-1", object: "model" },
-          { id: "text-embedding-3-small", object: "model" },
-          { id: "claude-opus-4-8", object: "model" },
-          { id: "claude-sonnet-4-6", object: "model" },
-        ],
-      });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/debug/last-request") {
-      writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/debug/requests") {
-      writeJson(res, 200, requests);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/debug/image-generations") {
-      writeJson(res, 200, imageGenerationRequests);
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/images/generations") {
-      const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      imageGenerationRequests.push(body);
-      if (imageGenerationRequests.length > 20) {
-        imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
-      }
-      writeJson(res, 200, {
-        data: [
-          {
-            b64_json: TINY_PNG_BASE64,
-            revised_prompt: "A QA lighthouse with protocol droid silhouette.",
-          },
-        ],
-      });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
-      const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      const inputs = extractEmbeddingInputTexts(body.input);
-      writeJson(res, 200, {
-        object: "list",
-        data: inputs.map((text, index) => ({
-          object: "embedding",
-          index,
-          embedding: buildDeterministicEmbedding(text),
-        })),
-        model:
-          typeof body.model === "string" && body.model.trim()
-            ? body.model
-            : "text-embedding-3-small",
-        usage: {
-          prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
-          total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
-        },
-      });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-      const events = await buildResponsesPayload(body, scenarioState);
-      const resolvedModel = typeof body.model === "string" ? body.model : "";
-      lastRequest = {
-        raw,
-        body,
-        prompt: extractLastUserText(input),
-        allInputText: extractAllRequestTexts(input, body),
-        instructions: extractInstructionsText(body) || undefined,
-        toolOutput: extractToolOutput(input),
-        model: resolvedModel,
-        providerVariant: resolveProviderVariant(resolvedModel),
-        imageInputCount: countImageInputs(input),
-        plannedToolName: extractPlannedToolName(events),
-        plannedToolArgs: extractPlannedToolArgs(events),
-      };
-      requests.push(lastRequest);
-      if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-        requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-      }
-      if (body.stream === false) {
-        const completion = events.at(-1);
-        if (!completion || completion.type !== "response.completed") {
-          writeJson(res, 500, { error: "mock completion failed" });
-          return;
-        }
-        writeJson(res, 200, completion.response);
+  const server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
+        writeJson(res, 200, { ok: true, status: "live" });
         return;
       }
-      writeSse(res, events);
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/messages") {
-      const raw = await readBody(req);
-      let body: AnthropicMessagesRequest = {};
-      try {
-        body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
-      } catch {
-        writeJson(res, 400, {
-          type: "error",
-          error: {
-            type: "invalid_request_error",
-            message: "Malformed JSON body for Anthropic Messages request.",
+      if (req.method === "GET" && url.pathname === "/v1/models") {
+        writeJson(res, 200, {
+          data: [
+            { id: "gpt-5.5", object: "model" },
+            { id: "gpt-5.5-alt", object: "model" },
+            { id: "gpt-image-1", object: "model" },
+            { id: "text-embedding-3-small", object: "model" },
+            { id: "claude-opus-4-8", object: "model" },
+            { id: "claude-sonnet-4-6", object: "model" },
+          ],
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/last-request") {
+        writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/requests") {
+        writeJson(res, 200, requests);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/image-generations") {
+        writeJson(res, 200, imageGenerationRequests);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        imageGenerationRequests.push(body);
+        if (imageGenerationRequests.length > 20) {
+          imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
+        }
+        writeJson(res, 200, {
+          data: [
+            {
+              b64_json: TINY_PNG_BASE64,
+              revised_prompt: "A QA lighthouse with protocol droid silhouette.",
+            },
+          ],
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const inputs = extractEmbeddingInputTexts(body.input);
+        writeJson(res, 200, {
+          object: "list",
+          data: inputs.map((text, index) => ({
+            object: "embedding",
+            index,
+            embedding: buildDeterministicEmbedding(text),
+          })),
+          model:
+            typeof body.model === "string" && body.model.trim()
+              ? body.model
+              : "text-embedding-3-small",
+          usage: {
+            prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+            total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
           },
         });
         return;
       }
-      const {
-        events,
-        input,
-        responseBody,
-        streamEvents,
-        model: normalizedModel,
-      } = await buildMessagesPayload(body, scenarioState);
-      // Record the adapted request snapshot so /debug/requests gives the QA
-      // suite the same plannedToolName / allInputText / toolOutput signals
-      // on the Anthropic route that the OpenAI route already exposes. This
-      // is what lets a single parity run diff assertions across both lanes.
-      // Reuse the normalized model so an empty-string body.model no longer
-      // leaks through to `lastRequest.model`.
-      lastRequest = {
-        raw,
-        body: body as Record<string, unknown>,
-        prompt: extractLastUserText(input),
-        allInputText: extractAllInputTexts(input),
-        toolOutput: extractToolOutput(input),
-        model: normalizedModel,
-        providerVariant: resolveProviderVariant(normalizedModel),
-        imageInputCount: countImageInputs(input),
-        plannedToolName: extractPlannedToolName(events),
-        plannedToolArgs: extractPlannedToolArgs(events),
-      };
-      requests.push(lastRequest);
-      if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-        requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-      }
-      if (body.stream === true) {
-        writeAnthropicSse(res, streamEvents);
+      if (req.method === "POST" && url.pathname === "/v1/responses") {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+        const events = await buildResponsesPayload(body, scenarioState);
+        const resolvedModel = typeof body.model === "string" ? body.model : "";
+        lastRequest = {
+          raw,
+          body,
+          prompt: extractLastUserText(input),
+          allInputText: extractAllRequestTexts(input, body),
+          instructions: extractInstructionsText(body) || undefined,
+          toolOutput: extractToolOutput(input),
+          model: resolvedModel,
+          providerVariant: resolveProviderVariant(resolvedModel),
+          imageInputCount: countImageInputs(input),
+          plannedToolName: extractPlannedToolName(events),
+          plannedToolArgs: extractPlannedToolArgs(events),
+        };
+        requests.push(lastRequest);
+        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+        }
+        if (body.stream === false) {
+          const completion = events.at(-1);
+          if (!completion || completion.type !== "response.completed") {
+            writeJson(res, 500, { error: "mock completion failed" });
+            return;
+          }
+          writeJson(res, 200, completion.response);
+          return;
+        }
+        writeSse(res, events);
         return;
       }
-      writeJson(res, 200, responseBody);
-      return;
-    }
-    writeJson(res, 404, { error: "not found" });
+      if (req.method === "POST" && url.pathname === "/v1/messages") {
+        const raw = await readBody(req);
+        let body: AnthropicMessagesRequest;
+        try {
+          body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+        } catch {
+          writeJson(res, 400, {
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "Malformed JSON body for Anthropic Messages request.",
+            },
+          });
+          return;
+        }
+        const {
+          events,
+          input,
+          responseBody,
+          streamEvents,
+          model: normalizedModel,
+        } = await buildMessagesPayload(body, scenarioState);
+        // Record the adapted request snapshot so /debug/requests gives the QA
+        // suite the same plannedToolName / allInputText / toolOutput signals
+        // on the Anthropic route that the OpenAI route already exposes. This
+        // is what lets a single parity run diff assertions across both lanes.
+        // Reuse the normalized model so an empty-string body.model no longer
+        // leaks through to `lastRequest.model`.
+        lastRequest = {
+          raw,
+          body: body as Record<string, unknown>,
+          prompt: extractLastUserText(input),
+          allInputText: extractAllInputTexts(input),
+          toolOutput: extractToolOutput(input),
+          model: normalizedModel,
+          providerVariant: resolveProviderVariant(normalizedModel),
+          imageInputCount: countImageInputs(input),
+          plannedToolName: extractPlannedToolName(events),
+          plannedToolArgs: extractPlannedToolArgs(events),
+        };
+        requests.push(lastRequest);
+        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+        }
+        if (body.stream === true) {
+          writeAnthropicSse(res, streamEvents);
+          return;
+        }
+        writeJson(res, 200, responseBody);
+        return;
+      }
+      writeJson(res, 404, { error: "not found" });
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {

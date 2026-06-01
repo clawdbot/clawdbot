@@ -339,8 +339,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(params) {
-      return await client.resetRoomKeyBackup(params);
+    async resetRoomKeyBackup(paramsLocal) {
+      return await client.resetRoomKeyBackup(paramsLocal);
     },
     async restoreRoomKeyBackup(opts) {
       return await client.restoreRoomKeyBackup(opts);

@@ -1462,6 +1462,42 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "index.ts",
       distFile: "index.mjs",
     });
+    const mediaCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "media-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const mediaCoreMime = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "media-core",
+      srcFile: "mime.ts",
+      distFile: "mime.mjs",
+    });
+    const acpCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "acp-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const acpCoreRuntimeTypes = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "acp-core",
+      srcFile: path.join("runtime", "types.ts"),
+      distFile: path.join("runtime", "types.mjs"),
+    });
+    const normalizationCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const normalizationStringCoerce = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "string-coerce.ts",
+      distFile: "string-coerce.mjs",
+    });
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "markdown-core",
@@ -1512,6 +1548,12 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(markdownCoreTables.distFile);
     fs.rmSync(mediaGenerationCore.distFile);
     fs.rmSync(mediaGenerationModelRef.distFile);
+    fs.rmSync(mediaCore.distFile);
+    fs.rmSync(mediaCoreMime.distFile);
+    fs.rmSync(acpCore.distFile);
+    fs.rmSync(acpCoreRuntimeTypes.distFile);
+    fs.rmSync(normalizationCore.distFile);
+    fs.rmSync(normalizationStringCoerce.distFile);
     fs.rmSync(terminalCore.distFile);
     fs.rmSync(terminalCoreTheme.distFile);
     fs.rmSync(netPolicy.distFile);
@@ -1550,6 +1592,24 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/model-ref"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationModelRef.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/media-core"] ?? "")).toBe(
+      fs.realpathSync(mediaCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/media-core/mime"] ?? "")).toBe(
+      fs.realpathSync(mediaCoreMime.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/acp-core"] ?? "")).toBe(
+      fs.realpathSync(acpCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/types"] ?? "")).toBe(
+      fs.realpathSync(acpCoreRuntimeTypes.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core"] ?? "")).toBe(
+      fs.realpathSync(normalizationCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
+      fs.realpathSync(normalizationStringCoerce.srcFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/terminal-core"] ?? "")).toBe(
       fs.realpathSync(terminalCore.srcFile),
     );
@@ -1587,18 +1647,56 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "catalog.ts",
       distFile: "catalog.mjs",
     });
+    writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "media-core",
+      srcFile: "read-response-with-limit.ts",
+      distFile: "read-response-with-limit.mjs",
+    });
+    const mediaCoreRootDistFile = path.join(
+      fixture.root,
+      "dist",
+      "media-core",
+      "read-response-with-limit.js",
+    );
+    mkdirSafeDir(path.dirname(mediaCoreRootDistFile));
+    fs.writeFileSync(mediaCoreRootDistFile, "export {};\n", "utf-8");
+    writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "acp-core",
+      srcFile: "normalize-text.ts",
+      distFile: "normalize-text.mjs",
+    });
+    const acpCoreRootDistFile = path.join(fixture.root, "dist", "acp-core", "normalize-text.js");
+    mkdirSafeDir(path.dirname(acpCoreRootDistFile));
+    fs.writeFileSync(acpCoreRootDistFile, "export {};\n", "utf-8");
+    writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "record-coerce.ts",
+      distFile: "record-coerce.mjs",
+    });
+    const normalizationCoreRootDistFile = path.join(
+      fixture.root,
+      "dist",
+      "normalization-core",
+      "record-coerce.js",
+    );
+    mkdirSafeDir(path.dirname(normalizationCoreRootDistFile));
+    fs.writeFileSync(normalizationCoreRootDistFile, "export {};\n", "utf-8");
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "markdown-core",
       srcFile: "render.ts",
       distFile: "render.mjs",
     });
-    const terminalCore = writeWorkspacePackageEntry({
+    const ignoredTerminalCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "terminal-core",
       srcFile: "links.ts",
       distFile: "links.mjs",
     });
+    void ignoredTerminalCore;
     const terminalCoreRootDistFile = path.join(fixture.root, "dist", "terminal-core", "links.js");
     mkdirSafeDir(path.dirname(terminalCoreRootDistFile));
     fs.writeFileSync(terminalCoreRootDistFile, "export {};\n", "utf-8");
@@ -1635,6 +1733,15 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.distFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/media-core/read-response-with-limit"] ?? "")).toBe(
+      fs.realpathSync(mediaCoreRootDistFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/acp-core/normalize-text"] ?? "")).toBe(
+      fs.realpathSync(acpCoreRootDistFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/record-coerce"] ?? "")).toBe(
+      fs.realpathSync(normalizationCoreRootDistFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
       fs.realpathSync(terminalCoreRootDistFile),
     );
@@ -1644,6 +1751,28 @@ describe("plugin sdk alias helpers", () => {
     expect(
       fs.realpathSync(aliases["@openclaw/model-catalog-core/provider-model-id-normalize"] ?? ""),
     ).toBe(fs.realpathSync(modelCatalogCore.distFile));
+  });
+
+  it("derives acp-core aliases from packaged root dist when package metadata is absent", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+    const acpRuntimeErrors = path.join(fixture.root, "dist", "acp-core", "runtime", "errors.js");
+    mkdirSafeDir(path.dirname(acpRuntimeErrors));
+    fs.writeFileSync(acpRuntimeErrors, "export {};\n", "utf-8");
+    const cwdWithoutOpenClawPackage = makeTempDir();
+
+    const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+      ),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/errors"] ?? "")).toBe(
+      fs.realpathSync(acpRuntimeErrors),
+    );
   });
 
   it("aliases bundled plugin package public surfaces for source plugin transforms", () => {

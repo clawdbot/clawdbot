@@ -16,6 +16,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
+  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -103,7 +104,10 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -118,7 +122,10 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -939,7 +946,10 @@ describe("before_tool_call requireApproval handling", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
+  async function runAbortDuringApprovalWait(options?: {
+    abortReason?: unknown;
+    onResolution?: ReturnType<typeof vi.fn>;
+  }) {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Abortable",
@@ -951,7 +961,7 @@ describe("before_tool_call requireApproval handling", () => {
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
     mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -1166,6 +1176,63 @@ describe("before_tool_call requireApproval handling", () => {
       }),
     ).resolves.toEqual({ blocked: false, params });
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
+  it("reports trusted policy diagnostics through guarded readers", () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const registry = createEmptyPluginRegistry();
+    const unreadableIdPolicy: Record<string, unknown> = {
+      description: "synthetic trusted policy",
+      evaluate: () => undefined,
+    };
+    Object.defineProperty(unreadableIdPolicy, "id", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy id is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: unreadableIdPolicy as never,
+      },
+      {
+        pluginId: "mockplugin",
+        pluginName: "Mock Plugin",
+        source: "test",
+        policy: {
+          id: "mockpolicy",
+          description: "mock policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
+    try {
+      state = getBeforeToolCallPolicyDiagnosticState();
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+
+    expect(state).toEqual({
+      hasBeforeToolCallHook: false,
+      trustedToolPolicies: [
+        {
+          id: "fuzzplugin",
+          pluginId: "fuzzplugin",
+          pluginName: "Fuzz Plugin",
+        },
+        {
+          id: "mockpolicy",
+          pluginId: "mockplugin",
+          pluginName: "Mock Plugin",
+        },
+      ],
+    });
   });
 
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
@@ -1434,6 +1501,13 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies non-Error abort reasons as run abort cancellation", async () => {
+    const result = await runAbortDuringApprovalWait({ abortReason: "sessions_yield" });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
   });
 
   it("removes abort listener after waitDecision resolves", async () => {

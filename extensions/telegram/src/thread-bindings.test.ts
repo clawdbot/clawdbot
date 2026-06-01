@@ -61,8 +61,12 @@ function createTelegramThreadBindingManager(
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 describe("telegram thread bindings", () => {

@@ -90,6 +90,22 @@ const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CODEX_VITEST_CONFIG = "test/vitest/vitest.extension-codex.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_EXTRA_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_LIGHT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_SUPPORT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts";
+const EXTENSION_CODEX_APP_SERVER_RUNTIME_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-runtime.config.ts";
+const EXTENSION_CODEX_APP_SERVER_SUPPORT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-support.config.ts";
+const EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-tools.config.ts";
+const EXTENSION_CODEX_SURFACE_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-surface.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -148,6 +164,14 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_CODEX_VITEST_CONFIG, 168],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_VITEST_CONFIG, 168],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_EXTRA_VITEST_CONFIG, 118],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_LIGHT_VITEST_CONFIG, 82],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_SUPPORT_VITEST_CONFIG, 80],
+  [EXTENSION_CODEX_APP_SERVER_RUNTIME_VITEST_CONFIG, 88],
+  [EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG, 78],
+  [EXTENSION_CODEX_APP_SERVER_SUPPORT_VITEST_CONFIG, 72],
+  [EXTENSION_CODEX_SURFACE_VITEST_CONFIG, 68],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -403,6 +427,63 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
+  [
+    "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "src/agents/agent-bundle-mcp-runtime.test.ts",
+      "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+    [
+      "src/agents/agent-bundle-mcp-runtime.test.ts",
+      "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/mcp-channels-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-observability.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/mcp-channels-docker-client.ts",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
+  ],
+  [
+    "scripts/mcp-code-mode-gateway-e2e.ts",
+    [
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
+  ],
   ["scripts/dependency-changes-report.mjs", ["test/scripts/dependency-changes-report.test.ts"]],
   [
     "scripts/dependency-ownership-surface-report.mjs",
@@ -1297,7 +1378,7 @@ function findDirectImportersWithGitGrep(cwd, importedFile, fileSet) {
       if (file === importedFile || !fileSet.has(file) || importers.includes(file)) {
         continue;
       }
-      let source = "";
+      let source;
       try {
         source = fs.readFileSync(path.join(cwd, file), "utf8");
       } catch {
@@ -1372,7 +1453,7 @@ function getImportGraph(cwd) {
   );
 
   for (const file of files) {
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(path.join(cwd, file), "utf8");
     } catch {

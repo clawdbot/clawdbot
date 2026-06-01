@@ -41,18 +41,18 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
 }));
 
 vi.mock("./auth-choice.apply.api-providers.js", () => {
-  const normalizeProviderId = (value: string) => value.trim().toLowerCase();
+  const normalizeProviderIdLocal = (value: string) => value.trim().toLowerCase();
   const resolveChoiceByKind = (params: {
     authChoice: string;
     kind: ProviderAuthMethod["kind"];
     tokenProvider?: string;
   }) => {
-    const providerId = normalizeProviderId(params.tokenProvider ?? "");
+    const providerId = normalizeProviderIdLocal(params.tokenProvider ?? "");
     if (!providerId) {
       return params.authChoice;
     }
     const provider = resolvePluginProviders().find(
-      (entry) => normalizeProviderId(entry.id) === providerId,
+      (entry) => normalizeProviderIdLocal(entry.id) === providerId,
     );
     return (
       provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId ??

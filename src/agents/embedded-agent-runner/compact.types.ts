@@ -27,6 +27,8 @@ export type CompactEmbeddedAgentSessionParams = {
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;
+  /** Host-resolved provider credential for native harness compaction. */
+  resolvedApiKey?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -66,6 +68,12 @@ export type CompactEmbeddedAgentSessionParams = {
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
+  /** Force compaction because the caller already determined this turn must compact before prompt submission. */
+  forcePreflight?: boolean;
+  /** Alias for forcePreflight used by preflight budget gates. */
+  preflightRequired?: boolean;
+  /** Diagnostic trigger that made preflight compaction mandatory. */
+  preflightCompactionTrigger?: "tokens" | "transcript_bytes";
   trigger?: "budget" | "overflow" | "manual";
   /**
    * Preflight callers can allow native/current-session harness compaction but

@@ -37,7 +37,7 @@ export function updateLastRouteInBackground(params: {
       accountId: params.accountId,
     },
     ctx: params.ctx,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     params.warn(
       {
         error: formatError(err),

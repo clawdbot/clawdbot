@@ -182,8 +182,8 @@ export async function openaiTTS(params: {
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
     return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes }) =>
-        new Error(`OpenAI TTS audio response exceeds ${maxBytes} bytes`),
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
     });
   } finally {
     await release();

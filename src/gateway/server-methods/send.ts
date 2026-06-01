@@ -82,6 +82,7 @@ function resolveGatewayInflightMap(params: { context: GatewayRequestContext; ded
       kind: "ready";
       inflightMap: Map<string, Promise<InflightResult>>;
     } {
+  // Persistent dedupe wins before process-local in-flight joins for idempotent retries.
   const cached = params.context.dedupe.get(params.dedupeKey);
   if (cached) {
     return { kind: "cached", cached };
@@ -94,22 +95,27 @@ function resolveGatewayInflightMap(params: { context: GatewayRequestContext; ded
   return { kind: "ready", inflightMap };
 }
 
-function resolveGatewayInflightStart(params: {
+function resolveGatewayInflightRequest(params: {
   context: GatewayRequestContext;
-  dedupeKey: string;
+  prefix: "message.action" | "poll" | "send";
+  idempotencyKey: string;
   respond: RespondFn;
 }):
   | {
       kind: "ready";
+      idem: string;
+      dedupeKey: string;
       inflightMap: Map<string, Promise<InflightResult>>;
     }
   | {
       kind: "handled";
       done: Promise<void>;
     } {
+  const idem = params.idempotencyKey;
+  const dedupeKey = `${params.prefix}:${idem}`;
   const inflight = resolveGatewayInflightMap({
     context: params.context,
-    dedupeKey: params.dedupeKey,
+    dedupeKey,
   });
   if (inflight.kind === "cached") {
     params.respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
@@ -126,7 +132,12 @@ function resolveGatewayInflightStart(params: {
       }),
     };
   }
-  return { kind: "ready", inflightMap: inflight.inflightMap };
+  return {
+    kind: "ready",
+    idem,
+    dedupeKey,
+    inflightMap: inflight.inflightMap,
+  };
 }
 
 async function runGatewayInflightWork(params: {
@@ -190,6 +201,36 @@ async function resolveRequestedChannel(params: {
   return { cfg, sourceCfg, channel };
 }
 
+async function resolveInternalDeliveryChannel(
+  requestChannel: unknown,
+  context: GatewayRequestContext,
+): Promise<
+  | {
+      kind: "ready";
+      cfg: OpenClawConfig;
+      sourceCfg: OpenClawConfig;
+      channel: string;
+    }
+  | {
+      kind: "failed";
+      result: InflightResult;
+    }
+> {
+  const resolvedChannel = await resolveRequestedChannel({
+    requestChannel,
+    unsupportedMessage: (input) => `unsupported channel: ${input}`,
+    context,
+    rejectWebchatAsInternalOnly: true,
+  });
+  if ("error" in resolvedChannel) {
+    return {
+      kind: "failed",
+      result: { ok: false, error: resolvedChannel.error },
+    };
+  }
+  return { kind: "ready", ...resolvedChannel };
+}
+
 function resolveGatewayOutboundTarget(params: {
   channel: string;
   to: string;
@@ -234,6 +275,7 @@ function resolveMessageActionRuntimeConfig(params: {
     runtimeConfig,
     runtimeSourceConfig,
   });
+  // Message actions must use the hot runtime snapshot when it matches the caller's source config.
   if (selected === runtimeConfig && selected !== params.cfg) {
     return resolveGatewayPluginConfig({ config: selected });
   }
@@ -310,6 +352,25 @@ function createGatewayInflightSuccess(params: {
   };
 }
 
+function createGatewayDeliveryInflightSuccess(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  runId: string;
+  channel: string;
+  result: Record<string, unknown>;
+}): InflightResult {
+  return createGatewayInflightSuccess({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+    payload: buildGatewayDeliveryPayload({
+      runId: params.runId,
+      channel: params.channel,
+      result: params.result,
+    }),
+    channel: params.channel,
+  });
+}
+
 function createGatewayInflightUnavailableFailure(params: {
   context: GatewayRequestContext;
   dedupeKey: string;
@@ -349,6 +410,7 @@ const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
 function resolveSourceReplyTranscriptMirrorQueueKey(
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
 ): string {
+  // Missing session keys are serialized together so global mirrors preserve delivery order.
   return mirror.sessionKey?.trim() || "__global__";
 }
 
@@ -408,14 +470,17 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       idempotencyKey: string;
     };
-    const idem = request.idempotencyKey;
-    const dedupeKey = `message.action:${idem}`;
-    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
-    if (inflightStart.kind === "handled") {
-      await inflightStart.done;
+    const inflight = resolveGatewayInflightRequest({
+      context,
+      prefix: "message.action",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+    });
+    if (inflight.kind === "handled") {
+      await inflight.done;
       return;
     }
-    const inflightMap = inflightStart.inflightMap;
+    const { dedupeKey, inflightMap } = inflight;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
@@ -529,14 +594,17 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       idempotencyKey: string;
     };
-    const idem = request.idempotencyKey;
-    const dedupeKey = `send:${idem}`;
-    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
-    if (inflightStart.kind === "handled") {
-      await inflightStart.done;
+    const inflight = resolveGatewayInflightRequest({
+      context,
+      prefix: "send",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+    });
+    if (inflight.kind === "handled") {
+      await inflight.done;
       return;
     }
-    const inflightMap = inflightStart.inflightMap;
+    const { idem, dedupeKey, inflightMap } = inflight;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -558,14 +626,9 @@ export const sendHandlers: GatewayRequestHandlers = {
     const threadId = normalizeOptionalString(request.threadId);
 
     const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveRequestedChannel({
-        requestChannel: request.channel,
-        unsupportedMessage: (input) => `unsupported channel: ${input}`,
-        context,
-        rejectWebchatAsInternalOnly: true,
-      });
-      if ("error" in resolvedChannel) {
-        return { ok: false, error: resolvedChannel.error };
+      const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
+      if (resolvedChannel.kind !== "ready") {
+        return resolvedChannel.result;
       }
       const { cfg, channel } = resolvedChannel;
       const outboundChannel = channel;
@@ -642,6 +705,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
             normalizeOptionalLowercaseString(providedSessionBaseKey) &&
           normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
+        // Slack replies can refine an existing base session into a thread session after target lookup.
         const outboundRoute = derivedRoute
           ? providedSessionKey
             ? shouldUseDerivedThreadSessionKey
@@ -705,8 +769,13 @@ export const sendHandlers: GatewayRequestHandlers = {
         if (!result) {
           throw new Error("No delivery result");
         }
-        const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-        return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
+        return createGatewayDeliveryInflightSuccess({
+          context,
+          dedupeKey,
+          runId: idem,
+          channel,
+          result,
+        });
       } catch (err) {
         return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
       }
@@ -741,14 +810,17 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       idempotencyKey: string;
     };
-    const idem = request.idempotencyKey;
-    const dedupeKey = `poll:${idem}`;
-    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
-    if (inflightStart.kind === "handled") {
-      await inflightStart.done;
+    const inflight = resolveGatewayInflightRequest({
+      context,
+      prefix: "poll",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+    });
+    if (inflight.kind === "handled") {
+      await inflight.done;
       return;
     }
-    const inflightMap = inflightStart.inflightMap;
+    const { idem, dedupeKey, inflightMap } = inflight;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
@@ -765,6 +837,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         typeof request.durationSeconds === "number" &&
         outbound?.supportsPollDurationSeconds !== true
       ) {
+        // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
         return {
           ok: false,
           error: errorShape(

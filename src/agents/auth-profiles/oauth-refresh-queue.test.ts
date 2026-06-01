@@ -91,12 +91,12 @@ describe("OAuth refresh in-process queue", () => {
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
-      }).catch((e) => e),
+      }).catch((e: unknown) => e),
       resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
-      }).catch((e) => e),
+      }).catch((e: unknown) => e),
     ]);
 
     expect(first).toBeInstanceOf(Error);

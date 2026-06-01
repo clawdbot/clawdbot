@@ -26,31 +26,38 @@ export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
 
+/** Resolves a local avatar file MIME type from its extension. */
 export function resolveAvatarMime(filePath: string): string {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return AVATAR_MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
+/** Detects any data URL value before image-specific validation. */
 export function isAvatarDataUrl(value: string): boolean {
   return AVATAR_DATA_RE.test(value);
 }
 
+/** Detects image data URLs accepted by avatar sources. */
 export function isAvatarImageDataUrl(value: string): boolean {
   return AVATAR_IMAGE_DATA_RE.test(value);
 }
 
+/** Detects remote HTTP(S) avatar URLs. */
 export function isAvatarHttpUrl(value: string): boolean {
   return AVATAR_HTTP_RE.test(value);
 }
 
+/** Detects URI-scheme-like avatar values, including non-HTTP schemes. */
 export function hasAvatarUriScheme(value: string): boolean {
   return AVATAR_SCHEME_RE.test(value);
 }
 
+/** Detects Windows absolute paths so they are not mistaken for URI schemes. */
 export function isWindowsAbsolutePath(value: string): boolean {
   return WINDOWS_ABS_RE.test(value);
 }
 
+/** Accepts workspace-relative avatar paths while rejecting home paths and URI values. */
 export function isWorkspaceRelativeAvatarPath(value: string): boolean {
   if (!value) {
     return false;
@@ -64,10 +71,12 @@ export function isWorkspaceRelativeAvatarPath(value: string): boolean {
   return true;
 }
 
+/** Checks that a resolved avatar path remains inside its configured root. */
 export function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
   return isPathInside(rootDir, targetPath);
 }
 
+/** Heuristically detects strings that look like local avatar file paths. */
 export function looksLikeAvatarPath(value: string): boolean {
   if (/[\\/]/.test(value)) {
     return true;
@@ -75,6 +84,7 @@ export function looksLikeAvatarPath(value: string): boolean {
   return AVATAR_PATH_EXT_RE.test(value);
 }
 
+/** Restricts local avatar files to image extensions that can be safely served inline. */
 export function isSupportedLocalAvatarExtension(filePath: string): boolean {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return LOCAL_AVATAR_EXTENSIONS.has(ext);

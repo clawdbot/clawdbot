@@ -1,15 +1,42 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { flushPendingCallRecordWritesForTest } from "./store.js";
 
 const contexts: CallManagerContext[] = [];
+
+function installStateRuntime(): void {
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call event tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call event tests");
+      }) as never,
+    },
+  });
+}
+
+beforeEach(() => {
+  resetPluginStateStoreForTests();
+  installStateRuntime();
+});
 
 afterEach(async () => {
   for (const ctx of contexts.splice(0)) {
@@ -24,6 +51,8 @@ afterEach(async () => {
     await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
+  clearVoiceCallStateRuntime();
+  resetPluginStateStoreForTests();
 });
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {

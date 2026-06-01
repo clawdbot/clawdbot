@@ -166,17 +166,17 @@ export function createMattermostMonitorResources(params: {
       buttons,
     });
 
-  const updateModelPickerPost = async (params: {
+  const updateModelPickerPost = async (paramsLocal: {
     channelId: string;
     postId: string;
     message: string;
     buttons?: Array<unknown>;
   }): Promise<MattermostInteractionResponse> => {
-    const props = buildModelPickerProps(params.channelId, params.buttons ?? []) ?? {
+    const props = buildModelPickerProps(paramsLocal.channelId, paramsLocal.buttons ?? []) ?? {
       attachments: [],
     };
-    await updateMattermostPost(client, params.postId, {
-      message: params.message,
+    await updateMattermostPost(client, paramsLocal.postId, {
+      message: paramsLocal.message,
       props,
     });
     return {};

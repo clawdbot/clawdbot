@@ -481,7 +481,7 @@ function collectCodeFiles(dir: string): string[] {
   return files;
 }
 
-function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: string }> {
+function collectDeprecatedTestBarrelImports(): string[] {
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPatterns = [
     /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
@@ -509,7 +509,7 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
       }
     }
   }
-  return leaks;
+  return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
@@ -724,7 +724,7 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 }
 
 describe("plugin-sdk package contract guardrails", () => {
-  let deprecatedTestBarrelImports: Array<{ file: string; specifier: string }> = [];
+  let deprecatedTestBarrelImports: string[] = [];
   let unusedReservedSdkSubpaths: string[] = [];
 
   beforeAll(() => {

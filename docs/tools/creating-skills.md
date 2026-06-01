@@ -1,81 +1,76 @@
 ---
-summary: "Build and test custom workspace skills with SKILL.md"
 title: "Creating skills"
+sidebarTitle: "Creating skills"
+summary: "Build, test, and publish custom SKILL.md workspace skills for your OpenClaw agents."
 read_when:
-  - You are creating a new custom skill in your workspace
+  - You are creating a new custom skill
   - You need a quick starter workflow for SKILL.md-based skills
+  - You want to use Skill Workshop to propose a skill for agent review
 ---
 
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.
-
-For how skills are loaded and prioritized, see [Skills](/tools/skills). For
-agent-generated or reviewed skill changes, see
-[Skill Workshop](/tools/skill-workshop).
+OpenClaw loads skills from several roots in a defined [precedence order](/tools/skills#loading-order).
 
 ## Create your first skill
 
 <Steps>
   <Step title="Create the skill directory">
-    Skills live in your workspace. Create a new folder:
+    Skills live in your workspace `skills/` folder. Create a directory for your
+    new skill:
 
     ```bash
     mkdir -p ~/.openclaw/workspace/skills/hello-world
     ```
 
-    You can group skills in subfolders when your library grows:
+    You can group skills in subfolders for organization — the skill is still
+    named by the `SKILL.md` frontmatter, not the folder path:
 
     ```bash
     mkdir -p ~/.openclaw/workspace/skills/personal/hello-world
+    # skill name is still "hello-world", invoked as /hello-world
     ```
-
-    Group folders are only organizational. The skill is still named by
-    `SKILL.md` frontmatter, so `name: hello-world` is invoked as
-    `/hello-world`.
 
   </Step>
 
   <Step title="Write SKILL.md">
-    Create `SKILL.md` inside that directory. The frontmatter defines metadata,
-    and the markdown body contains instructions for the agent.
+    Create `SKILL.md` inside the directory. The frontmatter defines metadata;
+    the body gives the agent instructions.
 
     ```markdown
     ---
     name: hello-world
-    description: A simple skill that says hello.
+    description: A simple skill that prints a greeting.
     ---
 
-    # Hello World Skill
+    # Hello World
 
-    When the user asks for a greeting, use the `echo` tool to say
-    "Hello from your custom skill!".
+    When the user asks for a greeting, use the `exec` tool to run:
+
+    ```bash
+    echo "Hello from your custom skill!"
+    ```
     ```
 
-    Use hyphen-case with lowercase letters, digits, and hyphens for the skill
-    `name`. Keep the leaf folder name and frontmatter `name` aligned.
+    Naming rules:
+    - Use lowercase letters, digits, and hyphens for `name`.
+    - Keep the directory name and frontmatter `name` aligned.
+    - `description` is shown to the agent and in slash-command discovery —
+      keep it one line and under 160 characters.
 
   </Step>
 
-  <Step title="Add tools (optional)">
-    You can define custom tool schemas in the frontmatter or instruct the agent
-    to use existing system tools (like `exec` or `browser`). Skills can also
-    ship inside plugins alongside the tools they document.
-
-  </Step>
-
-  <Step title="Load the skill">
-    Verify the skill loaded:
-
+  <Step title="Verify the skill loaded">
     ```bash
     openclaw skills list
     ```
 
-    OpenClaw watches nested `SKILL.md` files under skills roots. If the watcher
-    is disabled or you are continuing an existing session, start a new session
-    so the model receives the refreshed skills list:
+    OpenClaw watches `SKILL.md` files under skills roots by default. If the
+    watcher is disabled or you are continuing an existing session, start a new
+    one so the agent receives the refreshed list:
 
     ```bash
-    # From chat
+    # From chat — archive current session and start fresh
     /new
 
     # Or restart the gateway
@@ -91,111 +86,186 @@ agent-generated or reviewed skill changes, see
     openclaw agent --message "give me a greeting"
     ```
 
-    Or just chat with the agent and ask for a greeting.
+    Or open a chat and ask the agent directly. Use `/skill hello-world` to
+    invoke it explicitly by name.
 
   </Step>
 </Steps>
 
-## Use Skill Workshop for generated skills
+## SKILL.md reference
 
-For agent-generated procedures, use Skill Workshop instead of writing `SKILL.md`
-directly. Skill Workshop creates a pending proposal first; it becomes an active
-skill only after review and apply:
+### Required fields
+
+| Field         | Description                                                     |
+| ------------- | --------------------------------------------------------------- |
+| `name`        | Unique slug using lowercase letters, digits, and hyphens        |
+| `description` | One-line description shown to the agent and in discovery output |
+
+### Optional frontmatter keys
+
+| Field                      | Default | Description                                                                      |
+| -------------------------- | ------- | -------------------------------------------------------------------------------- |
+| `user-invocable`           | `true`  | Expose the skill as a user slash command                                         |
+| `disable-model-invocation` | `false` | Keep the skill out of the agent's system prompt (still runs via `/skill`)        |
+| `command-dispatch`         | —       | Set to `tool` to route the slash command directly to a tool, bypassing the model |
+| `command-tool`             | —       | Tool name to invoke when `command-dispatch: tool` is set                         |
+| `command-arg-mode`         | `raw`   | For tool dispatch, forwards the raw args string to the tool                      |
+| `homepage`                 | —       | URL shown as "Website" in the macOS Skills UI                                    |
+
+For gating fields (`requires.bins`, `requires.env`, etc.) see
+[Skills — Gating](/tools/skills#gating).
+
+### Using `{baseDir}`
+
+Use `{baseDir}` in the skill body to reference files inside the skill
+directory without hardcoding paths:
+
+```markdown
+Run the helper script at `{baseDir}/scripts/run.sh`.
+```
+
+## Adding conditional activation
+
+Gate your skill so it only loads when its dependencies are available:
+
+```markdown
+---
+name: gemini-search
+description: Search using Gemini CLI.
+metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEMINI_API_KEY" } }
+---
+```
+
+<AccordionGroup>
+  <Accordion title="Gating options">
+    | Key | Description |
+    | --- | --- |
+    | `requires.bins` | All binaries must exist on `PATH` |
+    | `requires.anyBins` | At least one binary must exist on `PATH` |
+    | `requires.env` | Each env var must exist in the process or config |
+    | `requires.config` | Each `openclaw.json` path must be truthy |
+    | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
+    | `always` | Set `true` to skip all gates and always include the skill |
+
+    Full reference: [Skills — Gating](/tools/skills#gating).
+
+  </Accordion>
+  <Accordion title="Environment and API keys">
+    Wire an API key to a skill entry in `openclaw.json`:
+
+    ```json5
+    {
+      skills: {
+        entries: {
+          "gemini-search": {
+            enabled: true,
+            apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+          },
+        },
+      },
+    }
+    ```
+
+    The key is injected into the host process for that agent turn only.
+    It does not reach the sandbox — see
+    [sandboxed env vars](/tools/skills-config#sandboxed-skills-and-env-vars).
+
+  </Accordion>
+</AccordionGroup>
+
+## Propose via Skill Workshop
+
+For agent-drafted skills or when you want operator review before a skill goes
+live, use [Skill Workshop](/tools/skill-workshop) proposals instead of writing
+`SKILL.md` directly.
 
 ```bash
+# Propose a brand-new skill
 openclaw skills workshop propose-create \
   --name "hello-world" \
-  --description "A simple skill that says hello." \
+  --description "A simple skill that prints a greeting." \
   --proposal ./PROPOSAL.md
+
+# Propose an update to an existing skill
+openclaw skills workshop propose-update hello-world \
+  --proposal ./PROPOSAL.md \
+  --description "Updated greeting skill"
 ```
 
-Use `--proposal-dir` when the proposal also has support files:
+Use `--proposal-dir` when the proposal includes support files:
 
 ```bash
 openclaw skills workshop propose-create \
   --name "hello-world" \
-  --description "A simple skill that says hello." \
-  --proposal-dir ./hello-world-proposal
+  --description "A simple skill that prints a greeting." \
+  --proposal-dir ./hello-world-proposal/
 ```
 
-The proposal stays inactive until an operator reviews and applies it.
-Proposal directories must contain `PROPOSAL.md`. Support files can be included
-under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`:
+The directory must contain `PROPOSAL.md`. Support files can go in `assets/`,
+`examples/`, `references/`, `scripts/`, or `templates/`.
+
+After review:
 
 ```bash
 openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 openclaw skills workshop apply <proposal-id>
 ```
 
-When applied, OpenClaw writes the final `SKILL.md` into the workspace `skills/`
-root, writes approved support files beside it, and removes proposal-only
-frontmatter such as `status: proposal`, proposal `version`, and proposal
-`date`.
+See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
 
-Full proposal storage, review, Gateway, and approval-policy details are in
-[Skill Workshop](/tools/skill-workshop).
+## Publishing to ClawHub
 
-## Skill metadata reference
+<Steps>
+  <Step title="Ensure your SKILL.md is complete">
+    Make sure `name`, `description`, and any `metadata.openclaw` gating fields
+    are set. Add a `homepage` URL if you have a project page.
+  </Step>
+  <Step title="Install the ClawHub skill">
+    The ClawHub skill documents the current publish command shape and required
+    metadata:
 
-The YAML frontmatter supports these fields:
+    ```bash
+    openclaw skills install clawhub-publish
+    ```
 
-| Field                               | Required | Description                                                    |
-| ----------------------------------- | -------- | -------------------------------------------------------------- |
-| `name`                              | Yes      | Unique identifier using lowercase letters, digits, and hyphens |
-| `description`                       | Yes      | One-line description shown to the agent                        |
-| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.)                    |
-| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                                      |
-| `metadata.openclaw.requires.config` | No       | Required config keys                                           |
+  </Step>
+  <Step title="Publish">
+    ```bash
+    clawhub publish
+    ```
 
-## Advanced features
+    See [ClawHub — Publishing](/clawhub/publishing) for the full flow.
 
-Once a basic skill works, these fields help make it reliable and portable:
-
-- **Conditional activation** — use `requires.bins`, `requires.env`, or
-  `requires.config` to load the skill only when required dependencies are
-  available. See [Skills reference: gating](/tools/skills#gating).
-- **Environment and API-key wiring** — use `skills.entries.<name>.env` and
-  `skills.entries.<name>.apiKey` to inject host-side environment for a skill
-  turn. See [Skills reference: config wiring](/tools/skills#config-wiring).
-- **Invocation control** — set `user-invocable: false` to hide a slash command,
-  or `disable-model-invocation: true` to keep a command-style skill out of the
-  model prompt. See [Skills reference: frontmatter](/tools/skills#frontmatter).
-- **Direct command dispatch** — use `command-dispatch: tool` with
-  `command-tool` when a slash command should call a tool directly instead of
-  routing through the model.
-- **Portable paths** — use `{baseDir}` in `SKILL.md` when referencing scripts
-  or assets inside the skill directory.
-- **Publishing** — use the ClawHub skill when preparing a skill for publication.
-  It documents the current `clawhub publish` command shape and required
-  metadata.
+  </Step>
+</Steps>
 
 ## Best practices
 
-- **Be concise** — instruct the model on _what_ to do, not how to be an AI
-- **Safety first** — if your skill uses `exec`, ensure prompts don't allow arbitrary command injection from untrusted input
-- **Test locally** — use `openclaw agent --message "..."` to test before sharing
-- **Use ClawHub** — browse and contribute skills at [ClawHub](https://clawhub.ai)
-
-## Where skills live
-
-| Location                        | Precedence | Scope                 |
-| ------------------------------- | ---------- | --------------------- |
-| `\<workspace\>/skills/`         | Highest    | Per-agent             |
-| `\<workspace\>/.agents/skills/` | High       | Per-workspace agent   |
-| `~/.agents/skills/`             | Medium     | Shared agent profile  |
-| `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
-| Bundled (shipped with OpenClaw) | Low        | Global                |
-| `skills.load.extraDirs`         | Lowest     | Custom shared folders |
-
-Each skills root can contain direct skill folders such as
-`skills/hello-world/SKILL.md` or grouped folders such as
-`skills/personal/hello-world/SKILL.md`.
+<Tip>
+  - **Be concise** — instruct the model on *what* to do, not how to be an AI.
+  - **Safety first** — if your skill uses `exec`, ensure prompts do not allow
+    arbitrary command injection from untrusted input.
+  - **Test locally** — use `openclaw agent --message "..."` before sharing.
+  - **Use ClawHub** — browse community skills at [clawhub.ai](https://clawhub.ai)
+    before building from scratch.
+</Tip>
 
 ## Related
 
-- [Skills reference](/tools/skills) — loading, precedence, and gating rules
-- [Skill Workshop](/tools/skill-workshop) — governed creation for generated or reviewed skill changes
-- [Skills config](/tools/skills-config) — `skills.*` config schema
-- [ClawHub](/clawhub) — public skill registry
-- [Building Plugins](/plugins/building-plugins) — plugins can ship skills
+<CardGroup cols={2}>
+  <Card title="Skills reference" href="/tools/skills" icon="puzzle-piece">
+    Loading order, gating, allowlists, and SKILL.md format.
+  </Card>
+  <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
+    Proposal queue for agent-drafted skills.
+  </Card>
+  <Card title="Skills config" href="/tools/skills-config" icon="gear">
+    Full `skills.*` config schema.
+  </Card>
+  <Card title="ClawHub" href="/clawhub" icon="cloud">
+    Browse and publish skills on the public registry.
+  </Card>
+  <Card title="Building plugins" href="/plugins/building-plugins" icon="plug">
+    Plugins can ship skills alongside the tools they document.
+  </Card>
+</CardGroup>

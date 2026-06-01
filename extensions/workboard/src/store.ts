@@ -1285,7 +1285,9 @@ function normalizeMetadata(
     diagnostics: Array.isArray(record.diagnostics)
       ? record.diagnostics
           .map(normalizeDiagnostic)
-          .filter((diagnostic): diagnostic is WorkboardDiagnostic => diagnostic !== null)
+          .filter(
+            (diagnosticLocal): diagnosticLocal is WorkboardDiagnostic => diagnosticLocal !== null,
+          )
           .slice(-MAX_CARD_DIAGNOSTICS)
       : fallback.diagnostics,
     notifications: Array.isArray(record.notifications)

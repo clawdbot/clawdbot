@@ -19,9 +19,9 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { createConfigValidationMetadataPluginIdScope } from "../plugins/channel-plugin-ids.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
-  resolveInstalledPluginIndexRecordsStorePath,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
@@ -137,16 +137,6 @@ type ShippedPluginInstallConfigWriteMigration =
     }
   | {
       migrated: true;
-      filePath: string;
-      writtenHash: string;
-      previousFile:
-        | {
-            existed: false;
-          }
-        | {
-            existed: true;
-            raw: string;
-          };
     };
 
 type ShippedPluginInstallConfigReadMigration = {
@@ -411,22 +401,22 @@ function resolveGatewayMode(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function collectEnvRefPaths(value: unknown, path: string, output: Map<string, string>): void {
+function collectEnvRefPaths(value: unknown, pathLocal: string, output: Map<string, string>): void {
   if (typeof value === "string") {
     if (containsEnvVarReference(value)) {
-      output.set(path, value);
+      output.set(pathLocal, value);
     }
     return;
   }
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      collectEnvRefPaths(item, `${path}[${index}]`, output);
+      collectEnvRefPaths(item, `${pathLocal}[${index}]`, output);
     });
     return;
   }
   if (isRecord(value)) {
     for (const [key, child] of Object.entries(value)) {
-      const childPath = path ? `${path}.${key}` : key;
+      const childPath = pathLocal ? `${pathLocal}.${key}` : key;
       collectEnvRefPaths(child, childPath, output);
     }
   }
@@ -1354,6 +1344,7 @@ export function createConfigIO(
   overrides: ConfigIoDeps & {
     pluginValidation?: "full" | "skip";
     preservedLegacyRootKeys?: readonly string[];
+    shellEnvFallback?: "load" | "defer";
   } = {},
 ) {
   const deps = normalizeDeps(overrides);
@@ -1376,7 +1367,11 @@ export function createConfigIO(
     applyConfigEnvVars(cfg, deps.env);
 
     const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
-    if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
+    if (
+      enabled &&
+      overrides.shellEnvFallback !== "defer" &&
+      !shouldDeferShellEnvFallback(deps.env)
+    ) {
       loadShellEnvFallback({
         enabled: true,
         env: deps.env,
@@ -1401,49 +1396,6 @@ export function createConfigIO(
     });
 
     return applyConfigOverrides(cfgWithOwnerDisplaySecret);
-  }
-
-  function captureFileSnapshotSync(filePath: string):
-    | {
-        existed: false;
-      }
-    | {
-        existed: true;
-        raw: string;
-      } {
-    return deps.fs.existsSync(filePath)
-      ? ({
-          existed: true,
-          raw: deps.fs.readFileSync(filePath, "utf-8"),
-        } as const)
-      : ({ existed: false } as const);
-  }
-
-  function restoreFileSnapshotSync(
-    filePath: string,
-    previousFile:
-      | {
-          existed: false;
-        }
-      | {
-          existed: true;
-          raw: string;
-        },
-  ): void {
-    if (previousFile.existed) {
-      deps.fs.writeFileSync(filePath, previousFile.raw, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      return;
-    }
-    try {
-      deps.fs.unlinkSync(filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
   }
 
   function replaceConfigFileSync(raw: string): void {
@@ -1473,11 +1425,6 @@ export function createConfigIO(
 
     try {
       const stateDir = resolveStateDir(deps.env, deps.homedir);
-      const filePath = resolveInstalledPluginIndexRecordsStorePath({
-        env: deps.env,
-        stateDir,
-      });
-      const previousFile = captureFileSnapshotSync(filePath);
       const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
         env: deps.env,
         stateDir,
@@ -1502,12 +1449,7 @@ export function createConfigIO(
         const persistedRootRaw = JSON.stringify(persistedRootParsed, null, 2)
           .trimEnd()
           .concat("\n");
-        try {
-          replaceConfigFileSync(persistedRootRaw);
-        } catch (err) {
-          restoreFileSnapshotSync(filePath, previousFile);
-          throw err;
-        }
+        replaceConfigFileSync(persistedRootRaw);
         return { config: stripped, persistedRootParsed, persistedRootRaw };
       }
     } catch (err) {
@@ -1566,10 +1508,6 @@ export function createConfigIO(
     }
 
     const stateDir = resolveStateDir(deps.env, deps.homedir);
-    const filePath = resolveInstalledPluginIndexRecordsStorePath({
-      env: deps.env,
-      stateDir,
-    });
     const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
       env: deps.env,
       stateDir,
@@ -1578,14 +1516,8 @@ export function createConfigIO(
       return { migrated: false };
     }
 
-    const previousFile = deps.fs.existsSync(filePath)
-      ? ({
-          existed: true,
-          raw: deps.fs.readFileSync(filePath, "utf-8"),
-        } as const)
-      : ({ existed: false } as const);
     try {
-      const writtenPath = writePersistedInstalledPluginIndexInstallRecordsSync(
+      writePersistedInstalledPluginIndexInstallRecordsSync(
         {
           ...installRecords,
           ...existingRecords,
@@ -1596,14 +1528,8 @@ export function createConfigIO(
           stateDir,
         },
       );
-      const writtenRaw = deps.fs.existsSync(writtenPath)
-        ? deps.fs.readFileSync(writtenPath, "utf-8")
-        : null;
       return {
         migrated: true,
-        filePath: writtenPath,
-        writtenHash: hashConfigRaw(writtenRaw),
-        previousFile,
       };
     } catch (err) {
       throw new Error(
@@ -1621,34 +1547,18 @@ export function createConfigIO(
     if (!migration.migrated) {
       return false;
     }
-    const currentRaw = deps.fs.existsSync(migration.filePath)
-      ? deps.fs.readFileSync(migration.filePath, "utf-8")
-      : null;
-    if (hashConfigRaw(currentRaw) !== migration.writtenHash) {
-      return false;
-    }
-    if (migration.previousFile.existed) {
-      deps.fs.writeFileSync(migration.filePath, migration.previousFile.raw, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      return true;
-    }
-    try {
-      deps.fs.unlinkSync(migration.filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-    return true;
+    return false;
   }
 
-  function loadConfig(): OpenClawConfig {
+  function loadConfigLocal(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
-        if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
+        if (
+          overrides.shellEnvFallback !== "defer" &&
+          shouldEnableShellEnvFallback(deps.env) &&
+          !shouldDeferShellEnvFallback(deps.env)
+        ) {
           loadShellEnvFallback({
             enabled: true,
             env: deps.env,
@@ -1724,6 +1634,10 @@ export function createConfigIO(
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
           allowWorkspaceScopedCurrent: true,
+          pluginIdScope: createConfigValidationMetadataPluginIdScope({
+            config: metadataConfig,
+            env: deps.env,
+          }),
         });
         return pluginMetadataSnapshot;
       };
@@ -1944,6 +1858,10 @@ export function createConfigIO(
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
           allowWorkspaceScopedCurrent: true,
+          pluginIdScope: createConfigValidationMetadataPluginIdScope({
+            config: metadataConfig,
+            env: deps.env,
+          }),
         });
         return pluginMetadataSnapshot;
       };
@@ -2047,12 +1965,12 @@ export function createConfigIO(
     }
   }
 
-  async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
+  async function readConfigFileSnapshotLocal(): Promise<ConfigFileSnapshot> {
     const result = await readConfigFileSnapshotInternal();
     return result.snapshot;
   }
 
-  async function readConfigFileSnapshotWithPluginMetadata(): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+  async function readConfigFileSnapshotWithPluginMetadataLocal(): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
     const result = await readConfigFileSnapshotInternal();
     return {
       snapshot: result.snapshot,
@@ -2062,7 +1980,7 @@ export function createConfigIO(
     };
   }
 
-  async function promoteConfigSnapshotToLastKnownGood(
+  async function promoteConfigSnapshotToLastKnownGoodLocal(
     snapshot: ConfigFileSnapshot,
   ): Promise<boolean> {
     return await promoteConfigSnapshotToLastKnownGoodWithDeps({
@@ -2072,7 +1990,7 @@ export function createConfigIO(
     });
   }
 
-  async function recoverConfigFromLastKnownGood(params: {
+  async function recoverConfigFromLastKnownGoodLocal(params: {
     snapshot: ConfigFileSnapshot;
     reason: string;
   }): Promise<boolean> {
@@ -2083,7 +2001,9 @@ export function createConfigIO(
     });
   }
 
-  async function recoverConfigFromJsonRootSuffix(snapshot: ConfigFileSnapshot): Promise<boolean> {
+  async function recoverConfigFromJsonRootSuffixLocal(
+    snapshot: ConfigFileSnapshot,
+  ): Promise<boolean> {
     return await recoverConfigFromJsonRootSuffixWithDeps({
       deps,
       configPath,
@@ -2091,7 +2011,7 @@ export function createConfigIO(
     });
   }
 
-  async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
+  async function readConfigFileSnapshotForWriteLocal(): Promise<ReadConfigFileSnapshotForWriteResult> {
     const result = await readConfigFileSnapshotInternal();
     return {
       snapshot: result.snapshot,
@@ -2104,7 +2024,7 @@ export function createConfigIO(
     };
   }
 
-  async function readBestEffortConfig(): Promise<OpenClawConfig> {
+  async function readBestEffortConfigLocal(): Promise<OpenClawConfig> {
     const result = await readConfigFileSnapshotInternal();
     if (!result.snapshot.valid) {
       return result.snapshot.config;
@@ -2116,7 +2036,7 @@ export function createConfigIO(
     );
   }
 
-  async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
+  async function readSourceConfigBestEffortLocal(): Promise<OpenClawConfig> {
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
@@ -2144,7 +2064,7 @@ export function createConfigIO(
     }
   }
 
-  async function writeConfigFile(
+  async function writeConfigFileLocal(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<InternalConfigWriteResult> {
@@ -2471,16 +2391,16 @@ export function createConfigIO(
   return {
     configPath,
     env: deps.env,
-    loadConfig,
-    readBestEffortConfig,
-    readSourceConfigBestEffort,
-    readConfigFileSnapshot,
-    readConfigFileSnapshotWithPluginMetadata,
-    readConfigFileSnapshotForWrite,
-    promoteConfigSnapshotToLastKnownGood,
-    recoverConfigFromLastKnownGood,
-    recoverConfigFromJsonRootSuffix,
-    writeConfigFile,
+    loadConfig: loadConfigLocal,
+    readBestEffortConfig: readBestEffortConfigLocal,
+    readSourceConfigBestEffort: readSourceConfigBestEffortLocal,
+    readConfigFileSnapshot: readConfigFileSnapshotLocal,
+    readConfigFileSnapshotWithPluginMetadata: readConfigFileSnapshotWithPluginMetadataLocal,
+    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteLocal,
+    promoteConfigSnapshotToLastKnownGood: promoteConfigSnapshotToLastKnownGoodLocal,
+    recoverConfigFromLastKnownGood: recoverConfigFromLastKnownGoodLocal,
+    recoverConfigFromJsonRootSuffix: recoverConfigFromJsonRootSuffixLocal,
+    writeConfigFile: writeConfigFileLocal,
   };
 }
 
@@ -2558,9 +2478,13 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
 export function loadConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
+  skipShellEnvFallback?: boolean;
 }): OpenClawConfig {
   const loadFresh = () =>
-    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig();
+    createConfigIO({
+      ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+      ...(options?.skipShellEnvFallback ? { shellEnvFallback: "defer" as const } : {}),
+    }).loadConfig();
   if (options?.pin === false) {
     return loadFresh();
   }
@@ -2573,6 +2497,7 @@ export function loadConfig(options?: {
 export function getRuntimeConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
+  skipShellEnvFallback?: boolean;
 }): OpenClawConfig {
   return loadConfig(options);
 }
@@ -2729,7 +2654,7 @@ export async function writeConfigFile(
   // never touched any plugin entry.
   let canonicalSourceConfig: OpenClawConfig = nextCfg;
   const envBeforeCanonicalRead = snapshotEnv(process.env);
-  let envAfterCanonicalRead = envBeforeCanonicalRead;
+  let envAfterCanonicalRead;
   try {
     const freshSnapshot = await io.readConfigFileSnapshot();
     if (freshSnapshot.exists && freshSnapshot.valid) {

@@ -95,7 +95,8 @@ export async function xaiTTS(params: {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
     return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes }) => new Error(`xAI TTS audio response exceeds ${maxBytes} bytes`),
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
     });
   } finally {
     await release();

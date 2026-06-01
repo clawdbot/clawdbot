@@ -317,13 +317,13 @@ describe("exec security floor", () => {
     });
 
     const result = await tool.execute("call-elevated-full-auto-mode", {
-      command: "pwd",
+      command: "whoami",
       elevated: true,
     });
 
     expect(autoReviewer).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: "pwd",
+        command: "whoami",
         host: "gateway",
         reason: "allowlist-miss",
       }),
@@ -359,13 +359,13 @@ describe("exec security floor", () => {
       });
 
       const result = await tool.execute(`call-auto-review-${ask}`, {
-        command: "pwd",
+        command: "whoami",
         ask,
       });
 
       expect(autoReviewer).toHaveBeenCalledWith(
         expect.objectContaining({
-          command: "pwd",
+          command: "whoami",
           host: "gateway",
           reason: "allowlist-miss",
         }),

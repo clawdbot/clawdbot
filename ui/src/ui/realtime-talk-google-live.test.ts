@@ -363,14 +363,14 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     }
 
     await vi.waitFor(() => {
-      expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
     });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
 
   it("sends spoken active-control acknowledgements through Google Live", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -416,7 +416,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
     ws.emitMessage(
@@ -428,7 +428,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     );
 
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
@@ -452,7 +452,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
   it("replaces queued output with a spoken active-control steering acknowledgement in Google Live", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -499,7 +499,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
     ws.emitMessage(
@@ -511,7 +511,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     );
 
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
@@ -535,7 +535,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
   it("interrupts queued output when active-control cancel is suppressed in Google Live", async () => {
     const client = createClient();
-    vi.mocked(client.request).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
         return { runId: "run-1" };
       }
@@ -582,7 +582,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );
 
     ws.emitMessage(
@@ -594,7 +594,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     );
 
     await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));

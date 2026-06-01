@@ -180,7 +180,7 @@ describe("sendMessage", () => {
     if (!request) {
       throw new Error("expected Synology Chat webhook request");
     }
-    const body = vi.mocked(request.write).mock.calls[0]?.[0];
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
     if (typeof body !== "string") {
       throw new Error("expected Synology Chat webhook body");
     }
@@ -199,7 +199,7 @@ describe("sendMessage", () => {
     if (!request) {
       throw new Error("expected Synology Chat webhook request");
     }
-    const body = vi.mocked(request.write).mock.calls[0]?.[0];
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
     if (typeof body !== "string") {
       throw new Error("expected Synology Chat webhook body");
     }

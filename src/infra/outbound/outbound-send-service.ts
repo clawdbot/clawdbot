@@ -15,11 +15,13 @@ import type { GatewayClientMode, GatewayClientName } from "../../utils/message-c
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import { extractToolPayload } from "./tool-payload.js";
 
+/** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
   url?: string;
   token?: string;
@@ -29,6 +31,7 @@ export type OutboundGatewayContext = {
   mode: GatewayClientMode;
 };
 
+/** Shared execution context for message-tool send and poll actions. */
 export type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -112,17 +115,6 @@ async function sendCoreMessage(params: {
   });
 }
 
-function collectActionMediaSources(params: Record<string, unknown>): string[] {
-  const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      sources.push(value);
-    }
-  }
-  return sources;
-}
-
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
@@ -134,7 +126,9 @@ async function tryHandleWithPluginAction(params: {
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
-    mediaSources: collectActionMediaSources(params.ctx.params),
+    mediaSources: collectActionMediaSourceHints(params.ctx.params, undefined, {
+      structuredAttachments: params.action === "send" ? "all" : undefined,
+    }),
     sessionKey: params.ctx.sessionKey,
     messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
     accountId:
@@ -234,6 +228,7 @@ async function tryPreparePluginSendPayload(params: {
   );
 }
 
+/** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -270,6 +265,7 @@ export async function executeSendAction(params: {
   });
   if (preparedPayload) {
     throwIfAborted(params.ctx.abortSignal);
+    // Prepared plugin payloads still use core delivery so queueing, hooks, and mirrors stay uniform.
     const result = await sendCoreMessage({
       ...params,
       queuePolicy,
@@ -322,6 +318,7 @@ export async function executeSendAction(params: {
   };
 }
 
+/** Executes a message-tool poll through plugin handlers or the core poll path. */
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
   resolveCorePoll: () => {

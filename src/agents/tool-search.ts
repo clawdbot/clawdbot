@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -39,6 +39,9 @@ const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 type ToolSearchMode = "code" | "tools";
 type CatalogSource = "openclaw" | "mcp" | "client";
 type CatalogTool = AnyAgentTool | ToolDefinition;
+type CatalogVisibilityOptions = {
+  includeMcp?: boolean;
+};
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -89,6 +92,7 @@ export type ToolSearchCatalogEntry = {
   id: string;
   source: CatalogSource;
   sourceName?: string;
+  mcp?: PluginToolMcpMeta;
   name: string;
   label?: string;
   description: string;
@@ -523,6 +527,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.id,
         entry.source,
         entry.sourceName ?? "",
+        stableJsonFingerprint(entry.mcp),
         entry.name,
         entry.label ?? "",
         entry.description,
@@ -602,11 +607,20 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
   }
 }
 
-function classifyTool(tool: CatalogTool): { source: CatalogSource; sourceName?: string } {
+function classifyTool(tool: CatalogTool): {
+  source: CatalogSource;
+  sourceName?: string;
+  mcp?: PluginToolMcpMeta;
+} {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
   if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
+    const mcp = meta?.mcp;
+    return {
+      source: "mcp",
+      sourceName: pluginId,
+      ...(mcp ? { mcp } : {}),
+    };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -640,6 +654,7 @@ function toCatalogEntry(
     id: makeCatalogId(tool, source, sourceName),
     source,
     sourceName,
+    ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
@@ -953,6 +968,7 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     id: entry.id,
     source: entry.source,
     sourceName: entry.sourceName,
+    ...(entry.mcp ? { mcp: entry.mcp } : {}),
     name: entry.name,
     label: entry.label,
     description: entry.description,
@@ -999,9 +1015,22 @@ function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {
   return score;
 }
 
-function findEntry(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+function visibleCatalogEntries(
+  catalog: ToolSearchCatalogSession,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry[] {
+  return options?.includeMcp === false
+    ? catalog.entries.filter((entry) => entry.source !== "mcp")
+    : catalog.entries;
+}
+
+function findEntry(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = catalog.entries.find(
+  const entry = visibleCatalogEntries(catalog, options).find(
     (candidate) => candidate.id === needle || candidate.name === needle,
   );
   if (!entry) {
@@ -1092,12 +1121,12 @@ export class ToolSearchRuntime {
     private readonly config: ToolSearchConfig,
   ) {}
 
-  search = async (query: string, options?: { limit?: number }) => {
+  search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readLimit(options?.limit, this.config);
     const terms = tokenize(query);
-    return catalog.entries
+    return visibleCatalogEntries(catalog, options)
       .map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
@@ -1105,15 +1134,24 @@ export class ToolSearchRuntime {
       .map((hit) => compactEntry(hit.entry));
   };
 
-  all = () => {
+  all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return catalog.entries.map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
   };
 
-  describe = async (id: string) => {
+  namespaceEntries = () => {
+    const catalog = resolveCatalog(this.ctx);
+    return catalog.entries.map((entry) =>
+      Object.assign(compactEntry(entry), {
+        parameters: entry.parameters ?? {},
+      }),
+    );
+  };
+
+  describe = async (id: string, options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(findEntry(catalog, id));
+    return describeEntry(findEntry(catalog, id, options));
   };
 
   call = async (
@@ -1423,9 +1461,9 @@ async function runCodeModeBridgeRequest(
       if (typeof query !== "string") {
         throw new ToolInputError("search query must be a string.");
       }
-      const options = isRecord(values[1]) ? values[1] : undefined;
+      const optionsLocal = isRecord(values[1]) ? values[1] : undefined;
       return await runtime.search(query, {
-        limit: typeof options?.limit === "number" ? options.limit : undefined,
+        limit: typeof optionsLocal?.limit === "number" ? optionsLocal.limit : undefined,
       });
     }
     case "describe": {

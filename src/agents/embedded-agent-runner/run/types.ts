@@ -142,7 +142,13 @@ export type EmbeddedRunAttemptResult = {
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas: Array<{
+    toolName: string;
+    meta?: string;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;

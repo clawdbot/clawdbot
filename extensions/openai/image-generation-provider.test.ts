@@ -18,12 +18,10 @@ const {
     (params: { provider: string; agentDir?: string }) => boolean
   >(() => false),
   listProfilesForProviderMock: vi.fn(
-    (store: { profiles?: Record<string, { provider?: string }> }, provider: string) => {
-      const normalize = (raw?: string) => (raw === ["openai", "codex"].join("-") ? "openai" : raw);
-      return Object.entries(store.profiles ?? {})
-        .filter(([, profile]) => normalize(profile.provider) === provider)
-        .map(([profileId]) => profileId);
-    },
+    (store: { profiles?: Record<string, { provider?: string }> }, provider: string) =>
+      Object.entries(store.profiles ?? {})
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId),
   ),
   resolveApiKeyForProviderMock: vi.fn(
     async (_params?: {
@@ -384,25 +382,6 @@ describe("openai image generation provider", () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(false);
-  });
-
-  it("reports configured before doctor rewrites retired OpenAI auth profiles", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: ["openai", "codex"].join("-"),
-          access: "legacy-chatgpt-access",
-          refresh: "legacy-chatgpt-refresh",
-          expires: Date.now() + 60_000,
-        },
-      },
-    });
-
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(true);
   });
 
   it("does not report Codex OAuth image auth as configured for custom OpenAI endpoints", () => {

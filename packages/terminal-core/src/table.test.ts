@@ -200,6 +200,39 @@ describe("renderTable", () => {
     }
   });
 
+  it("keeps borders aligned when a wide grapheme lands in a narrow cell", () => {
+    // A width-2 CJK/emoji glyph in a column whose content width is 1 cannot be
+    // wrapped, so padCell must clamp it instead of overflowing the cell and
+    // pushing the right border out of alignment.
+    const out = renderTable({
+      border: "ascii",
+      padding: 0,
+      columns: [{ key: "B", header: "B", minWidth: 1, maxWidth: 1 }],
+      rows: [{ B: "表" }],
+    });
+    const lines = out.trimEnd().split("\n");
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBe(3);
+    }
+  });
+
+  it("keeps borders aligned when a narrow flex column receives wide content", () => {
+    const out = renderTable({
+      width: 10,
+      border: "ascii",
+      columns: [
+        { key: "A", header: "long header here" },
+        { key: "B", header: "", flex: true },
+      ],
+      rows: [{ A: "data", B: "📸" }],
+    });
+    const lines = out.trimEnd().split("\n");
+    const headerWidth = visibleWidth(lines[0] ?? "");
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBe(headerWidth);
+    }
+  });
+
   it("consumes unsupported escape sequences without hanging", () => {
     const out = renderTable({
       width: 48,

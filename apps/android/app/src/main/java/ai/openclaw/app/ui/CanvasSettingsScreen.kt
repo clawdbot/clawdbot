@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Settings detail surface for live canvas status, refresh, and embedded preview. */
 @Composable
 internal fun CanvasSettingsScreen(
   viewModel: MainViewModel,
@@ -47,6 +48,8 @@ internal fun CanvasSettingsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Refresh once when the gateway comes online so the settings preview is
+      // populated before the user manually asks for a rehydrate.
       viewModel.refreshHomeCanvasOverviewIfConnected()
     }
   }

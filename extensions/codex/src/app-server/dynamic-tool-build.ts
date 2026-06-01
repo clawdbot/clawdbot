@@ -2,6 +2,7 @@ import {
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
+  filterProviderNormalizableTools,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
@@ -9,6 +10,7 @@ import {
   resolveSandboxContext,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
+  type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
@@ -265,15 +267,19 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     },
   });
   toolBuildStages.mark("create-openclaw-coding-tools");
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
+  const readableAllToolProjection = filterProviderNormalizableTools(allTools);
+  preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
+  const readableAllTools = [...readableAllToolProjection.tools];
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
     addSandboxShellDynamicToolsIfAvailable(
       isCodexMemoryFlushRun(params)
-        ? filterCodexMemoryFlushDynamicTools(allTools)
-        : filterCodexDynamicTools(allTools, input.pluginConfig),
-      allTools,
+        ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+        : filterCodexDynamicTools(readableAllTools, input.pluginConfig),
+      readableAllTools,
       input,
     ),
-    allTools,
+    readableAllTools,
     input,
   );
   toolBuildStages.mark("codex-filtering");
@@ -295,8 +301,25 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelId: params.modelId,
     modelApi: params.model.api,
     model: params.model,
+    onPreNormalizationSchemaDiagnostics: (diagnostics) =>
+      preNormalizationDiagnostics.push(...diagnostics),
   });
   toolBuildStages.mark("runtime-normalization");
+  if (preNormalizationDiagnostics.length > 0) {
+    embeddedAgentLog.warn(
+      `codex app-server quarantined ${preNormalizationDiagnostics.length} unsupported runtime tool schema${preNormalizationDiagnostics.length === 1 ? "" : "s"} before dynamic tool registration`,
+      {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        diagnostics: preNormalizationDiagnostics.map((diagnostic) => ({
+          index: diagnostic.toolIndex,
+          tool: diagnostic.toolName,
+          violations: diagnostic.violations.slice(0, 12),
+          violationCount: diagnostic.violations.length,
+        })),
+      },
+    );
+  }
   const summary = toolBuildStages.snapshot();
   if (shouldWarnCodexDynamicToolBuildStageSummary(summary)) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
@@ -308,7 +331,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         phase,
         totalMs: summary.totalMs,
         stages: summary.stages,
-        allToolCount: allTools.length,
+        allToolCount: readableAllTools.length,
         codexFilteredToolCount: codexFilteredTools.length,
         visionFilteredToolCount: visionFilteredTools.length,
         filteredToolCount: filteredTools.length,

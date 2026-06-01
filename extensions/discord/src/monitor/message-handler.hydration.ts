@@ -146,7 +146,7 @@ function copyRuntimeMessageFields(source: Message, target: Message): void {
 }
 
 function shouldHydrateDiscordMessage(params: { message: Message }) {
-  let currentText = "";
+  let currentText;
   try {
     currentText = resolveDiscordMessageText(params.message, {
       includeForwarded: true,

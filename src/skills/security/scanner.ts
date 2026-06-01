@@ -588,7 +588,7 @@ async function walkDirWithLimit(
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
-  let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(dirPath);
   } catch (err) {
@@ -645,7 +645,7 @@ async function resolveForcedFiles(params: {
       continue;
     }
 
-    let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+    let st: Awaited<ReturnType<typeof fs.stat>> | null;
     try {
       st = await fs.stat(includePath);
     } catch (err) {
@@ -713,7 +713,7 @@ async function scanFileWithCache(params: {
   maxFileBytes: number;
 }): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
   const { filePath, maxFileBytes } = params;
-  let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(filePath);
   } catch (err) {

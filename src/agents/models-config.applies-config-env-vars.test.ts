@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
@@ -47,6 +50,24 @@ function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): 
       },
     ],
     ...overrides,
+  };
+}
+
+function createImplicitGoogleVertexProvider(): ProviderConfig {
+  return {
+    baseUrl: "https://{location}-aiplatform.googleapis.com",
+    api: "google-vertex",
+    models: [
+      {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+    ],
   };
 }
 
@@ -401,6 +422,72 @@ describe("models-config", () => {
     expect(parsed.providers?.google?.models?.map((model) => model.id)).toEqual([
       "gemini-3.1-pro-preview",
     ]);
+  });
+
+  it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-models-"));
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "google-vertex:default": {
+                type: "api_key",
+                provider: "google-vertex",
+                keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                models: {
+                  "google-vertex/gemini-2.5-pro": {},
+                },
+                model: { primary: "google-vertex/gemini-2.5-pro" },
+              },
+            },
+            models: { providers: {} },
+          },
+          agentDir,
+          env: {},
+          existingRaw: "",
+          existingParsed: null,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            "google-vertex": createImplicitGoogleVertexProvider(),
+          }),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<
+          string,
+          { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
+        >;
+      };
+      expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
+      expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("GOOGLE_CLOUD_API_KEY");
+      expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-2.5-pro",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {

@@ -1,4 +1,7 @@
-import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ChannelBotLoopProtectionConfig,
+  MentionPatternsPolicyConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import type {
   ContextVisibilityMode,
   DmPolicy,
@@ -153,6 +156,8 @@ export type MatrixConfig = {
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected Matrix room IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
   /**

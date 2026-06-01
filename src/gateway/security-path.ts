@@ -63,7 +63,7 @@ export function buildCanonicalPathCandidates(
   let malformedEncoding = false;
   let decodePasses = 0;
   for (let pass = 0; pass < maxDecodePasses; pass++) {
-    let nextDecoded = decoded;
+    let nextDecoded;
     try {
       nextDecoded = decodeURIComponent(decoded);
     } catch {

@@ -133,7 +133,7 @@ export function createGatewayAuxHandlers(params: {
                 params.sharedGatewaySessionGenerationState.current;
               const previousSharedGatewaySessionGenerationRequired =
                 params.sharedGatewaySessionGenerationState.required;
-              let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
+              let nextSharedGatewaySessionGeneration;
               let sharedGatewaySessionGenerationChanged = false;
               const stoppedChannels: ChannelKind[] = [];
               const restartedChannels = new Set<ChannelKind>();

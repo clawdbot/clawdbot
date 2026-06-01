@@ -214,7 +214,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
       expect(finalPersist?.[0]).toBe(storePath);
       const persistedStore: Record<string, { [key: string]: unknown }> = {};
-      (finalPersist?.[1] as (store: typeof persistedStore) => void)(persistedStore);
+      (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
       expect(persistedStore[boundSessionKey]).toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",

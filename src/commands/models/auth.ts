@@ -20,7 +20,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { externalCliDiscoveryForProviderAuth } from "../../agents/auth-profiles.js";
+import {
+  externalCliDiscoveryForProviderAuth,
+  removeProviderAuthProfilesWithLock,
+} from "../../agents/auth-profiles.js";
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
@@ -30,6 +33,7 @@ import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -65,7 +69,6 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-const LEGACY_OPENAI_AUTH_PROVIDER_ID = ["openai", "codex"].join("-");
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -152,9 +155,7 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai" || normalized === LEGACY_OPENAI_AUTH_PROVIDER_ID
-    ? "openai"
-    : normalized;
+  return normalized === "openai" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {
@@ -414,6 +415,7 @@ async function pickProviderTokenMethod(params: {
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
   profiles?: ProviderAuthResult["profiles"];
+  config: OpenClawConfig;
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
@@ -423,8 +425,15 @@ async function persistProviderAuthResult(params: {
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
   const profiles = params.profiles ?? params.result.profiles;
+  const shouldUpdateConfig = Boolean(
+    params.result.configPatch || (params.setDefault && defaultModel),
+  );
 
   for (const profile of profiles) {
+    const configuredSelection = resolveConfiguredAuthSelectionForProvider(
+      params.config,
+      profile.credential.provider,
+    );
     await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -434,49 +443,49 @@ async function persistProviderAuthResult(params: {
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
+      createIfMissing: configuredSelection.createIfMissing,
+      ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
   }
 
-  const updated = await updateConfig((cfg) => {
-    const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
-    let next = cfg;
-    if (params.result.configPatch) {
-      next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
-        replaceDefaultModels: params.result.replaceDefaultModels,
+  // Auth login owns the credential store. Keep openclaw.json untouched unless
+  // the provider explicitly returns a config patch or the user opts into a
+  // default-model write.
+  if (shouldUpdateConfig) {
+    const updated = await updateConfig((cfg) => {
+      const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
+      let next = cfg;
+      if (params.result.configPatch) {
+        next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
+          replaceDefaultModels: params.result.replaceDefaultModels,
+        });
+      }
+      next = restorePriorAgentsDefaultsModelUnlessOptIn({
+        cfg: next,
+        priorAgentsDefaultsModel,
+        setDefault: params.setDefault,
       });
-    }
-    for (const profile of profiles) {
-      next = applyAuthProfileConfig(next, {
-        profileId: profile.profileId,
-        provider: profile.credential.provider,
-        mode: credentialMode(profile.credential),
+      if (params.setDefault && defaultModel) {
+        next = applyDefaultModel(next, defaultModel);
+      }
+      return next;
+    });
+    if (defaultModel) {
+      const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+        cfg: updated,
+        model: defaultModel,
       });
+      const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+        cfg: updated,
+        model: defaultModel,
+      });
+      for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+        params.runtime.error?.(warning);
+      }
     }
-    next = restorePriorAgentsDefaultsModelUnlessOptIn({
-      cfg: next,
-      priorAgentsDefaultsModel,
-      setDefault: params.setDefault,
-    });
-    if (params.setDefault && defaultModel) {
-      next = applyDefaultModel(next, defaultModel);
-    }
-    return next;
-  });
-  if (defaultModel) {
-    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: defaultModel,
-    });
-    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: defaultModel,
-    });
-    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
-      params.runtime.error?.(warning);
-    }
+    logConfigUpdated(params.runtime);
   }
 
-  logConfigUpdated(params.runtime);
   for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
@@ -492,6 +501,30 @@ async function persistProviderAuthResult(params: {
   if (params.result.notes && params.result.notes.length > 0) {
     await params.prompter.note(params.result.notes.join("\n"), "Provider notes");
   }
+}
+
+function resolveConfiguredAuthSelectionForProvider(
+  cfg: OpenClawConfig,
+  provider: string,
+): { createIfMissing: boolean; order?: string[] } {
+  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  for (const [orderProvider, profileIds] of Object.entries(cfg.auth?.order ?? {})) {
+    if (
+      profileIds.length > 0 &&
+      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey
+    ) {
+      return { createIfMissing: true, order: profileIds };
+    }
+  }
+  const profileIds = Object.entries(cfg.auth?.profiles ?? {})
+    .filter(
+      ([, profile]) =>
+        resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+    )
+    .map(([profileId]) => profileId);
+  return profileIds.length > 0
+    ? { createIfMissing: true, order: profileIds }
+    : { createIfMissing: false };
 }
 
 async function runProviderAuthMethod(params: {
@@ -542,6 +575,7 @@ async function runProviderAuthMethod(params: {
   await persistProviderAuthResult({
     result,
     profiles,
+    config: params.config,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -843,6 +877,13 @@ type LoginOptions = {
   setDefault?: boolean;
   yes?: boolean;
   agent?: string;
+  /**
+   * When true, remove any existing auth profiles for the resolved provider
+   * before invoking the auth flow. This is the escape hatch for stuck
+   * cached OAuth profiles where the standard `auth login` short-circuits
+   * because credentials already exist on disk.
+   */
+  force?: boolean;
 };
 
 /**
@@ -951,6 +992,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       `Unknown provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to see available provider plugins.`,
     );
   }
+
   const chosenMethod = await pickProviderAuthMethod({
     provider: selectedProvider,
     requestedMethod: opts.method,
@@ -961,6 +1003,35 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error(
       `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
     );
+  }
+
+  if (opts.force) {
+    // Purge existing profiles for this provider only after we have a valid
+    // auth method to invoke. Running the purge earlier (before method
+    // resolution) would delete the user's working credentials and then
+    // throw on an unresolvable `--method`, leaving them without a usable
+    // profile and no auth flow started. This is the documented escape
+    // hatch for stuck OAuth credentials (expired token, swapped account,
+    // etc.) where `auth login` would otherwise short-circuit on the cached
+    // profile.
+    try {
+      const clearedStore = await removeProviderAuthProfilesWithLock({
+        provider: selectedProvider.id,
+        agentDir,
+      });
+      if (!clearedStore) {
+        throw new Error("profile store update failed");
+      }
+      runtime.log(
+        `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Could not clear cached profiles for "${selectedProvider.id}" before re-login: ${message}. Re-login was not started because --force must remove cached profiles first.`,
+        { cause: err },
+      );
+    }
   }
 
   await runProviderAuthMethod({

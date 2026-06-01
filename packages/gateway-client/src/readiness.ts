@@ -10,10 +10,12 @@ export type GatewayClientStartable = {
   start(): void;
 };
 
+/** Injectable readiness waiter used by tests and alternate event-loop probes. */
 export type EventLoopReadyWaiter = (
   options?: EventLoopReadyOptions,
 ) => Promise<EventLoopReadyResult>;
 
+/** Timeout and abort controls for delaying client start until the loop can process IO. */
 export type GatewayClientStartReadinessOptions = {
   timeoutMs?: number;
   clientOptions?: Pick<
@@ -43,6 +45,7 @@ function resolveGatewayClientStartReadinessTimeoutMs(
   });
 }
 
+/** Starts a gateway client only after the supplied readiness probe succeeds. */
 export async function startGatewayClientWithReadinessWait(
   waitForReady: EventLoopReadyWaiter,
   client: GatewayClientStartable,
@@ -58,6 +61,7 @@ export async function startGatewayClientWithReadinessWait(
   return readiness;
 }
 
+/** Starts a gateway client after the default event-loop readiness probe succeeds. */
 export async function startGatewayClientWhenEventLoopReady(
   client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},

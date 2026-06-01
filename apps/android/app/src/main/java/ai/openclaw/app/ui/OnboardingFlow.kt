@@ -113,6 +113,7 @@ private enum class OnboardingStep {
 
 private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
 
+/** First-run Android onboarding flow for gateway pairing and permission setup. */
 @Composable
 fun OnboardingFlow(
   viewModel: MainViewModel,
@@ -273,6 +274,8 @@ fun OnboardingFlow(
             setupError = null
             attemptedConnect = true
             connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
+            // Setup-code pairing replaces any stale shared credentials before
+            // the bootstrap token is stored for the first authenticated connect.
             viewModel.resetGatewaySetupAuth()
             viewModel.setManualEnabled(true)
             viewModel.setManualHost(config.host)
@@ -905,6 +908,7 @@ internal enum class GatewayRecoveryUiState(
   ),
 }
 
+/** Derives recovery screen state from gateway/node readiness and transient status text. */
 internal fun gatewayRecoveryUiState(
   ready: Boolean,
   statusText: String,
@@ -918,6 +922,7 @@ internal fun gatewayRecoveryUiState(
     else -> GatewayRecoveryUiState.Failed
   }
 
+/** Detects gateway-approved states where the Android node is still coming online. */
 internal fun gatewayStatusLooksLikePartialConnect(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
   return lower.contains("operator offline") || lower.contains("node offline")
@@ -932,6 +937,7 @@ private data class GatewayConfig(
   val password: String,
 )
 
+/** Resolves setup-code or manual fields into the gateway config used for first connect. */
 private fun resolveGatewayConfig(
   setupCode: String,
   manualHost: String,
@@ -944,6 +950,8 @@ private fun resolveGatewayConfig(
   if (setup != null) {
     val endpoint = parseGatewayEndpointResult(setup.url).config ?: return null
     val bootstrapToken = setup.bootstrapToken?.trim().orEmpty()
+    // Bootstrap setup codes own first-pairing auth; fall back to typed token or
+    // password only for non-bootstrap setup payloads.
     return GatewayConfig(
       host = endpoint.host,
       port = endpoint.port,
@@ -974,6 +982,7 @@ private fun resolveGatewayConfig(
   )
 }
 
+/** Selects the recovery detail line from endpoint metadata and transient gateway status. */
 private fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
@@ -991,6 +1000,7 @@ private fun recoveryGatewayDetail(
       "Gateway unreachable"
     }
 
+/** Copies the onboarding recovery snapshot for support without including credentials. */
 private fun copyGatewayDiagnostic(
   context: Context,
   statusText: String,
@@ -1011,6 +1021,7 @@ private fun copyGatewayDiagnostic(
   Toast.makeText(context, "Diagnostic copied", Toast.LENGTH_SHORT).show()
 }
 
+/** One permission row plus launcher callback for onboarding's final setup step. */
 private data class PermissionRowModel(
   val title: String,
   val subtitle: String,
@@ -1019,16 +1030,19 @@ private data class PermissionRowModel(
   val onClick: () -> Unit,
 )
 
+/** Permission screen model plus a commit hook that persists granted feature toggles. */
 private class PermissionState(
   val rows: List<PermissionRowModel>,
   val applyToViewModel: () -> Unit,
 )
 
+/** Onboarding can finish only after gateway and node channels are both ready. */
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
 ): Boolean = isConnected && isNodeConnected
 
+/** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable
 private fun rememberPermissionState(
   context: Context,
@@ -1170,6 +1184,7 @@ private fun hasPermission(
   permission: String,
 ): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+/** Returns true when Android exposes any motion sensor that can back node motion commands. */
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||

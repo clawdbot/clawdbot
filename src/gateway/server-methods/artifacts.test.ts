@@ -41,6 +41,131 @@ function createResponder() {
   };
 }
 
+type ArtifactMethod = "artifacts.list" | "artifacts.get" | "artifacts.download";
+type ResponderCalls = ReturnType<typeof createResponder>["calls"];
+type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
+
+async function invokeArtifactHandler(
+  method: ArtifactMethod,
+  params: Record<string, unknown>,
+  options: { id?: string; context?: unknown } = {},
+) {
+  const responder = createResponder();
+  await artifactsHandlers[method]?.({
+    req: { type: "req", id: options.id ?? method, method, params: {} },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond: responder.respond,
+    context: (options.context ?? {}) as never,
+  });
+  return responder;
+}
+
+async function listArtifacts(
+  params: Record<string, unknown>,
+  options: { id?: string; context?: unknown } = {},
+) {
+  return await invokeArtifactHandler("artifacts.list", params, options);
+}
+
+async function getArtifact(
+  params: Record<string, unknown>,
+  options: { id?: string; context?: unknown } = {},
+) {
+  return await invokeArtifactHandler("artifacts.get", params, options);
+}
+
+async function downloadArtifact(
+  params: Record<string, unknown>,
+  options: { id?: string; context?: unknown } = {},
+) {
+  return await invokeArtifactHandler("artifacts.download", params, options);
+}
+
+function runtimeContext(config: Record<string, unknown>) {
+  return { getRuntimeConfig: () => config };
+}
+
+function expectOkPayload(calls: ResponderCalls): unknown {
+  expect(calls[0]?.ok).toBe(true);
+  return calls[0]?.payload;
+}
+
+function expectArtifactList(calls: ResponderCalls): ArtifactListPayload {
+  return expectOkPayload(calls) as ArtifactListPayload;
+}
+
+function expectFirstArtifact(calls: ResponderCalls): Record<string, unknown> | undefined {
+  const payload = expectArtifactList(calls);
+  return payload.artifacts?.[0];
+}
+
+function expectErrorDetails(calls: ResponderCalls): Record<string, unknown> | undefined {
+  expect(calls[0]?.ok).toBe(false);
+  const error = calls[0]?.error as { details?: Record<string, unknown> };
+  return error.details;
+}
+
+function assistantImageMessage(params: {
+  data?: string;
+  alt: string;
+  seq?: number;
+  runId?: string;
+  taskId?: string;
+}) {
+  return {
+    role: "assistant",
+    content: [{ type: "image", data: params.data ?? "aGVsbG8=", alt: params.alt }],
+    __openclaw: {
+      seq: params.seq ?? 2,
+      ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.taskId ? { messageTaskId: params.taskId } : {}),
+    },
+  };
+}
+
+function assistantFileMessage(params: {
+  data?: string;
+  title: string;
+  seq?: number;
+  runId?: string;
+  taskId?: string;
+}) {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "file",
+        data: params.data ?? "aGVsbG8=",
+        mimeType: "text/plain",
+        title: params.title,
+      },
+    ],
+    __openclaw: {
+      seq: params.seq ?? 2,
+      ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.taskId ? { taskId: params.taskId } : {}),
+    },
+  };
+}
+
+function resultImageMessage() {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text: "see attached" },
+      {
+        type: "image",
+        data: "aGVsbG8=",
+        mimeType: "image/png",
+        alt: "result.png",
+      },
+    ],
+    __openclaw: { seq: 2 },
+  };
+}
+
 function requireNonEmptyString(value: unknown, message: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(message);
@@ -58,6 +183,20 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
+function expectArtifactScopeNotFound(
+  calls: ResponderCalls,
+  params: { message?: string } = {},
+): void {
+  expect(calls[0]?.ok).toBe(false);
+  expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
+  expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
+  expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
+  if (params.message) {
+    expectFields(calls[0]?.error, { message: params.message });
+  }
+  expectFields(expectErrorDetails(calls), { type: "artifact_scope_not_found" });
+}
+
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -67,21 +206,7 @@ describe("artifacts RPC handlers", () => {
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "see attached" },
-          {
-            type: "image",
-            data: "aGVsbG8=",
-            mimeType: "image/png",
-            alt: "result.png",
-          },
-        ],
-        __openclaw: { seq: 2 },
-      },
-    ]);
+    mockedMessages([resultImageMessage()]);
   });
 
   function mockedMessages(messages: unknown[]) {
@@ -94,20 +219,10 @@ describe("artifacts RPC handlers", () => {
   }
 
   it("lists stable transcript artifact summaries by sessionKey", async () => {
-    const { calls, respond } = createResponder();
-
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "1", method: "artifacts.list", params: {} },
-      params: { sessionKey: "agent:main:main" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
+    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" }, { id: "1" });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.ok).toBe(true);
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    const payload = expectArtifactList(calls);
     expect(payload.artifacts).toHaveLength(1);
     const artifact = payload.artifacts?.[0];
     expectFields(artifact, {
@@ -132,161 +247,96 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("applies agentId to direct sessionKey aliases", async () => {
-    const { calls, respond } = createResponder();
+    const { calls } = await listArtifacts(
+      { sessionKey: "main", agentId: "work" },
+      { id: "session-alias-agent-scope" },
+    );
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "session-alias-agent-scope", method: "artifacts.list", params: {} },
-      params: { sessionKey: "main", agentId: "work" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(true);
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:main");
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expectFields(payload.artifacts?.[0], { sessionKey: "agent:work:main" });
+    expectFields(expectFirstArtifact(calls), { sessionKey: "agent:work:main" });
   });
 
   it("canonicalizes scoped sessionKey aliases with runtime config", async () => {
-    const { calls, respond } = createResponder();
-
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "session-alias-main-key", method: "artifacts.list", params: {} },
-      params: { sessionKey: "main", agentId: "work" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({
+    const { calls } = await listArtifacts(
+      { sessionKey: "main", agentId: "work" },
+      {
+        id: "session-alias-main-key",
+        context: runtimeContext({
           session: { mainKey: "primary" },
           agents: { list: [{ id: "main", default: true }, { id: "work" }] },
         }),
-      } as never,
-    });
+      },
+    );
 
-    expect(calls[0]?.ok).toBe(true);
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:primary");
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expectFields(payload.artifacts?.[0], { sessionKey: "agent:work:primary" });
+    expectFields(expectFirstArtifact(calls), { sessionKey: "agent:work:primary" });
   });
 
   it("preserves agent scope when loading global-scope run artifacts", async () => {
-    const { calls, respond } = createResponder();
     hoisted.resolveSessionKeyForRun.mockReturnValue("global");
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "out.txt" }],
-        __openclaw: { seq: 2, runId: "run-global" },
-      },
-    ]);
+    mockedMessages([assistantFileMessage({ title: "out.txt", runId: "run-global" })]);
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "global-run-agent-scope", method: "artifacts.list", params: {} },
-      params: { runId: "run-global", agentId: "work" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({
+    const { calls } = await listArtifacts(
+      { runId: "run-global", agentId: "work" },
+      {
+        id: "global-run-agent-scope",
+        context: runtimeContext({
           session: { scope: "global" },
           agents: { list: [{ id: "main", default: true }, { id: "work" }] },
         }),
-      } as never,
-    });
+      },
+    );
 
-    expect(calls[0]?.ok).toBe(true);
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-global", {
       agentId: "work",
     });
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expectFields(payload.artifacts?.[0], { sessionKey: "global", runId: "run-global" });
+    expectFields(expectFirstArtifact(calls), { sessionKey: "global", runId: "run-global" });
   });
 
   it("preserves inferred task agent scope when loading global-scope task artifacts", async () => {
-    const { calls, respond } = createResponder();
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
       agentId: "work",
       requesterSessionKey: "global",
     });
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "task.txt" }],
-        __openclaw: { seq: 2, taskId: "task-global" },
-      },
-    ]);
+    mockedMessages([assistantFileMessage({ title: "task.txt", taskId: "task-global" })]);
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "global-task-agent-scope", method: "artifacts.list", params: {} },
-      params: { taskId: "task-global" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({
+    const { calls } = await listArtifacts(
+      { taskId: "task-global" },
+      {
+        id: "global-task-agent-scope",
+        context: runtimeContext({
           session: { scope: "global" },
           agents: { list: [{ id: "main", default: true }, { id: "work" }] },
         }),
-      } as never,
-    });
+      },
+    );
 
-    expect(calls[0]?.ok).toBe(true);
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expectFields(payload.artifacts?.[0], { sessionKey: "global", taskId: "task-global" });
+    expectFields(expectFirstArtifact(calls), { sessionKey: "global", taskId: "task-global" });
   });
 
   it("gets and downloads an inline artifact", async () => {
     const listed = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "see attached" },
-            {
-              type: "image",
-              data: "aGVsbG8=",
-              mimeType: "image/png",
-              alt: "result.png",
-            },
-          ],
-          __openclaw: { seq: 2 },
-        },
-      ],
+      messages: [resultImageMessage()],
     });
     const artifactId = listed[0]?.id;
     const artifactIdString = requireNonEmptyString(artifactId, "expected listed artifact id");
 
-    const get = createResponder();
-    await artifactsHandlers["artifacts.get"]?.({
-      req: { type: "req", id: "2", method: "artifacts.get", params: {} },
-      params: { sessionKey: "agent:main:main", artifactId: artifactIdString },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: get.respond,
-      context: {} as never,
-    });
-    expect(get.calls[0]?.ok).toBe(true);
-    const getPayload = get.calls[0]?.payload as { artifact?: Record<string, unknown> };
+    const get = await getArtifact(
+      { sessionKey: "agent:main:main", artifactId: artifactIdString },
+      { id: "2" },
+    );
+    const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
     expectFields(getPayload.artifact, { id: artifactId });
     expectFields(getPayload.artifact?.download, { mode: "bytes" });
 
-    const download = createResponder();
-    await artifactsHandlers["artifacts.download"]?.({
-      req: { type: "req", id: "3", method: "artifacts.download", params: {} },
-      params: { sessionKey: "agent:main:main", artifactId },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: download.respond,
-      context: {} as never,
-    });
-    expect(download.calls[0]?.ok).toBe(true);
-    const downloadPayload = download.calls[0]?.payload as {
+    const download = await downloadArtifact(
+      { sessionKey: "agent:main:main", artifactId },
+      { id: "3" },
+    );
+    const downloadPayload = expectOkPayload(download.calls) as {
       artifact?: Record<string, unknown>;
     };
     expectFields(downloadPayload, {
@@ -368,51 +418,20 @@ describe("artifacts RPC handlers", () => {
 
   it("resolves runId queries through the gateway run-to-session lookup", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "aGVsbG8=", alt: "run-result.png" }],
-        __openclaw: { seq: 2, runId: "run-1" },
-      },
-    ]);
-    const { calls, respond } = createResponder();
+    mockedMessages([assistantImageMessage({ alt: "run-result.png", runId: "run-1" })]);
+    const { calls } = await listArtifacts({ runId: "run-1" }, { id: "4" });
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "4", method: "artifacts.list", params: {} },
-      params: { runId: "run-1" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(true);
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {
       agentId: "main",
     });
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expectFields(payload.artifacts?.[0], { runId: "run-1" });
+    expectFields(expectFirstArtifact(calls), { runId: "run-1" });
   });
 
   it("passes agentId to runId artifact queries", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("main");
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "aGVsbG8=", alt: "run-result.png" }],
-        __openclaw: { seq: 2, runId: "run-1" },
-      },
-    ]);
-    const { respond } = createResponder();
+    mockedMessages([assistantImageMessage({ alt: "run-result.png", runId: "run-1" })]);
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "agent-run-scope", method: "artifacts.list", params: {} },
-      params: { runId: "run-1", agentId: "work" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
+    await listArtifacts({ runId: "run-1", agentId: "work" }, { id: "agent-run-scope" });
 
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {
       agentId: "work",
@@ -427,22 +446,9 @@ describe("artifacts RPC handlers", () => {
     });
     hoisted.resolveSessionKeyForRun.mockReturnValue("acp:run-for-task-1");
     mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "dGFyZ2V0", alt: "task-result.png" }],
-        __openclaw: { seq: 2, messageTaskId: "task-1" },
-      },
+      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
     ]);
-    const { calls, respond } = createResponder();
-
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "task-run-agent-scope", method: "artifacts.list", params: {} },
-      params: { taskId: "task-1" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
+    const { calls } = await listArtifacts({ taskId: "task-1" }, { id: "task-run-agent-scope" });
 
     expect(calls[0]?.ok).toBe(true);
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-for-task-1", {
@@ -499,34 +505,22 @@ describe("artifacts RPC handlers", () => {
     const artifactId = listPayload.artifacts?.[0]?.id as string | undefined;
     const artifactIdString = requireNonEmptyString(artifactId, "expected task artifact id");
 
-    const get = createResponder();
-    await artifactsHandlers["artifacts.get"]?.({
-      req: { type: "req", id: "task-get", method: "artifacts.get", params: {} },
-      params: { taskId: "task-1", artifactId: artifactIdString },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: get.respond,
-      context: {} as never,
-    });
-    expect(get.calls[0]?.ok).toBe(true);
-    const getPayload = get.calls[0]?.payload as { artifact?: Record<string, unknown> };
+    const get = await getArtifact(
+      { taskId: "task-1", artifactId: artifactIdString },
+      { id: "task-get" },
+    );
+    const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
     expectFields(getPayload.artifact, {
       id: artifactId,
       taskId: "task-1",
       title: "task-result.png",
     });
 
-    const download = createResponder();
-    await artifactsHandlers["artifacts.download"]?.({
-      req: { type: "req", id: "task-download", method: "artifacts.download", params: {} },
-      params: { taskId: "task-1", artifactId },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: download.respond,
-      context: {} as never,
-    });
-    expect(download.calls[0]?.ok).toBe(true);
-    const downloadPayload = download.calls[0]?.payload as {
+    const download = await downloadArtifact(
+      { taskId: "task-1", artifactId },
+      { id: "task-download" },
+    );
+    const downloadPayload = expectOkPayload(download.calls) as {
       artifact?: Record<string, unknown>;
     };
     expectFields(downloadPayload, {
@@ -546,26 +540,14 @@ describe("artifacts RPC handlers", () => {
       runId: "run-for-task-1",
       agentId: "work",
     });
-    const { calls, respond } = createResponder();
+    const { calls } = await listArtifacts(
+      { taskId: "task-1", agentId: "main" },
+      { id: "task-agent-mismatch" },
+    );
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "task-agent-mismatch", method: "artifacts.list", params: {} },
-      params: { taskId: "task-1", agentId: "main" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(false);
-    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
-    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
-    expectFields(calls[0]?.error, {
+    expectArtifactScopeNotFound(calls, {
       message: "no session found for artifact query",
     });
-    const error = calls[0]?.error as { details?: Record<string, unknown> };
-    expectFields(error.details, { type: "artifact_scope_not_found" });
   });
 
   it("derives taskId artifact scope from requesterSessionKey when task agentId is absent", async () => {
@@ -573,28 +555,12 @@ describe("artifacts RPC handlers", () => {
       requesterSessionKey: "agent:work:main",
       runId: "run-for-task-1",
     });
-    const { calls, respond } = createResponder();
+    const { calls } = await listArtifacts(
+      { taskId: "task-1", agentId: "main" },
+      { id: "task-requester-agent-mismatch" },
+    );
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: {
-        type: "req",
-        id: "task-requester-agent-mismatch",
-        method: "artifacts.list",
-        params: {},
-      },
-      params: { taskId: "task-1", agentId: "main" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(false);
-    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
-    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
-    const error = calls[0]?.error as { details?: Record<string, unknown> };
-    expectFields(error.details, { type: "artifact_scope_not_found" });
+    expectArtifactScopeNotFound(calls);
   });
 
   it("treats legacy task requester session keys as the main agent for artifact scope", async () => {
@@ -602,28 +568,12 @@ describe("artifacts RPC handlers", () => {
       requesterSessionKey: "main",
       runId: "run-for-task-1",
     });
-    const { calls, respond } = createResponder();
+    const { calls } = await listArtifacts(
+      { taskId: "task-1", agentId: "work" },
+      { id: "task-legacy-requester-agent-mismatch" },
+    );
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: {
-        type: "req",
-        id: "task-legacy-requester-agent-mismatch",
-        method: "artifacts.list",
-        params: {},
-      },
-      params: { taskId: "task-1", agentId: "work" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(false);
-    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
-    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
-    const error = calls[0]?.error as { details?: Record<string, unknown> };
-    expectFields(error.details, { type: "artifact_scope_not_found" });
+    expectArtifactScopeNotFound(calls);
   });
 
   it("uses the configured default agent for legacy task requester session keys", async () => {
@@ -632,36 +582,21 @@ describe("artifacts RPC handlers", () => {
       runId: "run-for-task-1",
     });
     mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "dGFyZ2V0", alt: "task-result.png" }],
-        __openclaw: { seq: 2, messageTaskId: "task-1" },
-      },
+      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
     ]);
-    const { calls, respond } = createResponder();
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: {
-        type: "req",
+    const { calls } = await listArtifacts(
+      { taskId: "task-1", agentId: "work" },
+      {
         id: "task-legacy-default-agent",
-        method: "artifacts.list",
-        params: {},
-      },
-      params: { taskId: "task-1", agentId: "work" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({
+        context: runtimeContext({
           agents: { list: [{ id: "work", default: true }] },
         }),
-      } as never,
-    });
+      },
+    );
 
-    expect(calls[0]?.ok).toBe(true);
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:main");
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expectFields(payload.artifacts?.[0], {
+    expectFields(expectFirstArtifact(calls), {
       taskId: "task-1",
       sessionKey: "agent:work:main",
     });
@@ -669,19 +604,9 @@ describe("artifacts RPC handlers", () => {
 
   it("does not return untagged session artifacts for scoped runId queries", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
-    const { calls, respond } = createResponder();
+    const { calls } = await listArtifacts({ runId: "run-1" }, { id: "run-scope" });
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "run-scope", method: "artifacts.list", params: {} },
-      params: { runId: "run-1" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(true);
-    expect(calls[0]?.payload).toEqual({ artifacts: [] });
+    expect(expectArtifactList(calls)).toEqual({ artifacts: [] });
   });
 
   it("discovers transcript image_url data blocks", async () => {
@@ -698,19 +623,9 @@ describe("artifacts RPC handlers", () => {
         __openclaw: { seq: 3 },
       },
     ]);
-    const { calls, respond } = createResponder();
+    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" }, { id: "image-url" });
 
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "image-url", method: "artifacts.list", params: {} },
-      params: { sessionKey: "agent:main:main" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
-
-    expect(calls[0]?.ok).toBe(true);
-    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    const payload = expectArtifactList(calls);
     expect(payload.artifacts).toHaveLength(1);
     const artifact = payload.artifacts?.[0];
     expectFields(artifact, {
@@ -795,33 +710,14 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("returns typed errors for missing query scope and missing artifacts", async () => {
-    const missingScope = createResponder();
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "5", method: "artifacts.list", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond: missingScope.respond,
-      context: {} as never,
-    });
-    expect(missingScope.calls[0]?.ok).toBe(false);
-    const missingScopeError = missingScope.calls[0]?.error as {
-      details?: Record<string, unknown>;
-    };
-    expectFields(missingScopeError.details, { type: "artifact_query_unsupported" });
+    const missingScope = await listArtifacts({}, { id: "5" });
+    expectFields(expectErrorDetails(missingScope.calls), { type: "artifact_query_unsupported" });
 
-    const notFound = createResponder();
-    await artifactsHandlers["artifacts.get"]?.({
-      req: { type: "req", id: "6", method: "artifacts.get", params: {} },
-      params: { sessionKey: "agent:main:main", artifactId: "artifact_missing" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: notFound.respond,
-      context: {} as never,
-    });
-    expect(notFound.calls[0]?.ok).toBe(false);
-    const notFoundError = notFound.calls[0]?.error as { details?: Record<string, unknown> };
-    expectFields(notFoundError.details, {
+    const notFound = await getArtifact(
+      { sessionKey: "agent:main:main", artifactId: "artifact_missing" },
+      { id: "6" },
+    );
+    expectFields(expectErrorDetails(notFound.calls), {
       type: "artifact_not_found",
       artifactId: "artifact_missing",
     });

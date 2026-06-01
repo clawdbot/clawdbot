@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 function buildMinimaxCatalog() {
   return [
     {
+      id: "MiniMax-M3",
+      cost: {
+        input: 0.6,
+        output: 2.4,
+        cacheRead: 0.12,
+        cacheWrite: 0,
+      },
+    },
+    {
       id: "MiniMax-M2.7",
       cost: {
         input: 1.1,
@@ -30,10 +39,12 @@ describe("minimax provider catalog", () => {
       "minimax-portal": { models: buildMinimaxCatalog() },
     };
     expect(providers?.minimax?.models?.map((model) => model.id)).toEqual([
+      "MiniMax-M3",
       "MiniMax-M2.7",
       "MiniMax-M2.7-highspeed",
     ]);
     expect(providers?.["minimax-portal"]?.models?.map((model) => model.id)).toEqual([
+      "MiniMax-M3",
       "MiniMax-M2.7",
       "MiniMax-M2.7-highspeed",
     ]);

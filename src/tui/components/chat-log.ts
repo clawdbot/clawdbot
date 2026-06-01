@@ -99,6 +99,13 @@ export class ChatLog extends Container {
     }
   }
 
+  clearTools() {
+    for (const tool of this.toolById.values()) {
+      this.removeChild(tool);
+    }
+    this.toolById.clear();
+  }
+
   restorePendingUsers() {
     for (const entry of this.pendingUsers.values()) {
       if (this.children.includes(entry.component)) {

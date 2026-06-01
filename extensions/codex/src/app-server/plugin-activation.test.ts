@@ -22,6 +22,59 @@ describe("Codex plugin activation", () => {
     expect((params as Record<string, unknown> | undefined)?.[key]).toBe(expected);
   }
 
+  it("activates plugins from every first-party OpenAI marketplace", async () => {
+    // chrome ships in openai-bundled (with Codex.app), documents ships in
+    // openai-primary-runtime (Codex primary runtime). Both should activate the
+    // same way openai-curated plugins do.
+    for (const { plugin, marketplace } of [
+      { plugin: "chrome", marketplace: "openai-bundled" as const },
+      { plugin: "documents", marketplace: "openai-primary-runtime" as const },
+    ]) {
+      const calls: string[] = [];
+      const result = await ensureCodexPluginActivation({
+        identity: identity(plugin, marketplace),
+        request: async (method) => {
+          calls.push(method);
+          if (method === "plugin/list") {
+            return pluginListFor(marketplace, [
+              pluginSummary(plugin, { installed: true, enabled: true }),
+            ]);
+          }
+          throw new Error(`unexpected request ${method}`);
+        },
+      });
+
+      expectActivationResult(result, {
+        ok: true,
+        reason: "already_active",
+        installAttempted: false,
+      });
+      expect(result.marketplace?.name).toBe(marketplace);
+      expect(calls).toEqual(["plugin/list"]);
+    }
+  });
+
+  it("rejects activation requests for marketplaces outside the openai allowlist", async () => {
+    const result = await ensureCodexPluginActivation({
+      identity: {
+        configKey: "rogue",
+        marketplaceName: "third-party" as never,
+        pluginName: "rogue",
+        enabled: true,
+        allowDestructiveActions: false,
+      },
+      request: async () => {
+        throw new Error("plugin/list should not be reached when marketplace is rejected");
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "marketplace_missing",
+      installAttempted: false,
+    });
+  });
+
   it("skips plugin/install when the migrated plugin is already active", async () => {
     const calls: string[] = [];
     const result = await ensureCodexPluginActivation({
@@ -295,10 +348,13 @@ describe("Codex plugin activation", () => {
   });
 });
 
-function identity(pluginName: string): ResolvedCodexPluginPolicy {
+function identity(
+  pluginName: string,
+  marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"] = CODEX_PLUGINS_MARKETPLACE_NAME,
+): ResolvedCodexPluginPolicy {
   return {
     configKey: pluginName,
-    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    marketplaceName,
     pluginName,
     enabled: true,
     allowDestructiveActions: false,
@@ -311,6 +367,24 @@ function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
       {
         name: CODEX_PLUGINS_MARKETPLACE_NAME,
         path: "/marketplaces/openai-curated",
+        interface: null,
+        plugins,
+      },
+    ],
+    marketplaceLoadErrors: [],
+    featuredPluginIds: [],
+  };
+}
+
+function pluginListFor(
+  marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"],
+  plugins: v2.PluginSummary[],
+): v2.PluginListResponse {
+  return {
+    marketplaces: [
+      {
+        name: marketplaceName,
+        path: `/marketplaces/${marketplaceName}`,
         interface: null,
         plugins,
       },

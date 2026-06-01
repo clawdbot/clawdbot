@@ -16,9 +16,9 @@ export async function probeZalouser(
     const user = timeoutMs
       ? await Promise.race([
           getZaloUserInfo(profile),
-          new Promise<null>((resolve) =>
-            setTimeout(() => resolve(null), resolveTimerTimeoutMs(timeoutMs, 1000, 1000)),
-          ),
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), resolveTimerTimeoutMs(timeoutMs, 1000, 1000));
+          }),
         ])
       : await getZaloUserInfo(profile);
 

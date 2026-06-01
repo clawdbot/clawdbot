@@ -85,7 +85,9 @@ async function runConcurrentRefreshCase(): Promise<ConcurrentRefreshResult> {
     let callCount = 0;
     refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       callCount += 1;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       return {
         type: "oauth",
         provider,

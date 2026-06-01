@@ -12,6 +12,7 @@ import {
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -41,6 +42,7 @@ export type ProviderRuntimePluginLookupParams = {
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
   bundledProviderVitestCompat?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
 export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
@@ -86,6 +88,10 @@ function resolveProviderRuntimePluginCacheKey(
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
+    pluginMetadata:
+      params.pluginMetadataSnapshot?.manifestRegistry.plugins
+        .map((plugin) => plugin.id)
+        .join(",") ?? null,
     pluginRegistryKey: registryState?.key ?? null,
     pluginRegistryVersion: registryState?.activeVersion ?? null,
   });
@@ -192,30 +198,19 @@ export function resolveProviderPluginsForHooks(params: {
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
   bundledProviderVitestCompat?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  if (
-    isPluginProvidersLoadInFlight({
-      ...params,
-      workspaceDir,
-      env,
-      activate: false,
-      applyAutoEnable: params.applyAutoEnable,
-      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
-    })
-  ) {
-    return [];
-  }
-  const resolved = resolvePluginProviders({
+  return resolvePluginProviders({
     ...params,
     workspaceDir,
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+    skipIfLoadInFlight: true,
   });
-  return resolved;
 }
 
 export function resolveProviderRuntimePlugin(
@@ -263,6 +258,7 @@ export function resolveProviderRuntimePlugin(
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
         bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
         if (apiOwnerHint) {
           return (
@@ -359,6 +355,8 @@ export function ensureProviderRuntimePluginHandle(
       env: params.env ?? params.runtimeHandle?.env,
       applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
       bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
+      pluginMetadataSnapshot:
+        params.pluginMetadataSnapshot ?? params.runtimeHandle?.pluginMetadataSnapshot,
     });
   }
   return params.runtimeHandle;

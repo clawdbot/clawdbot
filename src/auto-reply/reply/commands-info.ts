@@ -162,7 +162,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     return null;
   }
   const normalized = params.command.commandBodyNormalized;
-  let verbose = false;
+  let verbose;
   if (normalized === "/tools" || normalized === "/tools compact") {
     verbose = false;
   } else if (normalized === "/tools verbose") {

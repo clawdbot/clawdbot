@@ -41,9 +41,13 @@ export type CanonicalInboundMessageHookContext = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   provider?: string;
   surface?: string;
   threadId?: string | number;
+  threadParentId?: string | number;
   // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
   // are provider/media-server references that may not exist on this host.
   mediaPath?: string;
@@ -142,9 +146,13 @@ export function deriveInboundMessageHookContext(
     senderName: ctx.SenderName,
     senderUsername: ctx.SenderUsername,
     senderE164: ctx.SenderE164,
+    replyToId: ctx.ReplyToId,
+    replyToBody: ctx.ReplyToBody,
+    replyToSender: ctx.ReplyToSender,
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
+    threadParentId: ctx.ThreadParentId,
     mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
     mediaUrl: ctx.MediaUrl ?? mediaUrls?.[0],
     mediaType: ctx.MediaType ?? mediaTypes?.[0],
@@ -238,6 +246,15 @@ export function toPluginMessageContext(
   if ("senderId" in canonical && canonical.senderId) {
     context.senderId = canonical.senderId;
   }
+  if ("replyToId" in canonical && canonical.replyToId !== undefined) {
+    context.replyToId = canonical.replyToId;
+  }
+  if ("replyToBody" in canonical && canonical.replyToBody !== undefined) {
+    context.replyToBody = canonical.replyToBody;
+  }
+  if ("replyToSender" in canonical && canonical.replyToSender !== undefined) {
+    context.replyToSender = canonical.replyToSender;
+  }
   assignTraceFields(context, canonical.trace);
   if (canonical.callDepth != null) {
     context.callDepth = canonical.callDepth;
@@ -270,6 +287,7 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
         to: canonical.to ?? canonical.originatingTo,
         conversationId: canonical.conversationId,
         threadId: canonical.threadId,
+        threadParentId: canonical.threadParentId,
         isGroup: canonical.isGroup,
       })
     : null;
@@ -301,6 +319,15 @@ export function toPluginInboundClaimContext(
     runId: canonical.runId,
     callDepth: canonical.callDepth,
   };
+  if (canonical.replyToId !== undefined) {
+    context.replyToId = canonical.replyToId;
+  }
+  if (canonical.replyToBody !== undefined) {
+    context.replyToBody = canonical.replyToBody;
+  }
+  if (canonical.replyToSender !== undefined) {
+    context.replyToSender = canonical.replyToSender;
+  }
   assignTraceFields(context, canonical.trace);
   return context;
 }
@@ -326,6 +353,9 @@ export function toPluginInboundClaimEvent(
     senderId: canonical.senderId,
     senderName: canonical.senderName,
     senderUsername: canonical.senderUsername,
+    ...(canonical.replyToId !== undefined ? { replyToId: canonical.replyToId } : {}),
+    ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
+    ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
     threadId: canonical.threadId,
     messageId: canonical.messageId,
     sessionKey: canonical.sessionKey,
@@ -341,6 +371,9 @@ export function toPluginInboundClaimEvent(
       originatingChannel: canonical.originatingChannel,
       originatingTo: canonical.originatingTo,
       senderE164: canonical.senderE164,
+      replyToId: canonical.replyToId,
+      replyToBody: canonical.replyToBody,
+      replyToSender: canonical.replyToSender,
       mediaPath: canonical.mediaPath,
       mediaUrl: canonical.mediaUrl,
       mediaType: canonical.mediaType,
@@ -367,6 +400,9 @@ export function toPluginMessageReceivedEvent(
     threadId: canonical.threadId,
     messageId: canonical.messageId,
     senderId: canonical.senderId,
+    ...(canonical.replyToId !== undefined ? { replyToId: canonical.replyToId } : {}),
+    ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
+    ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
     metadata: {
@@ -381,6 +417,9 @@ export function toPluginMessageReceivedEvent(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
+      replyToId: canonical.replyToId,
+      replyToBody: canonical.replyToBody,
+      replyToSender: canonical.replyToSender,
       mediaPath: canonical.mediaPath,
       mediaUrl: canonical.mediaUrl,
       mediaType: canonical.mediaType,
@@ -432,6 +471,12 @@ export function toInternalMessageReceivedContext(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaUrl: canonical.mediaUrl,
+      mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaUrls: canonical.mediaUrls,
+      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,

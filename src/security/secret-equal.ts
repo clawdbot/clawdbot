@@ -9,6 +9,7 @@ function padSecretBytes(bytes: Buffer, length: number): Buffer {
   return padded;
 }
 
+/** Compare two optional UTF-8 secrets without leaking length through timingSafeEqual errors. */
 export function safeEqualSecret(
   provided: string | undefined | null,
   expected: string | undefined | null,

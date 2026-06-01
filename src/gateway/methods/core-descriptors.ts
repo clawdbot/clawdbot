@@ -15,6 +15,8 @@ type CoreGatewayMethodSpec = {
   controlPlaneWrite?: true;
 };
 
+// This is the canonical core method policy table: every core handler must appear here so
+// listing, authorization, startup availability, and write throttling stay in sync.
 export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "health", scope: "operator.read" },
   { name: "diagnostics.stability", scope: "operator.read" },
@@ -226,24 +228,29 @@ const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpe
   CORE_GATEWAY_METHOD_SPECS.map((spec) => [spec.name, spec]),
 );
 
+/** Core methods that are listed early but return retryable unavailable until sidecars are ready. */
 export const STARTUP_UNAVAILABLE_GATEWAY_METHODS = CORE_GATEWAY_METHOD_SPECS.filter(
   (spec) => spec.startup === true,
 ).map((spec) => spec.name);
 
+/** Returns the core methods that should be advertised to external gateway clients. */
 export function listCoreAdvertisedGatewayMethodNames(): string[] {
   return CORE_GATEWAY_METHOD_SPECS.filter((spec) => spec.advertise !== false).map(
     (spec) => spec.name,
   );
 }
 
+/** Returns all registered core method names, including hidden/internal compatibility methods. */
 export function listCoreGatewayMethodNames(): string[] {
   return CORE_GATEWAY_METHOD_SPECS.map((spec) => spec.name);
 }
 
+/** Looks up the raw core method scope, including node and dynamic sentinel scopes. */
 export function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
 }
 
+/** Looks up an operator-only core method scope, excluding node and dynamic methods. */
 export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorScope | undefined {
   const scope = resolveCoreGatewayMethodScope(method);
   return scope === NODE_GATEWAY_METHOD_SCOPE || scope === DYNAMIC_GATEWAY_METHOD_SCOPE
@@ -251,18 +258,22 @@ export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorS
     : scope;
 }
 
+/** Returns true for core methods reserved for authenticated node clients. */
 export function isCoreNodeGatewayMethod(method: string): boolean {
   return resolveCoreGatewayMethodScope(method) === NODE_GATEWAY_METHOD_SCOPE;
 }
 
+/** Returns true for core methods whose required operator scope is resolved by the handler. */
 export function isDynamicOperatorGatewayMethod(method: string): boolean {
   return resolveCoreGatewayMethodScope(method) === DYNAMIC_GATEWAY_METHOD_SCOPE;
 }
 
+/** Returns true when a method name has an explicit core policy entry. */
 export function isCoreGatewayMethodClassified(method: string): boolean {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
 }
 
+/** Creates dispatch descriptors for core handlers and fails if any handler lacks policy. */
 export function createCoreGatewayMethodDescriptors(
   handlers: Record<string, GatewayMethodHandler>,
 ): GatewayMethodDescriptorInput[] {
@@ -286,6 +297,8 @@ export function createCoreGatewayMethodDescriptors(
   }
   for (const name of Object.keys(handlers)) {
     if (!specNames.has(name)) {
+      // Unclassified core handlers would bypass scope/startup/write metadata, so fail before the
+      // dispatcher can expose a method with missing policy.
       throw new Error(`gateway method handler is missing a descriptor: ${name}`);
     }
   }

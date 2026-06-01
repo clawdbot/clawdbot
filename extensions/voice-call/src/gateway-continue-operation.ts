@@ -135,7 +135,7 @@ export function createVoiceCallContinueOperationStore(params: {
           result: { success: true, transcript: result.transcript },
         });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         const current = operations.get(operationId);
         if (!current || current.status !== "pending") {
           return;

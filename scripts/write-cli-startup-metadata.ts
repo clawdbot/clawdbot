@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -28,6 +28,9 @@ const extensionsDir = path.join(rootDir, "extensions");
 const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
 const BROWSER_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
+const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
+const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = ["doctor", "gateway", "models", "plugins"] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
@@ -55,6 +58,9 @@ type BundledChannelCatalog = {
 type PrecomputedSubcommandHelpCommand = (typeof PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS)[number];
 type PrecomputedSubcommandHelpText = Record<PrecomputedSubcommandHelpCommand, string>;
 type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
+type Awaitable<T> = T | Promise<T>;
+type SourceCommandHelpCommand = "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
+type SourceCommandHelpText = Record<SourceCommandHelpCommand, string>;
 
 function resolveRootHelpBundleIdentity(
   distDirOverride: string = distDir,
@@ -257,6 +263,205 @@ function createIsolatedRootHelpRenderContext(
   return { config, env };
 }
 
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  limit: number,
+  run: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  results.length = values.length;
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), values.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) {
+          return;
+        }
+        results[index] = await run(values[index]);
+      }
+    }),
+  );
+  return results;
+}
+
+async function spawnText(
+  args: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    failureMessage: string;
+    killGraceMs?: number;
+    maxOutputBytes?: number;
+    timeoutMs: number;
+  },
+): Promise<string> {
+  const maxOutputBytes = options.maxOutputBytes ?? COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES;
+  const killGraceMs = options.killGraceMs ?? COMMAND_HELP_RENDER_KILL_GRACE_MS;
+  const useProcessGroup = process.platform !== "win32";
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, {
+      cwd: options.cwd,
+      detached: useProcessGroup,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let outputBytes = 0;
+    let outputExceeded = false;
+    let settled = false;
+    let timedOut = false;
+    let waitingForKillGrace = false;
+    let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const signalChild = (signal: NodeJS.Signals) => {
+      if (useProcessGroup && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
+          }
+        }
+      }
+      child.kill(signal);
+    };
+    const relayParentSignal = (signal: NodeJS.Signals) => {
+      const handler = () => {
+        signalChild(signal);
+        cleanupParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.push({ handler, signal });
+      process.once(signal, handler);
+    };
+    if (useProcessGroup) {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
+      relayParentSignal("SIGHUP");
+    }
+    const processGroupIsAlive = () => {
+      if (!useProcessGroup || typeof child.pid !== "number") {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    };
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      cleanupParentSignalHandlers();
+      callback();
+    };
+    const finishClose = (result: { code: number | null; signal: NodeJS.Signals | null }) => {
+      settle(() => {
+        if (result.code === 0 && !timedOut && !outputExceeded) {
+          resolve(stdout);
+          return;
+        }
+        const detail = stderr.trim();
+        reject(
+          new Error(
+            options.failureMessage +
+              (outputExceeded
+                ? `: output exceeded ${maxOutputBytes} bytes`
+                : timedOut
+                  ? `: timed out after ${options.timeoutMs}ms`
+                  : detail
+                    ? `: ${detail}`
+                    : result.signal
+                      ? `: terminated by ${result.signal}`
+                      : ""),
+          ),
+        );
+      });
+    };
+    const scheduleKill = () => {
+      if (waitingForKillGrace) {
+        return;
+      }
+      waitingForKillGrace = true;
+      killTimer = setTimeout(() => {
+        waitingForKillGrace = false;
+        killTimer = undefined;
+        signalChild("SIGKILL");
+        if (childClosedResult) {
+          finishClose(childClosedResult);
+        }
+      }, killGraceMs);
+    };
+    const requestStop = () => {
+      signalChild("SIGTERM");
+      scheduleKill();
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      requestStop();
+    }, options.timeoutMs);
+    timeout.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (outputExceeded) {
+        return;
+      }
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > maxOutputBytes) {
+        outputExceeded = true;
+        requestStop();
+        return;
+      }
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      if (outputExceeded) {
+        return;
+      }
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > maxOutputBytes) {
+        outputExceeded = true;
+        requestStop();
+        return;
+      }
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle(() => {
+        reject(error);
+      });
+    });
+    child.once("close", (code, signal) => {
+      const result = { code, signal };
+      if (waitingForKillGrace && processGroupIsAlive()) {
+        childClosedResult = result;
+        return;
+      }
+      finishClose(result);
+    });
+  });
+}
+
 export async function renderBundledRootHelpText(
   _distDirOverride: string = distDir,
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(
@@ -389,52 +594,60 @@ function renderSourceBrowserHelpText(
   return result.stdout ?? "";
 }
 
-function renderSourceCommandHelpText(
-  command: "nodes" | "secrets" | PrecomputedSubcommandHelpCommand,
+async function renderSourceCommandHelpText(
+  command: SourceCommandHelpCommand,
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
-  const result = spawnSync(process.execPath, ["openclaw.mjs", command, "--help"], {
+): Promise<string> {
+  return await spawnText(["openclaw.mjs", command, "--help"], {
     cwd: rootDir,
-    encoding: "utf8",
     env: {
       ...renderContext.env,
       OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
     },
-    timeout: COMMAND_HELP_RENDER_TIMEOUT_MS,
+    failureMessage: `Failed to render source ${command} help`,
+    timeoutMs: COMMAND_HELP_RENDER_TIMEOUT_MS,
   });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(
-      `Failed to render source ${command} help` +
-        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
-    );
-  }
-  return result.stdout ?? "";
 }
 
-function renderSourceSecretsHelpText(
+async function renderSourceSecretsHelpText(
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
-  return renderSourceCommandHelpText("secrets", renderContext);
+): Promise<string> {
+  return await renderSourceCommandHelpText("secrets", renderContext);
 }
 
-function renderSourceNodesHelpText(
+async function renderSourceNodesHelpText(
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
-  return renderSourceCommandHelpText("nodes", renderContext);
+): Promise<string> {
+  return await renderSourceCommandHelpText("nodes", renderContext);
 }
 
-function renderSourceSubcommandHelpTextRecord(
+async function renderSourceCommandHelpTextRecord(
+  commands: readonly SourceCommandHelpCommand[],
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): PrecomputedSubcommandHelpText {
-  const entries = PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
-    commandName,
-    renderSourceCommandHelpText(commandName, renderContext),
-  ]);
-  return Object.fromEntries(entries) as PrecomputedSubcommandHelpText;
+): Promise<SourceCommandHelpText> {
+  const helpTexts = await mapWithConcurrency(
+    commands,
+    COMMAND_HELP_RENDER_CONCURRENCY,
+    async (commandName) => await renderSourceCommandHelpText(commandName, renderContext),
+  );
+  return Object.fromEntries(
+    commands.map((commandName, index) => [commandName, helpTexts[index]]),
+  ) as SourceCommandHelpText;
+}
+
+async function renderSourceSubcommandHelpTextRecord(
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
+): Promise<PrecomputedSubcommandHelpText> {
+  const commandHelpText = await renderSourceCommandHelpTextRecord(
+    PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS,
+    renderContext,
+  );
+  return Object.fromEntries(
+    PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+      commandName,
+      commandHelpText[commandName],
+    ]),
+  ) as PrecomputedSubcommandHelpText;
 }
 
 export async function writeCliStartupMetadata(options?: {
@@ -445,9 +658,11 @@ export async function writeCliStartupMetadata(options?: {
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
   renderSourceRootHelpText?: typeof renderSourceRootHelpText;
   renderSourceBrowserHelpText?: typeof renderSourceBrowserHelpText;
-  renderSourceSecretsHelpText?: typeof renderSourceSecretsHelpText;
-  renderSourceNodesHelpText?: typeof renderSourceNodesHelpText;
-  renderSourceSubcommandHelpTextRecord?: typeof renderSourceSubcommandHelpTextRecord;
+  renderSourceSecretsHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
+  renderSourceNodesHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
+  renderSourceSubcommandHelpTextRecord?: (
+    renderContext: RootHelpRenderContext,
+  ) => Awaitable<PrecomputedSubcommandHelpText>;
 }): Promise<void> {
   const resolvedDistDir = options?.distDir ?? distDir;
   const resolvedOutputPath = options?.outputPath ?? outputPath;
@@ -514,15 +729,31 @@ export async function writeCliStartupMetadata(options?: {
   const browserHelpText = (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
     renderContext,
   );
-  const secretsHelpText = (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(
-    renderContext,
-  );
-  const nodesHelpText = (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(
-    renderContext,
-  );
-  const subcommandHelpText = (
-    options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord
-  )(renderContext);
+  const commandHelpText =
+    options?.renderSourceSecretsHelpText ||
+    options?.renderSourceNodesHelpText ||
+    options?.renderSourceSubcommandHelpTextRecord
+      ? null
+      : await renderSourceCommandHelpTextRecord(
+          ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
+          renderContext,
+        );
+  const secretsHelpText = commandHelpText
+    ? commandHelpText.secrets
+    : await (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext);
+  const nodesHelpText = commandHelpText
+    ? commandHelpText.nodes
+    : await (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext);
+  const subcommandHelpText = commandHelpText
+    ? (Object.fromEntries(
+        PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+          commandName,
+          commandHelpText[commandName],
+        ]),
+      ) as PrecomputedSubcommandHelpText)
+    : await (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+        renderContext,
+      );
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
@@ -560,6 +791,13 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
     (commandName) => typeof record[commandName] === "string" && record[commandName].length > 0,
   );
 }
+
+export const testing = {
+  mapWithConcurrency,
+  spawnText,
+};
+
+export { testing as __testing };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   await writeCliStartupMetadata();

@@ -44,11 +44,11 @@ export function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
       continue;
     }
     const id = item.id;
-    // Reasoning items always reference server-side encrypted state bound to the
-    // original item ID. Rewriting or stripping that ID can turn replay into an
-    // invalid or ambiguous server-state lookup, so drop unsafe reasoning items.
+    // Reasoning items with replay IDs reference server-side encrypted state
+    // bound to that ID. Drop unsafe IDs, but keep the store-disabled idless
+    // replay form produced by core Responses conversion.
     if (item.type === "reasoning") {
-      if (!isValidReasoningReplayId(id)) {
+      if (id !== undefined && !isValidReasoningReplayId(id)) {
         input.splice(index, 1);
         rewrote = true;
       }

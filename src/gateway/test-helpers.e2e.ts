@@ -158,7 +158,9 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
     ws.on("message", handler);
     ws.once("close", closeHandler);
   });
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   const connectNonce = await connectNoncePromise;
   const identity = loadOrCreateDeviceIdentity();
   const signedAtMs = Date.now();

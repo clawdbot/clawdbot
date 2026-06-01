@@ -2,6 +2,7 @@ import type { SessionMetadata, SessionTreeEntry } from "../types.js";
 import { BaseSessionStorage } from "./storage-base.js";
 import { uuidv7 } from "./uuid.js";
 
+/** Volatile session storage used by tests and in-process harness callers. */
 export class InMemorySessionStorage<
   TMetadata extends SessionMetadata = SessionMetadata,
 > extends BaseSessionStorage<TMetadata> {

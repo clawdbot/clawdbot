@@ -1,6 +1,9 @@
 import type { Skill } from "./types.js";
 
+/** Format model-visible skill metadata for inclusion in the harness system prompt. */
 export function formatSkillsForSystemPrompt(skills: Skill[]): string {
+  // Hidden skills can still be invoked directly by host code, but should not be
+  // advertised to the model for autonomous selection.
   const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
   if (visibleSkills.length === 0) {
     return "";

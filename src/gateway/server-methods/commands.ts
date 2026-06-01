@@ -21,7 +21,6 @@ import {
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
@@ -30,10 +29,14 @@ import type {
 } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
-import { listPluginCommands } from "../../plugins/commands.js";
+import {
+  getPluginCommandEntrySpecs,
+  getPluginCommandEntrySpecsFromRegistrations,
+} from "../../plugins/command-specs.js";
+import { getActivePluginGatewayCommandRegistry } from "../../plugins/runtime.js";
 import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
@@ -54,25 +57,6 @@ function clampDescription(value: string | undefined): string {
   return clampString(value ?? "", COMMAND_DESCRIPTION_MAX_LENGTH);
 }
 
-function resolveAgentIdOrRespondError(
-  rawAgentId: unknown,
-  respond: RespondFn,
-  cfg: OpenClawConfig,
-) {
-  const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
-  const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
-  if (requestedAgentId && !knownAgents.includes(agentId)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-    );
-    return null;
-  }
-  return { cfg, agentId };
-}
-
 function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): string {
   const baseName = cmd.nativeName ?? cmd.key;
   if (!provider || !cmd.nativeName) {
@@ -90,6 +74,7 @@ function stripLeadingSlash(value: string): string {
   return value.startsWith("/") ? value.slice(1) : value;
 }
 
+/** Resolves normalized text aliases, preserving slash-prefixed command names. */
 function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
   const seen = new Set<string>();
   const aliases: string[] = [];
@@ -118,6 +103,7 @@ function resolvePrimaryTextName(cmd: ChatCommandDefinition): string {
   return stripLeadingSlash(resolveTextAliases(cmd)[0] ?? `/${cmd.key}`);
 }
 
+/** Serializes a command argument into the bounded gateway protocol shape. */
 function serializeArg(arg: CommandArgDefinition): SerializedArg {
   const isDynamic = typeof arg.choices === "function";
   const staticChoices = Array.isArray(arg.choices)
@@ -174,29 +160,34 @@ function mapCommand(
   };
 }
 
+/** Builds plugin command entries from text specs plus provider-native metadata. */
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
   cfg: OpenClawConfig;
 }): CommandEntry[] {
-  const pluginTextSpecs = listPluginCommands();
-  const pluginNativeSpecs = getPluginCommandSpecs(params.provider, { config: params.cfg });
+  const gatewayRegistry = getActivePluginGatewayCommandRegistry();
+  const pluginSpecs = gatewayRegistry
+    ? getPluginCommandEntrySpecsFromRegistrations(gatewayRegistry.commands, params.provider, {
+        config: params.cfg,
+      })
+    : getPluginCommandEntrySpecs(params.provider, { config: params.cfg });
   const entries: CommandEntry[] = [];
 
-  for (const [index, textSpec] of pluginTextSpecs.entries()) {
-    const nativeSpec = pluginNativeSpecs[index];
-    const nativeName = nativeSpec?.name;
+  for (const spec of pluginSpecs) {
     entries.push({
       name: clampString(
-        params.nameSurface === "text" ? textSpec.name : (nativeName ?? textSpec.name),
+        params.nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
         COMMAND_NAME_MAX_LENGTH,
       ),
-      ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
-      textAliases: [`/${clampString(textSpec.name, COMMAND_NAME_MAX_LENGTH)}`],
-      description: clampDescription(textSpec.description),
+      ...(spec.nativeName
+        ? { nativeName: clampString(spec.nativeName, COMMAND_NAME_MAX_LENGTH) }
+        : {}),
+      textAliases: [`/${clampString(spec.name, COMMAND_NAME_MAX_LENGTH)}`],
+      description: clampDescription(spec.description),
       source: "plugin",
       scope: "both",
-      acceptsArgs: textSpec.acceptsArgs,
+      acceptsArgs: spec.acceptsArgs,
     });
   }
 
@@ -206,6 +197,7 @@ function buildPluginCommandEntries(params: {
   return entries;
 }
 
+/** Builds the public commands.list payload for an agent/provider/scope view. */
 export function buildCommandsListResult(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -244,6 +236,7 @@ export function buildCommandsListResult(params: {
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }
 
+/** Gateway handler for enumerating available chat/native commands. */
 export const commandsHandlers: GatewayRequestHandlers = {
   "commands.list": ({ params, respond, context }) => {
     if (!validateCommandsListParams(params)) {
@@ -257,11 +250,12 @@ export const commandsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(
-      params.agentId,
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: params.agentId,
       respond,
-      context.getRuntimeConfig(),
-    );
+      cfg: context.getRuntimeConfig(),
+      normalize: (rawAgentId) => (typeof rawAgentId === "string" ? rawAgentId.trim() : undefined),
+    });
     if (!resolved) {
       return;
     }

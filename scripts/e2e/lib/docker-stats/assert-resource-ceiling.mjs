@@ -47,10 +47,10 @@ function parseCpuPercent(raw) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function assertSampleValue(value, raw, name, label) {
+function assertSampleValue(value, raw, name, labelLocal) {
   if (value === undefined) {
     throw new Error(
-      `docker stats sample for ${label} had invalid ${name}: ${JSON.stringify(raw)}`,
+      `docker stats sample for ${labelLocal} had invalid ${name}: ${JSON.stringify(raw)}`,
     );
   }
 }

@@ -138,7 +138,7 @@ export function createFeishuBotMenuHandler(params: {
           }
           return await handleLegacyMenu();
         })
-        .catch(async (err) => {
+        .catch(async (err: unknown) => {
           if (isFeishuRetryableSyntheticEventError(err)) {
             await forgetProcessedFeishuMessage(syntheticMessageId, accountId, log);
           } else {
@@ -150,7 +150,7 @@ export function createFeishuBotMenuHandler(params: {
           releaseFeishuMessageProcessing(syntheticMessageId, accountId);
         });
       if (fireAndForget) {
-        promise.catch((err) => {
+        promise.catch((err: unknown) => {
           error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
         });
         return;

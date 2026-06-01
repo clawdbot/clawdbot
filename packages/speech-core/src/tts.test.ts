@@ -1169,14 +1169,14 @@ describe("speech-core native voice-note routing", () => {
   });
 
   it("passes directive overrides to telephony synthesis providers", async () => {
-    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+    const synthesizeTelephonyMock = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
       audioBuffer: Buffer.from("voice"),
       outputFormat: "pcm",
-      sampleRate: 24000,
+      sampleRate: 24_000,
     }));
     installSpeechProviders([
       createMockSpeechProvider("mock", {
-        synthesizeTelephony,
+        synthesizeTelephony: synthesizeTelephonyMock,
       }),
     ]);
 
@@ -1200,6 +1200,7 @@ describe("speech-core native voice-note routing", () => {
         providerOverrides: {
           mock: {
             speakerVoice: "directed-voice",
+            speed: 1.5,
           },
         },
       },
@@ -1208,12 +1209,15 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     expect(result.providerModel).toBe("telephony-model");
     expect(result.providerVoice).toBe("directed-voice");
-    expect(synthesizeTelephony).toHaveBeenCalledOnce();
+    expect(synthesizeTelephonyMock).toHaveBeenCalledOnce();
     const telephonyRequest = requireRecord(
-      requireFirstCallParam(synthesizeTelephony.mock.calls, "telephony synthesis"),
+      requireFirstCallParam(synthesizeTelephonyMock.mock.calls, "telephony synthesis"),
       "telephony synthesis request",
     );
-    expect(telephonyRequest.providerOverrides).toEqual({ speakerVoice: "directed-voice" });
+    expect(telephonyRequest.providerOverrides).toEqual({
+      speakerVoice: "directed-voice",
+      speed: 1.5,
+    });
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {

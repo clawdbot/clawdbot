@@ -555,7 +555,7 @@ async function scanMemoryFiles(
     }
   }
 
-  let dirReadable: boolean | null = null;
+  let dirReadable: boolean | null;
   try {
     await fs.access(memoryDir, fsSync.constants.R_OK);
     dirReadable = true;
@@ -587,7 +587,7 @@ async function scanMemoryFiles(
     }
   }
 
-  let totalFiles: number | null = 0;
+  let totalFiles: number | null;
   if (dirReadable === null) {
     totalFiles = null;
   } else {

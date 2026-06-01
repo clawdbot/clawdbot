@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Settings health screen for gateway/node status and recent gateway logs. */
 @Composable
 internal fun HealthLogsSettingsScreen(
   viewModel: MainViewModel,
@@ -45,6 +46,8 @@ internal fun HealthLogsSettingsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Load logs when the gateway becomes available; manual refresh covers
+      // later updates so this screen does not poll.
       viewModel.refreshHealthLogs()
     }
   }
@@ -202,6 +205,8 @@ private fun GatewayLogRow(entry: GatewayLogEntry) {
 private fun compactLogTime(value: String?): String {
   val raw = value?.trim().orEmpty()
   if (raw.isEmpty()) return "--:--"
+  // Gateway log timestamps may be ISO strings or already-compact fragments;
+  // keep only the HH:mm portion when present.
   val time =
     raw
       .substringAfter('T', raw)

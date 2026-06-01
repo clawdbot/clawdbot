@@ -114,7 +114,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
 
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(fake.client.addNotificationHandler).not.toHaveBeenCalled();
+    expect(fake.client["addNotificationHandler"]).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(false);
     expect(result.result?.tokensBefore).toBe(123);

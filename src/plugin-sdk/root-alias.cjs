@@ -11,6 +11,38 @@ const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const privateQaExcludedPluginSdkSubpaths = new Set(["ssrf-runtime-internal"]);
+const workspacePackageAliases = [
+  {
+    name: "@openclaw/llm-core",
+    subpath: "",
+    srcFile: "src/index.ts",
+    distFile: "dist/index.mjs",
+  },
+  {
+    name: "@openclaw/llm-core",
+    subpath: "diagnostics",
+    srcFile: "src/utils/diagnostics.ts",
+    distFile: "dist/utils/diagnostics.mjs",
+  },
+  {
+    name: "@openclaw/llm-core",
+    subpath: "event-stream",
+    srcFile: "src/utils/event-stream.ts",
+    distFile: "dist/utils/event-stream.mjs",
+  },
+  {
+    name: "@openclaw/llm-core",
+    subpath: "types",
+    srcFile: "src/types.ts",
+    distFile: "dist/types.mjs",
+  },
+  {
+    name: "@openclaw/llm-core",
+    subpath: "validation",
+    srcFile: "src/validation.ts",
+    distFile: "dist/validation.mjs",
+  },
+];
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
@@ -240,7 +272,7 @@ function listPluginSdkExportedSubpaths() {
     return pluginSdkSubpathsCache.get(cacheKey);
   }
 
-  let subpaths = [];
+  let subpaths;
   try {
     const packageJsonPath = path.join(packageRoot, "package.json");
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
@@ -314,6 +346,30 @@ function buildPluginSdkAliasMap(useDist) {
         aliasMap[`${packageName}/${subpath}`] = normalizeTarget(candidate);
       }
       break;
+    }
+  }
+
+  // Agent-core intentionally imports @openclaw/llm-core by package name so built
+  // package entrypoints share constructor identity. In source-checkout live
+  // tests, keep that package specifier on the same source graph instead of
+  // falling through to pnpm's package export and requiring a prebuilt dist.
+  for (const entry of workspacePackageAliases) {
+    const alias = entry.subpath ? `${entry.name}/${entry.subpath}` : entry.name;
+    const preferred = path.join(
+      packageRoot,
+      "packages",
+      "llm-core",
+      useDist ? entry.distFile : entry.srcFile,
+    );
+    const fallback = path.join(
+      packageRoot,
+      "packages",
+      "llm-core",
+      useDist ? entry.srcFile : entry.distFile,
+    );
+    const target = fs.existsSync(preferred) ? preferred : fs.existsSync(fallback) ? fallback : null;
+    if (target) {
+      aliasMap[alias] = normalizeTarget(target);
     }
   }
 

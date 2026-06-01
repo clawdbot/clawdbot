@@ -1,4 +1,8 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import type {
+  ChannelThreadingContext,
+  ChannelThreadingToolContext,
+} from "openclaw/plugin-sdk/channel-contract";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -126,6 +130,29 @@ export const googlechatThreadingAdapter = {
     resolveReplyToMode: (account: ResolvedGoogleChatAccount, _chatType?: string | null) =>
       account.config.replyToMode,
     fallback: "off" as const,
+  },
+  buildToolContext: ({
+    cfg,
+    accountId,
+    context,
+    hasRepliedRef,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    context: ChannelThreadingContext;
+    hasRepliedRef?: { value: boolean };
+  }): ChannelThreadingToolContext => {
+    const currentChannelId = normalizeGoogleChatTarget(context.To);
+    const replyToId =
+      normalizeOptionalString(context.ReplyToIdFull) ?? normalizeOptionalString(context.ReplyToId);
+
+    return {
+      currentChannelId,
+      currentMessageId: replyToId,
+      currentThreadTs: replyToId,
+      replyToMode: resolveGoogleChatAccount({ cfg, accountId }).config.replyToMode,
+      hasRepliedRef,
+    };
   },
 };
 
@@ -260,13 +287,13 @@ export const googlechatOutboundAdapter = {
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
+        resolveChannelLimitMb: ({ cfg: cfgLocal, accountId: accountIdLocal }) =>
           (
-            cfg.channels?.googlechat as
+            cfgLocal.channels?.googlechat as
               | { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number }
               | undefined
-          )?.accounts?.[accountId]?.mediaMaxMb ??
-          (cfg.channels?.googlechat as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
+          )?.accounts?.[accountIdLocal]?.mediaMaxMb ??
+          (cfgLocal.channels?.googlechat as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
       const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;

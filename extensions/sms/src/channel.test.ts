@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedSmsAccount } from "./types.js";
 
 type ChannelModule = typeof import("./channel.js");
 
@@ -27,9 +28,49 @@ afterEach(() => {
   vi.doUnmock("./twilio.js");
 });
 
+describe("smsPlugin status", () => {
+  it("builds a status snapshot for configured SMS accounts", async () => {
+    const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
+      cfg: {},
+      account: {
+        accountId: "support",
+        enabled: true,
+        accountSid: "AC123",
+        authToken: "secret",
+        fromNumber: "+15557654321",
+        messagingServiceSid: "",
+        defaultTo: "",
+        webhookPath: "/webhooks/sms",
+        publicWebhookUrl: "",
+        dangerouslyDisableSignatureValidation: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+        textChunkLimit: 1500,
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "support",
+      name: "+15557654321",
+      enabled: true,
+      configured: true,
+      statusState: "configured",
+      running: false,
+      webhookPath: "/webhooks/sms",
+    });
+    expect(snapshot).not.toHaveProperty("connected");
+  });
+});
+
 describe("smsPlugin outbound", () => {
   it("declares an active text chunker and account-aware chunk limit", () => {
     expect(smsPlugin.configSchema).toBeDefined();
+    expect(smsPlugin.status?.probeAccount).toBeDefined();
+    expect(smsPlugin.status?.formatCapabilitiesProbe).toBeDefined();
+    expect(smsPlugin.secrets?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+      "channels.sms.accounts.*.authToken",
+      "channels.sms.authToken",
+    ]);
     expect(smsPlugin.messaging?.targetPrefixes).toEqual(["twilio-sms"]);
     expect(smsPlugin.outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
     expect(
@@ -114,5 +155,34 @@ describe("smsPlugin outbound", () => {
         to: "",
       }),
     ).toEqual({ ok: true, to: "+15551234567" });
+  });
+
+  it("preserves inspected account status fields", async () => {
+    const cfg = {
+      channels: {
+        sms: {
+          accountSid: "AC123",
+          authToken: "secret",
+          fromNumber: "+15557654321",
+          webhookPath: "/twilio/sms",
+        },
+      },
+    };
+    const account = smsPlugin.config.inspectAccount?.(cfg);
+    expect(account).toBeDefined();
+
+    const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
+      account: account as ResolvedSmsAccount,
+      cfg,
+    });
+
+    expect(snapshot).toMatchObject({
+      configured: true,
+      enabled: true,
+      statusState: "configured",
+      tokenStatus: "available",
+      webhookPath: "/twilio/sms",
+    });
+    expect(snapshot).not.toHaveProperty("connected");
   });
 });

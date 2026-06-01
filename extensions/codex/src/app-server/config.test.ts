@@ -653,6 +653,59 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
   });
 
+  it("accepts native plugin identities from every first-party OpenAI marketplace", () => {
+    // OpenAI ships first-party Codex plugins across three marketplaces: the local
+    // openai-bundled marketplace shipped with Codex.app (chrome, browser, computer-use,
+    // latex-tectonic), the remote openai-curated marketplace, and the
+    // openai-primary-runtime marketplace owned by the Codex primary runtime
+    // (documents, spreadsheets, presentations). All three should resolve.
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          chrome: {
+            marketplaceName: "openai-bundled",
+            pluginName: "chrome",
+          },
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          documents: {
+            marketplaceName: "openai-primary-runtime",
+            pluginName: "documents",
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins?.enabled).toBe(true);
+    const policy = resolveCodexPluginsPolicy(config);
+    expect(policy.pluginPolicies).toEqual([
+      {
+        configKey: "chrome",
+        marketplaceName: "openai-bundled",
+        pluginName: "chrome",
+        enabled: true,
+        allowDestructiveActions: true,
+      },
+      {
+        configKey: "documents",
+        marketplaceName: "openai-primary-runtime",
+        pluginName: "documents",
+        enabled: true,
+        allowDestructiveActions: true,
+      },
+      {
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+        enabled: true,
+        allowDestructiveActions: true,
+      },
+    ]);
+  });
+
   it("treats configured and environment commands as explicit overrides", () => {
     expectFields(
       resolveRuntimeForTest({

@@ -7,7 +7,11 @@ import {
   sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
-import { classifyFailoverReason, formatAssistantErrorText } from "./embedded-agent-helpers.js";
+import {
+  classifyFailoverReason,
+  formatUserFacingAssistantErrorText,
+  GENERIC_ASSISTANT_ERROR_TEXT,
+} from "./embedded-agent-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn.js";
 import {
@@ -72,24 +76,23 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     ctx.state.livenessState === "working" ? derivedWorkingTerminalState : ctx.state.livenessState;
 
   if (isError && lastAssistant) {
-    const friendlyError = formatAssistantErrorText(lastAssistant, {
+    const rawError = lastAssistant.errorMessage?.trim();
+    const failoverReason = classifyFailoverReason(rawError ?? "", {
+      provider: lastAssistant.provider,
+    });
+    const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
     });
-    const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyFailoverReason(rawError ?? "", {
-      provider: lastAssistant.provider,
-    });
-    const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {
         provider: lastAssistant.provider,
-      }).textPreview ?? "LLM request failed.";
+      }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
     lifecycleErrorText = safeErrorText;
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
@@ -131,7 +134,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
         stream: "lifecycle",
         data: {
           phase: "error",
-          error: lifecycleErrorText ?? "LLM request failed.",
+          error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
           ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
@@ -142,7 +145,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
         stream: "lifecycle",
         data: {
           phase: "error",
-          error: lifecycleErrorText ?? "LLM request failed.",
+          error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
           ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
@@ -228,7 +231,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     }
     if (isPromiseLike<void>(beforeLifecycleTerminal)) {
       return Promise.resolve(beforeLifecycleTerminal)
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
         })
         .then(() => {
@@ -248,7 +251,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
       return Promise.resolve(flushPendingMediaAndChannelResult).then(
         () => emitLifecycleTerminalOnce(),
-        (error) => {
+        (error: unknown) => {
           const emitted = emitLifecycleTerminalOnce();
           if (isPromiseLike<void>(emitted)) {
             return Promise.resolve(emitted).then(() => {

@@ -27,19 +27,19 @@ import { readSkillFrontmatterSafe } from "./local-loader.js";
 import { loadWorkspaceSkillEntries } from "./workspace.js";
 
 vi.mock("../../plugins/manifest-registry.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs");
+  const pathLocal = await import("node:path");
   return {
     loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
-      const extensionsRoot = path.join(params.workspaceDir ?? "", ".openclaw", "extensions");
+      const extensionsRoot = pathLocal.join(params.workspaceDir ?? "", ".openclaw", "extensions");
       const plugins = [];
       for (const id of ["open-prose", "browser"]) {
-        const rootDir = path.join(extensionsRoot, id);
-        const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-        if (!fs.existsSync(manifestPath)) {
+        const rootDir = pathLocal.join(extensionsRoot, id);
+        const manifestPath = pathLocal.join(rootDir, "openclaw.plugin.json");
+        if (!fsLocal.existsSync(manifestPath)) {
           continue;
         }
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        const manifest = JSON.parse(fsLocal.readFileSync(manifestPath, "utf8")) as {
           enabledByDefault?: boolean;
           skills?: string[];
         };

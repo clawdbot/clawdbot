@@ -88,7 +88,7 @@ function buildParams(
   options: GoogleOptions = {},
 ): GenerateContentParameters {
   return buildGoogleGenerateContentParams(model, context, options, {
-    getDisabledThinkingConfig: (model) =>
-      getDisabledGoogleThinkingConfig(model, { includeGemma4: true }),
+    getDisabledThinkingConfig: (modelLocal) =>
+      getDisabledGoogleThinkingConfig(modelLocal, { includeGemma4: true }),
   });
 }

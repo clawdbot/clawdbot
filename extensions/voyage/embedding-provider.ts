@@ -67,11 +67,11 @@ export async function createVoyageEmbeddingProvider(
       id: "voyage",
       model: client.model,
       maxInputTokens: VOYAGE_MAX_INPUT_TOKENS[client.model],
-      embedQuery: async (text, options) => {
-        const [vec] = await embed([text], "query", options?.signal);
+      embedQuery: async (text, optionsValue) => {
+        const [vec] = await embed([text], "query", optionsValue?.signal);
         return vec ?? [];
       },
-      embedBatch: async (texts, options) => embed(texts, "document", options?.signal),
+      embedBatch: async (texts, optionsLocal) => embed(texts, "document", optionsLocal?.signal),
     },
     client,
   };

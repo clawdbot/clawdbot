@@ -43,7 +43,7 @@ export function bumpSkillsSnapshotVersion(params?: {
   const reason = params?.reason ?? "manual";
   const changedPath = params?.changedPath;
   if (params?.workspaceDir) {
-    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
+    const current = Math.max(globalVersion, workspaceVersions.get(params.workspaceDir) ?? 0);
     const next = bumpVersion(current);
     workspaceVersions.set(params.workspaceDir, next);
     emit({ workspaceDir: params.workspaceDir, reason, changedPath });
@@ -60,6 +60,16 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   }
   const local = workspaceVersions.get(workspaceDir) ?? 0;
   return Math.max(globalVersion, local);
+}
+
+export function clearSkillsSnapshotVersionForWorkspace(workspaceDir: string): void {
+  const local = workspaceVersions.get(workspaceDir);
+  if (typeof local === "number" && local > globalVersion) {
+    // Keep pending workspace invalidation visible after dropping the workspace
+    // key; otherwise teardown can hide a skill change from cached snapshots.
+    globalVersion = local;
+  }
+  workspaceVersions.delete(workspaceDir);
 }
 
 export function shouldRefreshSnapshotForVersion(

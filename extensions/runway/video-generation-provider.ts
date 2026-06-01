@@ -310,9 +310,6 @@ async function pollRunwayTask(params: {
           readRunwayFailureMessage(payload.failure) ||
             `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
         );
-      case "PENDING":
-      case "RUNNING":
-      case "THROTTLED":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;

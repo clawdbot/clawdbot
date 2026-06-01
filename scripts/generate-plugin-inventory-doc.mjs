@@ -167,9 +167,6 @@ function resolveDescription({ manifest, packageJson }) {
 
   const providers = Array.isArray(manifest.providers) ? manifest.providers : [];
   if (providers.length > 0) {
-    if (manifest.providerAuthAliases?.["openai-codex"] === "openai") {
-      return `Adds ${displayList(providers)} model provider support to OpenClaw, including ChatGPT/Codex OAuth.`;
-    }
     return `Adds ${displayList(providers)} model provider support to OpenClaw.`;
   }
 

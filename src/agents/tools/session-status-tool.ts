@@ -1,3 +1,4 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type {
@@ -29,6 +30,15 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildModelAliasIndex,
@@ -190,6 +200,140 @@ function listImplicitDefaultDirectFallbackKeys(params: {
 
 type ActiveStatusModelIdentity = { provider?: string; model: string };
 
+type SessionStatusOriginDetails = {
+  provider?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type SessionStatusDeliveryContextDetails = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type SessionStatusRouteDetails = {
+  origin?: SessionStatusOriginDetails;
+  active?: SessionStatusDeliveryContextDetails;
+  deliveryContext?: SessionStatusDeliveryContextDetails;
+};
+
+const INTERNAL_SESSION_KEY_ORIGIN_PREFIXES = new Set(["main", "cron", "subagent", "acp"]);
+
+function readRouteThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return undefined;
+}
+
+function compactOriginDetails(params: {
+  provider?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): SessionStatusOriginDetails | undefined {
+  const threadId = readRouteThreadId(params.threadId);
+  const details: SessionStatusOriginDetails = {
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+  return Object.keys(details).length ? details : undefined;
+}
+
+function compactDeliveryContextDetails(params: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): SessionStatusDeliveryContextDetails | undefined {
+  const threadId = readRouteThreadId(params.threadId);
+  const details: SessionStatusDeliveryContextDetails = {
+    ...(params.channel ? { channel: params.channel } : {}),
+    ...(params.to ? { to: params.to } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+  return Object.keys(details).length ? details : undefined;
+}
+
+function normalizeStatusDeliveryContext(
+  context?: DeliveryContext,
+): SessionStatusDeliveryContextDetails | undefined {
+  return compactDeliveryContextDetails({
+    channel: readStringValue(context?.channel),
+    to: readStringValue(context?.to),
+    accountId: readStringValue(context?.accountId),
+    threadId: context?.threadId,
+  });
+}
+
+function normalizeActiveDeliveryContext(
+  context?: DeliveryContext,
+): SessionStatusDeliveryContextDetails | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const normalized = normalizeDeliveryContext(context);
+  const rawChannel = readStringValue(normalized?.channel) ?? readStringValue(context.channel);
+  const channel = rawChannel ? (normalizeMessageChannel(rawChannel) ?? rawChannel) : undefined;
+  return compactDeliveryContextDetails({
+    channel,
+    to: readStringValue(normalized?.to) ?? readStringValue(context.to),
+    accountId: readStringValue(normalized?.accountId) ?? readStringValue(context.accountId),
+    threadId: normalized?.threadId ?? context.threadId,
+  });
+}
+
+function inferOriginProviderFromSessionKey(sessionKey: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const head = readStringValue(parsed?.rest.split(":")[0]);
+  if (!head || INTERNAL_SESSION_KEY_ORIGIN_PREFIXES.has(head.toLowerCase())) {
+    return undefined;
+  }
+  const channel = normalizeMessageChannel(head);
+  return channel && isDeliverableMessageChannel(channel) ? channel : undefined;
+}
+
+function buildSessionStatusRouteDetails(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  activeDeliveryContext?: DeliveryContext;
+  isLiveRunSession?: boolean;
+}): SessionStatusRouteDetails {
+  const origin = compactOriginDetails({
+    provider:
+      readStringValue(params.entry.origin?.provider) ??
+      inferOriginProviderFromSessionKey(params.sessionKey),
+    accountId: readStringValue(params.entry.origin?.accountId),
+    threadId: params.entry.origin?.threadId,
+  });
+  const deliveryContext = normalizeStatusDeliveryContext(deliveryContextFromSession(params.entry));
+  const active = params.isLiveRunSession
+    ? normalizeActiveDeliveryContext(params.activeDeliveryContext)
+    : undefined;
+
+  return {
+    ...(origin ? { origin } : {}),
+    ...(active ? { active } : {}),
+    ...(deliveryContext ? { deliveryContext } : {}),
+  };
+}
+
+function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): string | undefined {
+  if (Object.keys(details).length === 0) {
+    return undefined;
+  }
+  return `Route context:
+\`\`\`json
+${JSON.stringify(details, null, 2)}
+\`\`\``;
+}
+
 function resolveActiveStatusModelIdentity(params: {
   activeModelId?: string;
   activeModelProvider?: string;
@@ -348,6 +492,8 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  /** Active live-run route, kept separate from the persisted/origin delivery route. */
+  activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -673,17 +819,18 @@ export function createSessionStatusTool(opts?: {
       const activeModelId = opts?.activeModelId?.trim();
       const activeModelProvider = opts?.activeModelProvider?.trim();
       const isImplicitCurrentRequest = requestedKeyParam === undefined;
+      const liveSessionKeys = [
+        opts?.runSessionKey,
+        storeScopedRequesterKey,
+        effectiveRequesterKey,
+        visibilityRequesterKey,
+      ];
       const activeModelIdentity = resolveActiveStatusModelIdentity({
         activeModelId,
         activeModelProvider,
         isImplicitCurrentRequest,
         isSemanticCurrentRequest,
-        liveSessionKeys: [
-          opts?.runSessionKey,
-          storeScopedRequesterKey,
-          effectiveRequesterKey,
-          visibilityRequesterKey,
-        ],
+        liveSessionKeys,
         modelRaw,
         resolvedKey: resolved.key,
       });
@@ -767,6 +914,27 @@ export function createSessionStatusTool(opts?: {
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
       const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
       const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
+      const liveSessionKeySet = new Set(
+        liveSessionKeys
+          .map((value) => value?.trim())
+          .filter((value): value is string => Boolean(value)),
+      );
+      const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+      const isLiveRouteSession = activeRouteRunSessionKey
+        ? resolved.key.trim() === activeRouteRunSessionKey
+        : liveSessionKeySet.has(resolved.key.trim());
+      const routeDetails = buildSessionStatusRouteDetails({
+        entry: statusSessionEntry,
+        sessionKey: resolved.key,
+        activeDeliveryContext: opts?.activeDeliveryContext,
+        isLiveRunSession: isLiveRouteSession,
+      });
+      const routeContextText = formatSessionStatusRouteContext(routeDetails);
+      const visibleStatusText = routeContextText
+        ? `${fullStatusText}
+
+${routeContextText}`
+        : fullStatusText;
       const modelOverrideForResult =
         modelRaw === undefined
           ? undefined
@@ -777,7 +945,7 @@ export function createSessionStatusTool(opts?: {
             : null;
 
       return {
-        content: [{ type: "text", text: fullStatusText }],
+        content: [{ type: "text", text: visibleStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
@@ -791,7 +959,8 @@ export function createSessionStatusTool(opts?: {
                 modelOverride: modelOverrideForResult,
               }
             : {}),
-          statusText: fullStatusText,
+          statusText: visibleStatusText,
+          ...routeDetails,
         },
       };
     },

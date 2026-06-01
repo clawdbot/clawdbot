@@ -194,8 +194,12 @@ async function withMockChromeCdpServer(params: {
     const addr = server.address() as AddressInfo;
     await params.run(`http://127.0.0.1:${addr.port}`);
   } finally {
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
@@ -952,9 +956,13 @@ describe("chrome.ts internal", () => {
     it("resolves false when the direct-ws probe cannot connect", async () => {
       // Bind a ws server and then close it, so connecting to it fails.
       const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
       await expect(
         isChromeReachable(`ws://127.0.0.1:${port}/devtools/browser/GONE`, 50),
       ).resolves.toBe(false);
@@ -962,7 +970,9 @@ describe("chrome.ts internal", () => {
 
     it("resolves true when the direct-ws handshake succeeds", async () => {
       const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
       try {
         // Direct /devtools/ WS URL — isChromeReachable goes through
@@ -972,7 +982,9 @@ describe("chrome.ts internal", () => {
           isChromeReachable(`ws://127.0.0.1:${port}/devtools/browser/OK`, 500),
         ).resolves.toBe(true);
       } finally {
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
     });
   });
@@ -994,9 +1006,13 @@ describe("chrome.ts internal", () => {
       // accepting ws upgrades — the canRunCdpHealthCommand probe will
       // fire its 'error' handler during handshake.
       const dead = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => dead.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        dead.once("listening", () => resolve());
+      });
       const deadPort = (dead.address() as { port: number }).port;
-      await new Promise<void>((resolve) => dead.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        dead.close(() => resolve());
+      });
       const server = createServer((req, res) => {
         if (req.url === "/json/version") {
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -1009,14 +1025,18 @@ describe("chrome.ts internal", () => {
         }
         res.writeHead(404).end();
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
       try {
         const addr = server.address() as AddressInfo;
         await expect(isChromeCdpReady(`http://127.0.0.1:${addr.port}`, 50, 10)).resolves.toBe(
           false,
         );
       } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
     });
 

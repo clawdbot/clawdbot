@@ -88,6 +88,8 @@ const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
 export type MarkdownCodeBlockChrome = "copy" | "none";
 
@@ -102,9 +104,9 @@ type MarkdownRenderEnv = {
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
-// biome-ignore lint: readability — regex charset is inherently dense
-const CJK_RE =
-  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
+const CJK_RE = new RegExp(
+  "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
+);
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -196,6 +198,88 @@ function escapeHtml(value: string): string {
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
+}
+
+function normalizeMarkdownInput(markdownLocal: string): string {
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  if (!input) {
+    return "";
+  }
+  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+  const suffix = truncated.truncated
+    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    : "";
+  return `${truncated.text}${suffix}`.replace(/\r\n?/g, "\n");
+}
+
+function getFenceMarker(line: string): { marker: "`" | "~"; length: number } | null {
+  const match = FENCE_OPEN_RE.exec(stripFenceContainerPrefixes(line));
+  if (!match) {
+    return null;
+  }
+  const fence = match[1];
+  const marker = fence[0] as "`" | "~";
+  return { marker, length: fence.length };
+}
+
+function stripFenceContainerPrefixes(line: string): string {
+  let current = line;
+  for (let index = 0; index < 8; index += 1) {
+    const next = current.replace(FENCE_CONTAINER_PREFIX_RE, "");
+    if (next === current) {
+      return current;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function isFenceClose(line: string, fence: { marker: "`" | "~"; length: number }): boolean {
+  const trimmed = stripFenceContainerPrefixes(line).trimEnd();
+  const match = FENCE_OPEN_RE.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const marker = match[1][0];
+  if (marker !== fence.marker || match[1].length < fence.length) {
+    return false;
+  }
+  return trimmed.slice(match[0].length).trim() === "";
+}
+
+function findStableStreamingMarkdownBoundary(markdownLocal: string): number {
+  let boundary = 0;
+  let index = 0;
+  let openFence: { marker: "`" | "~"; length: number } | null = null;
+
+  while (index < markdownLocal.length) {
+    const nextLineBreak = markdownLocal.indexOf("\n", index);
+    const lineEnd = nextLineBreak === -1 ? markdownLocal.length : nextLineBreak + 1;
+    const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
+
+    if (openFence) {
+      if (isFenceClose(line, openFence)) {
+        openFence = null;
+        boundary = lineEnd;
+      }
+      index = lineEnd;
+      continue;
+    }
+
+    const openingFence = getFenceMarker(line);
+    if (openingFence) {
+      openFence = openingFence;
+      index = lineEnd;
+      continue;
+    }
+
+    if (line.trim() === "") {
+      boundary = lineEnd;
+    }
+    index = lineEnd;
+  }
+
+  return boundary;
 }
 
 for (const [language, definition, aliases] of [
@@ -610,11 +694,11 @@ md.renderer.rules.code_block = (tokens, idx, _options, env) => {
 };
 
 export function toSanitizedMarkdownHtml(
-  markdown: string,
+  markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
   if (!input) {
     return "";
   }
@@ -634,7 +718,7 @@ export function toSanitizedMarkdownHtml(
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    const html = toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, sanitized);
@@ -657,6 +741,37 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
-function renderEscapedPlainTextHtml(value: string): string {
+export function toEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+export function toStreamingPlainTextHtml(markdownLocal: string): string {
+  const input = normalizeMarkdownInput(markdownLocal);
+  if (!input) {
+    return "";
+  }
+  return toEscapedPlainTextHtml(input);
+}
+
+export function toStreamingMarkdownHtml(
+  markdownLocal: string,
+  options: MarkdownRenderOptions = {},
+): string {
+  const input = normalizeMarkdownInput(markdownLocal);
+  if (!input) {
+    return "";
+  }
+
+  const boundary = findStableStreamingMarkdownBoundary(input);
+  if (boundary <= 0) {
+    return toEscapedPlainTextHtml(input);
+  }
+
+  const stableMarkdown = input.slice(0, boundary);
+  const streamingTail = input.slice(boundary);
+  const stableHtml = toSanitizedMarkdownHtml(stableMarkdown, options);
+  if (!streamingTail.trim()) {
+    return stableHtml;
+  }
+  return `${stableHtml}${toEscapedPlainTextHtml(streamingTail)}`;
 }

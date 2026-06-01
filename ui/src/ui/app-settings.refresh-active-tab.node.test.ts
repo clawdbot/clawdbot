@@ -364,7 +364,7 @@ describe("refreshActiveTab", () => {
     const host = createHost();
     host.tab = "overview";
     const pendingReload = vi.fn();
-    host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+    host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
     setTab(host as never, "nodes");
 
@@ -382,7 +382,7 @@ describe("refreshActiveTab", () => {
   it("does not wait for secondary overview refreshes before resolving", async () => {
     const host = createHost();
     host.tab = "overview";
-    mocks.loadUsageMock.mockReturnValueOnce(new Promise<void>(() => undefined));
+    mocks.loadUsageMock.mockReturnValueOnce(new Promise<void>(() => {}));
 
     const refresh = refreshActiveTab(host as never);
     const outcome = await raceWithNextMacrotask(refresh);
@@ -518,7 +518,7 @@ describe("refreshActiveTab", () => {
   it("does not wait for cron runs before resolving the cron tab refresh", async () => {
     const host = createHost();
     host.tab = "cron";
-    mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<"ok">(() => undefined));
+    mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<"ok">(() => {}));
 
     const refresh = refreshActiveTab(host as never);
     const outcome = await raceWithNextMacrotask(refresh);

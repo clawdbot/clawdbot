@@ -366,7 +366,9 @@ describe("transcripts tool", () => {
 
     service.start();
     for (let i = 0; i < 20 && start.mock.calls.length === 0; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
     }
 
     expect(getTranscriptSourceProviderMock).toHaveBeenCalledWith(

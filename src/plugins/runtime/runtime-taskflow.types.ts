@@ -15,7 +15,11 @@ export type ManagedTaskFlowRecord = TaskFlowRecord & {
   controllerId: string;
 };
 
-export type ManagedTaskFlowMutationErrorCode = "not_found" | "not_managed" | "revision_conflict";
+export type ManagedTaskFlowMutationErrorCode =
+  | "not_found"
+  | "not_managed"
+  | "revision_conflict"
+  | "persist_failed";
 
 export type ManagedTaskFlowMutationResult =
   | {
@@ -27,6 +31,20 @@ export type ManagedTaskFlowMutationResult =
       code: ManagedTaskFlowMutationErrorCode;
       current?: TaskFlowRecord;
     };
+
+export type ManagedTaskFlowCreateParams = {
+  controllerId: string;
+  goal: string;
+  status?: ManagedTaskFlowRecord["status"];
+  notifyPolicy?: TaskNotifyPolicy;
+  currentStep?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+};
 
 export type BoundTaskFlowTaskRunResult =
   | {
@@ -52,19 +70,8 @@ export type BoundTaskFlowCancelResult = {
 export type BoundTaskFlowRuntime = {
   readonly sessionKey: string;
   readonly requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  createManaged: (params: {
-    controllerId: string;
-    goal: string;
-    status?: ManagedTaskFlowRecord["status"];
-    notifyPolicy?: TaskNotifyPolicy;
-    currentStep?: string | null;
-    stateJson?: JsonValue | null;
-    waitJson?: JsonValue | null;
-    cancelRequestedAt?: number | null;
-    createdAt?: number;
-    updatedAt?: number;
-    endedAt?: number | null;
-  }) => ManagedTaskFlowRecord;
+  createManaged: (params: ManagedTaskFlowCreateParams) => ManagedTaskFlowRecord;
+  tryCreateManaged: (params: ManagedTaskFlowCreateParams) => ManagedTaskFlowRecord | null;
   get: (flowId: string) => TaskFlowRecord | undefined;
   list: () => TaskFlowRecord[];
   findLatest: () => TaskFlowRecord | undefined;

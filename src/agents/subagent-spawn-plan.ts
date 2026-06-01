@@ -42,9 +42,11 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 export function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
+  requesterAgentConfig?: unknown;
   targetAgentConfig?: unknown;
   modelOverride?: string;
   thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
 }) {
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
@@ -54,8 +56,10 @@ export function resolveSubagentModelAndThinkingPlan(params: {
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,
+    requesterAgentConfig: params.requesterAgentConfig,
     targetAgentConfig: params.targetAgentConfig,
     thinkingOverrideRaw: params.thinkingOverrideRaw,
+    callerThinkingRaw: params.callerThinkingRaw,
   });
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(resolvedModel);

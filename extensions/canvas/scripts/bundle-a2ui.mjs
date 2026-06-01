@@ -222,7 +222,9 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main().catch((error) => {
-    fail(error instanceof Error ? error.message : String(error));
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      fail(error instanceof Error ? error.message : String(error));
+    },
+  );
 }

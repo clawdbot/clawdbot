@@ -11,7 +11,7 @@ export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.en
 
 export const COPILOT_SDK_FALLBACK_DIR = resolveCopilotSdkFallbackDir();
 
-export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.4";
+export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.9";
 
 let cached: Promise<typeof Sdk> | undefined;
 
@@ -30,7 +30,7 @@ export async function loadCopilotSdk(options: LoadCopilotSdkOptions = {}): Promi
 
   const promise = doLoad(options);
   if (useCache) {
-    cached = promise.catch((err) => {
+    cached = promise.catch((err: unknown) => {
       cached = undefined;
       throw err;
     });

@@ -346,7 +346,9 @@ async function emitAndCaptureLog(
 }
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function emitTrustedModelCallCompletedWithContent(
@@ -3297,24 +3299,26 @@ describe("diagnostics-otel service", () => {
       },
       {
         inputMessages: [
-        { role: "user", content: "what changed?", timestamp: 1 },
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } }],
-        },
-        { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
-      ],
+          { role: "user", content: "what changed?", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } },
+            ],
+          },
+          { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
+        ],
         outputMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "the trace changed" }],
-          stopReason: "stop",
-        },
-      ],
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "the trace changed" }],
+            stopReason: "stop",
+          },
+        ],
         systemPrompt: "be exact",
         toolDefinitions: [
-        { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
-      ],
+          { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
+        ],
       },
     );
     await flushDiagnosticEvents();

@@ -593,7 +593,7 @@ function readAnthropicSseChunk(
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -617,10 +617,12 @@ async function* parseAnthropicSseBody(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   try {
     while (true) {
       const { done, value } = await readAnthropicSseChunk(reader, signal);
       if (done) {
+        completed = true;
         break;
       }
       buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
@@ -651,6 +653,9 @@ async function* parseAnthropicSseBody(
       }
     }
   } finally {
+    if (!completed) {
+      await reader.cancel(signal?.reason).catch(() => undefined);
+    }
     reader.releaseLock();
   }
 }
@@ -1398,4 +1403,18 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     })();
     return eventStream as ReturnType<StreamFn>;
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

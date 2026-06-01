@@ -13,6 +13,7 @@ const loadDevicesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadHealthStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadNodesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const subscribeSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
+const syncUrlWithSessionKeyMock = vi.hoisted(() => vi.fn());
 const verifyPushMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayClientMock = {
@@ -22,6 +23,16 @@ type GatewayClientMock = {
 };
 
 const gatewayClients: GatewayClientMock[] = [];
+
+function createDeferred() {
+  let resolve: () => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<undefined>((res, rej) => {
+    resolve = () => res(undefined);
+    reject = rej;
+  });
+  return { promise, reject, resolve };
+}
 
 vi.mock("./gateway.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gateway.ts")>();
@@ -87,6 +98,7 @@ vi.mock("./app-settings.ts", () => ({
   loadCron: vi.fn(),
   refreshActiveTab: refreshActiveTabMock,
   setLastActiveSessionKey: vi.fn(),
+  syncUrlWithSessionKey: syncUrlWithSessionKeyMock,
 }));
 
 vi.mock("./controllers/agents.ts", () => ({
@@ -218,10 +230,142 @@ beforeEach(() => {
   loadHealthStateMock.mockClear();
   loadNodesMock.mockClear();
   subscribeSessionsMock.mockClear();
+  syncUrlWithSessionKeyMock.mockClear();
   verifyPushMock.mockClear();
 });
 
 describe("connectGateway chat load startup work", () => {
+  it("starts the active chat refresh before agents.list finishes", async () => {
+    const agentsList = createDeferred();
+    loadAgentsMock.mockReturnValueOnce(agentsList.promise);
+    const { host, client } = connectHost("chat");
+
+    client.emitHello();
+
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+
+    agentsList.resolve();
+    await agentsList.promise;
+    await Promise.resolve();
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts literal global chat refresh before agents.list when hello names the default agent", async () => {
+    const agentsList = createDeferred();
+    loadAgentsMock.mockReturnValueOnce(agentsList.promise);
+    const { host, client } = connectHost("chat");
+    host.sessionKey = "global";
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "ops",
+          mainKey: "main",
+          mainSessionKey: "agent:ops:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    });
+
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+
+    agentsList.resolve();
+    await agentsList.promise;
+    await Promise.resolve();
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for agents.list when a stale agent session may need fallback", async () => {
+    const agentsList = createDeferred();
+    const { host, client } = connectHost("chat");
+    loadAgentsMock.mockImplementationOnce(async () => {
+      await agentsList.promise;
+      host.agentsList = {
+        defaultId: "new-default",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "new-default" }],
+      };
+    });
+    host.sessionKey = "agent:old-default:main";
+    host.agentsList = {
+      defaultId: "old-default",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "old-default" }],
+    };
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "new-default",
+          mainKey: "main",
+          mainSessionKey: "agent:new-default:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    });
+
+    await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
+    expect(refreshActiveTabMock).not.toHaveBeenCalled();
+
+    agentsList.resolve();
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    expect(host.sessionKey).toBe("agent:new-default:main");
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for agents.list before refreshing selected-global chat", async () => {
+    const agentsList = createDeferred();
+    const { host, client } = connectHost("chat");
+    loadAgentsMock.mockImplementationOnce(async () => {
+      await agentsList.promise;
+      host.agentsList = {
+        defaultId: "new-default",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "new-default" }],
+      };
+    });
+    host.sessionKey = "global";
+    host.assistantAgentId = "old-default";
+    host.agentsList = {
+      defaultId: "old-default",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "old-default" }],
+    };
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "new-default",
+          mainKey: "main",
+          mainSessionKey: "agent:new-default:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    });
+
+    await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
+    expect(refreshActiveTabMock).not.toHaveBeenCalled();
+
+    agentsList.resolve();
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    expect(host.sessionKey).toBe("global");
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the active chat refresh own avatar loading on initial chat hello", async () => {
     const { host, client } = connectHost("chat");
 

@@ -39,6 +39,7 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   return { lastNewline, lastWhitespace };
 }
 
+/** Splits plain text at readable boundaries while avoiding breaks inside parentheses. */
 export function chunkText(text: string, limit: number): string[] {
   const early = resolveChunkEarlyReturn(text, limit);
   if (early) {

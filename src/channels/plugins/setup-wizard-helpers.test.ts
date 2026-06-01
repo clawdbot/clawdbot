@@ -641,7 +641,7 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       placeholder: "placeholder",
       parseEntries: (raw) =>
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg }) => cfg.channels?.imessage?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg: cfgValue }) => cfgValue.channels?.imessage?.allowFrom ?? [],
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["alice"]);
@@ -673,8 +673,8 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) => ({ entries: [raw.trim()] }),
-      getExistingAllowFrom: ({ cfg, accountId }) =>
-        cfg.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg: cfgLocal, accountId }) =>
+        cfgLocal.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
     });
 
     expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["+15555550124"]);

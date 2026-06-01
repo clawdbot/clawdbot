@@ -1,12 +1,9 @@
-import fsSync from "node:fs";
 import {
-  createLocalEmbeddingProvider,
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
   type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+} from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
@@ -66,22 +63,6 @@ function formatLocalSetupError(err: unknown): string {
     .join("\n");
 }
 
-function canAutoSelectLocal(modelPath?: string): boolean {
-  const trimmed = modelPath?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^(hf:|https?:)/i.test(trimmed)) {
-    return false;
-  }
-  const resolved = resolveUserPath(trimmed);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
-}
-
 const localAdapter: MemoryEmbeddingProviderAdapter = {
   id: "local",
   defaultModel: DEFAULT_LOCAL_MODEL,
@@ -90,6 +71,8 @@ const localAdapter: MemoryEmbeddingProviderAdapter = {
   formatSetupError: formatLocalSetupError,
   shouldContinueAutoSelection: () => true,
   create: async (options) => {
+    const { createLocalEmbeddingProvider } =
+      await import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
     const provider = await createLocalEmbeddingProvider({
       ...options,
       provider: "local",
@@ -166,5 +149,3 @@ export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Ar
       };
     });
 }
-
-export { canAutoSelectLocal };

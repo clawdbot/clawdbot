@@ -128,7 +128,7 @@ describe("plugin lifecycle resource sampler", () => {
       const dir = makeTempDir();
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
-      let descendantPid = 0;
+      let descendantPid;
 
       try {
         const result = spawnSync(
@@ -174,7 +174,7 @@ describe("plugin lifecycle resource sampler", () => {
     const dir = makeTempDir();
     const summary = path.join(dir, "summary.tsv");
     const pidFile = path.join(dir, "descendant.pid");
-    let descendantPid = 0;
+    let descendantPid;
 
     try {
       const result = spawnSync(

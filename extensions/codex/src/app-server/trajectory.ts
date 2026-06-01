@@ -335,8 +335,8 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
   }
   if (typeof value === "object") {
     const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value).slice(0, 100)) {
-      next[key] = sanitizeValue(child, depth + 1, key);
+    for (const [keyLocal, child] of Object.entries(value).slice(0, 100)) {
+      next[keyLocal] = sanitizeValue(child, depth + 1, keyLocal);
     }
     return next;
   }

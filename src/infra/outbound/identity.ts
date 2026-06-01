@@ -6,6 +6,7 @@ import type { OutboundIdentity } from "./identity-types.js";
 
 export type { OutboundIdentity } from "./identity-types.js";
 
+/** Trims outbound identity fields and drops empty identity payloads. */
 export function normalizeOutboundIdentity(
   identity?: OutboundIdentity | null,
 ): OutboundIdentity | undefined {
@@ -22,6 +23,7 @@ export function normalizeOutboundIdentity(
   return { name, avatarUrl, emoji, theme };
 }
 
+/** Resolves an agent's configured identity into channel-safe outbound metadata. */
 export function resolveAgentOutboundIdentity(
   cfg: OpenClawConfig,
   agentId: string,

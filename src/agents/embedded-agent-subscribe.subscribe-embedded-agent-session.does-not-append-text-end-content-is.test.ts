@@ -220,7 +220,9 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: "ok",
     });
     await Promise.resolve();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextEnd({ emit, content: "Checking: Fetched prices" });

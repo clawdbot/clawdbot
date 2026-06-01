@@ -14,8 +14,8 @@ describe("live transport CLI runtime", () => {
   it("tees stdout and stderr into an output artifact", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-output-"));
     tmpDirs.push(outputDir);
-    const originalStdoutWrite = process.stdout.write;
-    const originalStderrWrite = process.stderr.write;
+    const originalStdoutWrite = process.stdout["write"];
+    const originalStderrWrite = process.stderr["write"];
     process.stdout.write = (() => true) as typeof process.stdout.write;
     process.stderr.write = (() => true) as typeof process.stderr.write;
 
@@ -32,8 +32,8 @@ describe("live transport CLI runtime", () => {
       process.stderr.write = originalStderrWrite;
     }
 
-    expect(process.stdout.write).toBe(originalStdoutWrite);
-    expect(process.stderr.write).toBe(originalStderrWrite);
+    expect(process.stdout["write"]).toBe(originalStdoutWrite);
+    expect(process.stderr["write"]).toBe(originalStderrWrite);
     await expect(readFile(tee.outputPath, "utf8")).resolves.toContain("stdout marker\n");
     await expect(readFile(tee.outputPath, "utf8")).resolves.toContain("stderr marker\n");
   });
@@ -43,8 +43,8 @@ describe("live transport CLI runtime", () => {
     tmpDirs.push(outputDir);
     await rm(path.join(outputDir, "matrix-qa-output.log"), { recursive: true, force: true });
     await mkdir(path.join(outputDir, "matrix-qa-output.log"), { recursive: true });
-    const originalStdoutWrite = process.stdout.write;
-    const originalStderrWrite = process.stderr.write;
+    const originalStdoutWrite = process.stdout["write"];
+    const originalStderrWrite = process.stderr["write"];
     const mutedStdoutWrite = (() => true) as typeof process.stdout.write;
     const mutedStderrWrite = (() => true) as typeof process.stderr.write;
     process.stdout.write = mutedStdoutWrite;
@@ -65,8 +65,8 @@ describe("live transport CLI runtime", () => {
       expect(stopError).toBeInstanceOf(Error);
       expect((stopError as NodeJS.ErrnoException).code).toBe("EISDIR");
 
-      expect(process.stdout.write).toBe(mutedStdoutWrite);
-      expect(process.stderr.write).toBe(mutedStderrWrite);
+      expect(process.stdout["write"]).toBe(mutedStdoutWrite);
+      expect(process.stderr["write"]).toBe(mutedStderrWrite);
     } finally {
       process.stdout.write = originalStdoutWrite;
       process.stderr.write = originalStderrWrite;

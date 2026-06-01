@@ -28,7 +28,6 @@ let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
-let fallbackPngBuffer: Buffer;
 let fallbackPngFile = "";
 let fallbackPngCap = 0;
 let stateDirSnapshot: ReturnType<typeof captureEnv>;
@@ -75,7 +74,6 @@ beforeAll(async () => {
     const cap = Math.max(1, Math.min(buffer.length, smallestPng.optimizedSize) - 1);
     const jpegOptimized = await optimizeImageToJpeg(buffer, cap);
     if (jpegOptimized.buffer.length <= cap) {
-      fallbackPngBuffer = buffer;
       fallbackPngFile = await writeTempFile(buffer, ".png");
       fallbackPngCap = cap;
       break;

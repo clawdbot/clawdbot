@@ -29,12 +29,14 @@ private const val DEFAULT_PHOTOS_QUALITY = 0.85
 private const val MAX_TOTAL_BASE64_CHARS = 340 * 1024
 private const val MAX_PER_PHOTO_BASE64_CHARS = 300 * 1024
 
+/** Request shape for photos.latest after defaults and bounds are applied. */
 internal data class PhotosLatestRequest(
   val limit: Int,
   val maxWidth: Int,
   val quality: Double,
 )
 
+/** Encoded photo payload returned to the gateway. */
 internal data class EncodedPhotoPayload(
   val format: String,
   val base64: String,
@@ -43,6 +45,7 @@ internal data class EncodedPhotoPayload(
   val createdAt: String?,
 )
 
+/** Photo access seam for Android MediaStore and tests. */
 internal interface PhotosDataSource {
   fun hasPermission(context: Context): Boolean
 
@@ -53,6 +56,7 @@ internal interface PhotosDataSource {
 }
 
 private object SystemPhotosDataSource : PhotosDataSource {
+  /** Checks the API-specific image read permission used by MediaStore image access. */
   override fun hasPermission(context: Context): Boolean {
     val permission =
       if (Build.VERSION.SDK_INT >= 33) {
@@ -77,6 +81,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
       if (remainingBudget <= 0) break
       val bitmap = decodeScaledBitmap(resolver, row.uri, request.maxWidth) ?: continue
       try {
+        // Enforce both per-photo and total payload budgets before returning
+        // base64 data through the gateway invoke response.
         val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS)
         if (encoded == null) continue
         if (encoded.base64.length > remainingBudget) break
@@ -172,6 +178,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
       } ?: return null
 
     if (decoded.width <= maxWidth) return decoded
+    // Decode sampling is power-of-two only; finish with exact scaling when the
+    // sampled bitmap is still wider than the requested max width.
     val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
     return try {
       decoded.scale(maxWidth, targetHeight, true)
@@ -215,6 +223,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
           )
         }
         if (jpegQuality > 35) {
+          // Try quality reduction before resizing so small images keep detail.
           jpegQuality = max(25, jpegQuality - 15)
           return@repeat
         }
@@ -232,12 +241,14 @@ private object SystemPhotosDataSource : PhotosDataSource {
   }
 }
 
+/** Handles photos.latest by querying MediaStore and returning bounded JPEG payloads. */
 class PhotosHandler private constructor(
   private val appContext: Context,
   private val dataSource: PhotosDataSource,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemPhotosDataSource)
 
+  /** Returns the newest accessible photos as gateway-sized base64 JPEGs. */
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -300,6 +311,7 @@ class PhotosHandler private constructor(
     val maxWidthRaw = (params["maxWidth"] as? JsonPrimitive)?.content?.toIntOrNull()
     val qualityRaw = (params["quality"] as? JsonPrimitive)?.content?.toDoubleOrNull()
 
+    // Clamp model-supplied values to protect memory and response-size limits.
     val limit = (limitRaw ?: DEFAULT_PHOTOS_LIMIT).coerceIn(1, 20)
     val maxWidth = (maxWidthRaw ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096)
     val quality = (qualityRaw ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0)
@@ -307,6 +319,7 @@ class PhotosHandler private constructor(
   }
 
   companion object {
+    /** Creates a handler with an injected photo source for parser and payload tests. */
     internal fun forTesting(
       appContext: Context,
       dataSource: PhotosDataSource,

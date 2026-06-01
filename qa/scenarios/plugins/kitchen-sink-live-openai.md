@@ -95,9 +95,12 @@ execution:
       - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
       - context engine registration missing id
       - control UI descriptor registration requires id, surface, label, and valid optional fields
+      - hosted media resolver registration missing resolver
       - "http route registration missing or invalid auth: /kitchen-sink/http-route"
+      - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
       - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
       - memory prompt supplement registration missing builder
+      - model catalog provider registration missing provider
       - node invoke policy registration missing commands
       - session extension registration requires namespace and description
       - session scheduler job registration requires unique id, sessionKey, and kind

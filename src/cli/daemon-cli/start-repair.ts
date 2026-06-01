@@ -78,7 +78,7 @@ export async function repairLoadedGatewayServiceForStart(params: {
     environment,
   });
 
-  let loaded = true;
+  let loaded;
   try {
     loaded = await params.service.isLoaded({ env: installEnv });
   } catch {
@@ -87,7 +87,8 @@ export async function repairLoadedGatewayServiceForStart(params: {
 
   return {
     result: "started",
-    message: "Gateway service definition repaired and started.",
+    message:
+      "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
   };

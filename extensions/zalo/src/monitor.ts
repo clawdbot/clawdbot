@@ -282,12 +282,16 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
         runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5000);
+        });
       }
     }
 
     if (!isStopped() && !abortSignal.aborted) {
-      setImmediate(poll);
+      setImmediate(() => {
+        void poll();
+      });
     }
   };
 
@@ -451,7 +455,7 @@ async function authorizeZaloMessage(
       providerMissingFallbackApplied: senderAccess.providerMissingFallbackApplied,
       providerKey: "zalo",
       accountId: account.accountId,
-      log: (message) => logVerbose(core, runtime, message),
+      log: (messageValue) => logVerbose(core, runtime, messageValue),
     });
     if (!senderAccess.allowed) {
       if (senderAccess.reasonCode === "group_policy_disabled") {
@@ -486,12 +490,12 @@ async function authorizeZaloMessage(
         onCreated: () => {
           logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
         },
-        sendPairingReply: async (text) => {
+        sendPairingReply: async (textLocal) => {
           await sendMessage(
             token,
             {
               chat_id: chatId,
-              text,
+              text: textLocal,
             },
             fetcher,
           );
@@ -642,7 +646,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       },
       onStartError: (err: unknown) => {
         logTypingFailure({
-          log: (message) => logVerbose(core, runtime, message),
+          log: (messageLocal) => logVerbose(core, runtime, messageLocal),
           channel: "zalo",
           action: "start",
           target: chatId,

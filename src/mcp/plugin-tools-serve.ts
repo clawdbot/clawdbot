@@ -80,7 +80,7 @@ export async function servePluginToolsMcp(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  servePluginToolsMcp().catch((err) => {
+  servePluginToolsMcp().catch((err: unknown) => {
     process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

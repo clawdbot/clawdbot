@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -37,14 +34,6 @@ vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
 }));
 
 import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider.runtime.js";
-
-const registerOpenAIPluginForTest = async () =>
-  registerProviderPlugin({
-    plugin,
-    id: "openai",
-    name: "OpenAI Provider",
-  });
-
 async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
   const on = vi.fn();
   const providers: ProviderPlugin[] = [];

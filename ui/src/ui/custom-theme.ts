@@ -618,7 +618,7 @@ export function syncCustomThemeStyleTag(theme: ImportedCustomTheme | null | unde
     style?.remove();
     return;
   }
-  let cssText = "";
+  let cssText;
   try {
     cssText = buildCustomThemeStyles(theme);
   } catch {

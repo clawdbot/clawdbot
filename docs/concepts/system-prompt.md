@@ -208,7 +208,7 @@ because of the bootstrap file limits below.
 </Note>
 
 Large files are truncated with a marker. The max per-file size is controlled by
-`agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
+`agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
 (default: 60000). Missing files inject a short missing-file marker. When truncation
 occurs, OpenClaw can inject a concise system-prompt warning notice; control this with

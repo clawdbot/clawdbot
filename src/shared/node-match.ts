@@ -18,6 +18,7 @@ type ScoredNodeMatch = {
   selectionScore: number;
 };
 
+/** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
 export function normalizeNodeKey(value: string) {
   return normalizeLowercaseStringOrEmpty(value)
     .replace(/[^a-z0-9]+/g, "-")
@@ -63,6 +64,8 @@ function pickPreferredLegacyMigrationMatch(
   if (legacyCount === 0 || current.length + legacyCount !== matches.length) {
     return undefined;
   }
+  // During Clawdbot -> OpenClaw migration, a unique current client should win only
+  // when every other tie is a known legacy client for the same human-facing node.
   return current[0];
 }
 
@@ -121,6 +124,7 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
     .filter((entry): entry is ScoredNodeMatch => entry !== null);
 }
 
+/** Returns candidates matching a node id, remote ip, normalized display name, or long id prefix. */
 export function resolveNodeMatches(
   nodes: NodeMatchCandidate[],
   query: string,
@@ -128,6 +132,7 @@ export function resolveNodeMatches(
   return resolveScoredMatches(nodes, query).map((entry) => entry.node);
 }
 
+/** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
 export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
   const q = query.trim();
   if (!q) {

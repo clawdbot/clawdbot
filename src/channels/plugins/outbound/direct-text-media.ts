@@ -25,6 +25,18 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   text: string,
   opts: TOpts,
 ) => Promise<TResult>;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNumberField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
 export {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
@@ -50,9 +62,14 @@ export function createScopedChannelMediaMaxBytesResolver(channel: string) {
     resolveScopedChannelMediaMaxBytes({
       cfg: params.cfg,
       accountId: params.accountId,
-      resolveChannelLimitMb: ({ cfg, accountId }) =>
-        (cfg.channels?.[channel]?.accounts?.[accountId] as { mediaMaxMb?: number } | undefined)
-          ?.mediaMaxMb ?? cfg.channels?.[channel]?.mediaMaxMb,
+      resolveChannelLimitMb: ({ cfg, accountId }) => {
+        const channelConfig = asRecord(cfg.channels?.[channel]);
+        const accountConfig = asRecord(asRecord(channelConfig?.accounts)?.[accountId]);
+        return (
+          readNumberField(accountConfig, "mediaMaxMb") ??
+          readNumberField(channelConfig, "mediaMaxMb")
+        );
+      },
     });
 }
 

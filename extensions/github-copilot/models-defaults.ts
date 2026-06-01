@@ -14,6 +14,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_IDS = [
   "claude-opus-4.6",
   "claude-opus-4.7",
+  "claude-opus-4.8",
   "claude-sonnet-4.6",
   "gemini-2.5-pro",
   "gemini-3-flash",
@@ -47,6 +48,9 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(staticOverride?.thinkingLevelMap
+      ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
+      : {}),
     ...(compat ? { compat } : {}),
   };
 }

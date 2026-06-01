@@ -10,6 +10,7 @@ export type GatewayBindUrlResult =
     }
   | null;
 
+/** Resolves the externally advertised gateway URL for non-loopback bind modes. */
 export function resolveGatewayBindUrl(params: {
   bind?: string;
   customBindHost?: string;
@@ -43,5 +44,6 @@ export function resolveGatewayBindUrl(params: {
     return { error: "gateway.bind=lan set, but no private LAN IP was found." };
   }
 
+  // Loopback/default and unknown bind values do not need an advertised non-local URL.
   return null;
 }

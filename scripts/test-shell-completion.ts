@@ -217,7 +217,7 @@ async function main() {
   await installCompletion(status.shell, false, CLI_NAME);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(theme.error(`Error: ${String(err)}`));
   process.exit(1);
 });

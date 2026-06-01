@@ -258,7 +258,7 @@ async function resolveOAuthToken(params: {
 async function resolveProviderUsageAuthViaPlugin(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
-}): Promise<ProviderAuth | null> {
+}): Promise<{ handled: boolean; auth: ProviderAuth | null }> {
   const resolved = await resolveProviderUsageAuthWithPlugin({
     provider: params.provider,
     config: params.state.cfg,
@@ -290,13 +290,19 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       },
     },
   });
-  if (!resolved?.token) {
-    return null;
+  if (!resolved) {
+    return { handled: false, auth: null };
+  }
+  if ("handled" in resolved) {
+    return { handled: true, auth: null };
   }
   return {
-    provider: params.provider,
-    token: resolved.token,
-    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
+    handled: true,
+    auth: {
+      provider: params.provider,
+      token: resolved.token,
+      ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
+    },
   };
 }
 
@@ -392,8 +398,11 @@ export async function resolveProviderAuths(params: {
         state: authProfileSourceState,
         provider,
       });
-      if (pluginAuth) {
-        auths.push(pluginAuth);
+      if (pluginAuth.auth) {
+        auths.push(pluginAuth.auth);
+        continue;
+      }
+      if (pluginAuth.handled) {
         continue;
       }
       const fallbackAuth = await resolveProviderUsageAuthFallback({
@@ -442,8 +451,11 @@ export async function resolveProviderAuths(params: {
         state,
         provider,
       });
-      if (pluginAuth) {
-        auths.push(pluginAuth);
+      if (pluginAuth.auth) {
+        auths.push(pluginAuth.auth);
+        continue;
+      }
+      if (pluginAuth.handled) {
         continue;
       }
     }

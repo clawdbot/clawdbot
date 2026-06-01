@@ -97,7 +97,9 @@ async function waitForLocalListener(port: number, timeoutMs: number): Promise<vo
     if (await canConnectLocal(port)) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => {
+      setTimeout(r, 50);
+    });
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }

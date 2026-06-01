@@ -56,6 +56,9 @@ export const pluginSdkDocMetadata = {
   "channel-config-schema-legacy": {
     category: "channel",
   },
+  "chat-channel-ids": {
+    category: "channel",
+  },
   "channel-contract": {
     category: "channel",
   },

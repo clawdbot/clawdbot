@@ -380,8 +380,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       expect(out).toBe(input);
       expect(
-        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[1] as { id?: string })
-          .id,
+        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content[1] as { id?: string }).id,
       ).toBe("call_1");
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
     });

@@ -410,6 +410,16 @@
           "systemImage": "number",
           "markdownCapable": true
         },
+        "channelConfigs": {
+          "slack": {
+            "label": "Slack",
+            "description": "Slack channel, DM, command, and app event integration.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
         "install": {
           "npmSpec": "@openclaw/slack",
           "defaultChoice": "npm",

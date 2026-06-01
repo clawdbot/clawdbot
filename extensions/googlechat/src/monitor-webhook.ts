@@ -214,8 +214,8 @@ export function createGoogleChatWebhookRequestHandler(params: {
       inFlightLimiter: params.webhookInFlightLimiter,
       handle: async ({ targets }) => {
         const headerBearer = extractBearerToken(req.headers.authorization);
-        let selectedTarget: WebhookTarget | null = null;
-        let parsedEvent: GoogleChatEvent | null = null;
+        let selectedTarget: WebhookTarget | null;
+        let parsedEvent: GoogleChatEvent | null;
         const readAndParseEvent = async (
           profile: "pre-auth" | "post-auth",
         ): Promise<ParsedGoogleChatInboundSuccess | null> => {
@@ -287,7 +287,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
 
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
-        params.processEvent(parsedEvent, dispatchTarget).catch((err) => {
+        params.processEvent(parsedEvent, dispatchTarget).catch((err: unknown) => {
           dispatchTarget.runtime.error?.(
             `[${dispatchTarget.account.accountId}] Google Chat webhook failed: ${String(err)}`,
           );

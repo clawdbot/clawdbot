@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { MOCK_PNG_BASE64, MOCK_PNG_DATA_URL, toDataURL } = vi.hoisted(() => {
-  const MOCK_PNG_BASE64 = "ZmFrZXBuZw==";
-  const MOCK_PNG_DATA_URL = `data:image/png;base64,${MOCK_PNG_BASE64}`;
+  const MOCK_PNG_BASE64Local = "ZmFrZXBuZw==";
+  const MOCK_PNG_DATA_URLLocal = `data:image/png;base64,${MOCK_PNG_BASE64Local}`;
   return {
-    MOCK_PNG_BASE64,
-    MOCK_PNG_DATA_URL,
-    toDataURL: vi.fn(async () => MOCK_PNG_DATA_URL),
+    MOCK_PNG_BASE64: MOCK_PNG_BASE64Local,
+    MOCK_PNG_DATA_URL: MOCK_PNG_DATA_URLLocal,
+    toDataURL: vi.fn(async () => MOCK_PNG_DATA_URLLocal),
   };
 });
 

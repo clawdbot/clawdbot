@@ -1,3 +1,4 @@
+/** Formats a bounded comma-separated sample of string entries with a hidden-count suffix. */
 export function summarizeStringEntries(params: {
   entries?: ReadonlyArray<string> | null;
   limit?: number;

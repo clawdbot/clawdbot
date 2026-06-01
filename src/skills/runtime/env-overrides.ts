@@ -208,6 +208,10 @@ function applySkillConfigEnvOverrides(params: {
   }
 }
 
+function shouldApplySkillConfigEnvOverrides(skillConfig: SkillConfig): boolean {
+  return skillConfig.enabled !== false;
+}
+
 function createEnvReverter(updates: EnvUpdate[]) {
   return () => {
     for (const update of updates) {
@@ -225,6 +229,9 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
     const skillKey = resolveSkillKey(entry.skill, entry);
     const skillConfig = resolveSkillConfig(config, skillKey);
     if (!skillConfig) {
+      continue;
+    }
+    if (!shouldApplySkillConfigEnvOverrides(skillConfig)) {
       continue;
     }
 
@@ -254,6 +261,9 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   for (const skill of snapshot.skills) {
     const skillConfig = resolveSkillConfig(config, skill.name);
     if (!skillConfig) {
+      continue;
+    }
+    if (!shouldApplySkillConfigEnvOverrides(skillConfig)) {
       continue;
     }
 

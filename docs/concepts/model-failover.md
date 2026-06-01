@@ -67,6 +67,27 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 
 The auto fallback primary-probe interval is five minutes and is not configurable. OpenClaw remembers recent probes per session and primary model so a failing primary is not retried on every turn. OpenClaw sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
 
+## Auth failure skip cache
+
+By default, every new turn keeps the existing fallback retry behavior: OpenClaw
+will try each configured fallback candidate again, including non-primary
+candidates that recently failed with `auth` or `auth_permanent`.
+
+Operators who prefer to suppress those repeat auth failures can opt in with:
+
+```bash
+OPENCLAW_FALLBACK_SKIP_TTL_MS=60000
+```
+
+When enabled, OpenClaw records an in-memory, session-scoped skip marker for a
+non-primary fallback candidate after an auth-class failure. The marker is keyed
+by session id, provider, and model. Primary candidates are never skipped, so an
+explicit user model selection still surfaces the real auth error. The cache is
+process-local and clears on Gateway restart.
+
+The value is a TTL in milliseconds. `0` or an unset value disables the cache.
+Positive values are clamped between 1 second and 10 minutes.
+
 ## User-visible fallback notices
 
 When a session moves onto an auto-selected fallback, OpenClaw sends a status notice in the same reply surface:

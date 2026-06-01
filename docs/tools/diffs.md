@@ -216,7 +216,9 @@ Install the Diff Viewer Language Pack plugin to highlight other languages:
 openclaw plugins install clawhub:@openclaw/diffs-language-pack
 ```
 
-With the language pack available, OpenClaw automatically uses it for languages outside the default list. Without it, those files stay readable as plain text.
+With the language pack available, OpenClaw can highlight many more languages. If the pack is not installed, files outside the default list still render as readable plain text. Examples include Astro, Vue, Svelte, MDX, GraphQL, Terraform/HCL, Nix, Clojure, Elixir, Haskell, OCaml, Scala, Zig, Solidity, Verilog/VHDL, Fortran, MATLAB, LaTeX, Mermaid, Sass/Less/SCSS, Nginx, Apache, CSV, dotenv, INI, and diff files.
+
+See [Diffs Language Pack plugin](/plugins/reference/diffs-language-pack) for details and [Shiki languages](https://shiki.style/languages) for Shiki's upstream language and alias catalog.
 
 ## Output details contract
 

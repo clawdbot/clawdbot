@@ -212,8 +212,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
         await this.state.reset();
       },
       readNormalizedMessage: this.state.readMessage.bind(this.state),
-      executeGenericAction: (params) => this.handleAction(params),
-      waitForReady: (params) => this.waitReady(params),
+      executeGenericAction: (paramsValue) => this.handleAction(paramsValue),
+      waitForReady: (paramsLocal) => this.waitReady(paramsLocal),
       waitForCondition: createFailureAwareTransportWaitForCondition(this.state),
       assertNoFailureReplies: (options) => {
         assertNoFailureReplies(this.state, options);

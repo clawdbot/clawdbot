@@ -200,7 +200,9 @@ describe("web_fetch extraction fallbacks", () => {
     vi.useFakeTimers();
     try {
       installMockFetch(async (input: RequestInfo | URL) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 6000));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 6000);
+        });
         return textResponse("Loaded page", resolveRequestUrl(input)) as Response;
       });
       const updates: unknown[] = [];
@@ -374,7 +376,9 @@ describe("web_fetch extraction fallbacks", () => {
     vi.useFakeTimers();
     try {
       installMockFetch(async (input: RequestInfo | URL) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 6000));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 6000);
+        });
         return textResponse("Loaded page", resolveRequestUrl(input)) as Response;
       });
       const tool = createFetchTool({ firecrawl: { enabled: false } });

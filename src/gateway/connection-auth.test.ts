@@ -10,7 +10,7 @@ type ResolvedAuth = { token?: string; password?: string };
 
 type ConnectionAuthCase = {
   name: string;
-  cfg: OpenClawConfig;
+  cfgLocal: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   options?: Partial<Omit<GatewayConnectionAuthOptions, "config" | "env">>;
   expected: ResolvedAuth;
@@ -46,7 +46,7 @@ describe("resolveGatewayConnectionAuth", () => {
   const cases: ConnectionAuthCase[] = [
     {
       name: "local mode defaults to env-first token/password",
-      cfg: cfg({
+      cfgLocal: cfg({
         gateway: {
           mode: "local",
           auth: {
@@ -67,7 +67,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "local mode supports config-first token/password",
-      cfg: cfg({
+      cfgLocal: cfg({
         gateway: {
           mode: "local",
           auth: {
@@ -88,7 +88,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "local mode precedence can mix env-first token with config-first password",
-      cfg: cfg({
+      cfgLocal: cfg({
         gateway: {
           mode: "local",
           auth: {},
@@ -110,7 +110,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "remote mode defaults to remote-first token and env-first password",
-      cfg: cfg(createRemoteModeConfig()),
+      cfgLocal: cfg(createRemoteModeConfig()),
       env: DEFAULT_ENV,
       expected: {
         token: "remote-token",
@@ -119,7 +119,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "remote mode supports env-first token with remote-first password",
-      cfg: cfg(createRemoteModeConfig()),
+      cfgLocal: cfg(createRemoteModeConfig()),
       env: DEFAULT_ENV,
       options: {
         remoteTokenPrecedence: "env-first",
@@ -132,7 +132,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "remote-only fallback can suppress env/local password fallback",
-      cfg: cfg({
+      cfgLocal: cfg({
         gateway: {
           mode: "remote",
           auth: {
@@ -157,7 +157,7 @@ describe("resolveGatewayConnectionAuth", () => {
     },
     {
       name: "modeOverride can force remote precedence while config gateway.mode is local",
-      cfg: cfg({
+      cfgLocal: cfg({
         gateway: {
           mode: "local",
           auth: {
@@ -184,14 +184,14 @@ describe("resolveGatewayConnectionAuth", () => {
     },
   ];
 
-  it.each(cases)("$name", async ({ cfg, env, options, expected }) => {
+  it.each(cases)("$name", async ({ cfgLocal, env, options, expected }) => {
     const asyncResolved = await resolveGatewayConnectionAuth({
-      config: cfg,
+      config: cfgLocal,
       env,
       ...options,
     });
     const syncResolved = resolveGatewayConnectionAuthFromConfig({
-      cfg,
+      cfg: cfgLocal,
       env,
       ...options,
     });

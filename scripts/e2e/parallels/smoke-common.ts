@@ -105,7 +105,7 @@ export abstract class SmokeRunController<TOptions extends SmokeRunOptions & Smok
       async () => this.runFreshLane(),
       async () => this.runUpgradeLane(),
       async () => this.writeSummary(),
-      (path) => this.printSummary(path),
+      (pathLocal) => this.printSummary(pathLocal),
     );
   }
 

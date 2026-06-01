@@ -21,7 +21,7 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
   const cached = cronEvalCache.get(key);
   if (cached) {
-    // Move to end of Map iteration order for LRU eviction
+    // Move to the end of Map iteration order so the bounded cache behaves as LRU.
     cronEvalCache.delete(key);
     cronEvalCache.set(key, cached);
     return cached;
@@ -37,36 +37,21 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
-function resolveCronFromSchedule(schedule: {
-  tz?: string;
-  expr?: unknown;
-  cron?: unknown;
-}): Cron | undefined {
-  const exprSource = typeof schedule.expr === "string" ? schedule.expr : schedule.cron;
-  if (typeof exprSource !== "string") {
+function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }): Cron | undefined {
+  if (typeof schedule.expr !== "string") {
     throw new Error("invalid cron schedule: expr is required");
   }
-  const expr = exprSource.trim();
+  const expr = schedule.expr.trim();
   if (!expr) {
     return undefined;
   }
   return resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
 }
 
+/** Computes the next scheduled run timestamp after now for at/every/cron schedules. */
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const sched = schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof sched.atMs === "number" && Number.isFinite(sched.atMs) && sched.atMs > 0
-        ? sched.atMs
-        : typeof sched.atMs === "string"
-          ? parseAbsoluteTimeMs(sched.atMs)
-          : typeof sched.at === "string"
-            ? parseAbsoluteTimeMs(sched.at)
-            : null;
+    const atMs = parseAbsoluteTimeMs(schedule.at);
     if (atMs === null) {
       return undefined;
     }
@@ -85,11 +70,11 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
       return anchor;
     }
     const elapsed = nowMs - anchor;
-    const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
+    const steps = Math.floor(elapsed / everyMs) + 1;
     return anchor + steps * everyMs;
   }
 
-  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;
   }
@@ -130,11 +115,12 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   return nextMs;
 }
 
+/** Computes the previous cron-expression run timestamp before now. */
 export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind !== "cron") {
     return undefined;
   }
-  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;
   }
@@ -153,18 +139,22 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return previousMs;
 }
 
+/** Clears the Croner expression cache for deterministic tests. */
 export function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }
 
+/** Returns the Croner expression cache size for tests. */
 export function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
 }
 
+/** Returns the Croner expression cache capacity for tests. */
 export function getCronScheduleCacheMaxForTest(): number {
   return CRON_EVAL_CACHE_MAX;
 }
 
+/** Returns whether an expression/timezone pair is present in the Croner cache for tests. */
 export function hasCronInCacheForTest(expr: string, tz: string): boolean {
   return cronEvalCache.has(`${tz}\u0000${expr}`);
 }

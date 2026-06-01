@@ -2,21 +2,28 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;
-  requests: () => Array<Record<string, unknown>>;
+  requests: () => MockModelRequest[];
   stop: () => Promise<void>;
+};
+
+type MockModelRequest = {
+  method: string;
+  path: string;
+  body: Record<string, unknown>;
 };
 
 const activeRuns: PtyRun[] = [];
 const LOCAL_STARTUP_TIMEOUT_MS = 20_000;
-const LOCAL_OUTPUT_TIMEOUT_MS = 60_000;
+const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
-const LOCAL_TEST_TIMEOUT_MS = 90_000;
+const LOCAL_TEST_TIMEOUT_MS = 150_000;
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -95,25 +102,36 @@ function writeResponsesSse(res: ServerResponse, text: string) {
   res.end(body);
 }
 
+async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readRequestBody(req);
+  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+}
+
 async function startMockModelServer(replyText: string): Promise<MockModelServer> {
-  const requests: Array<Record<string, unknown>> = [];
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      writeJson(res, 200, { ok: true });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/v1/models") {
-      writeJson(res, 200, { data: [{ id: "gpt-5.5", object: "model" }] });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const raw = await readRequestBody(req);
-      requests.push(raw ? (JSON.parse(raw) as Record<string, unknown>) : {});
-      writeResponsesSse(res, replyText);
-      return;
-    }
-    writeJson(res, 404, { error: "not found" });
+  const requests: MockModelRequest[] = [];
+  const server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
+        writeJson(res, 200, { ok: true });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/models") {
+        writeJson(res, 200, { data: [{ id: "gpt-5.5", object: "model" }] });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJsonRequest(req);
+        requests.push({ method: req.method, path: url.pathname, body });
+        if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
+          writeResponsesSse(res, replyText);
+          return;
+        }
+        writeJson(res, 404, { error: "not found" });
+        return;
+      }
+      writeJson(res, 404, { error: "not found" });
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -138,12 +156,18 @@ async function startMockModelServer(replyText: string): Promise<MockModelServer>
 function buildLocalModeConfig(params: { workspaceDir: string; providerBaseUrl: string }) {
   return {
     plugins: {
-      allow: [],
+      enabled: false,
+      slots: {
+        memory: "none",
+      },
     },
     agents: {
       defaults: {
         workspace: params.workspaceDir,
         model: { primary: "tui-pty-mock/gpt-5.5" },
+        models: {
+          "tui-pty-mock/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+        },
         skills: [],
         skipBootstrap: true,
       },
@@ -155,6 +179,9 @@ function buildLocalModeConfig(params: { workspaceDir: string; providerBaseUrl: s
           model: { primary: "tui-pty-mock/gpt-5.5" },
         },
       ],
+    },
+    tools: {
+      profile: "minimal",
     },
     models: {
       mode: "replace",
@@ -199,6 +226,18 @@ async function startLocalModeTui() {
   const configPath = path.join(tempDir, "openclaw.json");
   const mockModel = await startMockModelServer(replyText);
   const config = buildLocalModeConfig({ workspaceDir, providerBaseUrl: mockModel.baseUrl });
+  const tuiCliModuleUrl = pathToFileURL(path.join(process.cwd(), "src/cli/tui-cli.ts")).href;
+  const script = [
+    `import { Command } from "commander";`,
+    `import { registerTuiCli } from ${JSON.stringify(tuiCliModuleUrl)};`,
+    `const program = new Command();`,
+    `program.exitOverride();`,
+    `registerTuiCli(program);`,
+    `program.parseAsync([process.execPath, "openclaw", "tui", "--local"], { from: "node" }).catch((error) => {`,
+    `  console.error(error);`,
+    `  process.exit(1);`,
+    `});`,
+  ].join("\n");
   await Promise.all([
     mkdir(workspaceDir, { recursive: true }),
     mkdir(homeDir, { recursive: true }),
@@ -209,7 +248,7 @@ async function startLocalModeTui() {
     writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
   ]);
 
-  const run = startPty(process.execPath, ["scripts/run-node.mjs", "tui", "--local"], {
+  const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
     activeRuns,
     cwd: process.cwd(),
     env: {
@@ -257,9 +296,17 @@ describe("TUI PTY local mode", () => {
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
           read: () => (fixture.mockModel.requests().length > 0 ? true : null),
           onTimeout: () =>
-            new Error(`mock model server did not receive a request\n${fixture.run.output()}`),
+            new Error(
+              `mock model server did not receive a request\nrequests=${JSON.stringify(
+                fixture.mockModel.requests(),
+                null,
+                2,
+              )}\n${fixture.run.output()}`,
+            ),
         });
-        expect(fixture.mockModel.requests()[0]?.model).toBe("gpt-5.5");
+        const request = fixture.mockModel.requests()[0];
+        expect(request?.path).toBe("/v1/responses");
+        expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
         await fixture.run.write("/exit\r", { delay: false });

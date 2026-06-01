@@ -942,7 +942,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -977,7 +978,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1024,7 +1026,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1074,7 +1077,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1138,7 +1142,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     await secondStream.result();

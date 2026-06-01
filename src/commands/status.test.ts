@@ -857,31 +857,31 @@ vi.mock("./status.daemon.js", () => ({
   getDaemonStatusSummary: vi.fn(async () => {
     const service = mocks.resolveGatewayService();
     const loaded = await service.isLoaded();
-    const runtime = await service.readRuntime();
+    const runtimeValue = await service.readRuntime();
     const command = await service.readCommand();
     return {
       label: service.label,
-      installed: Boolean(command) || runtime?.status === "running",
+      installed: Boolean(command) || runtimeValue?.status === "running",
       loaded,
       managedByOpenClaw: Boolean(command),
-      externallyManaged: !command && runtime?.status === "running",
+      externallyManaged: !command && runtimeValue?.status === "running",
       loadedText: loaded ? service.loadedText : service.notLoadedText,
-      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+      runtimeShort: runtimeValue?.pid ? `pid ${runtimeValue.pid}` : null,
     };
   }),
   getNodeDaemonStatusSummary: vi.fn(async () => {
     const service = mocks.resolveNodeService();
     const loaded = await service.isLoaded();
-    const runtime = await service.readRuntime();
+    const runtimeLocal = await service.readRuntime();
     const command = await service.readCommand();
     return {
       label: service.label,
-      installed: Boolean(command) || runtime?.status === "running",
+      installed: Boolean(command) || runtimeLocal?.status === "running",
       loaded,
       managedByOpenClaw: Boolean(command),
-      externallyManaged: !command && runtime?.status === "running",
+      externallyManaged: !command && runtimeLocal?.status === "running",
       loadedText: loaded ? service.loadedText : service.notLoadedText,
-      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+      runtimeShort: runtimeLocal?.pid ? `pid ${runtimeLocal.pid}` : null,
     };
   }),
 }));

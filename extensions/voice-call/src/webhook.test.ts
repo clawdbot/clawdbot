@@ -160,8 +160,8 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
-function expectNoTwilioStreamState(provider: TwilioProvider) {
-  const state = provider as unknown as {
+function expectNoTwilioStreamState(providerLocal: TwilioProvider) {
+  const state = providerLocal as unknown as {
     streamAuthTokens: Map<string, string>;
     activeStreamCalls: Set<string>;
   };
@@ -247,9 +247,9 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       if (!mediaStreamHandler) {
         throw new Error("expected media stream handler");
       }
-      expect(mediaStreamHandler.handleUpgrade).toBeTypeOf("function");
-      expect(mediaStreamHandler.sendAudio).toBeTypeOf("function");
-      expect(mediaStreamHandler.closeAll).toBeTypeOf("function");
+      expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
+      expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
+      expect(mediaStreamHandler["closeAll"]).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
@@ -332,7 +332,7 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       manager,
       createTwilioStreamingProvider(),
     );
-    const request = {
+    const requestLocal = {
       headers: {},
       socket: { remoteAddress: "127.0.0.1" },
       ...requestOverrides,
@@ -342,7 +342,7 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       server as unknown as {
         resolveMediaStreamClientIp: (request: MediaStreamRequestDouble) => string | undefined;
       }
-    ).resolveMediaStreamClientIp(request as never);
+    ).resolveMediaStreamClientIp(requestLocal as never);
   };
 
   it("uses forwarded IPs only when forwarding trust is explicitly enabled", () => {

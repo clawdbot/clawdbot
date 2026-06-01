@@ -24,7 +24,7 @@ export const formatTokensCompact = (
   const used = sess.totalTokens;
   const ctx = sess.contextTokens;
 
-  let result = "";
+  let result;
   if (used == null) {
     result = ctx ? `unknown/${formatKTokens(ctx)} (?%)` : "unknown used";
   } else if (!ctx) {

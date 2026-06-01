@@ -26,7 +26,7 @@ export function collectFilesSync(
     if (!current) {
       continue;
     }
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {

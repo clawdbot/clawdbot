@@ -267,7 +267,7 @@ async function fetchDiscordMedia(params: {
     fallbackContentType: params.fallbackContentType,
     originalFilename: params.originalFilename,
     ...(signal ? { requestInit: { signal } } : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
     }
@@ -365,8 +365,6 @@ function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerA
           fileName: `${baseName}.json`,
         },
       ];
-    case StickerFormatType.APNG:
-    case StickerFormatType.PNG:
     default:
       return [
         { url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.png`, fileName: `${baseName}.png` },

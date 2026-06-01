@@ -6,11 +6,61 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 8192;
-const BUILD_CACHE_VERSION = 2;
+const BUILD_CACHE_VERSION = 3;
+const PLUGIN_SDK_DTS_CACHE_INPUTS = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "npm-shrinkwrap.json",
+  "packages/plugin-sdk/package.json",
+  "packages/llm-core/package.json",
+  "packages/markdown-core/package.json",
+  "packages/media-core/package.json",
+  "packages/media-understanding-common/package.json",
+  "packages/terminal-core/package.json",
+  "packages/acp-core/package.json",
+  "packages/model-catalog-core/package.json",
+  "packages/normalization-core/package.json",
+  "packages/web-content-core/package.json",
+  "packages/memory-host-sdk/package.json",
+  "tsconfig.json",
+  "tsconfig.plugin-sdk.dts.json",
+  "src/plugin-sdk",
+  "packages/llm-core/src",
+  "packages/markdown-core/src",
+  "packages/media-core/src",
+  "packages/media-generation-core/src",
+  "packages/model-catalog-core/src",
+  "packages/memory-host-sdk/src",
+  "packages/normalization-core/src",
+  "packages/acp-core/src",
+  "packages/media-understanding-common/src",
+  "packages/terminal-core/src",
+  "packages/web-content-core/src",
+  "src/types",
+  "src/video-generation/dashscope-compatible.ts",
+  "src/video-generation/types.ts",
+];
+const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = ["OPENCLAW_BUILD_PRIVATE_QA"];
+const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+  "scripts/write-plugin-sdk-entry-dts.ts",
+  "scripts/lib/plugin-sdk-entries.mjs",
+  "scripts/lib/plugin-sdk-entrypoints.json",
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
+  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+  ...PLUGIN_SDK_DTS_CACHE_INPUTS,
+];
+const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
+  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+  "dist/plugin-sdk/webhook-path.js",
+  "dist/plugin-sdk/.boundary-entry-shims.stamp",
+  ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
+];
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
   [
@@ -41,35 +91,7 @@ export const BUILD_ALL_STEPS = [
     pnpmArgs: ["build:plugin-sdk:dts"],
     windowsNodeOptions: `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`,
     cache: {
-      inputs: [
-        "package.json",
-        "pnpm-lock.yaml",
-        "npm-shrinkwrap.json",
-        "packages/plugin-sdk/package.json",
-        "packages/llm-core/package.json",
-        "packages/markdown-core/package.json",
-        "packages/media-understanding-common/package.json",
-        "packages/terminal-core/package.json",
-        "packages/model-catalog-core/package.json",
-        "packages/normalization-core/package.json",
-        "packages/web-content-core/package.json",
-        "packages/memory-host-sdk/package.json",
-        "tsconfig.json",
-        "tsconfig.plugin-sdk.dts.json",
-        "src/plugin-sdk",
-        "packages/llm-core/src",
-        "packages/markdown-core/src",
-        "packages/model-catalog-core/src",
-        "packages/memory-host-sdk/src",
-        "packages/media-generation-core/src",
-        "packages/normalization-core/src",
-        "packages/media-understanding-common/src",
-        "packages/terminal-core/src",
-        "packages/web-content-core/src",
-        "src/types",
-        "src/video-generation/dashscope-compatible.ts",
-        "src/video-generation/types.ts",
-      ],
+      inputs: PLUGIN_SDK_DTS_CACHE_INPUTS,
       outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/packages", "dist/plugin-sdk/src"],
     },
   },
@@ -77,6 +99,12 @@ export const BUILD_ALL_STEPS = [
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
     args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+    cache: {
+      env: PLUGIN_SDK_ENTRY_DTS_CACHE_ENV,
+      inputs: PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS,
+      outputs: PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS,
+      restore: "always",
+    },
   },
   {
     label: "check-plugin-sdk-exports",
@@ -335,7 +363,21 @@ export function resolveBuildAllStep(step, params = {}) {
   };
 }
 
-function listFilesRecursively(rootPath, fsImpl) {
+function normalizeCacheEntry(entry) {
+  if (typeof entry === "string") {
+    return { path: entry };
+  }
+  return entry;
+}
+
+function cacheEntryIncludesFile(entry, filePath) {
+  if (!entry.extensions?.length) {
+    return true;
+  }
+  return entry.extensions.some((extension) => filePath.endsWith(extension));
+}
+
+function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath }) {
   let stat;
   try {
     stat = fsImpl.statSync(rootPath);
@@ -343,21 +385,22 @@ function listFilesRecursively(rootPath, fsImpl) {
     return [];
   }
   if (stat.isFile()) {
-    return [rootPath];
+    return cacheEntryIncludesFile(cacheEntry, rootPath) ? [rootPath] : [];
   }
   if (!stat.isDirectory()) {
     return [];
   }
   const out = [];
   const entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === ".DS_Store") {
+  const recursive = cacheEntry.recursive !== false;
+  for (const dirent of entries) {
+    if (dirent.name === ".DS_Store") {
       continue;
     }
-    const entryPath = path.join(rootPath, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...listFilesRecursively(entryPath, fsImpl));
-    } else if (entry.isFile()) {
+    const entryPath = path.join(rootPath, dirent.name);
+    if (dirent.isDirectory() && recursive) {
+      out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
+    } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {
       out.push(entryPath);
     }
   }
@@ -366,7 +409,8 @@ function listFilesRecursively(rootPath, fsImpl) {
 
 function listCacheFiles(rootDir, entries, fsImpl) {
   return entries
-    .flatMap((entry) => listFilesRecursively(path.resolve(rootDir, entry), fsImpl))
+    .map(normalizeCacheEntry)
+    .flatMap((entry) => listFilesRecursively(path.resolve(rootDir, entry.path), fsImpl, entry))
     .toSorted();
 }
 
@@ -388,9 +432,15 @@ function resolveCachePaths(rootDir, step) {
   };
 }
 
-function hashInputFiles(rootDir, files, fsImpl) {
+function hashInputFiles(rootDir, files, fsImpl, envEntries = [], env = process.env) {
   const hash = createHash("sha256");
   hash.update(`v${BUILD_CACHE_VERSION}\0`);
+  for (const name of envEntries.toSorted((left, right) => left.localeCompare(right))) {
+    hash.update(`env:${name}`);
+    hash.update("\0");
+    hash.update(env[name] ?? "");
+    hash.update("\0");
+  }
   for (const file of files) {
     hash.update(portableRelativePath(rootDir, file));
     hash.update("\0");
@@ -433,7 +483,13 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
   if (inputFiles.length === 0) {
     return { cacheable: true, fresh: false, reason: "missing-inputs" };
   }
-  const signature = hashInputFiles(rootDir, inputFiles, fsImpl);
+  const signature = hashInputFiles(
+    rootDir,
+    inputFiles,
+    fsImpl,
+    step.cache.env ?? [],
+    params.env ?? process.env,
+  );
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
@@ -446,8 +502,11 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);
   const cachedOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(outputRoot, stampedOutputs, fsImpl);
-  const restorable = stampMatches && !actualOutputsPresent && cachedOutputsPresent;
-  const fresh = stampMatches && (actualOutputsPresent || cachedOutputsPresent);
+  const alwaysRestore = step.cache.restore === "always";
+  const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
+  const restorable =
+    stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+  const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
   return {
     cacheable: true,
     fresh,

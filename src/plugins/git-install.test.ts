@@ -40,11 +40,6 @@ function expectParsedGitSpec(spec: string) {
   }
   return parsed;
 }
-
-function firstCommandRun(): unknown[] | undefined {
-  return runCommandWithTimeoutMock.mock.calls[0];
-}
-
 function commandArgvAt(index: number): string[] {
   const call = runCommandWithTimeoutMock.mock.calls[index];
   if (!call) {

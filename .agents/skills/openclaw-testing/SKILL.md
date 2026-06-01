@@ -19,7 +19,7 @@ or validating a change without wasting hours.
 Prove the touched surface first. Do not reflexively run the whole suite.
 
 1. Inspect the diff and classify the touched surface:
-   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed`
+   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed` (delegates to Crabbox/Testbox)
    - normal source checkout, tests only: `pnpm test:changed`
    - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
    - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
@@ -27,7 +27,7 @@ Prove the touched surface first. Do not reflexively run the whole suite.
      use the Crabbox wrapper with the provider that matches the proof surface.
      For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
      Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
---provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+--provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed`. For direct AWS
      Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
@@ -66,7 +66,7 @@ scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
 
 ```bash
 pnpm changed:lanes --json
-pnpm check:changed       # changed typecheck/lint/guards; no Vitest
+pnpm check:changed       # Crabbox/Testbox changed typecheck/lint/guards; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
 pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed

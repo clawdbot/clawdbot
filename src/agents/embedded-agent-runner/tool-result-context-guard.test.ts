@@ -409,10 +409,10 @@ describe("installToolResultContextGuard", () => {
 });
 
 type MockedEngine = ContextEngine & {
-  afterTurn: ReturnType<typeof vi.fn>;
-  assemble: ReturnType<typeof vi.fn>;
-  ingest: ReturnType<typeof vi.fn>;
-  ingestBatch?: ReturnType<typeof vi.fn>;
+  afterTurn: ReturnType<typeof vi.fn<NonNullable<ContextEngine["afterTurn"]>>>;
+  assemble: ReturnType<typeof vi.fn<ContextEngine["assemble"]>>;
+  ingest: ReturnType<typeof vi.fn<ContextEngine["ingest"]>>;
+  ingestBatch?: ReturnType<typeof vi.fn<NonNullable<ContextEngine["ingestBatch"]>>>;
 };
 
 function makeMockEngine(
@@ -429,13 +429,15 @@ function makeMockEngine(
     omitIngestBatch?: boolean;
   } = {},
 ): MockedEngine {
-  const defaultAfterTurn = vi.fn(async () => {});
-  const defaultAssemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-    messages: params.messages,
-    estimatedTokens: 0,
-  }));
-  const defaultIngest = vi.fn(async () => ({ ingested: true }));
-  const defaultIngestBatch = vi.fn(
+  const defaultAfterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+  const defaultAssemble = vi.fn<ContextEngine["assemble"]>(
+    async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }),
+  );
+  const defaultIngest = vi.fn<ContextEngine["ingest"]>(async () => ({ ingested: true }));
+  const defaultIngestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(
     async (params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0]) => ({
       ingestedCount: params.messages.length,
     }),
@@ -443,14 +445,18 @@ function makeMockEngine(
   const afterTurn = overrides.omitAfterTurn
     ? undefined
     : overrides.afterTurn
-      ? vi.fn(overrides.afterTurn)
+      ? vi.fn<NonNullable<ContextEngine["afterTurn"]>>(overrides.afterTurn)
       : defaultAfterTurn;
-  const assemble = overrides.assemble ? vi.fn(overrides.assemble) : defaultAssemble;
-  const ingest = overrides.ingest ? vi.fn(overrides.ingest) : defaultIngest;
+  const assemble = overrides.assemble
+    ? vi.fn<ContextEngine["assemble"]>(overrides.assemble)
+    : defaultAssemble;
+  const ingest = overrides.ingest
+    ? vi.fn<ContextEngine["ingest"]>(overrides.ingest)
+    : defaultIngest;
   const ingestBatch = overrides.omitIngestBatch
     ? undefined
     : overrides.ingestBatch
-      ? vi.fn(overrides.ingestBatch)
+      ? vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(overrides.ingestBatch)
       : defaultIngestBatch;
   const engine = {
     info: {

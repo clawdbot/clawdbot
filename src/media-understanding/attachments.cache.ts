@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  isInboundPathAllowed,
+  mergeInboundPathRoots,
+} from "@openclaw/media-core/inbound-path-policy";
+import { detectMime } from "@openclaw/media-core/mime";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -9,9 +14,7 @@ import {
   type MediaFetchRetryOptions,
   MediaFetchError,
 } from "../media/fetch.js";
-import { isInboundPathAllowed, mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";

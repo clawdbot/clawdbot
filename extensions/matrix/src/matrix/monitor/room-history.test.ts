@@ -60,8 +60,8 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
       messageId: "$trigger",
     });
 
-    expect(first.history.map((entry) => entry.body)).toEqual(["msg1"]);
-    expect(retried.history.map((entry) => entry.body)).toEqual(["msg1"]);
+    expect(first.history.map((entryValue) => entryValue.body)).toEqual(["msg1"]);
+    expect(retried.history.map((entryLocal) => entryLocal.body)).toEqual(["msg1"]);
     expect(retried.snapshotIdx).toBe(first.snapshotIdx);
   });
 

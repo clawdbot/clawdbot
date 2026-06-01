@@ -50,8 +50,25 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
+      recoverCorruptTargetStore: undefined,
     });
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
+  });
+
+  it("passes explicit corrupt-target recovery to state migrations", async () => {
+    vi.clearAllMocks();
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      recoverCorruptTargetStore: true,
+    });
+
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+      env: process.env,
+      recoverCorruptTargetStore: true,
+    });
   });
 
   it("limits invalid-config preflight to task sidecar migration", async () => {

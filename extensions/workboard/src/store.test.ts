@@ -1642,7 +1642,9 @@ describe("WorkboardStore", () => {
         }
         triggered = true;
         proofPromise = store.addProof(value.card.id, { status: "passed", label: "CI" });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       },
     });
     const store: WorkboardStore = new WorkboardStore(keyed);

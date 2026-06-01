@@ -1,3 +1,6 @@
+/**
+ * Transcript append data emitted after an outbound send completes.
+ */
 export type OutboundMirror = {
   sessionKey: string;
   agentId?: string;
@@ -6,6 +9,9 @@ export type OutboundMirror = {
   idempotencyKey?: string;
 };
 
+/**
+ * Delivery-layer mirror data with optional group/channel correlation metadata.
+ */
 export type DeliveryMirror = OutboundMirror & {
   /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;

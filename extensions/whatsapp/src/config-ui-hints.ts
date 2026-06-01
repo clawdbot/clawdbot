@@ -21,4 +21,20 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Config Writes",
     help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   },
+  mentionPatterns: {
+    label: "WhatsApp Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected WhatsApp conversation IDs such as 123@g.us.",
+  },
+  "mentionPatterns.mode": {
+    label: "WhatsApp Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "WhatsApp Mention Pattern Allowlist",
+    help: "WhatsApp conversation IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "WhatsApp Mention Pattern Denylist",
+    help: "WhatsApp conversation IDs where configured regex mention patterns are disabled.",
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

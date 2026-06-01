@@ -302,7 +302,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     {
       takeCacheOwnership: true,
       maintenanceConfig,
-      resolveSingleEntryPersistence: (entry) => (entry ? { sessionKey, entry } : undefined),
+      resolveSingleEntryPersistence: (entryLocal) =>
+        entryLocal ? { sessionKey, entry: entryLocal } : undefined,
     },
   );
   if (persisted) {

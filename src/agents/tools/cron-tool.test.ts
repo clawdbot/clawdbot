@@ -25,6 +25,7 @@ describe("cron tool", () => {
     anyOf?: Array<{ type?: string }>;
     description?: string;
     properties?: Record<string, SchemaLike>;
+    type?: string;
   };
 
   type TestDelivery = {
@@ -458,10 +459,52 @@ describe("cron tool", () => {
     const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
     const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
 
-    for (const threadId of [jobThreadId, patchThreadId]) {
-      expect(threadId?.description).toContain("Thread/topic id");
-      expect(threadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
-    }
+    expect(jobThreadId?.description).toContain("Thread/topic id");
+    expect(jobThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
+    expect(patchThreadId?.description).toContain("Thread/topic id");
+    expect(patchThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number", "null"]);
+  });
+
+  it("advertises nullable cron update clears in the tool schema", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const jobDelivery = parameters.properties?.job?.properties?.delivery;
+    const patch = parameters.properties?.patch;
+    const payload = patch?.properties?.payload;
+    const delivery = patch?.properties?.delivery;
+
+    expect(jobDelivery?.properties?.channel?.anyOf).toBeUndefined();
+    expect(jobDelivery?.properties?.channel?.type).toBe("string");
+    expect(jobDelivery?.properties?.failureDestination?.anyOf).toBeUndefined();
+    expect(jobDelivery?.properties?.failureDestination?.type).toBe("object");
+    expect(patch?.properties?.agentId?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(patch?.properties?.agentId?.type).toBeUndefined();
+    expect(patch?.properties?.agentId?.description).toContain("null to clear");
+    expect(patch?.properties?.sessionKey?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(patch?.properties?.sessionKey?.type).toBeUndefined();
+    expect(patch?.properties?.sessionKey?.description).toContain("null to clear");
+    expect(payload?.properties?.toolsAllow?.anyOf?.map((entry) => entry.type)).toEqual([
+      "array",
+      "null",
+    ]);
+    expect(payload?.properties?.toolsAllow?.type).toBeUndefined();
+    expect(payload?.properties?.toolsAllow?.description).toContain("null to clear");
+    expect(delivery?.properties?.channel?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(delivery?.properties?.channel?.type).toBeUndefined();
+    expect(delivery?.properties?.channel?.description).toContain("null to clear");
+    expect(delivery?.properties?.failureDestination?.anyOf?.map((entry) => entry.type)).toEqual([
+      "object",
+      "null",
+    ]);
   });
 
   it.each([

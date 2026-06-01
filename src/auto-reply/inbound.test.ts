@@ -555,9 +555,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const firstFlush = (
-        setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await vi.waitFor(() => {
         expect(started).toEqual(["1"]);
@@ -573,9 +571,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const thirdFlush = (
-        setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await Promise.resolve();
 
@@ -586,10 +582,12 @@ describe("createInboundDebouncer", () => {
         throw new Error("Expected first inbound debounce release callback to be initialized");
       }
       releaseFirst();
-      await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
+      await Promise.all([secondEnqueue, thirdEnqueue]);
 
-      expect(started).toEqual(["1", "2", "3"]);
-      expect(finished).toEqual(["1", "2", "3"]);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1", "2", "3"]);
+        expect(finished).toEqual(["1", "2", "3"]);
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -699,7 +697,9 @@ describe("createInboundDebouncer", () => {
 
     try {
       await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
@@ -775,9 +775,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[bufferedTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const bufferedFlush = (
-        setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
@@ -787,10 +785,12 @@ describe("createInboundDebouncer", () => {
         throw new Error("Expected inbound overflow release callback to be initialized");
       }
       releaseOverflow();
-      await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
+      await Promise.all([overflowEnqueue, bufferedEnqueue]);
 
-      expect(started).toEqual(["2", "3"]);
-      expect(finished).toEqual(["2", "3"]);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "3"]);
+        expect(finished).toEqual(["2", "3"]);
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -971,6 +971,81 @@ describe("mention helpers", () => {
     );
     expect(matchesMentionPatterns("workbot: hi", regexes)).toBe(true);
     expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
+  });
+
+  it("scopes configured mention patterns by provider conversation policy", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        slack: {
+          mentionPatterns: {
+            mode: "deny",
+            allowIn: ["C123"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const allowed = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C123",
+    });
+    const denied = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C999",
+    });
+
+    expect(matchesMentionPatterns("openclaw: hi", allowed)).toBe(true);
+    expect(matchesMentionPatterns("openclaw: hi", denied)).toBe(false);
+  });
+
+  it("preserves mention patterns for callers without scoped policy facts", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    });
+
+    expect(matchesMentionPatterns("openclaw", regexes)).toBe(true);
+  });
+
+  it("lets provider deny lists override globally allowed mention patterns", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        telegram: {
+          mentionPatterns: {
+            denyIn: ["-100:topic:7"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      buildMentionRegexes(cfg, undefined, {
+        provider: "telegram",
+        conversationId: "-100:topic:7",
+      }),
+    ).toEqual([]);
+    expect(
+      matchesMentionPatterns(
+        "openclaw",
+        buildMentionRegexes(cfg, undefined, {
+          provider: "telegram",
+          conversationId: "-100:topic:8",
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("strips safe mention patterns and ignores unsafe ones", () => {

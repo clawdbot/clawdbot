@@ -556,7 +556,7 @@ export class CodexNativeSubagentMonitor {
     childState.transcriptPollTimer = setTimeout(() => {
       childState.transcriptPollTimer = undefined;
       void this.reconcileChildTranscript(childState.childThreadId)
-        .catch((error) => {
+        .catch((error: unknown) => {
           embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
             childThreadId: childState.childThreadId,
             error: formatErrorMessage(error),
@@ -595,7 +595,7 @@ export class CodexNativeSubagentMonitor {
     }
     this.taskRowReconcileTimer = setInterval(
       () => {
-        void this.reconcileKnownTaskRows().catch((error) => {
+        void this.reconcileKnownTaskRows().catch((error: unknown) => {
           embeddedAgentLog.warn("Failed to reconcile Codex native subagent task rows", {
             error: formatErrorMessage(error),
           });

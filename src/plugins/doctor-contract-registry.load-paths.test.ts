@@ -94,6 +94,55 @@ module.exports = {
   );
 }
 
+function writeDistDoctorPlugin(pluginRoot: string, pluginId: string): void {
+  fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: pluginId,
+        name: "Dist Doctor",
+        version: "0.0.0-test",
+        configSchema: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: `@openclaw/${pluginId}`,
+        version: "0.0.0-test",
+        type: "module",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "dist", "doctor-contract-api.cjs"),
+    `
+module.exports = {
+  legacyConfigRules: [
+    {
+      path: ["plugins", "entries", ${JSON.stringify(pluginId)}, "config", "distOnly"],
+      message: "dist doctor contract warning",
+    },
+  ],
+};
+`,
+    "utf8",
+  );
+}
+
 function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
   fs.mkdirSync(pluginRoot, { recursive: true });
   fs.writeFileSync(
@@ -188,6 +237,26 @@ describe("doctor contract registry load-path plugins", () => {
       {
         path: `plugins.entries.${pluginId}.config.summaryModel`,
         message: "load-path doctor contract warning",
+      },
+    ]);
+  });
+
+  it("discovers doctor warning rules from package dist contracts", () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "dist-doctor";
+    writeDistDoctorPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    const rules = listPluginDoctorLegacyConfigRules({
+      config,
+      env: makeHermeticDoctorEnv(stateDir),
+      pluginIds: [pluginId],
+    });
+    expect(rules).toEqual([
+      {
+        path: ["plugins", "entries", pluginId, "config", "distOnly"],
+        message: "dist doctor contract warning",
       },
     ]);
   });

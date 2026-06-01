@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resolves env credential payloads", () => {
     expect(
       testing.resolveSlackQaRuntimeEnv({

@@ -71,7 +71,9 @@ describe("createCodexAttemptTurnWatchController", () => {
     try {
       controller.armAttemptIdleWatch();
       controller.touchActivity("turn:start", { attemptProgress: true });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
       controller.noteNotificationReceived("response.output_text.delta", {
         attemptProgress: true,
         attemptTimeoutMs: 40,
@@ -405,7 +407,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         return turnStartResult("turn-1", "inProgress");
       }
       if (method === "turn/interrupt") {
-        return new Promise<never>(() => undefined);
+        return new Promise<never>(() => {});
       }
       return {};
     });
@@ -474,7 +476,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     await harness.notify({
       method: "rawResponseItem/completed",
       params: {
@@ -488,7 +492,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     await harness.notify({
       method: "rawResponseItem/completed",
       params: {
@@ -543,7 +549,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     await harness.handleServerRequest({
       id: "request-account-refresh",
       method: "account/nonTurnRefresh",
@@ -595,7 +603,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await harness.waitForMethod("turn/start");
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     void harness.handleServerRequest({
       id: "request-auth-refresh",
       method: "account/chatgptAuthTokens/refresh",
@@ -659,7 +669,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     await harness.handleServerRequest({
       id: "request-null-turn-elicitation",
       method: "mcpServer/elicitation/request",
@@ -673,7 +685,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         _meta: null,
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -735,7 +749,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       fastWait,
     );
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     expect(
       onRunProgress.mock.calls.some(
         ([event]) =>
@@ -788,7 +804,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 75));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 75);
+    });
     const response = harness.handleServerRequest({
       id: "request-user-input",
       method: "item/tool/requestUserInput",
@@ -812,7 +830,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
-    await new Promise((resolve) => setTimeout(resolve, 125));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 125);
+    });
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
@@ -843,7 +863,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await harness.waitForMethod("turn/start");
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
     await harness.handleServerRequest({
       id: "request-foreign-elicitation",
       method: "mcpServer/elicitation/request",
@@ -1052,7 +1074,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(settled).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
@@ -1158,7 +1182,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(settled).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
@@ -1258,7 +1284,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
     await notify({
@@ -1342,7 +1370,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
 
-    await new Promise((resolve) => setTimeout(resolve, 130));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 130);
+    });
     expect(settled).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
@@ -1406,7 +1436,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 130));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 130);
+    });
     expect(settled).toBe(false);
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
@@ -1486,7 +1518,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 130));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 130);
+    });
     expect(settled).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
@@ -1679,7 +1713,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(settled).toBe(false);
 
     const result = await run;
@@ -1793,7 +1829,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
     expect(settled).toBe(false);
 
     const result = await run;
@@ -1884,7 +1922,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     // This covers the future-compatible path for raw response deltas if Codex
     // app-server exposes them directly; current Codex primarily emits
     // rawResponseItem/completed for the raw-event surface.
@@ -1896,7 +1936,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         delta: '{"cmd":"apply_patch","patch":"large chunk"}',
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     expect(settled).toBe(false);
 
     await notify({
@@ -1989,7 +2031,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     await notify({
       method: "item/fileChange/patchUpdated",
       params: {
@@ -2096,7 +2140,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     await notify({
       method: "response.custom_tool_call_input.delta",
       params: {
@@ -2194,7 +2240,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
     await notify({
       method: "response.custom_tool_call_input.delta",
       params: {
@@ -2597,7 +2645,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
     expect(settled).toBe(false);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -2650,7 +2700,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
     expect(settled).toBe(false);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -2686,7 +2738,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(settled).toBe(false);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -2740,7 +2794,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(settled).toBe(false);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -2763,7 +2819,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 15 });
     await harness.waitForMethod("turn/start");
     await harness.notify(rateLimitsUpdated(Date.now() + 60_000));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
 
     const result = await run;
     expect({
@@ -2880,7 +2938,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const queuedTerminal = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     void queuedTerminal.catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
 
     expect(settled).toBe(false);
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
@@ -3191,7 +3251,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
 
     expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
     await notify({
@@ -3272,7 +3334,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
 
     expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
     await notify({
@@ -3433,7 +3497,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
 
     expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
     await notify({
@@ -3677,7 +3743,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
 
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     harness.close();
 
     const result = await run;
@@ -3745,7 +3813,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     await harness.notify({

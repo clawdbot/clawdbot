@@ -82,7 +82,7 @@ export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
 }
 
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
-  if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+  if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
@@ -94,7 +94,8 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   return true;
 }
 
-export function buildChangedCheckCrabboxArgs(argv = []) {
+export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
+  const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
   return [
     "crabbox:run",
     "--",
@@ -114,11 +115,35 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
+    "env",
+    "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+    "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+    "CI=1",
+    "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
     "corepack",
     "pnpm",
     "check:changed",
-    ...argv,
+    ...delegatedArgv,
   ];
+}
+
+function buildDelegatedChangedCheckArgv(argv, options = {}) {
+  const args = parseArgs(argv);
+  if (!args.staged || args.paths.length > 0) {
+    return argv;
+  }
+  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const next = [];
+  if (args.timed) {
+    next.push("--timed");
+  }
+  if (stagedPaths.length === 0) {
+    next.push("--no-changes");
+    return next;
+  }
+  next.push("--base", "HEAD", "--head", "HEAD");
+  next.push("--", ...stagedPaths);
+  return next;
 }
 
 export function shouldRunShrinkwrapGuard(paths) {
@@ -148,9 +173,7 @@ export function createShrinkwrapGuardCommand(paths) {
 }
 
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error(
-    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
-  );
+  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
   return await runManagedCommand({
     bin: "pnpm",
     args: buildChangedCheckCrabboxArgs(argv),
@@ -477,6 +500,7 @@ function parseArgs(argv) {
     staged: false,
     dryRun: false,
     timed: false,
+    noChanges: false,
     help: false,
     paths: [],
   };
@@ -489,6 +513,7 @@ function parseArgs(argv) {
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
+      booleanFlag("--no-changes", "noChanges"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
@@ -515,6 +540,7 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
+      "  --no-changes     Treat the changed path set as empty",
       "  -h, --help       Show this help",
       "",
     ].join("\n"),
@@ -534,8 +560,9 @@ if (isDirectRun()) {
   } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
     process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
-    const paths =
-      args.paths.length > 0
+    const paths = args.noChanges
+      ? []
+      : args.paths.length > 0
         ? args.paths
         : args.staged
           ? listStagedChangedPaths()

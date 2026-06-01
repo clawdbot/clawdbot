@@ -23,15 +23,20 @@ export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
+  const apiKey = params.auth?.kind === "api-key" ? params.auth.apiKey : params.apiKey;
+  const defaultHeaders =
+    params.auth?.kind === "none" || !apiKey
+      ? undefined
+      : {
+          authorization: `Bearer ${apiKey}`,
+        };
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
-      defaultHeaders: {
-        authorization: `Bearer ${params.apiKey}`,
-      },
+      defaultHeaders,
       provider: params.provider,
       api: "openai-audio-transcriptions",
       capability: "audio",

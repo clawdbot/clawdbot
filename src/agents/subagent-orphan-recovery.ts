@@ -456,7 +456,7 @@ export function scheduleOrphanRecovery(params: {
             ),
           );
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (attempt < maxRetries) {
             const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
             log.warn(

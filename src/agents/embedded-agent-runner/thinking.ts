@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
@@ -427,7 +428,13 @@ function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
 ): boolean {
-  const message = formatErrorMessage(error);
+  return shouldRecoverAnthropicThinkingErrorMessage(formatErrorMessage(error), sessionMeta);
+}
+
+function shouldRecoverAnthropicThinkingErrorMessage(
+  message: string,
+  sessionMeta: RecoverySessionMeta,
+): boolean {
   if (!THINKING_BLOCK_ERROR_PATTERN.test(message)) {
     return false;
   }
@@ -440,17 +447,66 @@ function shouldRecoverAnthropicThinkingError(
   return true;
 }
 
+function isAssistantMessageErrorEvent(
+  event: unknown,
+): event is Extract<AssistantMessageEvent, { type: "error" }> {
+  return (
+    Boolean(event) && typeof event === "object" && (event as { type?: unknown }).type === "error"
+  );
+}
+
+function getAssistantMessageErrorText(
+  event: Extract<AssistantMessageEvent, { type: "error" }>,
+): string {
+  const errorMessage = (event.error as { errorMessage?: unknown }).errorMessage;
+  return typeof errorMessage === "string" ? errorMessage : "";
+}
+
+async function retryStreamWithoutThinking(
+  outer: ReturnType<typeof createAssistantMessageEventStream>,
+  retry: () => ReturnType<StreamFn>,
+): Promise<AssistantMessage> {
+  const retryStream = retry();
+  const resolvedRetry = retryStream instanceof Promise ? await retryStream : retryStream;
+  for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
+    outer.push(chunk as Parameters<typeof outer.push>[0]);
+  }
+  const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
+  return result as AssistantMessage;
+}
+
 async function pumpStreamWithRecovery(
   outer: ReturnType<typeof createAssistantMessageEventStream>,
   stream: ReturnType<StreamFn>,
   sessionMeta: RecoverySessionMeta,
   retry: () => ReturnType<StreamFn>,
 ): Promise<AssistantMessage> {
-  let yieldedChunk = false;
+  let yieldedOutput = false;
   try {
     const resolved = stream instanceof Promise ? await stream : stream;
     for await (const chunk of resolved as AsyncIterable<unknown>) {
-      yieldedChunk = true;
+      if (isAssistantMessageErrorEvent(chunk)) {
+        if (
+          shouldRecoverAnthropicThinkingErrorMessage(
+            getAssistantMessageErrorText(chunk),
+            sessionMeta,
+          )
+        ) {
+          if (yieldedOutput) {
+            log.warn(
+              `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
+            );
+          } else {
+            sessionMeta.recoveredAnthropicThinking = true;
+            log.warn(
+              `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+            );
+            return retryStreamWithoutThinking(outer, retry);
+          }
+        }
+      } else {
+        yieldedOutput = true;
+      }
       outer.push(chunk as Parameters<typeof outer.push>[0]);
     }
     const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
@@ -459,7 +515,7 @@ async function pumpStreamWithRecovery(
     if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
       throw error;
     }
-    if (yieldedChunk) {
+    if (yieldedOutput) {
       log.warn(
         `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
       );
@@ -469,13 +525,7 @@ async function pumpStreamWithRecovery(
     log.warn(
       `[session-recovery] Anthropic thinking error during stream; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
     );
-    const retryStream = retry();
-    const resolvedRetry = retryStream instanceof Promise ? await retryStream : retryStream;
-    for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
-      outer.push(chunk as Parameters<typeof outer.push>[0]);
-    }
-    const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
-    return result as AssistantMessage;
+    return retryStreamWithoutThinking(outer, retry);
   }
 }
 

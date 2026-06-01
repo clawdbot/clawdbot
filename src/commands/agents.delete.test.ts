@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveWorkspaceAttestationPath } from "../agents/workspace.js";
 import { loadSessionStore, resolveStorePath, saveSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -238,6 +239,40 @@ describe("agents delete command", () => {
     });
   });
 
+  it("trashes workspace attestations during local deletion", async () => {
+    await withStateDirEnv("openclaw-agents-delete-attestation-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {},
+      });
+      const attestationPath = resolveWorkspaceAttestationPath(path.join(stateDir, "workspace-ops"));
+      await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+      await fs.writeFile(
+        attestationPath,
+        `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+      );
+      const resolvedAttestationPath = path.join(
+        await fs.realpath(path.dirname(attestationPath)),
+        path.basename(attestationPath),
+      );
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).toContain(resolvedAttestationPath);
+    });
+  });
+
   it("purges legacy main-alias entries owned by the deleted default agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-main-alias-", async ({ stateDir }) => {
       const now = Date.now();
@@ -310,6 +345,12 @@ describe("agents delete command", () => {
     await withStateDirEnv("openclaw-agents-delete-shared-workspace-", async ({ stateDir }) => {
       const sharedWorkspace = path.join(stateDir, "workspace-shared");
       await fs.mkdir(sharedWorkspace, { recursive: true });
+      const attestationPath = resolveWorkspaceAttestationPath(sharedWorkspace);
+      await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+      await fs.writeFile(
+        attestationPath,
+        `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+      );
 
       const now = Date.now();
       const cfg: OpenClawConfig = {
@@ -344,6 +385,7 @@ describe("agents delete command", () => {
       expect(jsonOutput[0]?.workspaceSharedWith).toEqual(["main"]);
       const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
       expect(trashedPaths).not.toContain(sharedWorkspace);
+      expect(trashedPaths).not.toContain(attestationPath);
     });
   });
 

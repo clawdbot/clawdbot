@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** Settings screen for gateway skills and their readiness state. */
 @Composable
 internal fun SkillsSettingsScreen(
   viewModel: MainViewModel,

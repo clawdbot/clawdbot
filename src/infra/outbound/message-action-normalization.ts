@@ -10,6 +10,7 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
+/** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -29,6 +30,7 @@ export function normalizeMessageActionInput(params: {
     (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
 
   if (explicitTarget && hasLegacyTargetFields) {
+    // Canonical `target` wins over old `to`/`channelId` aliases before validation.
     delete normalizedArgs.to;
     delete normalizedArgs.channelId;
   }

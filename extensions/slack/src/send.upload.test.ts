@@ -59,11 +59,11 @@ const { sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest 
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
-  conversations: { open: ReturnType<typeof vi.fn> };
-  chat: { postMessage: ReturnType<typeof vi.fn> };
+  conversations: { open: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
+  chat: { postMessage: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
   files: {
-    getUploadURLExternal: ReturnType<typeof vi.fn>;
-    completeUploadExternal: ReturnType<typeof vi.fn>;
+    getUploadURLExternal: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
+    completeUploadExternal: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
   };
 };
 
@@ -135,18 +135,24 @@ function expectCompletedUpload(params: {
 function createUploadTestClient(): UploadTestClient {
   return {
     conversations: {
-      open: vi.fn(async () => ({ channel: { id: "D99RESOLVED" } })),
+      open: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+        channel: { id: "D99RESOLVED" },
+      })),
     },
     chat: {
-      postMessage: vi.fn(async () => ({ ts: "171234.567" })),
+      postMessage: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+        ts: "171234.567",
+      })),
     },
     files: {
-      getUploadURLExternal: vi.fn(async () => ({
+      getUploadURLExternal: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
         ok: true,
         upload_url: "https://uploads.slack.test/upload",
         file_id: "F001",
       })),
-      completeUploadExternal: vi.fn(async () => ({ ok: true })),
+      completeUploadExternal: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+        ok: true,
+      })),
     },
   } as unknown as UploadTestClient;
 }
@@ -235,8 +241,12 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("serializes concurrent sends to the same Slack target", async () => {
     const client = createUploadTestClient();
     let resolveFirst: (() => void) | undefined;
-    client.chat.postMessage.mockImplementation(async (payload: { text?: string }) => {
-      if (payload.text === "first") {
+    client.chat.postMessage.mockImplementation(async (payload: unknown) => {
+      const text =
+        typeof payload === "object" && payload !== null && "text" in payload
+          ? payload.text
+          : undefined;
+      if (text === "first") {
         await new Promise<void>((resolve) => {
           resolveFirst = resolve;
         });

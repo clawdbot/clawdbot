@@ -2046,18 +2046,20 @@ export async function loadSessionCostSummary(params: {
       if (entry.role === "assistant") {
         messageCounts.assistant += 1;
         messageCounts.total += 1;
-        const ts = entry.timestamp?.getTime();
-        if (ts !== undefined) {
+        const tsLocal = entry.timestamp?.getTime();
+        if (tsLocal !== undefined) {
           const latencyMs =
             entry.durationMs ??
-            (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
+            (lastUserTimestamp !== undefined
+              ? Math.max(0, tsLocal - lastUserTimestamp)
+              : undefined);
           if (
             latencyMs !== undefined &&
             Number.isFinite(latencyMs) &&
             latencyMs <= MAX_LATENCY_MS
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
+            const dayKey = formatDayKey(entry.timestamp ?? new Date(tsLocal));
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);

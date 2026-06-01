@@ -6,8 +6,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 internal object ChatEventText {
+  /** Extracts assistant reply text from a gateway chat event payload. */
   fun assistantTextFromPayload(payload: JsonObject): String? = assistantTextFromMessage(payload["message"])
 
+  /** Extracts text from assistant messages while ignoring non-assistant roles. */
   fun assistantTextFromMessage(messageEl: JsonElement?): String? {
     val message = messageEl.asObjectOrNull() ?: return null
     val role = message["role"].asStringOrNull()
@@ -19,6 +21,8 @@ internal object ChatEventText {
     when (content) {
       is JsonPrimitive -> content.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       is JsonArray ->
+        // Gateway content can be either bare strings or text-part objects;
+        // preserve part ordering when composing the spoken reply.
         content
           .mapNotNull(::textFromContentPart)
           .filter { it.isNotEmpty() }

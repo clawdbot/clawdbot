@@ -138,6 +138,9 @@ export async function loadProviderUsageSummary(
     if (entry.windows.length > 0) {
       return true;
     }
+    if (entry.summary?.trim()) {
+      return true;
+    }
     if (!entry.error) {
       return true;
     }

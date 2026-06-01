@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
@@ -45,6 +47,8 @@ function createRuntimeStub(stateDir?: string): PluginRuntime {
       },
     },
     state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("msteams", options),
       resolveStateDir: (env?: NodeJS.ProcessEnv) => {
         const override = env?.OPENCLAW_STATE_DIR?.trim();
         if (override) {
@@ -135,18 +139,6 @@ function requirePendingUpload(uploadId: string) {
   }
   return upload;
 }
-
-function expectInvokeResponse(sendActivity: ReturnType<typeof vi.fn>): void {
-  expect(
-    sendActivity.mock.calls.some(
-      ([activity]) =>
-        typeof activity === "object" &&
-        activity !== null &&
-        (activity as { type?: unknown }).type === "invokeResponse",
-    ),
-  ).toBe(true);
-}
-
 function expectPendingUploadFields(uploadId: string): void {
   const upload = requirePendingUpload(uploadId);
   expect(upload.conversationId).toBe("19:victim@thread.v2");

@@ -399,10 +399,7 @@ async function addMatrixAccount(params: {
     }
   }
 
-  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"] = {
-    currentDeviceId: null,
-    staleOpenClawDeviceIds: [],
-  };
+  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
   try {
     const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
     deviceHealth = {

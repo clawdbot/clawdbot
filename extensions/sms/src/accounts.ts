@@ -24,13 +24,16 @@ function getChannelConfig(cfg: OpenClawConfig): SmsChannelConfig | undefined {
   return cfg?.channels?.[CHANNEL_ID] as SmsChannelConfig | undefined;
 }
 
-function parseList(raw: string | string[] | undefined): string[] {
+function parseList(raw: unknown): string[] {
   if (!raw) {
     return [];
   }
-  return (Array.isArray(raw) ? raw : normalizeStringEntries(raw.split(",")))
-    .map((entry) => normalizeSmsAllowFrom(entry))
-    .filter(Boolean);
+  const entries = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? normalizeStringEntries(raw.split(","))
+      : [raw];
+  return entries.map((entry) => normalizeSmsAllowFrom(String(entry))).filter(Boolean);
 }
 
 function parseTextChunkLimit(raw: unknown): number {

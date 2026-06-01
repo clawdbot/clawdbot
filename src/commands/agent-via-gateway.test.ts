@@ -10,7 +10,19 @@ import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js"
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
+const loadConfigWithShellEnvFallback = vi.hoisted(() => vi.fn());
+const loadRuntimeConfig = vi.hoisted(() => vi.fn());
 const callGateway = vi.hoisted(() => vi.fn());
+const isGatewayCredentialsRequiredError = vi.hoisted(() =>
+  vi.fn(
+    (value: unknown) => value instanceof Error && value.name === "GatewayCredentialsRequiredError",
+  ),
+);
+const isGatewayExplicitAuthRequiredError = vi.hoisted(() =>
+  vi.fn(
+    (value: unknown) => value instanceof Error && value.name === "GatewayExplicitAuthRequiredError",
+  ),
+);
 const isGatewayTransportError = vi.hoisted(() =>
   vi.fn((value: unknown) => {
     if (!(value instanceof Error) || value.name !== "GatewayTransportError") {
@@ -39,7 +51,7 @@ const jsonRuntime = {
 };
 
 function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
-  loadConfig.mockReturnValue({
+  const config = {
     agents: {
       defaults: {
         timeoutSeconds: 600,
@@ -53,7 +65,10 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       ...overrides?.session,
     },
     gateway: overrides?.gateway,
-  });
+  };
+  loadConfig.mockReturnValue(config);
+  loadConfigWithShellEnvFallback.mockResolvedValue(config);
+  loadRuntimeConfig.mockReturnValue(config);
 }
 
 async function withTempStore(
@@ -144,7 +159,9 @@ async function waitForAgentCommandCall(expectedCalls = 1) {
     attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
     attempt += 1
   ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
   expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
 }
@@ -155,7 +172,9 @@ async function waitForGatewayCall(expectedCalls = 1) {
     attempt < 50 && callGateway.mock.calls.length < expectedCalls;
     attempt += 1
   ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
   expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
 }
@@ -207,9 +226,18 @@ function createGatewayNormalCloseError() {
   });
 }
 
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: loadConfig, loadConfig }));
+vi.mock("../config/gateway-dispatch-config.js", () => ({
+  readGatewayDispatchConfig: loadConfig,
+  readGatewayDispatchConfigWithShellEnvFallback: loadConfigWithShellEnvFallback,
+}));
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: loadRuntimeConfig,
+  loadConfig: loadRuntimeConfig,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
+  isGatewayCredentialsRequiredError,
+  isGatewayExplicitAuthRequiredError,
   isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
 }));
@@ -297,6 +325,28 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it.each(["/new", "/RESET", "/reset check status"] as const)(
+    "uses backend admin authority for %s gateway commands",
+    async (message) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message, sessionKey: "agent:main:main" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        expect(request.clientName).toBe("gateway-client");
+        expect(request.mode).toBe("backend");
+        expect(request.scopes).toEqual(["operator.admin"]);
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe(message);
+      });
+    },
+  );
+
   it("uses an explicit session key as the gateway session selector", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
@@ -310,9 +360,69 @@ describe("agentCliCommand", () => {
       expect(params.sessionId).toBeUndefined();
       expect(params.to).toBeUndefined();
       expect(request.config).toBe(loadConfig.mock.results[0]?.value);
-      expect(loadConfig).toHaveBeenCalledWith({ skipPluginValidation: true, pin: false });
+      expect(loadConfig).toHaveBeenCalledWith();
       expect(agentCommand).not.toHaveBeenCalled();
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
+    await withTempStore(async ({ store }) => {
+      const fastConfig = {
+        agents: { defaults: { timeoutSeconds: 600 } },
+        session: { store, mainKey: "main" },
+      };
+      const shellEnvConfig = {
+        ...fastConfig,
+        gateway: { auth: { mode: "token" as const } },
+      };
+      loadConfig.mockReset();
+      loadConfig.mockReturnValueOnce(fastConfig);
+      loadConfigWithShellEnvFallback.mockReset();
+      loadConfigWithShellEnvFallback.mockResolvedValueOnce(shellEnvConfig);
+      const authError = new Error("gateway agent requires credentials");
+      authError.name = "GatewayCredentialsRequiredError";
+      callGateway.mockRejectedValueOnce(authError);
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+      expect(loadConfig).toHaveBeenCalledWith();
+      expect(loadConfigWithShellEnvFallback).toHaveBeenCalledTimes(1);
+      expect(loadConfigWithShellEnvFallback).toHaveBeenCalledWith();
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(requireRecord(callGateway.mock.calls[0]?.[0], "first gateway request").config).toBe(
+        fastConfig,
+      );
+      expect(requireRecord(callGateway.mock.calls[1]?.[0], "second gateway request").config).toBe(
+        shellEnvConfig,
+      );
+    });
+  });
+
+  it("retries gateway dispatch with shell env fallback for env URL auth", async () => {
+    await withTempStore(async ({ store }) => {
+      const fastConfig = {
+        agents: { defaults: { timeoutSeconds: 600 } },
+        session: { store, mainKey: "main" },
+      };
+      loadConfig.mockReset();
+      loadConfig.mockReturnValueOnce(fastConfig);
+      loadConfigWithShellEnvFallback.mockReset();
+      loadConfigWithShellEnvFallback.mockResolvedValueOnce(fastConfig);
+      const authError = new Error("gateway url override requires explicit credentials");
+      authError.name = "GatewayExplicitAuthRequiredError";
+      callGateway.mockRejectedValueOnce(authError);
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+      expect(loadConfig).toHaveBeenCalledWith();
+      expect(loadConfigWithShellEnvFallback).toHaveBeenCalledTimes(1);
+      expect(loadConfigWithShellEnvFallback).toHaveBeenCalledWith();
+      expect(callGateway).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -616,8 +726,8 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAbort = { method, params, opts };
+                  await onSignalAbort?.(async (method, paramsResult, opts) => {
+                    sameConnectionAbort = { method, params: paramsResult, opts };
                     return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
                   });
                   const err = new Error("gateway request aborted before accepted ack");
@@ -720,8 +830,8 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAborts.push({ method, params, opts });
+                  await onSignalAbort?.(async (method, paramsValue, opts) => {
+                    sameConnectionAborts.push({ method, params: paramsValue, opts });
                     return sameConnectionAborts.length < 3
                       ? { ok: true, aborted: false, runIds: [] }
                       : { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
@@ -794,8 +904,8 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAborts.push({ method, params, opts });
+                  await onSignalAbort?.(async (method, paramsLocal, opts) => {
+                    sameConnectionAborts.push({ method, params: paramsLocal, opts });
                     return { ok: true, aborted: false, runIds: [] };
                   });
                   const err = new Error("gateway request aborted before registration");
@@ -1463,10 +1573,7 @@ describe("agentCliCommand", () => {
         };
         expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
         expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
-        expect(loadConfig.mock.calls).toEqual([
-          [{ skipPluginValidation: true, pin: false }],
-          [{ skipPluginValidation: true, pin: false }],
-        ]);
+        expect(loadConfig.mock.calls).toEqual([[], []]);
       },
       { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
     );
@@ -1654,7 +1761,7 @@ describe("agentCliCommand", () => {
       );
       expect(localOpts.agentId).toBe("ops");
       expect(localOpts.sessionKey).toBe("agent:ops:incident-42");
-      expect(loadConfig).toHaveBeenCalledWith();
+      expect(loadRuntimeConfig).toHaveBeenCalledWith();
     });
   });
 

@@ -172,6 +172,16 @@ function normalizeTransport(params: {
       baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
     };
   }
+  if (
+    params.provider === "google" &&
+    params.context.api == null &&
+    params.context.baseUrl === "https://generativelanguage.googleapis.com"
+  ) {
+    return {
+      api: "google-generative-ai",
+      baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
+    };
+  }
   if (isNativeOpenAiTransport) {
     return {
       api: "openai-responses",

@@ -169,13 +169,13 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
     async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
       const attachment = this.attachments.find((item) => item.index === attachmentIndex);
-      const path = attachment?.path;
-      const buffer = path ? acpAttachmentBuffers.get(path) : undefined;
+      const pathLocal = attachment?.path;
+      const buffer = pathLocal ? acpAttachmentBuffers.get(pathLocal) : undefined;
       if (buffer) {
         return {
           buffer,
           mime: "image/png",
-          fileName: path,
+          fileName: pathLocal,
           size: buffer.length,
         };
       }
@@ -212,7 +212,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, _label: string) {
   return source.mock.calls[callIndex]?.[argIndex];
 }
 

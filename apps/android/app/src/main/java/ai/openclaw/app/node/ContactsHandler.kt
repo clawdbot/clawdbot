@@ -17,6 +17,9 @@ import kotlinx.serialization.json.put
 
 private const val DEFAULT_CONTACTS_LIMIT = 25
 
+/**
+ * Normalized Android contact row returned through the contacts commands.
+ */
 internal data class ContactRecord(
   val identifier: String,
   val displayName: String,
@@ -27,11 +30,17 @@ internal data class ContactRecord(
   val emails: List<String>,
 )
 
+/**
+ * Parsed contacts.search request with bounded result count.
+ */
 internal data class ContactsSearchRequest(
   val query: String?,
   val limit: Int,
 )
 
+/**
+ * Parsed contacts.add request before ContentProviderOperation batching.
+ */
 internal data class ContactsAddRequest(
   val givenName: String?,
   val familyName: String?,
@@ -41,6 +50,9 @@ internal data class ContactsAddRequest(
   val emails: List<String>,
 )
 
+/**
+ * Injectable ContactsProvider facade for command tests and Android runtime access.
+ */
 internal interface ContactsDataSource {
   fun hasReadPermission(context: Context): Boolean
 
@@ -82,6 +94,7 @@ private object SystemContactsDataSource : ContactsDataSource {
       selection = null
       selectionArgs = null
     } else {
+      // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
       selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'"
       selectionArgs = arrayOf("%${escapeLikePattern(request.query)}%")
     }
@@ -119,6 +132,7 @@ private object SystemContactsDataSource : ContactsDataSource {
         .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, null)
         .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, null)
         .build()
+    // Subsequent Data rows use back-reference 0 to attach to the RawContact inserted above.
     if (!request.givenName.isNullOrEmpty() || !request.familyName.isNullOrEmpty() || !request.displayName.isNullOrEmpty()) {
       operations +=
         ContentProviderOperation
@@ -168,6 +182,7 @@ private object SystemContactsDataSource : ContactsDataSource {
       rawContactUri.lastPathSegment?.toLongOrNull()
         ?: throw IllegalStateException("contact insert failed")
     val contactId =
+      // Android returns the RawContact id; resolve the aggregate Contact id used by search APIs.
       resolveContactIdForRawContact(resolver, rawContactId)
         ?: throw IllegalStateException("contact insert failed")
     return loadContactRecord(
@@ -330,12 +345,16 @@ private object SystemContactsDataSource : ContactsDataSource {
   }
 }
 
+/**
+ * Handles contacts.search and contacts.add gateway commands through Android ContactsProvider.
+ */
 class ContactsHandler private constructor(
   private val appContext: Context,
   private val dataSource: ContactsDataSource,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemContactsDataSource)
 
+  /** Searches contacts by optional display-name substring with bounded result count. */
   fun handleContactsSearch(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -369,6 +388,7 @@ class ContactsHandler private constructor(
     }
   }
 
+  /** Adds a local contact after validating that at least one user-visible field is present. */
   fun handleContactsAdd(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasWritePermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -418,6 +438,7 @@ class ContactsHandler private constructor(
         null
       } ?: return null
     val query = (params["query"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null }
+    // Keep gateway-driven searches bounded even if the model asks for a large contact dump.
     val limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CONTACTS_LIMIT).coerceIn(1, 200)
     return ContactsSearchRequest(query = query, limit = limit)
   }
@@ -435,6 +456,7 @@ class ContactsHandler private constructor(
       organizationName = (params["organizationName"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
       displayName = (params["displayName"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
       phoneNumbers = stringArray(params["phoneNumbers"] as? JsonArray),
+      // Store emails case-normalized so repeated model calls do not create casing-only duplicates.
       emails = stringArray(params["emails"] as? JsonArray).map { it.lowercase() },
     )
   }
@@ -458,6 +480,7 @@ class ContactsHandler private constructor(
     }
 
   companion object {
+    /** Creates a handler with an injected contacts source for parser and payload tests. */
     internal fun forTesting(
       appContext: Context,
       dataSource: ContactsDataSource,

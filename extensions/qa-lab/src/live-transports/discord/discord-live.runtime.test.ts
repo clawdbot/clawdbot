@@ -426,7 +426,7 @@ describe("discord live qa runtime", () => {
       await vi.advanceTimersByTimeAsync(600);
 
       await expect(readyPromise).resolves.toBeUndefined();
-      expect(gateway.call).toHaveBeenCalledTimes(2);
+      expect(gateway["call"]).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -484,7 +484,7 @@ describe("discord live qa runtime", () => {
       "fetch",
       vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
         expect(init?.headers).toBeInstanceOf(Headers);
-        expect((init?.headers as Headers).get("authorization")).toBe("Bot token");
+        expect((init!.headers as Headers).get("authorization")).toBe("Bot token");
         return new Response(
           JSON.stringify([
             { id: "623456789012345678", name: "help" },

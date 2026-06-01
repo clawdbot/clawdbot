@@ -50,6 +50,48 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function buildDedupeTerminalSnapshot(params: {
+  status: AgentRunTerminalOutcome["status"];
+  startedAt?: number;
+  endedAt: number;
+  error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded: boolean;
+  timeoutPhase: unknown;
+  providerStarted: unknown;
+}): AgentWaitTerminalSnapshot {
+  const terminalOutcome = buildAgentRunTerminalOutcome({
+    status: params.status,
+    livenessState: params.livenessState,
+    error: params.error,
+    stopReason: params.stopReason,
+    timeoutPhase: params.timeoutPhase,
+    providerStarted: params.providerStarted,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+  });
+  const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
+  return {
+    status: normalized.status,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+    error:
+      normalized.status === "error"
+        ? normalized.error
+        : normalized.status === "timeout"
+          ? terminalOutcome.error
+          : undefined,
+    stopReason: params.stopReason,
+    livenessState: params.livenessState,
+    ...(params.yielded ? { yielded: params.yielded } : {}),
+    ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
+    ...(terminalOutcome.providerStarted !== undefined
+      ? { providerStarted: terminalOutcome.providerStarted }
+      : {}),
+  };
+}
+
 function removeWaiter(runId: string, waiter: () => void): void {
   const waiters = AGENT_WAITERS_BY_RUN_ID.get(runId);
   if (!waiters) {
@@ -75,6 +117,8 @@ function addWaiter(runId: string, waiter: () => void): () => void {
   return () => removeWaiter(normalizedRunId, waiter);
 }
 
+// Waiters are keyed only by run id so chat and agent dedupe entries can wake
+// the same `agent.wait` request regardless of which path finishes first.
 function notifyWaiters(runId: string): void {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -125,69 +169,26 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         ? payload.summary
         : entry.error?.message;
 
-  if (status === "ok" || status === "timeout") {
-    const terminalOutcome = buildAgentRunTerminalOutcome({
-      status,
-      livenessState,
-      error: errorMessage,
-      stopReason,
-      timeoutPhase,
-      providerStarted,
-      startedAt,
-      endedAt,
-    });
-    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
-    return {
-      status: normalized.status,
-      startedAt,
-      endedAt,
-      error:
-        normalized.status === "error"
-          ? normalized.error
-          : normalized.status === "timeout"
-            ? terminalOutcome.error
-            : undefined,
-      stopReason,
-      livenessState,
-      ...(yielded ? { yielded } : {}),
-      ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
-      ...(terminalOutcome.providerStarted !== undefined
-        ? { providerStarted: terminalOutcome.providerStarted }
-        : {}),
-    };
+  const terminalStatus =
+    status === "ok" || status === "timeout" || status === "error"
+      ? status
+      : entry.ok
+        ? null
+        : "error";
+  if (!terminalStatus) {
+    return null;
   }
-  if (status === "error" || !entry.ok) {
-    const terminalOutcome = buildAgentRunTerminalOutcome({
-      status: "error",
-      livenessState,
-      error: errorMessage,
-      stopReason,
-      timeoutPhase,
-      providerStarted,
-      startedAt,
-      endedAt,
-    });
-    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
-    return {
-      status: normalized.status,
-      startedAt,
-      endedAt,
-      error:
-        normalized.status === "error"
-          ? normalized.error
-          : normalized.status === "timeout"
-            ? terminalOutcome.error
-            : undefined,
-      stopReason,
-      livenessState,
-      ...(yielded ? { yielded } : {}),
-      ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
-      ...(terminalOutcome.providerStarted !== undefined
-        ? { providerStarted: terminalOutcome.providerStarted }
-        : {}),
-    };
-  }
-  return null;
+  return buildDedupeTerminalSnapshot({
+    status: terminalStatus,
+    startedAt,
+    endedAt,
+    error: errorMessage,
+    stopReason,
+    livenessState,
+    yielded,
+    timeoutPhase,
+    providerStarted,
+  });
 }
 
 function terminalOutcomeFromWaitSnapshot(
@@ -204,6 +205,8 @@ export function readTerminalSnapshotFromGatewayDedupe(params: {
   runId: string;
   ignoreAgentTerminalSnapshot?: boolean;
 }): AgentWaitTerminalSnapshot | null {
+  // Agent and chat handlers both cache terminal state. Project them into one
+  // wait result while preserving stronger terminal outcomes such as hard timeout.
   if (params.ignoreAgentTerminalSnapshot) {
     const chatEntry = params.dedupe.get(`chat:${params.runId}`);
     if (!chatEntry) {
@@ -255,6 +258,8 @@ export async function waitForTerminalGatewayDedupe(params: {
   return await new Promise((resolve) => {
     let settled = false;
 
+    // Always re-read from the dedupe map on wake; waiters are notifications,
+    // not carriers of terminal data, so stale callbacks cannot resolve a run.
     const finish = (snapshot: AgentWaitTerminalSnapshot | null) => {
       if (settled) {
         return;
@@ -266,7 +271,7 @@ export async function waitForTerminalGatewayDedupe(params: {
       if (onAbort) {
         params.signal?.removeEventListener("abort", onAbort);
       }
-      removeWaiter?.();
+      removeWaiterLocal?.();
       resolve(snapshot);
     };
 
@@ -277,7 +282,7 @@ export async function waitForTerminalGatewayDedupe(params: {
       }
     };
 
-    const removeWaiter: (() => void) | undefined = addWaiter(params.runId, onWake);
+    const removeWaiterLocal: (() => void) | undefined = addWaiter(params.runId, onWake);
     onWake();
     if (settled) {
       return;
@@ -299,6 +304,8 @@ export function setGatewayDedupeEntry(params: {
   key: string;
   entry: DedupeEntry;
 }) {
+  // Preserve sticky terminal outcomes before publishing the new entry. This
+  // protects waiters from late accepted/in-flight rewrites for the same run id.
   const existing = params.dedupe.get(params.key);
   const existingSnapshot = existing ? readTerminalSnapshotFromDedupeEntry(existing) : null;
   const incomingSnapshot = readTerminalSnapshotFromDedupeEntry(params.entry);

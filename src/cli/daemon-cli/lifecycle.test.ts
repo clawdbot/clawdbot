@@ -54,6 +54,15 @@ const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() 
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
 const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
+const findInstalledSystemdGatewayScope = vi.hoisted(() =>
+  vi.fn<() => Promise<{ scope: "user" | "system"; unitName: string; unitPath: string } | null>>(
+    async () => null,
+  ),
+);
+const restartSystemdService = vi.hoisted(() =>
+  vi.fn<() => Promise<{ outcome: "completed" }>>(async () => ({ outcome: "completed" })),
+);
+const stopSystemdService = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
 
 function requireMockCallArg(
   mockFn: { mock: { calls: unknown[][] } },
@@ -111,6 +120,12 @@ vi.mock("../../config/commands.js", () => ({
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
+}));
+
+vi.mock("../../daemon/systemd.js", () => ({
+  findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  restartSystemdService: () => restartSystemdService(),
+  stopSystemdService: () => stopSystemdService(),
 }));
 
 vi.mock("./launchd-recovery.js", () => ({
@@ -208,6 +223,12 @@ describe("runDaemonRestart health checks", () => {
     service.restart.mockResolvedValue({ outcome: "completed" });
     runServiceStart.mockResolvedValue(undefined);
     recoverInstalledLaunchAgent.mockResolvedValue(null);
+    findInstalledSystemdGatewayScope.mockReset();
+    findInstalledSystemdGatewayScope.mockResolvedValue(null);
+    restartSystemdService.mockReset();
+    restartSystemdService.mockResolvedValue({ outcome: "completed" });
+    stopSystemdService.mockReset();
+    stopSystemdService.mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -605,6 +626,89 @@ describe("runDaemonRestart health checks", () => {
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "Gateway restart is disabled in the running gateway config",
     );
+  });
+
+  it("delegates system-scope restart to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw.service",
+      unitPath: "/etc/systemd/system/openclaw.service",
+    });
+    restartSystemdService.mockResolvedValue({ outcome: "completed" });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
+
+    expect(restartSystemdService).toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("surfaces systemd sudo guidance and never signals when restarting a system-scope unit as non-root (openclaw#87577)", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw.service",
+      unitPath: "/etc/systemd/system/openclaw.service",
+    });
+    restartSystemdService.mockRejectedValue(
+      new Error(
+        "openclaw.service is a system-scope unit (/etc/systemd/system/openclaw.service); run `sudo systemctl restart openclaw.service` to restart it",
+      ),
+    );
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
+      /sudo systemctl restart openclaw\.service/,
+    );
+
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("delegates system-scope stop to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    stopSystemdService.mockResolvedValue(undefined);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
+      await params.onNotLoaded?.();
+    });
+
+    await expect(runDaemonStop({ json: true })).resolves.toBeUndefined();
+    expect(stopSystemdService).toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+  });
+
+  it("surfaces systemd sudo guidance and never signals when stopping a system-scope unit as non-root (openclaw#87577)", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    stopSystemdService.mockRejectedValue(
+      new Error(
+        "openclaw-gateway.service is a system-scope unit (/etc/systemd/system/openclaw-gateway.service); run `sudo systemctl stop openclaw-gateway.service` to stop it",
+      ),
+    );
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
+      await params.onNotLoaded?.();
+    });
+
+    await expect(runDaemonStop({ json: true })).rejects.toThrow(
+      /sudo systemctl stop openclaw-gateway\.service/,
+    );
+    expect(stopSystemdService).toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
   it("skips unmanaged signaling for pids that are not live gateway processes", async () => {

@@ -18,7 +18,7 @@ function startControlUiAssetsBuild(params: {
         params.log.warn(`gateway: ${result.message}`);
       }
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       params.log.warn(
         `gateway: Control UI assets build failed: ${error instanceof Error ? error.message : String(error)}`,
       );

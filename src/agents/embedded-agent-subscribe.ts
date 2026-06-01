@@ -272,7 +272,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       if (!isPromiseLike<void>(maybeTask)) {
         return true;
       }
-      const task = Promise.resolve(maybeTask).catch((err) => {
+      const task = Promise.resolve(maybeTask).catch((err: unknown) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
       pendingBlockReplyTasks.add(task);
@@ -452,7 +452,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         state.compactionRetryReject = reject;
       });
       // Prevent unhandled rejection if rejected after all consumers have resolved
-      state.compactionRetryPromise.catch((err) => {
+      state.compactionRetryPromise.catch((err: unknown) => {
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
@@ -659,7 +659,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const stripBlockTags = (
     text: string,
-    state: {
+    stateLocal: {
       thinking: boolean;
       final: boolean;
       inlineCode?: InlineCodeState;
@@ -674,9 +674,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
     options?: { final?: boolean; completeMarkdownChunk?: boolean },
   ): string => {
-    const input = `${state.pendingFenceFragment ?? ""}${state.pendingTagFragment ?? ""}${text}`;
-    state.pendingFenceFragment = undefined;
-    state.pendingTagFragment = undefined;
+    const input = `${stateLocal.pendingFenceFragment ?? ""}${stateLocal.pendingTagFragment ?? ""}${text}`;
+    stateLocal.pendingFenceFragment = undefined;
+    stateLocal.pendingTagFragment = undefined;
     if (!input) {
       return text;
     }
@@ -685,19 +685,19 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       ? { text: input, pendingFenceFragment: undefined }
       : options?.completeMarkdownChunk
         ? { text: input, pendingFenceFragment: undefined }
-        : splitTrailingFenceFragment(input, state.fence?.atLineStart ?? true);
-    state.pendingFenceFragment = pendingFenceFragment;
+        : splitTrailingFenceFragment(input, stateLocal.fence?.atLineStart ?? true);
+    stateLocal.pendingFenceFragment = pendingFenceFragment;
     if (!fenceInput) {
       return "";
     }
 
-    const inlineStateStart = state.inlineCode ?? createInlineCodeState();
-    const fenceStateStart = state.fence;
+    const inlineStateStart = stateLocal.inlineCode ?? createInlineCodeState();
+    const fenceStateStart = stateLocal.fence;
     const initialCodeSpans = buildCodeSpanIndex(fenceInput, inlineStateStart, fenceStateStart);
     const { text: scanText, pendingTagFragment } = options?.final
       ? { text: fenceInput, pendingTagFragment: undefined }
       : splitTrailingBlockTagFragment(fenceInput, initialCodeSpans.isInside);
-    state.pendingTagFragment = pendingTagFragment;
+    stateLocal.pendingTagFragment = pendingTagFragment;
     if (!scanText) {
       return "";
     }
@@ -707,31 +707,35 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let lastCodeIndex = 0;
-    let inThinking = state.thinking;
+    let inThinking = stateLocal.thinking;
     // Hidden reasoning has its own code state: malformed hidden fences must not
     // mark later visible text as code, but literal close tags there stay hidden.
-    let hiddenInlineState: InlineCodeState = state.reasoningInlineCode
-      ? { ...state.reasoningInlineCode }
+    let hiddenInlineState: InlineCodeState = stateLocal.reasoningInlineCode
+      ? { ...stateLocal.reasoningInlineCode }
       : createInlineCodeState();
-    let hiddenFenceState: FenceScanState | undefined = state.reasoningFence?.open
-      ? { atLineStart: state.reasoningFence.atLineStart, open: { ...state.reasoningFence.open } }
-      : state.reasoningFence
-        ? { atLineStart: state.reasoningFence.atLineStart }
+    let hiddenFenceState: FenceScanState | undefined = stateLocal.reasoningFence?.open
+      ? {
+          atLineStart: stateLocal.reasoningFence.atLineStart,
+          open: { ...stateLocal.reasoningFence.open },
+        }
+      : stateLocal.reasoningFence
+        ? { atLineStart: stateLocal.reasoningFence.atLineStart }
         : undefined;
-    let hiddenPendingFenceFragment = state.reasoningPendingFenceFragment;
-    state.reasoningPendingFenceFragment = undefined;
+    let hiddenPendingFenceFragment = stateLocal.reasoningPendingFenceFragment;
+    stateLocal.reasoningPendingFenceFragment = undefined;
     const advanceHiddenCodeState = (segment: string) => {
       const hiddenInput = `${hiddenPendingFenceFragment ?? ""}${segment}`;
       hiddenPendingFenceFragment = undefined;
       if (!hiddenInput) {
         return;
       }
-      const { text: hiddenFenceInput, pendingFenceFragment } = options?.final
-        ? { text: hiddenInput, pendingFenceFragment: undefined }
-        : options?.completeMarkdownChunk
+      const { text: hiddenFenceInput, pendingFenceFragment: pendingFenceFragmentLocal } =
+        options?.final
           ? { text: hiddenInput, pendingFenceFragment: undefined }
-          : splitTrailingFenceFragment(hiddenInput, hiddenFenceState?.atLineStart ?? true);
-      hiddenPendingFenceFragment = pendingFenceFragment;
+          : options?.completeMarkdownChunk
+            ? { text: hiddenInput, pendingFenceFragment: undefined }
+            : splitTrailingFenceFragment(hiddenInput, hiddenFenceState?.atLineStart ?? true);
+      hiddenPendingFenceFragment = pendingFenceFragmentLocal;
       if (!hiddenFenceInput) {
         return;
       }
@@ -786,26 +790,26 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!inThinking) {
       processed += scanText.slice(lastIndex);
     }
-    state.thinking = inThinking;
-    state.reasoningInlineCode = inThinking ? hiddenInlineState : undefined;
-    state.reasoningFence = inThinking ? hiddenFenceState : undefined;
-    state.reasoningPendingFenceFragment = inThinking ? hiddenPendingFenceFragment : undefined;
+    stateLocal.thinking = inThinking;
+    stateLocal.reasoningInlineCode = inThinking ? hiddenInlineState : undefined;
+    stateLocal.reasoningFence = inThinking ? hiddenFenceState : undefined;
+    stateLocal.reasoningPendingFenceFragment = inThinking ? hiddenPendingFenceFragment : undefined;
 
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
     const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart, fenceStateStart);
     if (!params.enforceFinalTag) {
-      state.inlineCode = finalCodeSpans.inlineState;
-      state.fence = finalCodeSpans.fenceState;
+      stateLocal.inlineCode = finalCodeSpans.inlineState;
+      stateLocal.fence = finalCodeSpans.fenceState;
       return stripFinalTagsOutsideCodeSpans(processed, finalCodeSpans.isInside);
     }
 
     // If enforcement is enabled, only return text that appeared inside a <final> block.
     let result = "";
     let lastFinalIndex = 0;
-    let inFinal = state.final;
-    let everInFinal = state.final;
+    let inFinal = stateLocal.final;
+    let everInFinal = stateLocal.final;
 
     for (const match of findFinalTagMatches(processed)) {
       const idx = match.index;
@@ -840,32 +844,32 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (inFinal) {
       result += processed.slice(lastFinalIndex);
     }
-    state.final = inFinal;
+    stateLocal.final = inFinal;
 
     // Strict Mode: If enforcing final tags, we MUST NOT return content unless
     // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
     // (e.g. "**Locating Manulife**...") that the model emitted without <think> tags.
     if (!everInFinal) {
-      state.inlineCode = createInlineCodeState();
-      state.fence = finalCodeSpans.fenceState;
-      state.finalInlineCode = undefined;
-      state.finalFence = undefined;
+      stateLocal.inlineCode = createInlineCodeState();
+      stateLocal.fence = finalCodeSpans.fenceState;
+      stateLocal.finalInlineCode = undefined;
+      stateLocal.finalFence = undefined;
       return "";
     }
 
     // Hardened Cleanup: Remove any remaining <final> tags that might have been
     // missed (e.g. nested tags or hallucinations) to prevent leakage.
-    const finalResultInlineStateStart = state.finalInlineCode ?? createInlineCodeState();
-    const finalResultFenceStateStart = state.finalFence;
+    const finalResultInlineStateStart = stateLocal.finalInlineCode ?? createInlineCodeState();
+    const finalResultFenceStateStart = stateLocal.finalFence;
     const resultCodeSpans = buildCodeSpanIndex(
       result,
       finalResultInlineStateStart,
       finalResultFenceStateStart,
     );
-    state.inlineCode = finalCodeSpans.inlineState;
-    state.fence = finalCodeSpans.fenceState;
-    state.finalInlineCode = inFinal ? resultCodeSpans.inlineState : undefined;
-    state.finalFence = inFinal ? resultCodeSpans.fenceState : undefined;
+    stateLocal.inlineCode = finalCodeSpans.inlineState;
+    stateLocal.fence = finalCodeSpans.fenceState;
+    stateLocal.finalInlineCode = inFinal ? resultCodeSpans.inlineState : undefined;
+    stateLocal.finalFence = inFinal ? resultCodeSpans.fenceState : undefined;
     return stripFinalTagsOutsideCodeSpans(result, resultCodeSpans.isInside);
   };
 

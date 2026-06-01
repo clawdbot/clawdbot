@@ -3,6 +3,7 @@ import * as tls from "node:tls";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { ManagedProxyTlsOptions } from "./proxy/proxy-tls.js";
 
+/** Parameters for opening an APNs HTTP/2 tunnel through an HTTP(S) forward proxy. */
 export type HttpConnectTunnelParams = {
   proxyUrl: URL;
   proxyTls?: ManagedProxyTlsOptions;
@@ -97,6 +98,8 @@ function readProxyConnectResponse(
 
   const responseHeader = nextBuffer.subarray(0, bodyOffset).toString("latin1");
   const statusLine = responseHeader.split("\r\n", 1)[0] ?? "";
+  // CONNECT can coalesce response headers and first tunneled bytes. Preserve
+  // those bytes so the target TLS handshake sees the stream from byte zero.
   const tunneledBytes =
     nextBuffer.length > bodyOffset ? nextBuffer.subarray(bodyOffset) : undefined;
   return {
@@ -113,6 +116,7 @@ function isSuccessfulConnectStatusLine(statusLine: string): boolean {
 
 function connectToProxy(proxy: URL, proxyTls: ManagedProxyTlsOptions | undefined): ProxySocket {
   const proxyHost = resolveProxyHost(proxy);
+  // TLS SNI cannot be an IP literal; omit it for IP-addressed HTTPS proxies.
   const proxyServername = net.isIP(proxyHost) === 0 ? proxyHost : undefined;
   const connectOptions = {
     host: proxyHost,
@@ -210,6 +214,8 @@ class HttpConnectTunnelAttempt {
     this.clearTimer();
     this.cleanupProxyListeners();
     this.cleanupTargetTlsListeners();
+    // Failure may happen during either CONNECT or target TLS setup. Destroy both
+    // sockets so half-open proxy tunnels do not leak into the process.
     this.targetTlsSocket?.destroy();
     this.proxySocket?.destroy();
     this.reject(formatTunnelFailure(this.params.proxyUrl, err));
@@ -310,6 +316,7 @@ class HttpConnectTunnelAttempt {
   };
 }
 
+/** Opens a TLS-over-CONNECT tunnel and verifies the target negotiated HTTP/2. */
 export async function openHttpConnectTunnel(
   params: HttpConnectTunnelParams,
 ): Promise<tls.TLSSocket> {

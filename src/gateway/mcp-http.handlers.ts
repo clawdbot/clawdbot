@@ -9,7 +9,11 @@ import {
   jsonRpcResult,
   type JsonRpcRequest,
 } from "./mcp-http.protocol.js";
-import type { McpLoopbackTool, McpToolSchemaEntry } from "./mcp-http.schema.js";
+import {
+  readMcpLoopbackToolName,
+  type McpLoopbackTool,
+  type McpToolSchemaEntry,
+} from "./mcp-http.schema.js";
 
 type McpTextContent = {
   type: "text";
@@ -62,9 +66,23 @@ export async function handleMcpJsonRpc(params: {
     case "tools/list":
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
-      const toolName = methodParams?.name as string;
+      const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
       const toolArgs = (methodParams?.arguments ?? {}) as Record<string, unknown>;
-      const tool = params.tools.find((candidate) => candidate.name === toolName);
+      if (!toolName) {
+        return jsonRpcResult(id, {
+          content: [{ type: "text", text: "Tool not available: unknown" }],
+          isError: true,
+        });
+      }
+      if (!params.toolSchema.some((tool) => tool.name === toolName)) {
+        return jsonRpcResult(id, {
+          content: [{ type: "text", text: `Tool not available: ${toolName}` }],
+          isError: true,
+        });
+      }
+      const tool = params.tools.find(
+        (candidate) => readMcpLoopbackToolName(candidate) === toolName,
+      );
       if (!tool) {
         return jsonRpcResult(id, {
           content: [{ type: "text", text: `Tool not available: ${toolName}` }],

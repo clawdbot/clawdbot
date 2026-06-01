@@ -21,11 +21,18 @@ import kotlinx.serialization.json.put
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
 private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 
+/**
+ * Trims notification text and caps payload size before it enters gateway-visible state.
+ */
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
+  // Notification extras can include long previews; cap before sending over node events.
   return normalized.take(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
 }
 
+/**
+ * Stable notification snapshot entry exposed through the Android notifications command.
+ */
 data class DeviceNotificationEntry(
   val key: String,
   val packageName: String,
@@ -53,24 +60,36 @@ internal fun DeviceNotificationEntry.toJsonObject(): JsonObject =
     channelId?.let { put("channelId", JsonPrimitive(it)) }
   }
 
+/**
+ * Listener state exposed to the gateway, including whether Android has connected the service.
+ */
 data class DeviceNotificationSnapshot(
   val enabled: Boolean,
   val connected: Boolean,
   val notifications: List<DeviceNotificationEntry>,
 )
 
+/**
+ * Gateway-supported notification actions mapped to Android listener operations.
+ */
 enum class NotificationActionKind {
   Open,
   Dismiss,
   Reply,
 }
 
+/**
+ * Gateway action request; [key] must match Android's StatusBarNotification key.
+ */
 data class NotificationActionRequest(
   val key: String,
   val kind: NotificationActionKind,
   val replyText: String? = null,
 )
 
+/**
+ * Normalized notification action result returned through node.invoke.
+ */
 data class NotificationActionResult(
   val ok: Boolean,
   val code: String? = null,
@@ -79,6 +98,9 @@ data class NotificationActionResult(
 
 internal fun actionRequiresClearableNotification(kind: NotificationActionKind): Boolean = kind == NotificationActionKind.Dismiss
 
+/**
+ * Process-local cache of active notifications mirrored from Android listener callbacks.
+ */
 private object DeviceNotificationStore {
   private val lock = Any()
   private var connected = false
@@ -109,6 +131,7 @@ private object DeviceNotificationStore {
     synchronized(lock) {
       connected = value
       if (!value) {
+        // Android invalidates activeNotifications when the listener disconnects.
         byKey.clear()
       }
     }
@@ -127,6 +150,9 @@ private object DeviceNotificationStore {
   }
 }
 
+/**
+ * Android notification listener that mirrors notification state and executes gateway actions.
+ */
 class DeviceNotificationListenerService : NotificationListenerService() {
   private val securePrefs by lazy { SecurePrefs(applicationContext) }
   private val forwardingLimiter = NotificationBurstLimiter()
@@ -226,6 +252,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (policy.isWithinQuietHours(nowEpochMs = nowEpochMs)) {
       return null
     }
+    // Apply burst limits after package/quiet-hour filters so blocked notifications do not consume quota.
     if (!forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
       return null
     }
@@ -288,6 +315,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     private fun serviceComponent(context: Context): ComponentName = ComponentName(context, DeviceNotificationListenerService::class.java)
 
+    /** Installs the node event sink used to emit filtered notification change events. */
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
     }
@@ -299,6 +327,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       val hasNew = prefs.contains(recentPackagesPref)
       val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
       if (!hasNew && legacy.isNotEmpty()) {
+        // Keep recent package suggestions across the preference-key rename.
         prefs.edit {
           putString(recentPackagesPref, legacy)
           remove(legacyRecentPackagesPref)
@@ -308,6 +337,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       }
     }
 
+    /** Returns recent third-party packages seen by the listener for settings suggestions. */
     fun recentPackages(context: Context): List<String> {
       migrateLegacyRecentPackagesIfNeeded(context)
       val prefs = recentPackagesPrefs(context)
@@ -319,22 +349,26 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         .distinct()
     }
 
+    /** Checks whether Android has granted listener access to this service component. */
     fun isAccessEnabled(context: Context): Boolean {
       val manager = context.getSystemService(NotificationManager::class.java) ?: return false
       return manager.isNotificationListenerAccessGranted(serviceComponent(context))
     }
 
+    /** Reads the current mirrored notification snapshot without forcing service startup. */
     fun snapshot(
       context: Context,
       enabled: Boolean = isAccessEnabled(context),
     ): DeviceNotificationSnapshot = DeviceNotificationStore.snapshot(enabled = enabled)
 
+    /** Asks Android to rebind the listener after settings grant access but callbacks have not arrived. */
     fun requestServiceRebind(context: Context) {
       runCatching {
         NotificationListenerService.requestRebind(serviceComponent(context))
       }
     }
 
+    /** Executes an open, dismiss, or reply action through the active listener instance. */
     fun executeAction(
       context: Context,
       request: NotificationActionRequest,
@@ -376,6 +410,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           .map { it.trim() }
           .filter { it.isNotEmpty() && it != normalized }
           .take(recentPackagesLimit - 1)
+      // Most recent package first keeps settings suggestions useful without storing notification content.
       val updated = listOf(normalized) + existing
       prefs.edit { putString(recentPackagesPref, updated.joinToString(",")) }
     }
@@ -449,6 +484,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         val action =
           sbn.notification.actions
             ?.firstOrNull { candidate ->
+              // Android reply actions are identified by RemoteInput, not by a stable action title.
               candidate.actionIntent != null && !candidate.remoteInputs.isNullOrEmpty()
             }
             ?: return NotificationActionResult(

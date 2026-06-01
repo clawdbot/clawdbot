@@ -183,17 +183,16 @@ describe("Hermes migration file and skill items", () => {
     await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
   });
 
-  it("reports legacy Hermes auth.json OAuth state as manual reauth work", async () => {
+  it("reports legacy Hermes OpenAI auth.json OAuth state as manual reauth work", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
-    const legacyOpenAIProvider = ["openai", "codex"].join("-");
     await writeFile(
       path.join(source, "auth.json"),
       JSON.stringify({
         providers: {
-          [legacyOpenAIProvider]: {
+          openai: {
             tokens: {
               access_token: "old-access",
               refresh_token: "old-refresh",
@@ -201,7 +200,7 @@ describe("Hermes migration file and skill items", () => {
           },
         },
         credential_pool: {
-          [legacyOpenAIProvider]: [
+          openai: [
             {
               access_token: "pool-access",
               refresh_token: "pool-refresh",

@@ -473,8 +473,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         execute: async () => ({ text: "ok" }),
       },
       {
-        name: "dofbot_move_angles",
-        label: "Dofbot Move Angles",
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
         description: "Move robot joints.",
         parameters: { type: "array", items: { type: "number" } },
         execute: async () => ({ text: "bad" }),
@@ -1110,7 +1110,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("forwards internal compaction hook messages to the caller", async () => {
     const onHookMessages = vi.fn();
-    triggerInternalHook.mockImplementation(async (event: unknown) => {
+    triggerInternalHook.mockImplementation((event: unknown) => {
       const hookEvent = event as { action?: string; messages?: string[] };
       hookEvent.messages?.push(`${hookEvent.action} notice`);
     });
@@ -2162,6 +2162,46 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.compacted).toBe(false);
     expect(result.reason).toContain("timed out");
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+  });
+
+  it("forces engine-owned compaction for preflight-required budget compaction", async () => {
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg, {
+      compactionTarget: "budget",
+      force: true,
+    });
+    expectRecordFields(compactArg.runtimeContext, {
+      forceReason: "preflight_required",
+      preflightCompactionTrigger: "transcript_bytes",
+    });
+  });
+
+  it("continues forcing engine-owned manual compaction with manual force reason", async () => {
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" }));
+
+    expect(result.ok).toBe(true);
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg, {
+      compactionTarget: "threshold",
+      force: true,
+    });
+    expectRecordFields(compactArg.runtimeContext, {
+      forceReason: "manual",
+    });
   });
 
   it("threads the caller abort signal into the engine compact() call", async () => {

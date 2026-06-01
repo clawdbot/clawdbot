@@ -127,11 +127,11 @@ export default definePluginEntry({
           : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeArceeResolvedModel(model),
-      normalizeTransport: ({ api, baseUrl }) => {
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
         const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;

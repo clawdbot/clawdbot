@@ -8,20 +8,20 @@ import {
 } from "./web-guarded-fetch.js";
 
 vi.mock("../../infra/net/fetch-guard.js", () => {
-  const GUARDED_FETCH_MODE = {
+  const GUARDED_FETCH_MODELocal = {
     STRICT: "strict",
     TRUSTED_ENV_PROXY: "trusted_env_proxy",
   } as const;
   return {
-    GUARDED_FETCH_MODE,
+    GUARDED_FETCH_MODE: GUARDED_FETCH_MODELocal,
     fetchWithSsrFGuard: vi.fn(),
     withStrictGuardedFetchMode: (params: Record<string, unknown>) => ({
       ...params,
-      mode: GUARDED_FETCH_MODE.STRICT,
+      mode: GUARDED_FETCH_MODELocal.STRICT,
     }),
     withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
       ...params,
-      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      mode: GUARDED_FETCH_MODELocal.TRUSTED_ENV_PROXY,
     }),
   };
 });

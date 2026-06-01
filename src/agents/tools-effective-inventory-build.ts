@@ -11,6 +11,7 @@ import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
 import {
+  filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
@@ -74,8 +75,9 @@ function buildUnsupportedToolSchemaNotice(params: {
   tool: AnyAgentTool | undefined;
   fallbackTool: AnyAgentTool | undefined;
 }): EffectiveToolInventoryNotice {
-  const source = params.tool
-    ? resolveEffectiveToolSource(params.tool, params.fallbackTool)
+  const sourceTool = params.tool ?? params.fallbackTool;
+  const source = sourceTool
+    ? resolveEffectiveToolSource(sourceTool, params.fallbackTool)
     : { source: "core" as const };
   const owner =
     source.source === "plugin" && source.pluginId
@@ -98,10 +100,43 @@ function buildUnsupportedToolSchemaNotices(params: {
   return params.diagnostics.map((diagnostic) =>
     buildUnsupportedToolSchemaNotice({
       diagnostic,
-      tool: params.tools[diagnostic.toolIndex],
+      tool: readMatchingTool(params.tools, diagnostic),
       fallbackTool: params.rawToolsByName.get(diagnostic.toolName),
     }),
   );
+}
+
+function readMatchingTool(
+  tools: readonly AnyAgentTool[],
+  diagnostic: RuntimeToolSchemaDiagnostic,
+): AnyAgentTool | undefined {
+  try {
+    const tool = tools[diagnostic.toolIndex];
+    return tool?.name === diagnostic.toolName ? tool : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildReadableRawToolsByName(
+  tools: readonly AnyAgentTool[],
+): ReadonlyMap<string, AnyAgentTool> {
+  const toolsByName = new Map<string, AnyAgentTool>();
+  let toolCount: number;
+  try {
+    toolCount = tools.length;
+  } catch {
+    return toolsByName;
+  }
+  for (let index = 0; index < toolCount; index += 1) {
+    try {
+      const tool = tools[index];
+      toolsByName.set(tool.name, tool);
+    } catch {
+      // Unreadable entries are reported by the schema projection diagnostics.
+    }
+  }
+  return toolsByName;
 }
 
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
@@ -171,23 +206,30 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const rawToolsByName = buildReadableRawToolsByName(params.tools);
+  const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
+    ...preNormalizationProjection.diagnostics,
+  ];
   const normalizedTools = normalizeAgentRuntimeTools({
     // Schema normalization can replace tool definitions, so hand the runtime
     // policy a mutable copy while keeping this inventory API readonly.
-    tools: [...params.tools],
+    tools: [...preNormalizationProjection.tools],
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     modelId: params.modelId,
     modelApi: params.modelApi ?? undefined,
     model: params.runtimeModel,
+    onPreNormalizationSchemaDiagnostics: (diagnostics) =>
+      preNormalizationDiagnostics.push(...diagnostics),
   });
   const projection = filterRuntimeCompatibleTools(normalizedTools);
+  const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
   return {
     entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
     notices: buildUnsupportedToolSchemaNotices({
-      diagnostics: projection.diagnostics,
+      diagnostics,
       tools: normalizedTools,
       rawToolsByName,
     }),

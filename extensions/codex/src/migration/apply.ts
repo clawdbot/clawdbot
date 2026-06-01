@@ -30,6 +30,7 @@ import {
 } from "../app-server/auth-bridge.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  isCodexPluginsMarketplaceName,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
@@ -354,12 +355,13 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
   return (
     Array.isArray(marketplaces) &&
-    marketplaces.some(
-      (marketplace) =>
-        marketplace &&
-        typeof marketplace === "object" &&
-        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
-    )
+    marketplaces.some((marketplace) => {
+      if (!marketplace || typeof marketplace !== "object") {
+        return false;
+      }
+      const name = (marketplace as { name?: unknown }).name;
+      return name === CODEX_PLUGINS_MARKETPLACE_NAME;
+    })
   );
 }
 
@@ -385,7 +387,9 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
@@ -494,14 +498,15 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
   const pluginName = item.details?.pluginName;
   if (
     typeof configKey !== "string" ||
-    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+    typeof marketplaceName !== "string" ||
+    !isCodexPluginsMarketplaceName(marketplaceName) ||
     typeof pluginName !== "string"
   ) {
     return undefined;
   }
   return {
     configKey,
-    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    marketplaceName,
     pluginName,
     enabled: true,
     allowDestructiveActions: true,

@@ -18,24 +18,44 @@ import {
 
 setupRunAttemptTestHooks();
 
+function createSteeringParams(name: string) {
+  const params = createParams(
+    path.join(tempDir, `${name}.jsonl`),
+    path.join(tempDir, `${name}-workspace`),
+  );
+  params.sessionId = `session-${name}`;
+  params.sessionKey = `agent:main:session-${name}`;
+  return params;
+}
+
+async function queueActiveRunMessageEventually(
+  sessionId: string,
+  text: string,
+  options?: Parameters<typeof queueActiveRunMessageForTest>[2],
+) {
+  await vi.waitFor(
+    () => expect(queueActiveRunMessageForTest(sessionId, text, options)).toBe(true),
+    fastWait,
+  );
+}
+
 describe("runCodexAppServerAttempt steering", () => {
   it("forwards queued user input and aborts the active app-server turn", async () => {
     const { requests, waitForMethod } = createStartedThreadHarness();
+    const params = createSteeringParams("steering-forward");
 
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      { pluginConfig: { appServer: { mode: "yolo" } } },
-    );
+    const run = runCodexAppServerAttempt(params, { pluginConfig: { appServer: { mode: "yolo" } } });
     await waitForMethod("turn/start");
 
-    expect(queueActiveRunMessageForTest("session-1", "more context", { debounceMs: 1 })).toBe(true);
-    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/steer"), {
-      interval: 1,
-    });
-    expect(abortAgentHarnessRun("session-1")).toBe(true);
+    await queueActiveRunMessageEventually(params.sessionId, "more context", { debounceMs: 1 });
+    await vi.waitFor(
+      () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
+      fastWait,
+    );
+    expect(abortAgentHarnessRun(params.sessionId)).toBe(true);
     await vi.waitFor(
       () => expect(requests.map((entry) => entry.method)).toContain("turn/interrupt"),
-      { interval: 1 },
+      fastWait,
     );
 
     const result = await run;
@@ -67,22 +87,21 @@ describe("runCodexAppServerAttempt steering", () => {
 
   it("accepts message-tool-only steering for active Codex app-server source replies", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createSteeringParams("steering-message-tool");
     params.sourceReplyDeliveryMode = "message_tool_only";
 
     const run = runCodexAppServerAttempt(params);
     await waitForMethod("turn/start");
 
-    expect(
-      queueActiveRunMessageForTest("session-1", "subagent complete", {
+    await queueActiveRunMessageEventually(
+      params.sessionId,
+      "subagent complete",
+      {
         debounceMs: 1,
         steeringMode: "all",
         sourceReplyDeliveryMode: "message_tool_only",
-      }),
-    ).toBe(true);
+      },
+    );
 
     await vi.waitFor(
       () =>
@@ -96,7 +115,7 @@ describe("runCodexAppServerAttempt steering", () => {
             },
           },
         ]),
-      { interval: 1 },
+      fastWait,
     );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -105,14 +124,13 @@ describe("runCodexAppServerAttempt steering", () => {
 
   it("batches default queued steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createSteeringParams("steering-batch-default");
 
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    );
+    const run = runCodexAppServerAttempt(params);
     await waitForMethod("turn/start");
 
-    expect(queueActiveRunMessageForTest("session-1", "first", { debounceMs: 5 })).toBe(true);
-    expect(queueActiveRunMessageForTest("session-1", "second", { debounceMs: 5 })).toBe(true);
+    await queueActiveRunMessageEventually(params.sessionId, "first", { debounceMs: 5 });
+    expect(queueActiveRunMessageForTest(params.sessionId, "second", { debounceMs: 5 })).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -129,7 +147,7 @@ describe("runCodexAppServerAttempt steering", () => {
             },
           },
         ]),
-      { interval: 1 },
+      fastWait,
     );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -138,15 +156,12 @@ describe("runCodexAppServerAttempt steering", () => {
 
   it("flushes pending default queued steering during normal turn cleanup", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createSteeringParams("steering-flush");
 
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    );
+    const run = runCodexAppServerAttempt(params);
     await waitForMethod("turn/start");
 
-    expect(queueActiveRunMessageForTest("session-1", "late steer", { debounceMs: 30_000 })).toBe(
-      true,
-    );
+    await queueActiveRunMessageEventually(params.sessionId, "late steer", { debounceMs: 30_000 });
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -165,17 +180,20 @@ describe("runCodexAppServerAttempt steering", () => {
 
   it("batches explicit all-mode steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createSteeringParams("steering-batch-all");
 
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    );
+    const run = runCodexAppServerAttempt(params);
     await waitForMethod("turn/start");
 
+    await queueActiveRunMessageEventually(params.sessionId, "first", {
+      debounceMs: 5,
+      steeringMode: "all",
+    });
     expect(
-      queueActiveRunMessageForTest("session-1", "first", { debounceMs: 5, steeringMode: "all" }),
-    ).toBe(true);
-    expect(
-      queueActiveRunMessageForTest("session-1", "second", { debounceMs: 5, steeringMode: "all" }),
+      queueActiveRunMessageForTest(params.sessionId, "second", {
+        debounceMs: 5,
+        steeringMode: "all",
+      }),
     ).toBe(true);
 
     await vi.waitFor(
@@ -193,7 +211,7 @@ describe("runCodexAppServerAttempt steering", () => {
             },
           },
         ]),
-      { interval: 1 },
+      fastWait,
     );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -235,10 +253,7 @@ describe("runCodexAppServerAttempt steering", () => {
         }) as never,
     );
 
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createSteeringParams("steering-request-input");
     params.onBlockReply = vi.fn();
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -271,7 +286,7 @@ describe("runCodexAppServerAttempt steering", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
-    expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
+    await queueActiveRunMessageEventually(params.sessionId, "2");
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });

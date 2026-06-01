@@ -86,10 +86,10 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "page errors",
-        collect: async ({ cdpUrl, targetId, pw }) =>
+        collect: async ({ cdpUrl, targetId: targetIdValue, pw }) =>
           await pw.getPageErrorsViaPlaywright({
             cdpUrl,
-            targetId,
+            targetId: targetIdValue,
             clear,
           }),
       });
@@ -109,10 +109,10 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "network requests",
-        collect: async ({ cdpUrl, targetId, pw }) =>
+        collect: async ({ cdpUrl, targetId: targetIdLocal, pw }) =>
           await pw.getNetworkRequestsViaPlaywright({
             cdpUrl,
-            targetId,
+            targetId: targetIdLocal,
             filter: normalizeOptionalString(filter),
             clear,
           }),

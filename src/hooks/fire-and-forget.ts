@@ -77,7 +77,7 @@ export function fireAndForgetHook(
   label: string,
   logger: (message: string) => void = logVerbose,
 ): void {
-  void task.catch((err) => {
+  void task.catch((err: unknown) => {
     logger(`${label}: ${formatHookErrorForLog(err)}`);
   });
 }
@@ -99,7 +99,7 @@ function runFireAndForgetHookJob(
 
   void Promise.resolve()
     .then(job.task)
-    .catch((err) => {
+    .catch((err: unknown) => {
       if (!didLogTimeout) {
         job.logger(`${job.label}: ${formatHookErrorForLog(err)}`);
       }

@@ -13,6 +13,7 @@ export function createGatewayClientVitestConfig(env?: Record<string, string | un
     {
       env,
       exclude: ["src/gateway/**/*server*.test.ts"],
+      isolate: true,
       name: "gateway-client",
     },
   );

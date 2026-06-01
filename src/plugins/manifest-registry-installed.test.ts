@@ -300,7 +300,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       includeDisabled: true,
     });
     const realpathSpy = vi.spyOn(fs, "realpathSync");
-    let packagePathCalls: unknown[][] = [];
+    let packagePathCalls: unknown[][];
     try {
       loadPluginManifestRegistryForInstalledIndex({
         index,

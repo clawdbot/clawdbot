@@ -41,7 +41,9 @@ const TEST_CONFIG = {} as OpenClawConfig;
 async function settleLifecycleWork(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 

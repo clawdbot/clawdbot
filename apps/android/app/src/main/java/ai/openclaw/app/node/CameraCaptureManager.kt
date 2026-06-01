@@ -41,19 +41,25 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
 
+/**
+ * CameraX-backed capture service used by gateway camera commands.
+ */
 class CameraCaptureManager(
   private val context: Context,
 ) {
+  /** Base64 JSON response for camera.snap after resize and JPEG budget enforcement. */
   data class Payload(
     val payloadJson: String,
   )
 
+  /** Temporary MP4 response for camera.clip before CameraHandler validates invoke size. */
   data class FilePayload(
     val file: File,
     val durationMs: Long,
     val hasAudio: Boolean,
   )
 
+  /** Camera device metadata exposed through camera.list. */
   data class CameraDeviceInfo(
     val id: String,
     val name: String,
@@ -65,14 +71,19 @@ class CameraCaptureManager(
 
   @Volatile private var permissionRequester: PermissionRequester? = null
 
+  /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */
   fun attachLifecycleOwner(owner: LifecycleOwner) {
+    // CameraX binds use cases to an Activity lifecycle; background services cannot capture alone.
     lifecycleOwner = owner
   }
 
+  /** Supplies the Activity-owned permission launcher used by camera and microphone commands. */
   fun attachPermissionRequester(requester: PermissionRequester) {
+    // Permission prompts must be launched by the Activity that owns the ActivityResult registry.
     permissionRequester = requester
   }
 
+  /** Lists CameraX devices with stable Camera2 ids where available. */
   suspend fun listDevices(): List<CameraDeviceInfo> =
     withContext(Dispatchers.Main) {
       val provider = context.cameraProvider()
@@ -107,6 +118,7 @@ class CameraCaptureManager(
     }
   }
 
+  /** Captures one still image and returns a gateway-sized JPEG payload. */
   suspend fun snap(paramsJson: String?): Payload =
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
@@ -122,6 +134,7 @@ class CameraCaptureManager(
       val selector = resolveCameraSelector(provider, facing, deviceId)
 
       provider.unbindAll()
+      // Bind only the still capture use case; CameraX owns camera open/close through the lifecycle owner.
       provider.bindToLifecycle(owner, selector, capture)
 
       val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
@@ -179,6 +192,7 @@ class CameraCaptureManager(
       }
     }
 
+  /** Records a short MP4 clip into a temporary cache file for the caller to encode/delete. */
   @SuppressLint("MissingPermission")
   suspend fun clip(paramsJson: String?): FilePayload =
     withContext(Dispatchers.Main) {
@@ -303,6 +317,7 @@ class CameraCaptureManager(
     orientation: Int,
   ): Bitmap {
     val matrix = Matrix()
+    // CameraX JPEG bytes keep sensor orientation in EXIF; normalize before resizing/encoding.
     when (orientation) {
       ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
       ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
@@ -365,6 +380,7 @@ class CameraCaptureManager(
     }
     return CameraSelector
       .Builder()
+      // CameraX selectors are filters over CameraInfo; pin by Camera2 id for stable device selection.
       .addCameraFilter { infos -> infos.filter { cameraIdOrNull(it) == deviceId } }
       .build()
   }
@@ -419,7 +435,9 @@ private suspend fun Context.cameraProvider(): ProcessCameraProvider =
     )
   }
 
-/** Returns (jpegBytes, exifOrientation) so caller can rotate the decoded bitmap. */
+/**
+ * Returns JPEG bytes plus EXIF orientation so callers can normalize the decoded bitmap.
+ */
 private suspend fun ImageCapture.takeJpegWithExif(
   executor: Executor,
   tempDir: File,

@@ -11,7 +11,7 @@ function formatErrorMessage(error: unknown): string {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  serveCodexSupervisorMcp().catch((err) => {
+  serveCodexSupervisorMcp().catch((err: unknown) => {
     process.stderr.write(`codex-supervisor-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

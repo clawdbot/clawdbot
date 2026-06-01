@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 
 const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
-  const GatewayIntents = {
+  const GatewayIntentsLocal = {
     Guilds: 1 << 0,
     GuildMessages: 1 << 1,
     MessageContent: 1 << 2,
@@ -31,7 +31,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     }
   }
 
-  class GatewayPlugin {
+  class GatewayPluginLocal {
     options: unknown;
     gatewayInfo: unknown;
     emitter = new TestEmitter();
@@ -44,12 +44,12 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
       this.options = options;
     }
 
-    async registerClient(clientForTest: unknown): Promise<void> {}
+    async registerClient(_clientForTest: unknown): Promise<void> {}
 
     connect(_resume = false): void {}
   }
 
-  return { GatewayIntents, GatewayPlugin };
+  return { GatewayIntents: GatewayIntentsLocal, GatewayPlugin: GatewayPluginLocal };
 });
 
 vi.mock("../internal/gateway.js", () => ({
@@ -66,6 +66,7 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (value: string) => value,
+  warn: (value: string) => value,
 }));
 
 describe("createDiscordGatewayPlugin", () => {
@@ -86,14 +87,15 @@ describe("createDiscordGatewayPlugin", () => {
   function createPlugin(
     testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
+    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    },
   ) {
     return createDiscordGatewayPlugin({
       discordConfig,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
+      runtime,
       ...(testing ? { testing } : {}),
     });
   }
@@ -312,5 +314,43 @@ describe("createDiscordGatewayPlugin", () => {
     staleSocket.emit("message", Buffer.from("{}"));
 
     expect(activitySpy).not.toHaveBeenCalled();
+  });
+
+  it("logs Discord gateway websocket error and abnormal close details", () => {
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const plugin = createPlugin(
+      {
+        webSocketCtor: function WebSocketCtor() {
+          return socket;
+        } as unknown as NonNullable<
+          Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+        >["webSocketCtor"],
+      },
+      {},
+      runtime,
+    );
+    const createdSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+    ).createWebSocket("wss://gateway.discord.gg");
+    const receiverLimitError = Object.assign(new Error("Too many buffered parts"), {
+      code: "WS_ERR_TOO_MANY_BUFFERED_PARTS",
+    });
+
+    createdSocket.emit("error", receiverLimitError);
+    createdSocket.emit("close", 1008, Buffer.from("policy violation"));
+
+    const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(logs).toContain("discord: gateway websocket error");
+    expect(logs).toContain("code=WS_ERR_TOO_MANY_BUFFERED_PARTS");
+    expect(logs).toContain("discord: gateway websocket closed");
+    expect(logs).toContain("code=1008");
+    expect(logs).toContain("reason=policy violation");
+    expect(logs).toContain("lastErrorCode=WS_ERR_TOO_MANY_BUFFERED_PARTS");
+    expect(logs).toContain("hint=possible ws receiver buffered-parts limit");
   });
 });

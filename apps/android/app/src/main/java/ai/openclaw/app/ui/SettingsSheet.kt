@@ -72,6 +72,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
+/** Mobile settings surface for device permissions, forwarding, location, and app preferences. */
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
   val context = LocalContext.current
@@ -131,6 +132,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
     }
   val quietHoursCanEnable = notificationForwardingEnabled && quietHoursDraftValid
+  // Compare stored values against normalized drafts so equivalent HH:mm input
+  // does not keep the save button enabled.
   val quietHoursDraftDirty =
     notificationForwardingQuietStart != (normalizedQuietStartDraft ?: notificationQuietStartDraft.trim()) ||
       notificationForwardingQuietEnd != (normalizedQuietEndDraft ?: notificationQuietEndDraft.trim())
@@ -344,6 +347,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
     val observer =
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
+          // Permission and role screens live outside Compose; refresh all derived
+          // toggles whenever Android returns to this settings surface.
           micPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
@@ -1217,79 +1222,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   }
 }
 
-data class InstalledApp(
-  val label: String,
-  val packageName: String,
-  val isSystemApp: Boolean,
-)
-
-private fun queryInstalledApps(
-  context: Context,
-  configuredPackages: Set<String>,
-): List<InstalledApp> {
-  val packageManager = context.packageManager
-  val launcherIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-
-  val launcherPackages =
-    packageManager
-      .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
-      .asSequence()
-      .mapNotNull {
-        it.activityInfo
-          ?.packageName
-          ?.trim()
-          ?.takeIf(String::isNotEmpty)
-      }.toMutableSet()
-
-  val recentNotificationPackages =
-    DeviceNotificationListenerService
-      .recentPackages(context)
-      .asSequence()
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      .toList()
-
-  val candidatePackages =
-    resolveNotificationCandidatePackages(
-      launcherPackages = launcherPackages,
-      recentPackages = recentNotificationPackages,
-      configuredPackages = configuredPackages,
-      appPackageName = context.packageName,
-    )
-
-  return candidatePackages
-    .asSequence()
-    .mapNotNull { packageName ->
-      runCatching {
-        val appInfo = packageManager.getApplicationInfo(packageName, 0)
-        val label = packageManager.getApplicationLabel(appInfo).toString().trim()
-        InstalledApp(
-          label = if (label.isEmpty()) packageName else label,
-          packageName = packageName,
-          isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
-        )
-      }.getOrNull()
-    }.sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
-    .toList()
-}
-
-internal fun resolveNotificationCandidatePackages(
-  launcherPackages: Set<String>,
-  recentPackages: List<String>,
-  configuredPackages: Set<String>,
-  appPackageName: String,
-): Set<String> {
-  val blockedPackage = appPackageName.trim()
-  return sequenceOf(
-    configuredPackages.asSequence(),
-    launcherPackages.asSequence(),
-    recentPackages.asSequence(),
-  ).flatten()
-    .map { it.trim() }
-    .filter { it.isNotEmpty() && it != blockedPackage }
-    .toSet()
-}
-
+/** Shared Material text-field colors for the legacy mobile settings sheet. */
 @Composable
 private fun settingsTextFieldColors() =
   OutlinedTextFieldDefaults.colors(
@@ -1302,6 +1235,7 @@ private fun settingsTextFieldColors() =
     cursorColor = mobileAccent,
   )
 
+/** Applies the legacy mobile card border/background used by settings rows. */
 @Composable
 private fun Modifier.settingsRowModifier() =
   this
@@ -1309,6 +1243,7 @@ private fun Modifier.settingsRowModifier() =
     .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
     .background(mobileCardSurface, RoundedCornerShape(14.dp))
 
+/** Primary button colors for the legacy mobile settings sheet. */
 @Composable
 private fun settingsPrimaryButtonColors() =
   ButtonDefaults.buttonColors(
@@ -1318,6 +1253,7 @@ private fun settingsPrimaryButtonColors() =
     disabledContentColor = Color.White.copy(alpha = 0.9f),
   )
 
+/** Destructive button colors for permission and capability settings actions. */
 @Composable
 private fun settingsDangerButtonColors() =
   ButtonDefaults.buttonColors(
@@ -1327,6 +1263,7 @@ private fun settingsDangerButtonColors() =
     disabledContentColor = Color.White.copy(alpha = 0.9f),
   )
 
+/** Opens this app's Android settings page for permissions that require system UI. */
 private fun openAppSettings(context: Context) {
   val intent =
     Intent(
@@ -1336,6 +1273,7 @@ private fun openAppSettings(context: Context) {
   context.startActivity(intent)
 }
 
+/** Opens notification-listener settings, falling back to app settings if the intent is unavailable. */
 private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
   runCatching {
@@ -1345,14 +1283,17 @@ private fun openNotificationListenerSettings(context: Context) {
   }
 }
 
+/** Android 13+ notification permission check; earlier versions grant posting at install time. */
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
     PackageManager.PERMISSION_GRANTED
 }
 
+/** Mirrors the notification listener service access check for UI enablement. */
 private fun isNotificationListenerEnabled(context: Context): Boolean = DeviceNotificationListenerService.isAccessEnabled(context)
 
+/** Checks whether the device exposes motion sensors needed by motion-related capabilities. */
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||

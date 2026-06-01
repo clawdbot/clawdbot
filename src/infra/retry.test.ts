@@ -70,7 +70,7 @@ async function runRetryNumberCase(
     const promise = retryAsync(fn as () => Promise<unknown>, attempts, initialDelayMs);
     const settled = promise.then(
       (value) => ({ ok: true as const, value }),
-      (error) => ({ ok: false as const, error }),
+      (error: unknown) => ({ ok: false as const, error }),
     );
     await vi.runAllTimersAsync();
     const result = await settled;

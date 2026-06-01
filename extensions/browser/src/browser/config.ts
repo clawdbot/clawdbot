@@ -469,7 +469,7 @@ export function resolveProfile(
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
-  let cdpUrl = "";
+  let cdpUrl;
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
   const headless = profile.headless ?? resolved.headless;
   const headlessSource =

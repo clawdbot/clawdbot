@@ -203,6 +203,96 @@
       "@openclaw/media-generation-core/*": [
         "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts"
       ],
+      "@openclaw/media-core": [
+        "../dist/plugin-sdk/packages/media-core/src/index.d.ts"
+      ],
+      "@openclaw/media-core/base64": [
+        "../dist/plugin-sdk/packages/media-core/src/base64.d.ts"
+      ],
+      "@openclaw/media-core/constants": [
+        "../dist/plugin-sdk/packages/media-core/src/constants.d.ts"
+      ],
+      "@openclaw/media-core/content-length": [
+        "../dist/plugin-sdk/packages/media-core/src/content-length.d.ts"
+      ],
+      "@openclaw/media-core/file-name": [
+        "../dist/plugin-sdk/packages/media-core/src/file-name.d.ts"
+      ],
+      "@openclaw/media-core/inbound-path-policy": [
+        "../dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts"
+      ],
+      "@openclaw/media-core/inline-image-data-url": [
+        "../dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts"
+      ],
+      "@openclaw/media-core/media-source-url": [
+        "../dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts"
+      ],
+      "@openclaw/media-core/mime": [
+        "../dist/plugin-sdk/packages/media-core/src/mime.d.ts"
+      ],
+      "@openclaw/media-core/read-byte-stream-with-limit": [
+        "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts"
+      ],
+      "@openclaw/media-core/read-response-with-limit": [
+        "../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts"
+      ],
+      "@openclaw/media-core/*": [
+        "../dist/plugin-sdk/packages/media-core/src/*.d.ts"
+      ],
+      "@openclaw/normalization-core/record-coerce": [
+        "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts"
+      ],
+      "@openclaw/normalization-core/string-coerce": [
+        "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts"
+      ],
+      "@openclaw/normalization-core/*": [
+        "../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"
+      ],
+      "@openclaw/acp-core": [
+        "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"
+      ],
+      "@openclaw/acp-core/normalize-text": [
+        "../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts"
+      ],
+      "@openclaw/acp-core/meta": [
+        "../dist/plugin-sdk/packages/acp-core/src/meta.d.ts"
+      ],
+      "@openclaw/acp-core/numeric-options": [
+        "../dist/plugin-sdk/packages/acp-core/src/numeric-options.d.ts"
+      ],
+      "@openclaw/acp-core/record-shared": [
+        "../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts"
+      ],
+      "@openclaw/acp-core/session": [
+        "../dist/plugin-sdk/packages/acp-core/src/session.d.ts"
+      ],
+      "@openclaw/acp-core/session-interaction-mode": [
+        "../dist/plugin-sdk/packages/acp-core/src/session-interaction-mode.d.ts"
+      ],
+      "@openclaw/acp-core/session-lineage-meta": [
+        "../dist/plugin-sdk/packages/acp-core/src/session-lineage-meta.d.ts"
+      ],
+      "@openclaw/acp-core/types": [
+        "../dist/plugin-sdk/packages/acp-core/src/types.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/error-text": [
+        "../dist/plugin-sdk/packages/acp-core/src/runtime/error-text.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/errors": [
+        "../dist/plugin-sdk/packages/acp-core/src/runtime/errors.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/session-identifiers": [
+        "../dist/plugin-sdk/packages/acp-core/src/runtime/session-identifiers.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/session-identity": [
+        "../dist/plugin-sdk/packages/acp-core/src/runtime/session-identity.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/types": [
+        "../dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts"
+      ],
+      "@openclaw/acp-core/*": [
+        "../dist/plugin-sdk/packages/acp-core/src/*.d.ts"
+      ],
       "@openclaw/terminal-core": [
         "../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"
       ],

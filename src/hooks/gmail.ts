@@ -312,10 +312,10 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
 }
 
-function joinUrl(base: string, path: string): string {
+function joinUrl(base: string, pathLocal: string): string {
   const url = new URL(base);
   const basePath = url.pathname.replace(/\/+$/, "");
-  const extra = path.startsWith("/") ? path : `/${path}`;
+  const extra = pathLocal.startsWith("/") ? pathLocal : `/${pathLocal}`;
   url.pathname = `${basePath}${extra}`;
   return url.toString();
 }

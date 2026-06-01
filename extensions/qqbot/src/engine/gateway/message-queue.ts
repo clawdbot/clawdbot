@@ -387,8 +387,8 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
   const executeImmediate = (msg: QueuedMessage): void => {
     if (handleMessageFnRef) {
-      handleMessageFnRef(msg).catch((err) => {
-        log?.error(`Immediate execution error: ${err}`);
+      handleMessageFnRef(msg).catch((err: unknown) => {
+        log?.error(`Immediate execution error: ${formatErrorMessage(err)}`);
       });
     }
   };

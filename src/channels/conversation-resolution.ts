@@ -69,6 +69,7 @@ type ResolveInboundConversationResolutionInput = {
   accountId?: string | null;
   to?: string | null;
   threadId?: string | number | null;
+  threadParentId?: string | number | null;
   conversationId?: string | null;
   groupId?: string | null;
   from?: string | null;
@@ -422,6 +423,7 @@ export function resolveInboundConversationResolution(
       normalizeOptionalString(params.groupId) ??
       normalizeOptionalString(params.to),
     threadId,
+    threadParentId: stringifyRouteThreadId(params.threadParentId),
     isGroup: params.isGroup ?? true,
   };
 
@@ -455,6 +457,11 @@ export function resolveInboundConversationResolution(
   }
 
   const parentConversationId =
+    resolveChannelTargetId({
+      channel,
+      target: params.threadParentId == null ? undefined : String(params.threadParentId),
+      preserveExplicitTopicSuffix: threadId == null,
+    }) ??
     resolveChannelTargetId({
       channel,
       target: params.to,

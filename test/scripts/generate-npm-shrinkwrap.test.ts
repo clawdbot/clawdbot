@@ -5,6 +5,7 @@ import {
   collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  createNpmShrinkwrapExecOptions,
   createNpmShrinkwrapCommand,
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
@@ -42,6 +43,42 @@ describe("generate-npm-shrinkwrap", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("bounds npm shrinkwrap command runtime and captured output by default", () => {
+    expect(
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {}),
+    ).toMatchObject({
+      cwd: "/tmp/package",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10 * 60 * 1000,
+    });
+  });
+
+  it("accepts strict npm shrinkwrap command timeout and buffer overrides", () => {
+    expect(
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES: "1048576",
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS: "30000",
+      }),
+    ).toMatchObject({
+      maxBuffer: 1024 * 1024,
+      timeout: 30000,
+    });
+  });
+
+  it("rejects loose npm shrinkwrap command timeout and buffer overrides", () => {
+    expect(() =>
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS: "30s",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS: 30s");
+    expect(() =>
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES: "64mb",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES: 64mb");
   });
 
   it("extracts exact versions from npm override specs", () => {

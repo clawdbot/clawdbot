@@ -86,6 +86,7 @@ private enum class Tab(
   ProvidersModels(key = "providers-models", label = "Providers"),
 }
 
+/** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
 fun ShellScreen(
   viewModel: MainViewModel,
@@ -101,6 +102,8 @@ fun ShellScreen(
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
+      // HomeDestination is a one-shot command from launch intents and settings
+      // actions; consume it after translating to local shell state.
       activeTab =
         when (destination) {
           HomeDestination.Connect -> Tab.Overview
@@ -232,6 +235,8 @@ fun ShellScreen(
       }
 
       pendingTrust?.let { prompt ->
+        // Gateway certificate trust is modal across the shell so navigation
+        // cannot hide a changed TLS identity prompt.
         GatewayTrustDialog(
           prompt = prompt,
           onAccept = viewModel::acceptGatewayTrustPrompt,
@@ -242,6 +247,7 @@ fun ShellScreen(
   }
 }
 
+/** Modal trust decision for first-seen or changed gateway TLS fingerprints. */
 @Composable
 private fun GatewayTrustDialog(
   prompt: NodeRuntime.GatewayTrustPrompt,
@@ -421,6 +427,7 @@ private data class ModuleRow(
   val settingsRoute: SettingsRoute? = null,
 )
 
+/** Floating overview shortcut that keeps chat one tap away from module lists. */
 @Composable
 private fun OverviewChatButton(
   onClick: () -> Unit,
@@ -561,6 +568,7 @@ private data class RecentSessionListItem(
   val metadata: String,
 )
 
+/** Recent sessions panel that preserves the session key behind display labels. */
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
@@ -780,6 +788,7 @@ private fun approvalsSummary(count: Int): String =
 
 private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else null
 
+/** Summarizes scheduled gateway jobs for overview and settings rows. */
 private fun cronJobsSummary(count: Int): String =
   when (count) {
     0 -> "No scheduled jobs"
@@ -787,6 +796,7 @@ private fun cronJobsSummary(count: Int): String =
     else -> "$count scheduled"
   }
 
+/** Summarizes provider usage buckets without exposing detailed billing data. */
 private fun usageSummaryText(count: Int): String =
   when (count) {
     0 -> "No provider usage"
@@ -794,11 +804,13 @@ private fun usageSummaryText(count: Int): String =
     else -> "$count providers"
   }
 
+/** Reports how many gateway skills are enabled, eligible, and dependency-complete. */
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
   val ready = skills.count { !it.disabled && it.eligible && it.missingCount == 0 }
   return if (skills.isEmpty()) "No skills" else "$ready/${skills.size} ready"
 }
 
+/** Converts gateway skill health into a tri-state settings status dot. */
 private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
   when {
     skills.isEmpty() -> null
@@ -806,6 +818,7 @@ private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
     else -> true
   }
 
+/** Prioritizes pending pairings over online counts for compact node/device summaries. */
 private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String {
   val online = summary.nodes.count { it.connected }
   val devices = summary.pairedDevices.size
@@ -817,6 +830,7 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
   }
 }
 
+/** Maps node/device state to a settings status dot, treating pending pairings as attention-needed. */
 private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
   when {
     summary.pendingDevices.isNotEmpty() -> false
@@ -825,6 +839,7 @@ private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
     else -> null
   }
 
+/** Summarizes channel connection state, surfacing errors before connected counts. */
 private fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   val connected = summary.channels.count { it.connected }
   return when {
@@ -834,6 +849,7 @@ private fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   }
 }
 
+/** Maps channel health to the settings status dot shown in the shell. */
 private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
   when {
     summary.channels.any { it.error != null } -> false
@@ -842,6 +858,7 @@ private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
     else -> null
   }
 
+/** Summarizes dreaming memory health before enabled/off state. */
 private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> "Needs attention"
@@ -849,6 +866,7 @@ private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
     else -> "Off"
   }
 
+/** Maps dreaming store/phase health and enabled state to a settings status dot. */
 private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> false

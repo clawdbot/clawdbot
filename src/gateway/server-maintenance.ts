@@ -83,13 +83,13 @@ export function startGatewayMaintenanceTimers(params: {
   const healthInterval = setInterval(() => {
     void params
       .refreshGatewayHealthSnapshot({ probe: false })
-      .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+      .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params
     .refreshGatewayHealthSnapshot({ probe: false })
-    .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+    .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -272,7 +272,7 @@ export function startGatewayMaintenanceTimers(params: {
       recursive: true,
       pruneEmptyDirs: true,
     })
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
       .finally(() => {

@@ -97,16 +97,14 @@ describe("formatOpenAIOAuthTlsPreflightFix", () => {
 });
 
 describe("shouldRunOpenAIOAuthTlsPrerequisites", () => {
-  it("runs for pre-doctor legacy OpenAI OAuth profiles", () => {
-    const legacyOpenAIProvider = ["openai", "codex"].join("-");
-
+  it("runs for OpenAI OAuth profiles", () => {
     expect(
       shouldRunOpenAIOAuthTlsPrerequisites({
         cfg: {
           auth: {
             profiles: {
-              [`${legacyOpenAIProvider}:default`]: {
-                provider: legacyOpenAIProvider,
+              "openai:default": {
+                provider: "openai",
                 mode: "oauth",
               },
             },

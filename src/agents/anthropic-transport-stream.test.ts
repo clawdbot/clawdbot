@@ -55,6 +55,25 @@ function createRawSseResponse(body: string): Response {
   });
 }
 
+function createOpenRawSseResponse(params: {
+  body: string;
+  onCancel: (reason: unknown) => void;
+}): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(params.body));
+    },
+    cancel(reason) {
+      params.onCancel(reason);
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 function delay<T>(ms: number, value: T): Promise<T> {
   return new Promise((resolve) => {
     setTimeout(() => resolve(value), ms);
@@ -1859,6 +1878,28 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("aborted");
     expect(result.errorMessage).toBe("pre-aborted stream");
     expect(cancelReason).toBe(abortReason);
+  });
+
+  it("cancels open SSE bodies when Anthropic stream consumers throw", async () => {
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      createOpenRawSseResponse({
+        body: 'data: {"type":"error","error":{"message":"stream exploded"}}\n\n',
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("stream exploded");
+    expect(cancelCalled).toBe(true);
   });
 
   it("maps adaptive thinking effort for Claude 4.6 transport runs", async () => {

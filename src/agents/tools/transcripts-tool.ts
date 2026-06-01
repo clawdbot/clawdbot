@@ -480,7 +480,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           startedSessionIds.add(sessionId);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (stopped) {
           return;
         }
@@ -542,7 +542,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           ctx,
           store,
           rawParams: { action: "stop", sessionId },
-        }).catch((err) =>
+        }).catch((err: unknown) =>
           ctx.logger.warn(
             `transcripts autoStart stop failed session=${sessionId}: ${
               err instanceof Error ? err.message : String(err)

@@ -74,6 +74,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 fun ChatScreen(
   viewModel: MainViewModel,
@@ -452,6 +453,7 @@ private data class StarterPrompt(
   val message: String,
 )
 
+/** Default prompts shown only for an empty, connected session. */
 private val starterPrompts =
   listOf(
     StarterPrompt(mark = "1", title = "Catch me up", subtitle = "Summarize recent sessions and next steps.", message = "Catch me up on my recent OpenClaw sessions and suggest next steps."),
@@ -820,6 +822,7 @@ private fun userFacingChatError(error: String): String {
   }
 }
 
+/** Normalizes persisted thinking values into compact UI labels. */
 private fun thinkingDisplay(value: String): String =
   when (value.lowercase(Locale.US)) {
     "low" -> "Low"
@@ -828,6 +831,7 @@ private fun thinkingDisplay(value: String): String =
     else -> "Off"
   }
 
+/** Converts displayed thinking labels back to gateway request values. */
 private fun thinkingValue(display: String): String =
   when (display.lowercase(Locale.US)) {
     "low" -> "low"
@@ -836,6 +840,7 @@ private fun thinkingValue(display: String): String =
     else -> "off"
   }
 
+/** Cycles through context budget presets from the compact composer control. */
 private fun nextThinkingValue(value: String): String =
   when (value.lowercase(Locale.US)) {
     "off" -> "low"
@@ -844,6 +849,7 @@ private fun nextThinkingValue(value: String): String =
     else -> "off"
   }
 
+/** Maps thinking presets to the visual context meter fill fraction. */
 private fun thinkingMeterWidth(value: String): Float =
   when (value.lowercase(Locale.US)) {
     "low" -> 0.34f
@@ -856,6 +862,7 @@ private fun contextPercent(value: String): Int = (thinkingMeterWidth(value) * 10
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
 
+/** Quick markdown detector used to avoid routing plain chat text through the markdown renderer. */
 private fun String.hasMarkdownSyntax(): Boolean =
   any { it == '#' || it == '*' || it == '`' || it == '[' || it == '|' } ||
     contains("\n- ") ||

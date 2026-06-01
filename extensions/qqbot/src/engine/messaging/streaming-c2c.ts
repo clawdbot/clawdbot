@@ -103,7 +103,9 @@ class FlushController {
     if (!this.flushInProgress) {
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => this.flushResolvers.push(resolve));
+    return new Promise<void>((resolve) => {
+      this.flushResolvers.push(resolve);
+    });
   }
 
   /** 取消所有 pending timer + 等待正在执行的 flush 完成，确保 flush 活动彻底停止 */
@@ -478,7 +480,7 @@ export class StreamingController {
     // 将实际逻辑挂到 Promise 链尾部，保证串行执行
     this.callbackChain = this.callbackChain.then(
       () => this.handlePartialReply(payload),
-      (err) => {
+      (err: unknown) => {
         // 上一次如果异常，不阻塞后续调用
         this.logError(`onPartialReply chain error: ${formatStreamErr(err)}`);
         return this.handlePartialReply(payload);
@@ -584,7 +586,7 @@ export class StreamingController {
     // 挂到串行队列尾部，等所有 onPartialReply 执行完再处理
     this.callbackChain = this.callbackChain.then(
       () => this.handleIdle(payload),
-      (err) => {
+      (err: unknown) => {
         this.logError(`onIdle chain error: ${formatStreamErr(err)}`);
         return this.handleIdle(payload);
       },

@@ -5,7 +5,9 @@ import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuToolClient } from "./tool-account.js";
+import { createFeishuClient } from "./client.js";
+import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
+import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
 
@@ -586,10 +588,20 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     return;
   }
 
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  if (!toolsCfg.bitable) {
+    return;
+  }
+
   type AccountAwareParams = { accountId?: string };
 
-  const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+  const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) => {
+    const account = resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId });
+    if (!resolveToolsConfig(account.config.tools).bitable) {
+      throw new Error(`Feishu Bitable tools are disabled for account "${account.accountId}"`);
+    }
+    return createFeishuClient(account);
+  };
 
   const registerBitableTool = <
     // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Tool params bind each schema-specific executor to its registered tool.

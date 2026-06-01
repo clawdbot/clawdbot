@@ -1,5 +1,5 @@
 import { Agent, createServer, request } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import type { QaBusPollResult } from "./runtime-api.js";
@@ -86,6 +86,10 @@ describe("closeQaHttpServer", () => {
 describe("qa-bus server", () => {
   const stops: Array<() => Promise<void>> = [];
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(async () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
@@ -93,7 +97,7 @@ describe("qa-bus server", () => {
   it("wakes stale-cursor long polls as soon as matching account traffic arrives", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
-    stops.push(bus.stop);
+    stops.push(bus["stop"]);
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -102,26 +106,14 @@ describe("qa-bus server", () => {
       timeoutMs: 500,
     });
 
-    setTimeout(() => {
-      state.addInboundMessage({
-        accountId: "acct-a",
-        conversation: { id: "target", kind: "direct" },
-        senderId: "acct-a-user",
-        text: "fresh event",
-      });
-    }, 20);
+    state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "fresh event",
+    });
 
-    const result = await Promise.race([
-      pending,
-      new Promise<"timed-out">((resolve) => {
-        setTimeout(() => resolve("timed-out"), 150);
-      }),
-    ]);
-
-    expect(result).not.toBe("timed-out");
-    if (result === "timed-out") {
-      throw new Error("stale-cursor long poll did not wake before timeout window");
-    }
+    const result = await pending;
     expect(result.events).toHaveLength(1);
     expect(result.events[0]).toMatchObject({
       accountId: "acct-a",

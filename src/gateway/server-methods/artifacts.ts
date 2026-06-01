@@ -84,6 +84,7 @@ function resolveRequesterSessionAgentId(
   return resolveAgentIdFromSessionKey(key);
 }
 
+/** Applies an optional agent scope to a transcript session key without crossing stores. */
 function resolveScopedArtifactSessionKey(
   sessionKey: string | undefined,
   agentId: string | undefined,
@@ -211,6 +212,7 @@ function isSafeDownloadUrl(value: string): boolean {
   }
 }
 
+/** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
   sessionKey: string;
   messageSeq: number;
@@ -440,6 +442,7 @@ function resolveQuerySession(
   return undefined;
 }
 
+/** Loads artifacts from the transcript selected by sessionKey, runId, or taskId. */
 async function loadArtifacts(
   query: ArtifactQuery,
   cfg?: OpenClawConfig,
@@ -519,10 +522,11 @@ async function findArtifact(
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: dataValue, url: _url, ...summary } = artifact;
+  const { data: _dataValue, url: _url, ...summary } = artifact;
   return summary;
 }
 
+/** Gateway handlers for listing, summarizing, and downloading transcript artifacts. */
 export const artifactsHandlers: GatewayRequestHandlers = {
   "artifacts.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin, UserConfig } from "vite";
 import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -134,6 +134,31 @@ function resolveTsconfigPathAlias(key: string, target: string): ControlUiViteAli
   };
 }
 
+function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteAlias {
+  return {
+    find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
+    replacement: path.join(
+      repoRoot,
+      "packages",
+      packageId,
+      "src",
+      ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
+        index === parts.length - 1 ? `${part}.ts` : part,
+      ),
+    ),
+  };
+}
+
+export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
+  return [
+    sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "string-coerce"),
+    sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core"),
+  ];
+}
+
 export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   const raw = fs.readFileSync(path.join(repoRoot, "tsconfig.json"), "utf8");
   const parsed = JSON.parse(raw) as {
@@ -151,6 +176,29 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
     const alias = resolveTsconfigPathAlias(key, targets[0]);
     return alias ? [alias] : [];
   });
+}
+
+export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
+  const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
+  const sharedRedactImporters = new Set([
+    path.join(repoRoot, "src/agents/tool-display-common.ts"),
+    path.join(repoRoot, "src/agents/tool-display-exec.ts"),
+    path.join(repoRoot, "src/agents/tool-display.ts"),
+  ]);
+  return {
+    name: "control-ui-browser-only-shared-module-aliases",
+    enforce: "pre",
+    resolveId(source, importer) {
+      if (
+        source === "../logging/redact.js" &&
+        importer &&
+        sharedRedactImporters.has(path.normalize(importer))
+      ) {
+        return browserRedactPath;
+      }
+      return null;
+    },
+  };
 }
 
 function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
@@ -172,7 +220,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
   };
 }
 
-export default defineConfig(() => {
+export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const controlUiBuildId = resolveControlUiBuildId();
@@ -191,7 +239,11 @@ export default defineConfig(() => {
       ],
     },
     resolve: {
-      alias: [{ find: "json5", replacement: json5EsmPath }, ...resolveTsconfigPathAliasesForVite()],
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     build: {
       outDir,
@@ -211,6 +263,7 @@ export default defineConfig(() => {
       strictPort: true,
     },
     plugins: [
+      controlUiBrowserOnlySharedModuleAliases(),
       controlUiServiceWorkerBuildIdPlugin(controlUiBuildId),
       {
         name: "control-ui-dev-stubs",
@@ -229,4 +282,4 @@ export default defineConfig(() => {
       },
     ],
   };
-});
+}

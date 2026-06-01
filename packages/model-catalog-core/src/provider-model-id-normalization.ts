@@ -58,6 +58,14 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
+export function stripSelfProviderModelPrefix(provider: string, model: string): string {
+  const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
+  const trimmed = model.trim();
+  return normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)
+    ? trimmed.slice(prefix.length)
+    : model;
+}
+
 export function normalizeProviderModelIdWithPolicies(params: {
   provider: string;
   policies: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
@@ -119,7 +127,12 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    return anthropicAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    const anthropicPrefix = "anthropic/";
+    const normalizedModel = normalizeLowercaseStringOrEmpty(model);
+    const providerModel = normalizedModel.startsWith(anthropicPrefix)
+      ? model.trim().slice(anthropicPrefix.length)
+      : model;
+    return anthropicAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
   }
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
@@ -151,6 +164,9 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
     };
     return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+  }
+  if (normalizedProvider === "openai") {
+    return model;
   }
   if (normalizedProvider === "together") {
     return normalizeTogetherModelId(model);

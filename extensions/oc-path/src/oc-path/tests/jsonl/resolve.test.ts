@@ -76,7 +76,7 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   // line's bytes; the universal resolve was preferring that local
   // number over the JsonlLine's file-relative line.
 
-  const log = [
+  const logLocal = [
     '{"event":"start"}', // line 1
     '{"event":"step","n":1}', // line 2
     '{"event":"step","n":2}', // line 3
@@ -85,7 +85,7 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   ].join("\n");
 
   it("resolves L2/event with line=2 (not 1)", () => {
-    const { ast } = parseJsonl(log);
+    const { ast } = parseJsonl(logLocal);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L2/event"));
     if (m === null) {
       throw new Error("expected L2/event match");
@@ -94,7 +94,7 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   });
 
   it("resolves L4/event with line=4", () => {
-    const { ast } = parseJsonl(log);
+    const { ast } = parseJsonl(logLocal);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L4/event"));
     if (m === null) {
       throw new Error("expected L4/event match");
@@ -103,7 +103,7 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   });
 
   it("findOcPaths over wildcard surfaces correct file-relative lines", () => {
-    const { ast } = parseJsonl(log);
+    const { ast } = parseJsonl(logLocal);
     const matches = findOcPaths(ast, parseOcPath("oc://session.jsonl/*/event"));
     expect(matches).toHaveLength(4);
     const lines = matches.map((m) => m.match.line);

@@ -21,6 +21,11 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
   requireSourceLiteral: true,
 };
 
+const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
+  path: ["gateway", "webchat"],
+  message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
+};
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
@@ -63,6 +68,24 @@ function escapeControlForLog(value: string): string {
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.webchat-remove",
+    describe: "Remove retired WebChat gateway config",
+    legacyRules: [GATEWAY_WEBCHAT_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "webchat")) {
+        return;
+      }
+      delete gateway.webchat;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",

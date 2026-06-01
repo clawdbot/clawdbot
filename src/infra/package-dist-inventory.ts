@@ -109,7 +109,9 @@ async function withPackageDistInventoryFsSlot<T>(
   task: () => Promise<T>,
 ): Promise<T> {
   while (context.activeFsOps >= context.fsConcurrency) {
-    await new Promise<void>((resolve) => context.waiters.push(resolve));
+    await new Promise<void>((resolve) => {
+      context.waiters.push(resolve);
+    });
   }
   context.activeFsOps += 1;
   try {

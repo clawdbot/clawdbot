@@ -44,6 +44,9 @@ export type PluginHookMessageContext = {
   runId?: string;
   messageId?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   trace?: DiagnosticTraceContext;
   traceId?: string;
   spanId?: string;
@@ -71,6 +74,9 @@ export type PluginHookInboundClaimEvent = {
   senderId?: string;
   senderName?: string;
   senderUsername?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   threadId?: string | number;
   messageId?: string;
   sessionKey?: string;
@@ -92,6 +98,9 @@ export type PluginHookMessageReceivedEvent = {
   threadId?: string | number;
   messageId?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   sessionKey?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;

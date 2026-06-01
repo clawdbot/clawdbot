@@ -144,16 +144,28 @@ describe("plugin approval forwarding", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-once",
+                },
                 value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-always",
+                },
                 value: "/approve plugin-req-1 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 deny",
+                },
                 value: "/approve plugin-req-1 deny",
                 style: "danger",
               },
@@ -178,7 +190,7 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(true);
       await flushPendingDelivery();
       const payload = firstDeliveredPayload(deliver);
-      expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
+      expect(payload?.text).toContain("Reply with: /approve plugin-req-1 allow-once|deny");
       expect(payload?.text).not.toContain("allow-always");
       expect(payload?.presentation).toEqual({
         blocks: [
@@ -187,11 +199,19 @@ describe("plugin approval forwarding", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-once",
+                },
                 value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 deny",
+                },
                 value: "/approve plugin-req-1 deny",
                 style: "danger",
               },

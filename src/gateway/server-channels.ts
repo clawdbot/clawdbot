@@ -367,14 +367,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
-    opts: StartChannelOptions = {},
+    optsValue: StartChannelOptions = {},
   ) => {
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
       return;
     }
-    const { preserveRestartAttempts = false, preserveManualStop = false } = opts;
+    const { preserveRestartAttempts = false, preserveManualStop = false } = optsValue;
     const cfg = getRuntimeConfig();
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
@@ -533,8 +533,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (opts.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(opts.deferAccountStartUntil, abort.signal);
+            if (optsValue.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(optsValue.deferAccountStartUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
@@ -577,12 +577,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] ${message}`);
             })
-            .catch((err) => {
+            .catch((err: unknown) => {
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
-            .finally(async () => {
+            .then(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
               setRuntime(channelId, id, {
                 accountId: id,
@@ -719,9 +719,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const stopChannel = async (
     channelId: ChannelId,
     accountId?: string,
-    opts: StopChannelOptions = {},
+    optsLocal: StopChannelOptions = {},
   ) => {
-    const manual = opts.manual ?? true;
+    const manual = optsLocal.manual ?? true;
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
     const lifecycleIds = new Set<string>([

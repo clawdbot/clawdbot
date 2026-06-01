@@ -64,7 +64,7 @@ export const detectFeishuLegacyStateMigrations: BundledChannelLegacyStateMigrati
   stateDir,
 }) => {
   const dedupDir = path.join(stateDir, "feishu", "dedup");
-  let entries: fs.Dirent[] = [];
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dedupDir, { withFileTypes: true });
   } catch {

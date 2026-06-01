@@ -1,4 +1,4 @@
-import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import {
   handleCodexPluginsSubcommand,
@@ -40,6 +40,16 @@ const fakeCtx: PluginCommandContext = {
   getCurrentConversationBinding: async () => null,
 };
 
+function buttonCommands(result: PluginCommandResult): string[] {
+  const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
+  if (!block || block.type !== "buttons") {
+    throw new Error("expected button presentation");
+  }
+  return block.buttons.map((button) =>
+    button.action?.type === "command" ? button.action.command : "",
+  );
+}
+
 describe("Codex /codex plugins subcommand", () => {
   it("lists a configured plugin with its enabled marker and explains the underlying file", async () => {
     const io = inMemoryIO({
@@ -70,6 +80,50 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
     expect(result.text).toContain("OFF  google-calendar");
     expect(result.text).toContain("Global codexPlugins.enabled is off");
+  });
+
+  it("renders the plugins menu as portable slash-command buttons", async () => {
+    const io = inMemoryIO();
+
+    const result = await handleCodexPluginsSubcommand(fakeCtx, ["menu"], io);
+
+    expect(result.text).toContain("/codex plugins list");
+    expect(buttonCommands(result)).toEqual([
+      "/codex plugins list",
+      "/codex plugins enable",
+      "/codex plugins disable",
+      "/codex plugins help",
+      "/codex",
+    ]);
+  });
+
+  it("renders enable and disable target pickers from effective plugin state", async () => {
+    const io = inMemoryIO({
+      "google-calendar": {
+        enabled: false,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+      notion: {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "notion",
+      },
+    });
+
+    const enableResult = await handleCodexPluginsSubcommand(fakeCtx, ["enable"], io);
+    expect(enableResult.text).toContain("/codex plugins enable google-calendar");
+    expect(buttonCommands(enableResult)).toEqual([
+      "/codex plugins enable google-calendar",
+      "/codex plugins menu",
+    ]);
+
+    const disableResult = await handleCodexPluginsSubcommand(fakeCtx, ["disable"], io);
+    expect(disableResult.text).toContain("/codex plugins disable notion");
+    expect(buttonCommands(disableResult)).toEqual([
+      "/codex plugins disable notion",
+      "/codex plugins menu",
+    ]);
   });
 
   it("enables and disables a configured plugin and reflects the change in subsequent reads", async () => {
@@ -149,18 +203,13 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).not.toContain("@ops");
   });
 
-  it("returns usage when list, enable, or disable receives the wrong arity", async () => {
+  it("returns usage when list, menu, enable, or disable receives the wrong arity", async () => {
     const io = inMemoryIO();
     const listResult = await handleCodexPluginsSubcommand(fakeCtx, ["list", "chrome"], io);
     expect(listResult.text).toContain("Usage: /codex plugins list");
 
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["disable"], io);
-    expect(result.text).toContain("Usage: /codex plugins disable <name>");
-    expect(result.presentation).toBeUndefined();
-
-    const enableResult = await handleCodexPluginsSubcommand(fakeCtx, ["enable"], io);
-    expect(enableResult.text).toContain("Usage: /codex plugins enable <name>");
-    expect(enableResult.presentation).toBeUndefined();
+    const menuResult = await handleCodexPluginsSubcommand(fakeCtx, ["menu", "extra"], io);
+    expect(menuResult.text).toContain("Usage: /codex plugins menu");
 
     const extraResult = await handleCodexPluginsSubcommand(
       fakeCtx,

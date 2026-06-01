@@ -224,7 +224,7 @@ describe("package manager build policy", () => {
         .filter((entry) => entry.isDirectory())
         .map((entry) => `extensions/${entry.name}/npm-shrinkwrap.json`)
         .filter((shrinkwrapPath) => fs.existsSync(shrinkwrapPath))
-        .sort((left, right) => left.localeCompare(right)),
+        .toSorted((left, right) => left.localeCompare(right)),
     ];
 
     for (const shrinkwrapPath of shrinkwrapPaths) {

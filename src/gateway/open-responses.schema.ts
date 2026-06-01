@@ -184,10 +184,18 @@ export const ToolChoiceSchema = z.union([
   z.literal("auto"),
   z.literal("none"),
   z.literal("required"),
-  z.object({
-    type: z.literal("function"),
-    function: z.object({ name: z.string() }),
-  }),
+  z
+    .object({
+      type: z.literal("function"),
+      name: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("function"),
+      function: z.object({ name: z.string().min(1) }),
+    })
+    .strict(),
 ]);
 
 export const CreateResponseBodySchema = z

@@ -313,7 +313,7 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     throw new Error("Google Chat service account file path is empty");
   }
 
-  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  let handle: Awaited<ReturnType<typeof fs.open>> | null;
   try {
     handle = await fs.open(resolvedPath, "r");
   } catch {

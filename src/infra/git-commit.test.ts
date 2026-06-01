@@ -224,24 +224,28 @@ describe("git commit resolution", () => {
 
   it("caches deterministic null results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-null-cache");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
+    const repoRootEntry = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRootEntry, {
       head: "not-a-commit\n",
     });
 
     const readGitCommit = vi.fn(() => null);
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    expect(
+      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
+    ).toBeNull();
     const firstCallReads = readGitCommit.mock.calls.length;
     expect(firstCallReads).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    expect(
+      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
+    ).toBeNull();
     expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("caches caught null fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-caught-null-cache");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
+    const repoRootResult = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRootResult, {
       head: "0123456789abcdef0123456789abcdef01234567\n",
     });
     const readGitCommit = vi.fn(() => {
@@ -253,7 +257,7 @@ describe("git commit resolution", () => {
 
     expect(
       resolveCommitHash({
-        cwd: repoRoot,
+        cwd: repoRootResult,
         env: {},
         readers: {
           readGitCommit,
@@ -266,7 +270,7 @@ describe("git commit resolution", () => {
     expect(firstCallReads).toBe(2);
     expect(
       resolveCommitHash({
-        cwd: repoRoot,
+        cwd: repoRootResult,
         env: {},
         readers: {
           readGitCommit,
@@ -316,33 +320,33 @@ describe("git commit resolution", () => {
 
   it("resolves refs from the git commondir in worktree layouts", async () => {
     const temp = await makeTempDir("git-commit-worktree");
-    const repoRoot = path.join(temp, "repo");
+    const repoRootValue = path.join(temp, "repo");
     const worktreeGitDir = path.join(temp, "worktree-git");
     const commonGitDir = path.join(temp, "common-git");
     await fs.mkdir(commonGitDir, { recursive: true });
     const refPath = path.join(commonGitDir, "refs", "heads", "main");
     await fs.mkdir(path.dirname(refPath), { recursive: true });
     await fs.writeFile(refPath, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", "utf-8");
-    await makeFakeGitRepo(repoRoot, {
+    await makeFakeGitRepo(repoRootValue, {
       gitdir: worktreeGitDir,
       head: "ref: refs/heads/main\n",
       commondir: "../common-git",
     });
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("bbbbbbb");
+    expect(resolveCommitHash({ cwd: repoRootValue, env: {} })).toBe("bbbbbbb");
   });
 
   it("reads full HEAD refs before parsing long branch names", async () => {
     const temp = await makeTempDir("git-commit-long-head");
-    const repoRoot = path.join(temp, "repo");
+    const repoRootLocal = path.join(temp, "repo");
     const longRefName = `refs/heads/${"segment/".repeat(40)}main`;
-    await makeFakeGitRepo(repoRoot, {
+    await makeFakeGitRepo(repoRootLocal, {
       head: `ref: ${longRefName}\n`,
       refs: {
         [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
       },
     });
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ccccccc");
+    expect(resolveCommitHash({ cwd: repoRootLocal, env: {} })).toBe("ccccccc");
   });
 });

@@ -95,9 +95,9 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
       }
       const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
       if (restoredArchiveName) {
-        const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
-        if (archivedStem && restoredArchiveName !== `${archivedStem}.jsonl`) {
-          return { stem: archivedStem, liveStem: mdStem, ownerAgentId, archived: true };
+        const archivedStemLocal = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
+        if (archivedStemLocal && restoredArchiveName !== `${archivedStemLocal}.jsonl`) {
+          return { stem: archivedStemLocal, liveStem: mdStem, ownerAgentId, archived: true };
         }
       }
     }

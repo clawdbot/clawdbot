@@ -261,6 +261,35 @@ describe("browser manage output", () => {
     expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
+  it("prints suggested tab references while keeping raw target ids visible", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/tabs"
+        ? {
+            running: true,
+            tabs: [
+              {
+                targetId: "RAW_TARGET_1",
+                suggestedTargetId: "docs",
+                tabId: "t1",
+                label: "docs",
+                title: "Docs",
+                url: "https://docs.example.com",
+              },
+            ],
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "tabs"], { from: "user" });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("use: docs");
+    expect(output).toContain("tab: t1");
+    expect(output).toContain("label:docs");
+    expect(output).toContain("id: RAW_TARGET_1");
+  });
+
   it("rejects non-integer tab indexes without calling browser actions", async () => {
     const program = createBrowserManageProgram();
 
@@ -348,6 +377,6 @@ describe("browser manage output", () => {
 
     const output = lastRuntimeLog();
     expect(output).toContain("OK gateway: browser control endpoint reachable");
-    expect(output).toContain("OK tabs: 1 visible, use target t1");
+    expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
   });
 });

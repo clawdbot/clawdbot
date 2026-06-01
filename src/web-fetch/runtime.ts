@@ -198,11 +198,11 @@ export function resolveWebFetchDefinition(
         fetch: toolConfig as WebFetchConfig | undefined,
         sandboxed,
       }),
-    resolveAutoProviderId: ({ config, toolConfig, providers }) =>
+    resolveAutoProviderId: ({ config, toolConfig, providers: providersLocal }) =>
       resolveWebFetchProviderId({
         config,
         fetch: toolConfig as WebFetchConfig | undefined,
-        providers,
+        providers: providersLocal,
       }),
     createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
       provider.createTool({

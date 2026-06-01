@@ -1,3 +1,4 @@
+/** Shared persisted cron job envelope used by runtime and external config shapes. */
 export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDelivery, TFailureAlert> =
   {
     id: string;

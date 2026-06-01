@@ -9,6 +9,7 @@ import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
 import {
   bumpSkillsSnapshotVersion,
+  clearSkillsSnapshotVersionForWorkspace,
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
@@ -59,6 +60,10 @@ const workspaceWatchTargets = new Map<string, WatchTarget[]>();
 // per-turn watcher reconciliation path stays cheap until config or watched
 // filesystem changes require a fresh root scan.
 const workspaceWatchTargetCache = new Map<string, WatchTargetCacheEntry>();
+const workspaceWatchLastEnsuredAt = new Map<string, number>();
+// Session turns re-ensure their workspace; entries older than this are treated
+// as abandoned subscriptions and evicted by the next ensure call.
+const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
 
 setSkillsChangeListenerErrorHandler((err) => {
   log.warn(`skills change listener failed: ${String(err)}`);
@@ -523,26 +528,51 @@ function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: WatchTa
   }
 }
 
+function disposeWorkspaceWatchState(
+  workspaceDir: string,
+  watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(workspaceDir) ?? [],
+): void {
+  const hadWatchTargets = watchTargets.length > 0;
+  for (const watchTarget of watchTargets) {
+    unsubscribeWorkspaceFromPath(workspaceDir, watchTarget);
+  }
+  workspaceWatchTargets.delete(workspaceDir);
+  workspaceWatchTargetCache.delete(workspaceDir);
+  workspaceWatchLastEnsuredAt.delete(workspaceDir);
+  if (hadWatchTargets) {
+    // Watcher disposal creates an unwatched interval; mark the workspace dirty
+    // so the next turn rebuilds skills even if file events were missed.
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch-targets" });
+  }
+  clearSkillsSnapshotVersionForWorkspace(workspaceDir);
+}
+
+function evictIdleWorkspaceWatchStates(now: number): void {
+  const cutoff = now - SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS;
+  for (const [workspaceDir, lastEnsuredAt] of workspaceWatchLastEnsuredAt) {
+    if (lastEnsuredAt < cutoff) {
+      disposeWorkspaceWatchState(workspaceDir);
+    }
+  }
+}
+
 export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return;
   }
+  const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
   const debounceMs = resolveWatchDebounceMs(params.config);
   const previousTargets = workspaceWatchTargets.get(workspaceDir) ?? [];
 
   if (!watchEnabled) {
-    if (previousTargets.length > 0) {
-      for (const watchTarget of previousTargets) {
-        unsubscribeWorkspaceFromPath(workspaceDir, watchTarget);
-      }
-      workspaceWatchTargets.delete(workspaceDir);
-      workspaceWatchTargetCache.delete(workspaceDir);
-    }
+    disposeWorkspaceWatchState(workspaceDir, previousTargets);
+    evictIdleWorkspaceWatchStates(now);
     return;
   }
 
+  workspaceWatchLastEnsuredAt.set(workspaceDir, now);
   const watchTargets = resolveWatchTargets(workspaceDir, params.config);
   const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
   const debounceUnchanged = watchTargets.every(
@@ -553,6 +583,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     },
   );
   if (targetsUnchanged && debounceUnchanged) {
+    evictIdleWorkspaceWatchStates(now);
     return;
   }
   const watchTargetsChanged = previousTargets.length > 0 && !targetsUnchanged;
@@ -575,6 +606,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
       changedPath: watchTargets.map((target) => target.path).join("|"),
     });
   }
+  evictIdleWorkspaceWatchStates(now);
 }
 
 export async function resetSkillsRefreshForTest(): Promise<void> {
@@ -584,6 +616,7 @@ export async function resetSkillsRefreshForTest(): Promise<void> {
   pathWatchers.clear();
   workspaceWatchTargets.clear();
   workspaceWatchTargetCache.clear();
+  workspaceWatchLastEnsuredAt.clear();
   await Promise.all(
     active.map(async (state) => {
       if (state.timer) {

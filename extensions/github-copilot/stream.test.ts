@@ -127,6 +127,7 @@ describe("wrapCopilotAnthropicStream", () => {
       const payload = {
         input: [
           { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
+          { type: "reasoning", encrypted_content: "idless-encrypted-payload", summary: [] },
           {
             id: overlongReasoningId,
             type: "reasoning",
@@ -181,8 +182,13 @@ describe("wrapCopilotAnthropicStream", () => {
       onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
-    expect(payloads[0]?.input.map((item) => item.type)).toEqual(["reasoning", "message"]);
-    expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input.map((item) => item.type)).toEqual([
+      "reasoning",
+      "reasoning",
+      "message",
+    ]);
+    expect(payloads[0]?.input[1]?.id).toBeUndefined();
+    expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
   it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {

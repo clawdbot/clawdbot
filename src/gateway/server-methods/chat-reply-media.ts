@@ -1,9 +1,9 @@
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
 function isDataUrlMedia(mediaUrl: string): boolean {
@@ -20,6 +20,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
   if (isPassThroughRemoteMediaSource(mediaUrl)) {
     return true;
   }
+  // Local audio is preserved only after the producer marks it as already trust-scoped.
   return payload.trustedLocalMedia === true;
 }
 
@@ -48,6 +49,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
   const normalized: ReplyPayload[] = [];
   for (const payload of params.payloads) {
     if (payload.sensitiveMedia === true) {
+      // Suppressed media must not be copied into managed outbound storage for display.
       normalized.push(payload);
       continue;
     }

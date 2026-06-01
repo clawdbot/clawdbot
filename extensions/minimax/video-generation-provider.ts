@@ -209,8 +209,6 @@ async function pollMinimaxVideo(params: {
           normalizeOptionalString(payload.base_resp?.status_msg) ||
             "MiniMax video generation failed",
         );
-      case "Preparing":
-      case "Processing":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;

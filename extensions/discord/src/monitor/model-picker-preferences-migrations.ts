@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizePersistedBinding,
+  THREAD_BINDINGS_MAX_ENTRIES,
+  THREAD_BINDINGS_NAMESPACE,
+  toBindingRecordKey,
+} from "./thread-bindings.state.js";
 
 const PREFERENCE_MAX_ENTRIES = 2_000;
 const MAX_PLUGIN_STATE_KEY_BYTES = 512;
@@ -16,6 +23,11 @@ type LegacyModelPickerPreferencesEntry = {
 
 type LegacyModelPickerPreferencesStore = {
   entries?: unknown;
+};
+
+type LegacyThreadBindingsStore = {
+  version?: unknown;
+  bindings?: unknown;
 };
 
 function fileExists(filePath: string): boolean {
@@ -35,6 +47,14 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
   } catch {
     return null;
   }
+}
+
+function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore {
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("legacy Discord thread bindings store must be an object");
+  }
+  return parsed as LegacyThreadBindingsStore;
 }
 
 function normalizeLegacyPreferenceKey(key: string): string | undefined {
@@ -107,15 +127,13 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
 }) => {
-  const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-  if (!fileExists(sourcePath)) {
-    return [];
-  }
-  return [
-    {
+  const plans: ChannelLegacyStateMigrationPlan[] = [];
+  const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
+  if (fileExists(modelPickerSourcePath)) {
+    plans.push({
       kind: "plugin-state-import",
       label: "Discord model picker preferences",
-      sourcePath,
+      sourcePath: modelPickerSourcePath,
       targetPath: "plugin state:model-picker-preferences",
       pluginId: "discord",
       namespace: "model-picker-preferences",
@@ -123,7 +141,7 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
       scopeKey: "",
       cleanupSource: "rename",
       readEntries: () => {
-        const store = readLegacyStore(sourcePath);
+        const store = readLegacyStore(modelPickerSourcePath);
         if (!store || !store.entries || typeof store.entries !== "object") {
           return [];
         }
@@ -149,6 +167,40 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         }
         return out;
       },
-    },
-  ];
+    });
+  }
+
+  const threadBindingsSourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+  if (fileExists(threadBindingsSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord thread bindings",
+      sourcePath: threadBindingsSourcePath,
+      targetPath: `plugin state:${THREAD_BINDINGS_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: THREAD_BINDINGS_NAMESPACE,
+      maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "rename",
+      cleanupWhenEmpty: true,
+      readEntries: () => {
+        const store = readLegacyThreadBindingsStore(threadBindingsSourcePath);
+        if (store?.version !== 1 || !store.bindings || typeof store.bindings !== "object") {
+          throw new Error("legacy Discord thread bindings store must have version 1 bindings");
+        }
+        const out: Array<{ key: string; value: unknown }> = [];
+        for (const [rawKey, rawEntry] of Object.entries(
+          store.bindings as Record<string, unknown>,
+        )) {
+          const normalized = normalizePersistedBinding(rawKey, rawEntry);
+          if (normalized) {
+            out.push({ key: toBindingRecordKey(normalized), value: normalized });
+          }
+        }
+        return out;
+      },
+    });
+  }
+
+  return plans;
 };

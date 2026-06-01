@@ -34,7 +34,20 @@ function createRuntime() {
   const readAllowFromStore = vi.fn(async () => [] as string[]);
   const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR123", created: true }));
   const resolveAgentRoute = vi.fn();
-  const run = vi.fn();
+  const run = vi.fn<
+    (params: {
+      adapter: {
+        ingest: (msg: {
+          from: string;
+          to: string;
+          body: string;
+          messageSid: string;
+          accountSid: string;
+        }) => unknown;
+        resolveTurn: (ingested: unknown) => Promise<{ routeSessionKey: string }>;
+      };
+    }) => void
+  >();
   const buildContext = vi.fn();
   const resolveStorePath = vi.fn();
   const runtime = {
@@ -96,10 +109,15 @@ describe("dispatchSmsInboundEvent", () => {
       meta: undefined,
     });
     expect(sendSmsViaTwilio).toHaveBeenCalledOnce();
-    expect(sendSmsViaTwilio.mock.calls[0]?.[0]).toMatchObject({
+    const firstSendCall = sendSmsViaTwilio.mock.calls[0];
+    expect(firstSendCall).toBeDefined();
+    if (!firstSendCall) {
+      throw new Error("Expected SMS send call");
+    }
+    expect(firstSendCall[0]).toMatchObject({
       to: "+15551234567",
     });
-    expect(sendSmsViaTwilio.mock.calls[0]?.[0].text).toContain("PAIR123");
+    expect(firstSendCall[0].text).toContain("PAIR123");
   });
 
   it("uses the canonical routed session key for authorized SMS turns", async () => {

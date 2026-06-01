@@ -144,7 +144,7 @@ export function handleGoogleMeetRealtimeConsultToolCall(params: {
       });
       params.session.submitToolResult(callId, result);
     })
-    .catch((error: Error) => {
+    .catch((error: unknown) => {
       params.onTalkEvent?.({
         type: "tool.error",
         callId,

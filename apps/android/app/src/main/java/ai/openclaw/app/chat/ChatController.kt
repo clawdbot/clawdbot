@@ -61,12 +61,15 @@ class ChatController(
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+  // Preserve sent messages locally until chat.history includes the gateway-confirmed copy.
   private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
+  // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
 
   private var lastHealthPollAtMs: Long? = null
 
+  /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     _healthOk.value = false
     _errorText.value = null
@@ -78,6 +81,7 @@ class ChatController(
     _sessionId.value = null
   }
 
+  /** Loads a chat session, normalizing "main" to the current gateway-provided main session key. */
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     val generation = beginHistoryLoad(key, clearMessages = key != _sessionKey.value)
@@ -86,6 +90,7 @@ class ChatController(
     }
   }
 
+  /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
   fun applyMainSessionKey(mainSessionKey: String) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
@@ -108,6 +113,7 @@ class ChatController(
     }
   }
 
+  /** Refreshes current chat history and session list without clearing optimistic messages first. */
   fun refresh() {
     val key = normalizeRequestedSessionKey(_sessionKey.value)
     val generation = beginHistoryLoad(key, clearMessages = false)
@@ -120,12 +126,14 @@ class ChatController(
     scope.launch { fetchSessions(limit = limit) }
   }
 
+  /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
     if (normalized == _thinkingLevel.value) return
     _thinkingLevel.value = normalized
   }
 
+  /** Switches to another gateway chat session and starts a fresh history load. */
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
@@ -163,6 +171,7 @@ class ChatController(
     return key
   }
 
+  /** Queues a chat send without waiting for gateway acceptance. */
   fun sendMessage(
     message: String,
     thinkingLevel: String,
@@ -177,6 +186,7 @@ class ChatController(
     }
   }
 
+  /** Sends a chat message and returns once the gateway accepts or rejects the request. */
   suspend fun sendMessageAwaitAcceptance(
     message: String,
     thinkingLevel: String,
@@ -194,7 +204,7 @@ class ChatController(
     val sessionKey = _sessionKey.value
     val thinking = normalizeThinking(thinkingLevel)
 
-    // Optimistic user message.
+    // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
     val userContent =
       buildList {
         add(ChatMessageContent(type = "text", text = text))
@@ -257,6 +267,7 @@ class ChatController(
       val res = session.request("chat.send", params.toString())
       val actualRunId = parseRunId(res) ?: runId
       if (actualRunId != runId) {
+        // Gateway may return a canonical run id; move all pending bookkeeping to that id.
         optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
         clearPendingRun(runId)
         armPendingRunTimeout(actualRunId)
@@ -274,6 +285,7 @@ class ChatController(
     }
   }
 
+  /** Sends best-effort abort requests for every currently pending gateway run. */
   fun abort() {
     val runIds =
       synchronized(pendingRuns) {
@@ -296,6 +308,7 @@ class ChatController(
     }
   }
 
+  /** Applies gateway chat/agent stream events to local transcript and pending-run state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -396,7 +409,7 @@ class ChatController(
     val state = payload["state"].asStringOrNull()
     when (state) {
       "delta" -> {
-        // Only show streaming text for runs we initiated
+        // Only show streaming text for runs we initiated in this controller.
         if (!isPending) return
         val text = parseAssistantDeltaText(payload)
         if (!text.isNullOrEmpty()) {
@@ -637,6 +650,9 @@ internal fun isCurrentHistoryLoad(
   activeGeneration: Long,
 ): Boolean = requestedSessionKey == currentSessionKey && requestGeneration == activeGeneration
 
+/**
+ * Convert gateway chat content parts into Android UI content parts.
+ */
 internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   val obj = el.asObjectOrNull() ?: return null
   return when (obj["type"].asStringOrNull() ?: "text") {
@@ -663,6 +679,9 @@ internal data class MainSessionState(
   val appliedMainSessionKey: String,
 )
 
+/**
+ * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
+ */
 internal fun applyMainSessionKey(
   currentSessionKey: String,
   appliedMainSessionKey: String,
@@ -680,6 +699,9 @@ internal fun applyMainSessionKey(
   )
 }
 
+/**
+ * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
+ */
 internal fun reconcileMessageIds(
   previous: List<ChatMessage>,
   incoming: List<ChatMessage>,
@@ -729,6 +751,9 @@ internal fun mergeOptimisticMessages(
   return (incoming + missingOptimistic).sortedWith(compareBy<ChatMessage> { it.timestampMs ?: Long.MAX_VALUE }.thenBy { it.id })
 }
 
+/**
+ * Message identity used only for refresh reconciliation; it avoids exposing gateway ids as UI keys.
+ */
 internal fun messageIdentityKey(message: ChatMessage): String? {
   val contentKey = messageContentIdentityKey(message) ?: return null
   val timestamp = message.timestampMs?.toString().orEmpty()

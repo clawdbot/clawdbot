@@ -1,6 +1,13 @@
+import type { ResolveMentionPatternPolicyParams } from "../../channels/mention-pattern-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export type BuildMentionRegexes = (cfg: OpenClawConfig | undefined, agentId?: string) => RegExp[];
+export type BuildMentionRegexesOptions = Omit<ResolveMentionPatternPolicyParams, "cfg" | "agentId">;
+
+export type BuildMentionRegexes = (
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+  options?: BuildMentionRegexesOptions,
+) => RegExp[];
 
 export type MatchesMentionPatterns = (text: string, mentionRegexes: RegExp[]) => boolean;
 

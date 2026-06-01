@@ -65,8 +65,22 @@ if (mode === "reject") {
   process.exit(0);
 }
 if (!result.ok) {
-  throw result.error;
+  throw toLintErrorObject(result.error, "Non-Error thrown");
 }
 if (result.value?.status !== "ok") {
   throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

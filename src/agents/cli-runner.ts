@@ -37,6 +37,11 @@ const log = createSubsystemLogger("agents/cli-runner");
 
 const cliRunnerDeps = {
   claudeCliSessionTranscriptHasContent: claudeCliSessionTranscriptHasContentImpl,
+  delay: async (delayMs: number) => {
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+  },
 };
 
 export function setCliRunnerTestDeps(overrides: Partial<typeof cliRunnerDeps>): void {
@@ -45,10 +50,34 @@ export function setCliRunnerTestDeps(overrides: Partial<typeof cliRunnerDeps>): 
 
 export function restoreCliRunnerTestDeps(): void {
   cliRunnerDeps.claudeCliSessionTranscriptHasContent = claudeCliSessionTranscriptHasContentImpl;
+  cliRunnerDeps.delay = async (delayMs: number) => {
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+  };
 }
 
 function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
+}
+
+function shouldRetryFreshCliSessionAfterFailover(params: {
+  error: FailoverError;
+  hasHistoryPrompt: boolean;
+}): boolean {
+  if (!params.hasHistoryPrompt) {
+    return false;
+  }
+  switch (params.error.reason) {
+    case "session_expired":
+      return true;
+    case "unknown":
+      return params.error.code === "cli_unknown_empty_failure";
+    case "timeout":
+      return params.error.code === "cli_no_output_timeout";
+    default:
+      return false;
+  }
 }
 
 export async function isCliBindingFlushed(
@@ -64,7 +93,7 @@ export async function isCliBindingFlushed(
   }
   for (const delayMs of [0, 50, 150]) {
     if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await cliRunnerDeps.delay(delayMs);
     }
     if (await cliRunnerDeps.claudeCliSessionTranscriptHasContent({ sessionId, workspaceDir })) {
       return true;
@@ -186,7 +215,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);
       if (notification) {
-        void Promise.resolve(notification).catch((error) => {
+        void Promise.resolve(notification).catch((error: unknown) => {
           log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
         });
       }
@@ -492,8 +521,18 @@ export async function runPreparedCliAgent(
     throw error;
   };
 
-  const executeCliAttempt = async (cliSessionIdToUse?: string) => {
-    const output = await executePreparedCliRun(context, cliSessionIdToUse);
+  const executeCliAttempt = async (cliSessionIdToUse?: string, timeoutMs = params.timeoutMs) => {
+    const attemptContext =
+      timeoutMs === params.timeoutMs
+        ? context
+        : {
+            ...context,
+            params: {
+              ...context.params,
+              timeoutMs,
+            },
+          };
+    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
     if (!assistantText) {
       throw new FailoverError("CLI backend returned an empty response.", {
@@ -634,7 +673,6 @@ export async function runPreparedCliAgent(
     };
   };
 
-  // Try with the provided CLI session ID first
   try {
     await bootstrapHarnessContextEngine({
       hadSessionFile: context.hadSessionFile,
@@ -654,6 +692,35 @@ export async function runPreparedCliAgent(
           config: params.config,
         })
       : [];
+    const finishCliAttempt = async (
+      result: Awaited<ReturnType<typeof executeCliAttempt>>,
+      fallbackCliSessionId?: string,
+    ) => {
+      const { output, lastAssistant } = result;
+      const assistantText = output.text.trim();
+      const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
+      await finalizeCliContextEngineTurn({
+        context,
+        historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
+        assistantText,
+        output,
+      });
+      const bindingFlushOk = await isCliBindingFlushed(
+        effectiveCliSessionId,
+        params.provider,
+        context.cwd ?? context.workspaceDir,
+      );
+      await runCliAgentEndHook(params, {
+        event: {
+          messages: buildAgentEndMessages(lastAssistant),
+          success: true,
+          durationMs: Date.now() - context.started,
+        },
+        ctx: hookContext,
+        hookRunner,
+      });
+      return buildCliRunResult({ output, effectiveCliSessionId, bindingFlushOk });
+    };
 
     if (hasBeforeAgentRunHooks && hookRunner) {
       let beforeRunResult:
@@ -715,69 +782,40 @@ export async function runPreparedCliAgent(
       hookRunner,
     });
     try {
-      const { output, lastAssistant } = await executeCliAttempt(
+      return await finishCliAttempt(
+        await executeCliAttempt(context.reusableCliSession.sessionId),
         context.reusableCliSession.sessionId,
       );
-      const assistantText = output.text.trim();
-      const effectiveCliSessionId = output.sessionId ?? context.reusableCliSession.sessionId;
-      await finalizeCliContextEngineTurn({
-        context,
-        historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
-        assistantText,
-        output,
-      });
-      const bindingFlushOk = await isCliBindingFlushed(
-        effectiveCliSessionId,
-        params.provider,
-        context.cwd ?? context.workspaceDir,
-      );
-      await runCliAgentEndHook(params, {
-        event: {
-          messages: buildAgentEndMessages(lastAssistant),
-          success: true,
-          durationMs: Date.now() - context.started,
-        },
-        ctx: hookContext,
-        hookRunner,
-      });
-      return buildCliRunResult({ output, effectiveCliSessionId, bindingFlushOk });
     } catch (err) {
       if (isFailoverError(err)) {
-        const retryableSessionId = context.reusableCliSession.sessionId ?? params.cliSessionId;
-        // Check if this is a session expired error and we have a session to clear
-        if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
-          // Clear the expired session ID from the session entry
-          // This requires access to the session store, which we don't have here
-          // We'll need to modify the caller to handle this case
-
-          // For now, retry without the session ID to create a new session
+        const retryableSessionId = context.reusableCliSession.sessionId;
+        if (
+          shouldRetryFreshCliSessionAfterFailover({
+            error: err,
+            hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          }) &&
+          retryableSessionId &&
+          params.sessionKey
+        ) {
           try {
-            const { output, lastAssistant } = await executeCliAttempt(undefined);
-            const assistantText = output.text.trim();
-            const effectiveCliSessionId = output.sessionId;
-            await finalizeCliContextEngineTurn({
-              context,
-              historyMessages: context.contextEngine
-                ? contextEngineHistoryMessages
-                : historyMessages,
-              assistantText,
-              output,
-            });
-            const bindingFlushOk = await isCliBindingFlushed(
-              effectiveCliSessionId,
-              params.provider,
-              context.cwd ?? context.workspaceDir,
+            const retryTimeoutMs = params.timeoutMs - (Date.now() - context.started);
+            if (retryTimeoutMs <= 0) {
+              throw err;
+            }
+            if (params.onBeforeFreshCliSessionRetry) {
+              const clearedStaleBinding = await params.onBeforeFreshCliSessionRetry({
+                provider: params.provider,
+                reason: err.reason,
+                sessionId: retryableSessionId,
+              });
+              if (!clearedStaleBinding) {
+                throw err;
+              }
+            }
+            cliBackendLog.warn(
+              `cli session recovery retry: provider=${params.provider} reason=${err.reason} sessionKey=${params.sessionKey}`,
             );
-            await runCliAgentEndHook(params, {
-              event: {
-                messages: buildAgentEndMessages(lastAssistant),
-                success: true,
-                durationMs: Date.now() - context.started,
-              },
-              ctx: hookContext,
-              hookRunner,
-            });
-            return buildCliRunResult({ output, effectiveCliSessionId, bindingFlushOk });
+            return await finishCliAttempt(await executeCliAttempt(undefined, retryTimeoutMs));
           } catch (retryErr) {
             const retryMessage = formatErrorMessage(retryErr);
             await runCliAgentEndHook(params, {

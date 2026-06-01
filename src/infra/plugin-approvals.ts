@@ -108,9 +108,9 @@ export function buildPluginApprovalRequestMessage(
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
   lines.push(
-    `Reply with: /approve <id> ${resolvePluginApprovalRequestAllowedDecisions(request.request).join(
-      "|",
-    )}`,
+    `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
+      request.request,
+    ).join("|")}`,
   );
   return lines.join("\n");
 }

@@ -217,7 +217,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                 () => {
                   recordPreloadSuccess(preloadKey);
                 },
-                (error) => {
+                (error: unknown) => {
                   const entry = recordPreloadFailure(preloadKey, Date.now());
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,

@@ -434,16 +434,16 @@ describe("doctor repair sequencing", () => {
 
   it("emits active tool schema projection warnings during doctor repair", async () => {
     mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
-      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     ]);
 
     const result = await runDoctorRepairSequence({
       state: {
         cfg: {
-          tools: { allow: ["dofbot_move_angles"] },
+          tools: { allow: ["fuzzplugin_move_angles"] },
         } as OpenClawConfig,
         candidate: {
-          tools: { allow: ["dofbot_move_angles"] },
+          tools: { allow: ["fuzzplugin_move_angles"] },
         } as OpenClawConfig,
         pendingChanges: false,
         fixHints: [],
@@ -453,11 +453,11 @@ describe("doctor repair sequencing", () => {
 
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.warningNotes).toContain(
-      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     );
     expect(mocks.collectActiveToolSchemaProjectionWarnings).toHaveBeenCalledWith({
       cfg: {
-        tools: { allow: ["dofbot_move_angles"] },
+        tools: { allow: ["fuzzplugin_move_angles"] },
       },
       env: process.env,
     });

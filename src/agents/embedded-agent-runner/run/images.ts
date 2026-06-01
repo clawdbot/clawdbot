@@ -75,8 +75,7 @@ const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
  *   "photo---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  *   "图片---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  */
-// eslint-disable-next-line no-control-regex
-const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\\x00]+)/;
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\]+)/;
 
 /**
  * Result of detecting an image reference in text.
@@ -361,7 +360,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // This must be tested before the extension-based path regex because the
     // URI has no file extension suffix in its base form.
     const mediaUriMatch = content.match(MEDIA_URI_REGEX);
-    if (mediaUriMatch) {
+    if (mediaUriMatch && !mediaUriMatch[1].includes("\0")) {
       const uri = `media://inbound/${mediaUriMatch[1]}`;
       const dedupeKey = normalizeRefForDedupe(uri);
       if (!seen.has(dedupeKey)) {

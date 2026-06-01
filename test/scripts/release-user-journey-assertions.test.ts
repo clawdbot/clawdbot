@@ -1,13 +1,20 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
+const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+
+function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
+  const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
+  return current.includes(DISABLE_EXPERIMENTAL_WARNING)
+    ? current
+    : [current, DISABLE_EXPERIMENTAL_WARNING].filter(Boolean).join(" ");
+}
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -25,6 +32,7 @@ function runAssertion(
       ...process.env,
       HOME: home,
       ...options.env,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(options.env?.NODE_OPTIONS),
     },
     killSignal: "SIGKILL",
     timeout: options.timeoutMs,
@@ -50,55 +58,6 @@ async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T
   }
 }
 
-async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (existsSync(filePath)) {
-      return readFileSync(filePath, "utf8");
-    }
-    await delay(25);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  const startedAt = Date.now();
-  while (child.exitCode === null && Date.now() - startedAt < 1000) {
-    await delay(25);
-  }
-  if (child.exitCode === null) {
-    child.kill("SIGKILL");
-  }
-}
-
-function startTcpFixture(portPath: string, connectionHandlerSource: string) {
-  return spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      [
-        'import net from "node:net";',
-        'import fs from "node:fs";',
-        `const server = net.createServer(${connectionHandlerSource});`,
-        'server.listen(0, "127.0.0.1", () => {',
-        "  const address = server.address();",
-        "  fs.writeFileSync(process.env.PORT_FILE, String(address.port));",
-        "});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
-    ],
-    {
-      env: { ...process.env, PORT_FILE: portPath },
-      stdio: "pipe",
-    },
-  );
-}
-
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
   port: number;
   stop: () => Promise<void>;
@@ -110,7 +69,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
     socket.on("error", () => undefined);
     socket.on("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
   return {
     port: address.port,
@@ -118,9 +79,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

@@ -28,8 +28,7 @@ dump_debug_logs() {
     /tmp/openclaw-release-plugin-marketplace-update.log \
     /tmp/openclaw-release-plugin-marketplace-cli-v2.log \
     /tmp/openclaw-release-plugin-marketplace-uninstall.log \
-    /tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log \
-    "$HOME/.openclaw/plugins/installs.json"
+    /tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 

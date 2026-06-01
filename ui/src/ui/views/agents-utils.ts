@@ -6,6 +6,7 @@ import {
 } from "../../../../src/agents/tool-policy-shared.js";
 import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
 import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
+import { controlUiPublicAssetPath } from "../public-assets.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
@@ -244,13 +245,11 @@ export function resolveChatAvatarRenderUrl(
 }
 
 export function agentLogoUrl(basePath: string): string {
-  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
-  return base ? `${base}/favicon.svg` : "favicon.svg";
+  return controlUiPublicAssetPath("favicon.svg", basePath);
 }
 
 export function assistantAvatarFallbackUrl(basePath: string): string {
-  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
-  return base ? `${base}/apple-touch-icon.png` : "apple-touch-icon.png";
+  return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }
 
 function isAvatarUrl(value: string): boolean {

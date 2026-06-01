@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import { getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -6,36 +7,23 @@ installGatewayTestHooks({ scope: "suite" });
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
-let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
-  enabledServer = await startServer(enabledPort, { openAiChatCompletionsEnabled: true });
+  enabledServer = await startOpenAiCompatGatewayServer({
+    startGatewayServer,
+    port: enabledPort,
+    auth: { mode: "none" },
+    openAiChatCompletionsEnabled: true,
+  });
 });
 
 afterAll(async () => {
   await enabledServer.close({ reason: "models http enabled suite done" });
 });
-
-async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
-  });
-}
-
-async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
-  });
-}
 
 async function getModels(pathname: string, headers?: Record<string, string>) {
   return await fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
@@ -120,7 +108,12 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
 
   it("rejects when disabled", async () => {
     const port = await getFreePort();
-    const server = await startServer(port, { openAiChatCompletionsEnabled: false });
+    const server = await startOpenAiCompatGatewayServer({
+      startGatewayServer,
+      port,
+      auth: { mode: "none" },
+      openAiChatCompletionsEnabled: false,
+    });
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {},
@@ -133,7 +126,12 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
 
   it("treats shared-secret bearer auth as full compat operator access", async () => {
     const port = await getFreePort();
-    const server = await startTokenServer(port, { openAiChatCompletionsEnabled: true });
+    const server = await startOpenAiCompatGatewayServer({
+      startGatewayServer,
+      port,
+      auth: { mode: "token", token: "secret" },
+      openAiChatCompletionsEnabled: true,
+    });
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {

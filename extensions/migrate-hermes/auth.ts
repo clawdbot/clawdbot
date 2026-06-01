@@ -39,7 +39,6 @@ import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
-const LEGACY_OPENAI_PROVIDER_ID = ["openai", "codex"].join("-");
 const OPENAI_DEFAULT_MODEL = "openai/gpt-5.5";
 const HERMES_AUTH_DISPLAY_NAME = "Hermes import";
 
@@ -143,10 +142,7 @@ function hasLegacyOpenAIOAuthTokenFields(value: unknown, keyHint = ""): boolean 
   }
   const provider = readString(value.provider)?.toLowerCase();
   const normalizedKeyHint = keyHint.toLowerCase();
-  const isOpenAIRecord =
-    normalizedKeyHint.includes("openai") ||
-    provider === OPENAI_PROVIDER_ID ||
-    provider === LEGACY_OPENAI_PROVIDER_ID;
+  const isOpenAIRecord = normalizedKeyHint.includes("openai") || provider === OPENAI_PROVIDER_ID;
   const hasTokenPair =
     (readString(value.access) && readString(value.refresh)) ||
     (readString(value.access_token) && readString(value.refresh_token));
@@ -437,7 +433,7 @@ export async function applyAuthItem(
     typeof item.details?.sourceCredentialIndex === "number"
       ? item.details.sourceCredentialIndex
       : undefined;
-  const sourceCredentialFingerprint =
+  const sourceCredentialFingerprintLocal =
     typeof item.details?.sourceCredentialFingerprint === "string"
       ? item.details.sourceCredentialFingerprint
       : undefined;
@@ -452,7 +448,9 @@ export async function applyAuthItem(
     profiles,
     sourceProfileId,
     ...(sourceCredentialIndex === undefined ? {} : { sourceCredentialIndex }),
-    ...(sourceCredentialFingerprint ? { sourceCredentialFingerprint } : {}),
+    ...(sourceCredentialFingerprintLocal
+      ? { sourceCredentialFingerprint: sourceCredentialFingerprintLocal }
+      : {}),
   });
   if (!profile) {
     return markMigrationItemSkipped(item, HERMES_REASON_SECRET_NO_LONGER_PRESENT);

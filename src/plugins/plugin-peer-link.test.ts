@@ -104,12 +104,40 @@ describe("plugin peer links", () => {
     },
   );
 
-  it("does not delete an existing real openclaw package directory", async () => {
+  it("replaces an existing real openclaw package directory", async () => {
     const root = makeTempDir();
     const packageDir = path.join(root, "peer-plugin");
     const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
     fs.mkdirSync(existingOpenClawDir, { recursive: true });
     fs.writeFileSync(path.join(existingOpenClawDir, "package.json"), '{"name":"openclaw"}', "utf8");
+
+    const messages: string[] = [];
+    const result = await linkOpenClawPeerDependencies({
+      installedDir: packageDir,
+      peerDependencies: {
+        openclaw: ">=2026.0.0",
+      },
+      logger: {
+        info: (message) => messages.push(message),
+      },
+    });
+
+    expect(result).toEqual({ repaired: 1, skipped: 0 });
+    expect(fs.lstatSync(existingOpenClawDir).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(existingOpenClawDir)).toBe(fs.realpathSync(process.cwd()));
+    expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
+  });
+
+  it("does not delete an unrelated existing package directory", async () => {
+    const root = makeTempDir();
+    const packageDir = path.join(root, "peer-plugin");
+    const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
+    fs.mkdirSync(existingOpenClawDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(existingOpenClawDir, "package.json"),
+      '{"name":"not-openclaw"}',
+      "utf8",
+    );
 
     const warnings: string[] = [];
     const result = await linkOpenClawPeerDependencies({

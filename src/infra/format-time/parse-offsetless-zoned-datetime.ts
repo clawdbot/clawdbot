@@ -87,6 +87,10 @@ function getTimeZoneOffsetMs(utcMs: number, timeZone: string): number {
     parts.hour,
     parts.minute,
     parts.second,
+    // Include the sub-second component (carried from utcMs via getUTCMilliseconds)
+    // so the offset is exact. Dropping it makes the offset wrong by the fraction,
+    // which fails the millisecond re-validation and rejects valid sub-second input.
+    parts.millisecond,
   );
 
   return localAsUtc - utcMs;

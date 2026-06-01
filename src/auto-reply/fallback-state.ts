@@ -166,15 +166,20 @@ export function resolveFallbackTransition(params: {
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||
       previousState.activeModel !== activeModelRef);
-  const previousStateWasRealFallback = Boolean(
-    previousState.selectedModel &&
-    previousState.activeModel &&
-    !areRuntimeModelRefsEquivalent(
-      previousState.selectedModel,
-      previousState.activeModel,
-      comparisonOptions,
-    ),
-  );
+  const previousStateMatchesCurrent =
+    previousState.selectedModel === selectedModelRef &&
+    previousState.activeModel === activeModelRef;
+  const previousStateWasRealFallback = previousStateMatchesCurrent
+    ? fallbackActive
+    : Boolean(
+        previousState.selectedModel &&
+        previousState.activeModel &&
+        !areRuntimeModelRefsEquivalent(
+          previousState.selectedModel,
+          previousState.activeModel,
+          comparisonOptions,
+        ),
+      );
   const fallbackCleared = !fallbackActive && previousStateWasRealFallback;
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
   const attemptSummaries = buildFallbackAttemptSummaries(params.attempts);

@@ -24,6 +24,17 @@ try {
     );
   } else if (mode === "status") {
     await proof.waitForManagedGatewayStatus(process.env, "proof-token");
+  } else if (mode === "startup-fails") {
+    await proof.expectGatewayStartupFails(
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        },
+      },
+      9,
+      "test leak",
+    );
   } else {
     throw new Error(`unknown proof harness mode: ${mode}`);
   }

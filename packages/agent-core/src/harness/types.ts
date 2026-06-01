@@ -26,7 +26,7 @@ export function err<TValue, TError>(error: TError): Result<TValue, TError> {
 /** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
 export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
   if (!result.ok) {
-    throw result.error;
+    throw toLintErrorObject(result.error, "Non-Error thrown");
   }
   return result.value;
 }
@@ -361,29 +361,38 @@ export interface Shell {
 /** Filesystem and process execution environment used by the harness. */
 export interface ExecutionEnv extends FileSystem, Shell {}
 
+/** Base fields shared by append-only session tree entries. */
 export interface SessionTreeEntryBase {
+  /** Entry discriminator used for JSONL persistence and typed narrowing. */
   type: string;
+  /** Stable entry id unique within a session file. */
   id: string;
+  /** Parent entry id, or null for a root entry. */
   parentId: string | null;
+  /** ISO timestamp string used for persistence and sorting. */
   timestamp: string;
 }
 
+/** Persisted transcript message entry. */
 export interface MessageEntry extends SessionTreeEntryBase {
   type: "message";
   message: AgentMessage;
 }
 
+/** Persisted thinking-level selection marker. */
 export interface ThinkingLevelChangeEntry extends SessionTreeEntryBase {
   type: "thinking_level_change";
   thinkingLevel: string;
 }
 
+/** Persisted model selection marker. */
 export interface ModelChangeEntry extends SessionTreeEntryBase {
   type: "model_change";
   provider: string;
   modelId: string;
 }
 
+/** Persisted summary that replaces older transcript history in context. */
 export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   type: "compaction";
   summary: string;
@@ -393,6 +402,7 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+/** Persisted summary of an abandoned branch when navigating the session tree. */
 export interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   type: "branch_summary";
   fromId: string;
@@ -401,12 +411,14 @@ export interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+/** Persisted harness/application marker that is not replayed into model context. */
 export interface CustomEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom";
   customType: string;
   data?: T;
 }
 
+/** Persisted harness/application message that can be replayed into model context. */
 export interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom_message";
   customType: string;
@@ -415,22 +427,27 @@ export interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   display: boolean;
 }
 
+/** Append-only label update for another session entry. */
 export interface LabelEntry extends SessionTreeEntryBase {
   type: "label";
   targetId: string;
   label: string | undefined;
 }
 
+/** Persisted session metadata marker. */
 export interface SessionInfoEntry extends SessionTreeEntryBase {
-  type: "session_info"; // legacy name, kept for backwards compatibility
+  // The persisted discriminator predates the public "session name" wording.
+  type: "session_info";
   name?: string;
 }
 
+/** Append-only marker that changes the active visible leaf. */
 export interface LeafEntry extends SessionTreeEntryBase {
   type: "leaf";
   targetId: string | null;
 }
 
+/** All persisted session tree entry variants. */
 export type SessionTreeEntry =
   | MessageEntry
   | ThinkingLevelChangeEntry
@@ -679,28 +696,36 @@ export type AgentHarnessEvent<
   TPromptTemplate extends PromptTemplate = PromptTemplate,
 > = AgentEvent | AgentHarnessOwnEvent<TSkill, TPromptTemplate>;
 
+/** Hook result for mutating the initial prompt run before the agent starts. */
 export interface BeforeAgentStartResult {
+  /** Replacement messages for the prompt run. */
   messages?: AgentMessage[];
+  /** Replacement system prompt for the prompt run. */
   systemPrompt?: string;
 }
 
+/** Hook result for replacing the full context message list before provider conversion. */
 export interface ContextResult {
   messages: AgentMessage[];
 }
 
+/** Hook result for patching provider request options before payload construction. */
 export interface BeforeProviderRequestResult {
   streamOptions?: AgentHarnessStreamOptionsPatch;
 }
 
+/** Hook result for replacing the provider payload after construction. */
 export interface BeforeProviderPayloadResult {
   payload: unknown;
 }
 
+/** Hook result for blocking a tool call before execution. */
 export interface ToolCallResult {
   block?: boolean;
   reason?: string;
 }
 
+/** Hook patch for a completed tool result before it is persisted/emitted. */
 export interface ToolResultPatch {
   content?: Array<TextContent | ImageContent>;
   details?: unknown;
@@ -708,11 +733,13 @@ export interface ToolResultPatch {
   terminate?: boolean;
 }
 
+/** Hook result for cancelling or replacing a planned compaction. */
 export interface SessionBeforeCompactResult {
   cancel?: boolean;
   compaction?: CompactResult;
 }
 
+/** Hook result for cancelling, labeling, or supplying branch-summary behavior before tree navigation. */
 export interface SessionBeforeTreeResult {
   cancel?: boolean;
   summary?: { summary: string; details?: unknown };
@@ -721,6 +748,7 @@ export interface SessionBeforeTreeResult {
   label?: string;
 }
 
+/** Typed return values expected from AgentHarness hook handlers by event type. */
 export type AgentHarnessEventResultMap = {
   before_agent_start: BeforeAgentStartResult | undefined;
   context: ContextResult | undefined;
@@ -742,15 +770,18 @@ export type AgentHarnessEventResultMap = {
   settled: undefined;
 };
 
+/** Options for a prompt submitted through AgentHarness. */
 export interface AgentHarnessPromptOptions {
   images?: ImageContent[];
 }
 
+/** Queued messages removed by an abort operation. */
 export interface AbortResult {
   clearedSteer: AgentMessage[];
   clearedFollowUp: AgentMessage[];
 }
 
+/** Compaction data supplied by hooks or returned from compaction preparation. */
 export interface CompactResult {
   summary: string;
   firstKeptEntryId: string;
@@ -758,18 +789,21 @@ export interface CompactResult {
   details?: unknown;
 }
 
+/** Result of moving the active session-tree leaf. */
 export interface NavigateTreeResult {
   cancelled: boolean;
   editorText?: string;
   summaryEntry?: BranchSummaryEntry;
 }
 
+/** Settings that control automatic context compaction. */
 export interface CompactionSettings {
   enabled: boolean;
   reserveTokens: number;
   keepRecentTokens: number;
 }
 
+/** Prepared compaction inputs exposed to hooks before a summary is generated. */
 export interface CompactionPreparation {
   firstKeptEntryId: string;
   messagesToSummarize: AgentMessage[];
@@ -781,12 +815,14 @@ export interface CompactionPreparation {
   settings: CompactionSettings;
 }
 
+/** File operations accumulated from summarized transcript ranges. */
 export interface FileOperations {
   read: Set<string>;
   written: Set<string>;
   edited: Set<string>;
 }
 
+/** Prepared branch navigation inputs exposed to hooks before a summary is generated. */
 export interface TreePreparation {
   targetId: string;
   oldLeafId: string | null;
@@ -798,6 +834,7 @@ export interface TreePreparation {
   label?: string;
 }
 
+/** Options for generating a branch summary. */
 export interface GenerateBranchSummaryOptions {
   model: Model;
   apiKey: string;
@@ -810,12 +847,14 @@ export interface GenerateBranchSummaryOptions {
   reserveTokens?: number;
 }
 
+/** Generated branch summary text and file-operation metadata. */
 export interface BranchSummaryResult {
   summary: string;
   readFiles: string[];
   modifiedFiles: string[];
 }
 
+/** Construction options for AgentHarness. */
 export interface AgentHarnessOptions<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -853,3 +892,17 @@ export interface AgentHarnessOptions<
 }
 
 export type { AgentHarness } from "./agent-harness.js";
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

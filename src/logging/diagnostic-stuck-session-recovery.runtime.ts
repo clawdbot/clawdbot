@@ -17,6 +17,7 @@ import {
 } from "./diagnostic-session-context.js";
 import {
   formatRecoveryOutcome,
+  resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
@@ -52,10 +53,6 @@ function isActiveRunProgressStale(params: {
   return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
 }
 
-function recoveryKey(params: StuckSessionRecoveryParams): string | undefined {
-  return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
-}
-
 function formatRecoveryContext(
   params: StuckSessionRecoveryParams,
   extra?: { activeSessionId?: string; lane?: string; activeCount?: number; queuedCount?: number },
@@ -84,7 +81,7 @@ function formatRecoveryContext(
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryParams,
 ): Promise<StuckSessionRecoveryOutcome> {
-  const key = recoveryKey(params);
+  const key = resolveStuckSessionRecoveryRef(params);
   if (!key || recoveriesInFlight.has(key)) {
     return {
       status: "skipped",
@@ -133,8 +130,7 @@ export async function recoverStuckDiagnosticSession(
         fileActiveWorkSessionId ??
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
-    const laneKey = params.sessionKey?.trim() || params.sessionId?.trim();
-    const sessionLane = laneKey ? resolveEmbeddedSessionLane(laneKey) : null;
+    const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
     let aborted = false;
     let drained = true;
     let forceCleared = false;

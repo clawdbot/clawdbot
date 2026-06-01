@@ -46,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Returns a pending assistant prompt only when chat can accept it immediately. */
 internal fun resolvePendingAssistantAutoSend(
   pendingPrompt: String?,
   healthOk: Boolean,
@@ -56,6 +57,7 @@ internal fun resolvePendingAssistantAutoSend(
   return prompt
 }
 
+/** Dispatches a pending assistant prompt once and reports whether it was accepted. */
 internal suspend fun dispatchPendingAssistantAutoSend(
   pendingPrompt: String?,
   healthOk: Boolean,
@@ -71,6 +73,7 @@ internal suspend fun dispatchPendingAssistantAutoSend(
   return dispatch(prompt)
 }
 
+/** Chooses the session key to load for initial chat hydration, if any. */
 internal fun resolveInitialChatLoadSessionKey(
   sessionKey: String,
   mainSessionKey: String,
@@ -81,6 +84,7 @@ internal fun resolveInitialChatLoadSessionKey(
   return main
 }
 
+/** Main Android chat sheet content: session picker, message list, and composer. */
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
@@ -105,6 +109,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   }
 
   LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+    // Assistant-launch prompts should wait for a healthy idle chat so they do
+    // not race an already-running turn.
     val accepted =
       dispatchPendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
@@ -131,6 +137,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
       scope.launch(Dispatchers.IO) {
+        // Bound both count and encoded size before attachments enter Compose
+        // state; sending uses these already-compressed payloads directly.
         val next =
           uris.take(8).mapNotNull { uri ->
             try {
@@ -265,6 +273,9 @@ private fun ChatErrorRail(errorText: String) {
   }
 }
 
+/**
+ * Image selected in the composer and held in memory until the next chat.send call.
+ */
 data class PendingImageAttachment(
   val id: String,
   val fileName: String,

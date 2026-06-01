@@ -1,5 +1,7 @@
+/** Controls whether the worker pool keeps scheduling after a task failure. */
 export type ConcurrencyErrorMode = "continue" | "stop";
 
+/** Runs async tasks with bounded concurrency while preserving result indexes. */
 export async function runTasksWithConcurrency<T>(params: {
   tasks: Array<() => Promise<T>>;
   limit: number;

@@ -187,11 +187,37 @@ gh pr view <number> --json additions,deletions,changedFiles \
 ## Read beyond the diff
 
 - Review the surrounding code path, not just changed lines. Open the caller, callee, data contracts, adjacent tests, and owner module.
+- Before any verdict, read enough code to fill this map: changed surface, runtime entry point, owner boundary, one caller, one callee, sibling implementations sharing the invariant, adjacent tests, current `main` behavior, and shipped/dependency/Codex contracts when relevant.
 - For large-codebase PRs, sample enough related files to understand the runtime boundary before deciding. Default to more code reading when the change touches agents, gateway, plugins, auth, sessions, process, config, or provider/runtime seams.
 - Compare the PR against current `origin/main` behavior. Check whether recent main already changed the same surface.
 - Dependency-backed behavior: MUST read upstream docs/source/types before judging API use, defaults, output shapes, errors, timeouts, memory behavior, or compatibility. Do not assume dependency contracts from memory or PR text.
 - Judge solution quality, not only correctness. Ask whether the PR is the clean owner-boundary fix or a wart/workaround that should be replaced by a small refactor, moved seam, contract change, or deletion of duplicate logic.
 - Mention the main files read when the verdict depends on code-path evidence.
+- If the user challenges the verdict or asks whether the idea is really good, resume code reading first. Do not defend, soften, or reverse the verdict until the missing caller/callee/sibling/dependency path is checked.
+
+## Best-fix review loop
+
+Every PR review must explicitly answer: "Is this the best fix, or only a plausible fix?"
+
+Before verdict:
+
+1. Reconstruct the bug, feature need, or behavior claim from issue/PR/proof.
+2. Trace current behavior from entry point to failure or decision point.
+3. Read touched files, callers, callees, owner modules, adjacent tests, and relevant docs.
+4. Read sibling surfaces that should share the invariant or could be broken by a one-sided fix.
+5. Compare against current `origin/main` and shipped behavior when regression/compat matters.
+6. Inspect upstream dependency/Codex source or docs for dependency-backed behavior.
+7. Identify at least one alternative fix location or shape, then reject it with evidence.
+8. If any required path above is uninspected, keep reading or mark `Remaining uncertainty`; do not call the PR best, blocked, proof-sufficient, or merge-ready.
+
+Review output must include:
+
+- `Best-fix verdict:` best / acceptable mitigation / wrong layer / too narrow / too broad.
+- `Alternatives considered:` 1-3 concrete alternatives and why rejected.
+- `Code read:` compact list of main files/contracts checked.
+- `Remaining uncertainty:` what was not proven.
+
+If the best-fix answer is only "maybe", keep reading or state the missing evidence. Do not call proof sufficient until the best-fix judgment is explicit.
 
 ## Enforce the bug-fix evidence bar
 

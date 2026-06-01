@@ -57,37 +57,39 @@ async function startEmbeddingServer(params?: {
   status?: number;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    try {
-      const body = await readJsonBody(req);
-      const captured: CapturedRequest = {
-        method: req.method,
-        url: req.url,
-        headers: req.headers,
-        body,
-      };
-      requests.push(captured);
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      try {
+        const body = await readJsonBody(req);
+        const captured: CapturedRequest = {
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body,
+        };
+        requests.push(captured);
 
-      if (params?.token) {
-        expect(req.headers.authorization).toBe(`Bearer ${params.token}`);
-      } else {
-        expect(req.headers.authorization).toBeUndefined();
+        if (params?.token) {
+          expect(req.headers.authorization).toBe(`Bearer ${params.token}`);
+        } else {
+          expect(req.headers.authorization).toBeUndefined();
+        }
+
+        res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify(
+            params?.respond?.(captured) ?? {
+              object: "list",
+              data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
+              model: body.model,
+            },
+          ),
+        );
+      } catch (error) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
       }
-
-      res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify(
-          params?.respond?.(captured) ?? {
-            object: "list",
-            data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
-            model: body.model,
-          },
-        ),
-      );
-    } catch (error) {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
-    }
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -172,7 +174,7 @@ describe("openai-compatible generic embedding provider", () => {
     });
     expect(result.runtime?.cacheKeyData).not.toHaveProperty("authorization");
     expect(
-      (result.runtime?.cacheKeyData as { headers?: Record<string, string> }).headers,
+      (result.runtime!.cacheKeyData as { headers?: Record<string, string> }).headers,
     ).not.toHaveProperty("x-api-key");
   });
 

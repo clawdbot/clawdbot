@@ -11,13 +11,13 @@ function loadLoginQrModule() {
 export async function startWebLoginWithQr(
   ...args: Parameters<StartWebLoginWithQr>
 ): ReturnType<StartWebLoginWithQr> {
-  const { startWebLoginWithQr } = await loadLoginQrModule();
-  return await startWebLoginWithQr(...args);
+  const { startWebLoginWithQr: startWebLoginWithQrLocal } = await loadLoginQrModule();
+  return await startWebLoginWithQrLocal(...args);
 }
 
 export async function waitForWebLogin(
   ...args: Parameters<WaitForWebLogin>
 ): ReturnType<WaitForWebLogin> {
-  const { waitForWebLogin } = await loadLoginQrModule();
-  return await waitForWebLogin(...args);
+  const { waitForWebLogin: waitForWebLoginLocal } = await loadLoginQrModule();
+  return await waitForWebLoginLocal(...args);
 }

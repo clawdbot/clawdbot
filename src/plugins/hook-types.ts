@@ -410,6 +410,9 @@ export type PluginHookBeforeDispatchEvent = {
   channel?: string;
   sessionKey?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -420,6 +423,9 @@ export type PluginHookBeforeDispatchContext = {
   conversationId?: string;
   sessionKey?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
 };
 
 export type PluginHookBeforeDispatchResult = {
@@ -441,6 +447,8 @@ export type PluginHookReplyDispatchEvent = {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   shouldSendToolSummaries: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;

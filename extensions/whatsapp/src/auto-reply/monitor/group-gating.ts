@@ -1,3 +1,4 @@
+import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
@@ -41,6 +42,7 @@ type ApplyGroupGatingParams = {
   agentId: string;
   sessionKey: string;
   baseMentionConfig: MentionConfig;
+  providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   authDir?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
@@ -167,7 +169,11 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
   const mentionConfig = {
-    ...buildMentionConfig(params.cfg, params.agentId),
+    ...buildMentionConfig(params.cfg, params.agentId, {
+      provider: "whatsapp",
+      conversationId: params.conversationId,
+      providerPolicy: params.providerMentionPatterns,
+    }),
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
   const mentionMsg =

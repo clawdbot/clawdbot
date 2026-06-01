@@ -101,7 +101,7 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: { NODE_OPTIONS: "--max-old-space-size=8192" },
+        env: { NODE_OPTIONS: "--max-old-space-size=12288" },
       },
     });
   });
@@ -110,11 +110,11 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("raises inherited lower tsdown heap settings to the build default", () => {
@@ -125,7 +125,7 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("raises split inherited lower tsdown heap settings to the build default", () => {
@@ -136,7 +136,7 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
@@ -154,7 +154,7 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
@@ -207,7 +207,7 @@ describe("resolveTsdownBuildInvocation", () => {
         shell: false,
         windowsVerbatimArguments: undefined,
         env: {
-          NODE_OPTIONS: "--max-old-space-size=8192",
+          NODE_OPTIONS: "--max-old-space-size=12288",
           OPENCLAW_BUILD_ALL_NO_PNPM: "1",
         },
       },

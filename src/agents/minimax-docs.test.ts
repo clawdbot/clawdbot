@@ -13,7 +13,7 @@ const minimaxDoc = fs.readFileSync(path.join(repoRoot, "docs/providers/minimax.m
 
 describe("MiniMax docs sync", () => {
   it("keeps the live-testing guide on the current MiniMax default", () => {
-    expect(testingLiveDoc).toContain("MiniMax M2.7");
+    expect(testingLiveDoc).toContain("MiniMax M3");
     expect(testingLiveDoc).toContain(MINIMAX_DEFAULT_MODEL_REF);
   });
 

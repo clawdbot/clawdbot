@@ -563,7 +563,7 @@ export function throwCapabilityGenerationFailure(params: {
   lastError: unknown;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
+    throw toLintErrorObject(params.lastError, "Non-Error thrown");
   }
   const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
@@ -642,4 +642,18 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
       ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
       : "If you want a specific provider, also configure that provider's auth/API key first.",
   ].join(" ");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

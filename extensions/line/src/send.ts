@@ -224,7 +224,7 @@ async function pushLineMessages(
   });
 
   if (behavior.errorContext) {
-    await pushRequest.catch((err) => {
+    await pushRequest.catch((err: unknown) => {
       logLineHttpError(err, behavior.errorContext!);
       throw err;
     });
@@ -301,7 +301,6 @@ export async function sendMessageLine(
       case "audio":
         messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
         break;
-      case "image":
       default:
         // Backward compatibility: keep image as default when media kind is unspecified.
         {

@@ -51,7 +51,7 @@ let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
 
 async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
   parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
-    ({ parseHTML }) => parseHTML,
+    (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
 }

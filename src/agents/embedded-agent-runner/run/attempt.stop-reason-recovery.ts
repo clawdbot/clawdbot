@@ -142,7 +142,7 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
         return Promise.resolve(maybeStream).then(
           (stream) => wrapStreamHandleUnhandledStopReason(model, stream),
-          (err) => {
+          (err: unknown) => {
             const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
             if (!normalizedMessage) {
               throw err;

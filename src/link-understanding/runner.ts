@@ -1,3 +1,4 @@
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,7 +11,6 @@ import {
   normalizeMediaUnderstandingChatType,
   resolveMediaUnderstandingScope,
 } from "../media-understanding/scope.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
 import { extractLinksFromMessage } from "./detect.js";

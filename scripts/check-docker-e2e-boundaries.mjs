@@ -16,6 +16,7 @@ const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
 // intentionally need both live credentials and a package-backed image.
 const livePackageBackedLanes = new Set([
   "live-codex-npm-plugin",
+  "live-mcp-code-mode-gateway",
   "live-plugin-tool",
   "openai-chat-tools",
   "openwebui",

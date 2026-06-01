@@ -1,0 +1,75 @@
+{
+  "name": "@openclaw/media-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./base64": {
+      "types": "./dist/base64.d.mts",
+      "import": "./dist/base64.mjs",
+      "default": "./dist/base64.mjs"
+    },
+    "./constants": {
+      "types": "./dist/constants.d.mts",
+      "import": "./dist/constants.mjs",
+      "default": "./dist/constants.mjs"
+    },
+    "./content-length": {
+      "types": "./dist/content-length.d.mts",
+      "import": "./dist/content-length.mjs",
+      "default": "./dist/content-length.mjs"
+    },
+    "./file-name": {
+      "types": "./dist/file-name.d.mts",
+      "import": "./dist/file-name.mjs",
+      "default": "./dist/file-name.mjs"
+    },
+    "./inbound-path-policy": {
+      "types": "./dist/inbound-path-policy.d.mts",
+      "import": "./dist/inbound-path-policy.mjs",
+      "default": "./dist/inbound-path-policy.mjs"
+    },
+    "./inline-image-data-url": {
+      "types": "./dist/inline-image-data-url.d.mts",
+      "import": "./dist/inline-image-data-url.mjs",
+      "default": "./dist/inline-image-data-url.mjs"
+    },
+    "./media-source-url": {
+      "types": "./dist/media-source-url.d.mts",
+      "import": "./dist/media-source-url.mjs",
+      "default": "./dist/media-source-url.mjs"
+    },
+    "./mime": {
+      "types": "./dist/mime.d.mts",
+      "import": "./dist/mime.mjs",
+      "default": "./dist/mime.mjs"
+    },
+    "./read-byte-stream-with-limit": {
+      "types": "./dist/read-byte-stream-with-limit.d.mts",
+      "import": "./dist/read-byte-stream-with-limit.mjs",
+      "default": "./dist/read-byte-stream-with-limit.mjs"
+    },
+    "./read-response-with-limit": {
+      "types": "./dist/read-response-with-limit.d.mts",
+      "import": "./dist/read-response-with-limit.mjs",
+      "default": "./dist/read-response-with-limit.mjs"
+    }
+  },
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*",
+    "file-type": "22.0.1"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/base64.ts src/constants.ts src/content-length.ts src/file-name.ts src/inbound-path-policy.ts src/inline-image-data-url.ts src/media-source-url.ts src/mime.ts src/read-byte-stream-with-limit.ts src/read-response-with-limit.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

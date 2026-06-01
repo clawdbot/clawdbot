@@ -15,8 +15,10 @@ import type { CronJob } from "./types.js";
 
 type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
+/** Result shape for direct/queued cron runs, including invalid persisted specs. */
 export type CronServiceRunResult = CronRunResult | { ok: true; ran: false; reason: "invalid-spec" };
 
+/** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
   start(): Promise<void>;
   stop(): void;

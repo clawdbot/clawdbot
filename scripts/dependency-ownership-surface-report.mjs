@@ -449,7 +449,7 @@ function main(argv = process.argv.slice(2)) {
   }
   if (options.asJson) {
     const artifactHint =
-      typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+      typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
     process.stdout.write(
       `INFO dependency ownership/install surface report: ` +
         `${report.summary.importerCount} workspace package entries, ` +

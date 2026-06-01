@@ -152,7 +152,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "content-type": "image/png",
       "x-amz-date": expect.any(String),
     });
-    expect((requests[0]?.headers as Record<string, string>).authorization).toContain(
+    expect((requests[0].headers as Record<string, string>).authorization).toContain(
       "Credential=access/",
     );
     expect(String(requests[4]?.body)).toContain(

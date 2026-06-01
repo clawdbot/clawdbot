@@ -107,7 +107,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
       return false;
     }
     const haystack = normalizedLogHaystack(log);
-    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((pathLocal) => haystack.includes(pathLocal));
   }
 
   return {
@@ -217,6 +217,10 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/media-core" ||
+    id.startsWith("@openclaw/media-core/") ||
+    id === "@openclaw/acp-core" ||
+    id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
   );
@@ -437,6 +441,53 @@ function buildNormalizationCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-core/src/index.ts",
+    base64: "packages/media-core/src/base64.ts",
+    constants: "packages/media-core/src/constants.ts",
+    "content-length": "packages/media-core/src/content-length.ts",
+    "file-name": "packages/media-core/src/file-name.ts",
+    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
+    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
+    "media-source-url": "packages/media-core/src/media-source-url.ts",
+    mime: "packages/media-core/src/mime.ts",
+    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
+    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
+  };
+}
+
+function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
+  const packageJsonPath = path.join("packages", packageDir, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    exports?: Record<string, unknown>;
+  };
+  const entries: Record<string, string> = {};
+  for (const [exportKey, value] of Object.entries(packageJson.exports ?? {})) {
+    const entry =
+      exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
+    if (!entry || entry.includes("..")) {
+      continue;
+    }
+    const importPath =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>).import
+        : value;
+    if (typeof importPath !== "string" || !importPath.startsWith("./dist/")) {
+      continue;
+    }
+    const sourcePath = importPath
+      .replace(/^\.\/dist\//u, `packages/${packageDir}/src/`)
+      .replace(/\.mjs$/u, ".ts");
+    entries[entry] = sourcePath;
+  }
+  return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
+}
+
+function buildAcpCoreDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("acp-core");
+}
+
 function buildTerminalCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/terminal-core/src/index.ts",
@@ -578,6 +629,18 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
+        `media-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildAcpCoreDistEntries()).map(([entry, source]) => [
+        `acp-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
         `terminal-core/${entry}`,
         source,
@@ -668,6 +731,18 @@ export default defineConfig([
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildNormalizationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("normalization-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("media-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildAcpCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("acp-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

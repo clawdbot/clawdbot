@@ -369,15 +369,18 @@ export async function createOllamaEmbeddingProvider(
     return embedding;
   };
 
-  const embedQuery = async (text: string, options?: { signal?: AbortSignal }): Promise<number[]> =>
-    await embedOne(applyQueryInstructionTemplate(client.model, text), options?.signal);
+  const embedQuery = async (
+    text: string,
+    optionsValue?: { signal?: AbortSignal },
+  ): Promise<number[]> =>
+    await embedOne(applyQueryInstructionTemplate(client.model, text), optionsValue?.signal);
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
     embedQuery,
-    embedBatch: async (texts, options) =>
-      texts.length === 0 ? [] : await embedMany(texts, options?.signal),
+    embedBatch: async (texts, optionsLocal) =>
+      texts.length === 0 ? [] : await embedMany(texts, optionsLocal?.signal),
   };
 
   return {

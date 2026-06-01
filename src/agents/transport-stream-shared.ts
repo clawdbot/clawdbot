@@ -26,6 +26,9 @@ type TransportOutputShape = {
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
+  if (typeof text !== "string") {
+    return "";
+  }
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
     "",

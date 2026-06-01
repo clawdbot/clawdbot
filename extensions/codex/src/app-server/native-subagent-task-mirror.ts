@@ -15,7 +15,7 @@ import { isJsonObject } from "./protocol.js";
 
 export type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
-  "createRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+  "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
 >;
 
 export type CodexNativeSubagentTaskMirrorParams = {
@@ -27,6 +27,7 @@ export type CodexNativeSubagentTaskMirrorParams = {
 
 export class CodexNativeSubagentTaskMirror {
   private readonly mirroredThreadIds = new Set<string>();
+  private readonly failedMirrorThreadIds = new Set<string>();
   private readonly terminalRunIds = new Set<string>();
   private readonly now: () => number;
 
@@ -81,7 +82,7 @@ export class CodexNativeSubagentTaskMirror {
       trimOptional(thread.preview) ??
       `Codex native subagent${label === "Codex subagent" ? "" : ` ${label}`}`;
     const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
-    this.runtime.createRunningTaskRun({
+    const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
       runId,
@@ -94,6 +95,13 @@ export class CodexNativeSubagentTaskMirror {
       lastEventAt: this.now(),
       progressSummary: "Codex native subagent started.",
     });
+    if (!taskRecord) {
+      this.mirroredThreadIds.delete(threadId);
+      this.failedMirrorThreadIds.add(threadId);
+      return;
+    }
+    this.failedMirrorThreadIds.delete(threadId);
+    this.terminalRunIds.delete(runId);
     this.applyStatus(threadId, thread.status);
   }
 
@@ -106,6 +114,9 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private applyStatus(threadId: string, status: CodexThreadStatus | null | undefined): void {
+    if (!this.mirroredThreadIds.has(threadId) && this.failedMirrorThreadIds.has(threadId)) {
+      return;
+    }
     const statusType = status?.type;
     if (!statusType) {
       return;
@@ -219,7 +230,7 @@ export class CodexNativeSubagentTaskMirror {
     const prompt = trimOptional(readString(item, "prompt"));
     const runId = codexNativeSubagentRunId(normalizedThreadId);
     const createdAt = this.now();
-    this.runtime.createRunningTaskRun({
+    const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
       runId,
@@ -232,6 +243,13 @@ export class CodexNativeSubagentTaskMirror {
       lastEventAt: createdAt,
       progressSummary: "Codex native subagent spawned.",
     });
+    if (!taskRecord) {
+      this.mirroredThreadIds.delete(normalizedThreadId);
+      this.failedMirrorThreadIds.add(normalizedThreadId);
+      return;
+    }
+    this.failedMirrorThreadIds.delete(normalizedThreadId);
+    this.terminalRunIds.delete(runId);
   }
 
   private applyCollabAgentStatus(
@@ -239,6 +257,9 @@ export class CodexNativeSubagentTaskMirror {
     status: string | undefined,
     message: string | null | undefined,
   ): void {
+    if (!this.mirroredThreadIds.has(threadId) && this.failedMirrorThreadIds.has(threadId)) {
+      return;
+    }
     const normalizedStatus = normalizeAgentStateStatus(status);
     if (!normalizedStatus) {
       return;

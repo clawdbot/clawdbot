@@ -717,7 +717,7 @@ describe("RequestClient", () => {
   it("dispatches multipart uploads with a multipart/form-data content type", async () => {
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toBeInstanceOf(Headers);
-      expect((init?.headers as Headers).get("Content-Type")).toMatch(
+      expect((init!.headers as Headers).get("Content-Type")).toMatch(
         /^multipart\/form-data; boundary=/,
       );
       expect(init?.body).not.toBeInstanceOf(FormData);

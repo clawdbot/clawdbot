@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -153,10 +154,12 @@ function writeJson(file, value) {
 }
 
 function installRecords() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
   const cfg = fs.existsSync(configPath()) ? readJson(configPath()) : {};
-  return index.installRecords || index.records || cfg.plugins?.installs || {};
+  return readPluginInstallRecords({
+    stateDir: stateDir(),
+    configPath: configPath(),
+    fallbackRecords: cfg.plugins?.installs ?? {},
+  });
 }
 
 function pluginInstallPath() {

@@ -468,7 +468,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   type LiveAllowlistCacheEntry = { signature: string; entries: string[] };
   let liveDmAllowlistCache: LiveAllowlistCacheEntry | null = null;
   let liveGroupAllowlistCache: LiveAllowlistCacheEntry | null = null;
-  const resolveCachedLiveAllowlist = async (params: {
+  const resolveCachedLiveAllowlist = async (paramsValue: {
     cfg: CoreConfig;
     entries?: ReadonlyArray<string | number>;
     failClosedOnUnresolved?: boolean;
@@ -476,25 +476,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     cache: LiveAllowlistCacheEntry | null;
     updateCache: (next: LiveAllowlistCacheEntry) => void;
   }): Promise<string[]> => {
-    const accountConfig = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
+    const accountConfigLocal = resolveMatrixAccountConfig({ cfg: paramsValue.cfg, accountId });
     const signature = JSON.stringify({
-      entries: (params.entries ?? []).map((entry) => String(entry).trim()),
-      failClosedOnUnresolved: params.failClosedOnUnresolved === true,
-      dangerouslyAllowNameMatching: isDangerousNameMatchingEnabled(accountConfig),
+      entries: (paramsValue.entries ?? []).map((entry) => String(entry).trim()),
+      failClosedOnUnresolved: paramsValue.failClosedOnUnresolved === true,
+      dangerouslyAllowNameMatching: isDangerousNameMatchingEnabled(accountConfigLocal),
     });
-    if (params.cache?.signature === signature) {
-      return params.cache.entries;
+    if (paramsValue.cache?.signature === signature) {
+      return paramsValue.cache.entries;
     }
     const entries = await resolveLiveUserAllowlist({
-      cfg: params.cfg,
+      cfg: paramsValue.cfg,
       accountId,
-      entries: params.entries,
-      failClosedOnUnresolved: params.failClosedOnUnresolved,
-      startupResolvedEntries: params.startupResolvedEntries,
+      entries: paramsValue.entries,
+      failClosedOnUnresolved: paramsValue.failClosedOnUnresolved,
+      startupResolvedEntries: paramsValue.startupResolvedEntries,
       runtime,
     });
     const next = { signature, entries };
-    params.updateCache(next);
+    paramsValue.updateCache(next);
     return entries;
   };
   const pairingReplySentAtMsBySender = new Map<string, number>();
@@ -677,16 +677,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         });
         return { content, isDirectMessage, locationPayload, selfUserId };
       };
-      const continueIngress = async (params: {
+      const continueIngress = async (paramsLocal: {
         content: RoomMessageEventContent;
         isDirectMessage: boolean;
         locationPayload: MatrixLocationPayload | null;
         selfUserId: string;
       }) => {
-        let content = params.content;
-        const isDirectMessage = params.isDirectMessage;
+        let content = paramsLocal.content;
+        const isDirectMessage = paramsLocal.isDirectMessage;
         const isRoom = !isDirectMessage;
-        const { locationPayload, selfUserId } = params;
+        const { locationPayload, selfUserId } = paramsLocal;
         if (isRoom && groupPolicy === "disabled") {
           await commitInboundEventIfClaimed();
           return undefined;
@@ -905,12 +905,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           if (!isPollEvent) {
             return null;
           }
-          pollSnapshotPromise ??= fetchMatrixPollSnapshot(client, roomId, event).catch((err) => {
-            logVerboseMessage(
-              `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
-            );
-            return null;
-          });
+          pollSnapshotPromise ??= fetchMatrixPollSnapshot(client, roomId, event).catch(
+            (err: unknown) => {
+              logVerboseMessage(
+                `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
+              );
+              return null;
+            },
+          );
           return await pollSnapshotPromise;
         };
 
@@ -965,7 +967,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
         });
         const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;
-        const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
+        const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId, {
+          provider: "matrix",
+          conversationId: roomId,
+          providerPolicy: accountConfig?.mentionPatterns,
+        });
         const selfDisplayName = content.formatted_body
           ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
           : undefined;
@@ -1477,7 +1483,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           .then(({ reactMatrixMessage }) =>
             reactMatrixMessage(roomId, messageId, ackReaction, client),
           )
-          .catch((err) => {
+          .catch((err: unknown) => {
             logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
           });
       }
@@ -1485,7 +1491,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (messageId) {
         loadMatrixSendModule()
           .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, messageId, client))
-          .catch((err) => {
+          .catch((err: unknown) => {
             logVerboseMessage(
               `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
             );
@@ -1646,8 +1652,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           );
         }
         const alreadyStarted = progressDraftGate.hasStarted;
-        await progressDraftGate.noteWork();
-        if (alreadyStarted && progressDraftGate.hasStarted) {
+        const progressActive = await progressDraftGate.noteWork();
+        if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
           renderProgressDraft();
         }
       };

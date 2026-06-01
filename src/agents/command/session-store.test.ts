@@ -71,18 +71,18 @@ vi.mock("../../utils/usage-format.js", () => ({
 
 vi.mock("../../config/sessions.js", async () => {
   const fsSync = await import("node:fs");
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
   const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
     try {
-      return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
+      return JSON.parse(await fsLocal.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
     } catch {
       return {};
     }
   };
   const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+    await fsLocal.mkdir(pathLocal.dirname(storePath), { recursive: true });
+    await fsLocal.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
   };
   sessionStoreMocks.updateSessionStore.mockImplementation(
     async <T>(
@@ -129,7 +129,7 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
-    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
     rewriteSessionFileForNewSessionId: (params: {
       sessionFile?: string;
       previousSessionId: string;
@@ -137,7 +137,7 @@ vi.mock("../../config/sessions.js", async () => {
     }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
     resolveSessionFilePathOptions: (params: unknown) => params,
     resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
-      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
+      entry?.sessionFile ?? pathLocal.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 

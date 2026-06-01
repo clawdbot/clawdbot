@@ -55,8 +55,8 @@ export type ChannelGatewayMethodDescriptor = {
   description?: string;
 };
 
-// Omitted generic means "plugin with some account shape", not "plugin whose
-// account is literally Record<string, unknown>".
+// Omitted generic means "plugin with some account shape"; using unknown makes
+// callback parameters contravariant and rejects concrete plugin implementations.
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;

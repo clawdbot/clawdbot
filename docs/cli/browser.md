@@ -142,6 +142,9 @@ the optional label, and the raw `targetId`. Agents should pass
 `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. You can
 assign a label with `open --label`, `tab new --label`, or `tab label`; labels,
 tab ids, raw target ids, and unique target-id prefixes are all accepted.
+The request field is still named `targetId` for compatibility, but it accepts
+these tab references. Treat raw target ids as diagnostic handles, not durable
+agent memory.
 When Chromium replaces the underlying raw target during a navigation or form
 submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab
 when it can prove the match. Raw target ids remain volatile; prefer

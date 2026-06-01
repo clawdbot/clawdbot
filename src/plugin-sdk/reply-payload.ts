@@ -302,10 +302,10 @@ export async function sendTextMediaPayload(params: {
     const lastResult = await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
-      send: async ({ text, mediaUrl }) =>
+      send: async ({ text: textLocal, mediaUrl }) =>
         await params.adapter.sendMedia!({
           ...params.ctx,
-          text,
+          text: textLocal,
           mediaUrl,
           ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
           replyToId: nextReplyToId(),

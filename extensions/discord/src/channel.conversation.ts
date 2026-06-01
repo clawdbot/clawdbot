@@ -1,6 +1,5 @@
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordCurrentConversationIdentity } from "./conversation-identity.js";
@@ -96,7 +95,7 @@ function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefin
 }
 
 export function resolveDiscordCommandConversation(params: {
-  threadId?: string;
+  threadId?: string | number;
   threadParentId?: string;
   parentSessionKey?: string;
   from?: string;
@@ -105,18 +104,9 @@ export function resolveDiscordCommandConversation(params: {
   commandTo?: string;
   fallbackTo?: string;
 }) {
-  const targets = [params.originatingTo, params.commandTo, params.fallbackTo];
-  if (params.threadId) {
-    const parentConversationId =
-      normalizeDiscordMessagingTarget(normalizeOptionalString(params.threadParentId) ?? "") ||
-      parseDiscordParentChannelFromSessionKey(params.parentSessionKey) ||
-      resolveDiscordConversationIdFromTargets(targets);
-    return {
-      conversationId: params.threadId,
-      ...(parentConversationId && parentConversationId !== params.threadId
-        ? { parentConversationId }
-        : {}),
-    };
+  const threadConversation = resolveDiscordThreadConversationRef(params);
+  if (threadConversation) {
+    return threadConversation;
   }
   const conversationId = resolveDiscordCurrentConversationIdentity({
     from: params.from,
@@ -128,12 +118,53 @@ export function resolveDiscordCommandConversation(params: {
   return conversationId ? { conversationId } : null;
 }
 
+export function resolveDiscordThreadConversationRef(params: {
+  threadId?: string | number | null;
+  threadParentId?: string | number | null;
+  parentSessionKey?: string | null;
+  originatingTo?: string;
+  to?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+  conversationId?: string;
+}) {
+  const threadId = normalizeOptionalStringifiedId(params.threadId);
+  if (!threadId) {
+    return null;
+  }
+  const targets = [
+    params.originatingTo ?? params.to,
+    params.commandTo,
+    params.fallbackTo ?? params.conversationId,
+  ];
+  const parentConversationId =
+    normalizeDiscordMessagingTarget(normalizeOptionalStringifiedId(params.threadParentId) ?? "") ||
+    parseDiscordParentChannelFromSessionKey(params.parentSessionKey) ||
+    resolveDiscordConversationIdFromTargets(targets);
+
+  return {
+    conversationId: threadId,
+    ...(parentConversationId && parentConversationId !== threadId ? { parentConversationId } : {}),
+  };
+}
+
 export function resolveDiscordInboundConversation(params: {
   from?: string;
   to?: string;
   conversationId?: string;
+  threadId?: string | number;
+  threadParentId?: string | number;
   isGroup: boolean;
 }) {
+  const threadConversation = resolveDiscordThreadConversationRef({
+    to: params.to,
+    conversationId: params.conversationId,
+    threadId: params.threadId,
+    threadParentId: params.threadParentId,
+  });
+  if (threadConversation) {
+    return threadConversation;
+  }
   const conversationId = resolveDiscordCurrentConversationIdentity({
     from: params.from,
     chatType: params.isGroup ? "group" : "direct",

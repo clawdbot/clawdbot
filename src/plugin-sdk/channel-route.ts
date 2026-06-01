@@ -5,12 +5,16 @@ import {
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 
+/** Coarse chat shape used when a channel can distinguish direct, group, and broadcast targets. */
 export type ChannelRouteChatType = "direct" | "group" | "channel";
 
+/** Provider-specific thread kind carried with normalized channel routes. */
 export type ChannelRouteThreadKind = "topic" | "thread" | "reply";
 
+/** Describes which runtime surface supplied a channel route thread id. */
 export type ChannelRouteThreadSource = "explicit" | "target" | "session" | "turn";
 
+/** Normalized channel route used for comparison, binding, and dedupe helpers. */
 export type ChannelRouteRef = {
   channel?: string;
   accountId?: string;
@@ -26,6 +30,7 @@ export type ChannelRouteRef = {
   };
 };
 
+/** Loose route input accepted at SDK boundaries before normalization. */
 export type ChannelRouteRefInput = {
   channel?: unknown;
   accountId?: unknown;
@@ -37,11 +42,13 @@ export type ChannelRouteRefInput = {
   threadSource?: ChannelRouteThreadSource;
 };
 
+/** Raw outbound target input shape used by helpers that do not need thread metadata source. */
 export type ChannelRouteTargetInput = Pick<
   ChannelRouteRefInput,
   "channel" | "accountId" | "to" | "rawTo" | "chatType" | "threadId"
 >;
 
+/** Route input accepted by compact-key helpers after legacy and normalized callers converge. */
 export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
 /** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
@@ -57,15 +64,18 @@ export type ChannelRouteExplicitTargetParser = (
   rawTarget: string,
 ) => ChannelRouteExplicitTarget | null;
 
+/** Normalizes a route thread id while preserving provider string ids. */
 export function normalizeRouteThreadId(value: unknown): string | number | undefined {
   return normalizeOptionalThreadValue(value);
 }
 
+/** Stringifies a normalized thread id for stable route keys and comparisons. */
 export function stringifyRouteThreadId(value: unknown): string | undefined {
   const normalized = normalizeRouteThreadId(value);
   return normalized == null ? undefined : String(normalized);
 }
 
+/** Converts loose channel/account/target/thread input into a normalized route reference. */
 export function normalizeChannelRouteRef(
   input?: ChannelRouteRefInput,
 ): ChannelRouteRef | undefined {
@@ -105,20 +115,24 @@ export function normalizeChannelRouteRef(
   };
 }
 
+/** Returns the normalized destination id for a route reference. */
 export function channelRouteTarget(route?: ChannelRouteRef): string | undefined {
   return route?.target?.to;
 }
 
+/** Returns the normalized thread id for a route reference. */
 export function channelRouteThreadId(route?: ChannelRouteRef): string | number | undefined {
   return route?.thread?.id;
 }
 
+/** Normalizes raw target-only route input. */
 export function normalizeChannelRouteTarget(
   input?: ChannelRouteTargetInput | null,
 ): ChannelRouteRef | undefined {
   return input ? normalizeChannelRouteRef(input) : undefined;
 }
 
+/** Parsed target shape retained for deprecated explicit-target parser adapters. */
 export type ChannelRouteParsedTarget = ChannelRouteTargetInput & {
   channel: string;
   rawTo: string;
@@ -150,6 +164,7 @@ export function resolveChannelRouteTargetWithParser(params: {
   };
 }
 
+/** Builds a JSON route dedupe key that remains unambiguous when route parts contain separators. */
 export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): string {
   const route = normalizeChannelRouteTarget(input);
   return JSON.stringify([
@@ -187,6 +202,7 @@ export function channelRoutesMatchExact(params: {
   if (!left || !right) {
     return false;
   }
+  // Exact route equality treats a missing account differently from an explicit account.
   return (
     left.channel === right.channel &&
     left.target?.to === right.target?.to &&
@@ -195,6 +211,7 @@ export function channelRoutesMatchExact(params: {
   );
 }
 
+/** Checks whether two normalized routes point at the same conversation or parent route. */
 export function channelRoutesShareConversation(params: {
   left?: ChannelRouteRef | null;
   right?: ChannelRouteRef | null;
@@ -211,11 +228,13 @@ export function channelRoutesShareConversation(params: {
     return false;
   }
   if (left.thread?.id == null || right.thread?.id == null) {
+    // Parent route matches any child thread once channel, target, and compatible account match.
     return true;
   }
   return threadIdsEqual(left.thread.id, right.thread.id);
 }
 
+/** Exact route comparison for loose target input. */
 export function channelRouteTargetsMatchExact(params: {
   left?: ChannelRouteTargetInput | null;
   right?: ChannelRouteTargetInput | null;
@@ -226,6 +245,7 @@ export function channelRouteTargetsMatchExact(params: {
   });
 }
 
+/** Conversation-level route comparison for loose target input. */
 export function channelRouteTargetsShareConversation(params: {
   left?: ChannelRouteTargetInput | null;
   right?: ChannelRouteTargetInput | null;
@@ -256,6 +276,7 @@ function normalizeChannelRouteKeyInput(
     : normalizeChannelRouteTarget(route);
 }
 
+/** Builds a compact human-readable route key when channel and target are both present. */
 export function channelRouteCompactKey(route?: ChannelRouteKeyInput | null): string | undefined {
   const normalized = normalizeChannelRouteKeyInput(route);
   if (!normalized?.channel || !normalized.target?.to) {

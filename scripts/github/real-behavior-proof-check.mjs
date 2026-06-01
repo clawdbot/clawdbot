@@ -148,7 +148,10 @@ export async function fetchProofComments({
       lastError = error;
     }
   }
-  throw lastError ?? new Error("No GitHub token available for proof comment lookup.");
+  throw toLintErrorObject(
+    lastError ?? new Error("No GitHub token available for proof comment lookup."),
+    "Non-Error thrown",
+  );
 }
 
 function isMainModule() {
@@ -230,4 +233,18 @@ export const testing = {
 
 if (isMainModule()) {
   await main();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

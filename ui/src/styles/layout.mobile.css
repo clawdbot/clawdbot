@@ -32,42 +32,29 @@
     row-gap: 0;
   }
 
-  .shell--chat-focus .content--chat .content-header {
-    min-height: 0;
-    max-height: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-    overflow: hidden;
-  }
-
   .chat-controls__session-row {
-    grid-template-columns:
-      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
-      minmax(112px, 4fr);
-    grid-template-areas: "agent session model thinking";
+    grid-template-columns: minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr);
+    grid-template-areas: "agent session model";
     align-items: center;
     gap: 8px;
     width: 100%;
   }
 
   .chat-controls__session-row--single-agent {
-    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr);
-    grid-template-areas: "session model thinking";
+    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr);
+    grid-template-areas: "session model";
   }
 
   .chat-controls__session-row--has-quota {
     grid-template-columns:
-      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
-      minmax(112px, 4fr) minmax(96px, auto);
-    grid-template-areas: "agent session model thinking quota";
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr)
+      minmax(96px, auto);
+    grid-template-areas: "agent session model quota";
   }
 
   .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr) minmax(
-        96px,
-        auto
-      );
-    grid-template-areas: "session model thinking quota";
+    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr) minmax(96px, auto);
+    grid-template-areas: "session model quota";
   }
 
   .chat-controls__agent {
@@ -82,10 +69,6 @@
     grid-area: model;
   }
 
-  .chat-controls__thinking-select {
-    grid-area: thinking;
-  }
-
   .chat-controls__quota {
     grid-area: quota;
     min-width: 96px;
@@ -93,16 +76,14 @@
 
   .chat-controls__session,
   .chat-controls__agent,
-  .chat-controls__model,
-  .chat-controls__thinking-select {
+  .chat-controls__model {
     min-width: 0;
     max-width: none;
   }
 
   .chat-controls__session select,
   .chat-controls__agent select,
-  .chat-controls__model select,
-  .chat-controls__thinking-select select {
+  .chat-controls__inline-select-trigger {
     width: 100%;
     max-width: none;
   }
@@ -117,10 +98,6 @@
     grid-template-areas:
       "topbar"
       "content";
-  }
-
-  .shell--chat-focus {
-    grid-template-rows: 0 minmax(0, 1fr);
   }
 
   .shell-nav,
@@ -476,22 +453,22 @@
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     grid-template-areas:
       "agent session"
-      "model thinking";
+      "model model";
     gap: 8px;
     width: 100%;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--single-agent {
-    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "session thinking"
-      "model model";
+      "session"
+      "model";
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
     grid-template-areas:
       "agent session"
-      "model thinking"
+      "model model"
       "quota quota";
   }
 
@@ -499,9 +476,9 @@
     .chat-controls-dropdown
     .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
     grid-template-areas:
-      "session thinking"
-      "model model"
-      "quota quota";
+      "session"
+      "model"
+      "quota";
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
@@ -555,23 +532,24 @@
     grid-area: model;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select {
-    grid-area: thinking;
-    min-width: 0;
-    max-width: none;
-    width: 100%;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
     width: 100%;
     min-width: 0;
     min-height: 40px;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select-full {
-    display: block;
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-trigger {
+    display: flex;
     width: 100%;
     max-width: none;
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-menu {
+    bottom: auto;
+    top: calc(100% + 6px);
+    width: 100%;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
@@ -591,7 +569,7 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: center;
     justify-content: stretch;
     gap: 8px;

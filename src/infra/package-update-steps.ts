@@ -335,7 +335,7 @@ async function replaceNpmBinShims(params: {
   targetLayout: NpmGlobalPrefixLayout;
   packageName: string;
 }): Promise<void> {
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = await fs.readdir(params.stageLayout.binDir);
   } catch {
@@ -499,7 +499,7 @@ export async function runGlobalPackageUpdateSteps(params: {
 }> {
   const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
   const installEnv = params.env === undefined ? {} : { env: params.env };
-  let stagedInstall: StagedNpmInstall | null = null;
+  let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
 
   try {
@@ -679,7 +679,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       failedStep,
     };
   } finally {
-    await cleanupStagedNpmInstall(stagedInstall);
+    await cleanupStagedNpmInstall(stagedInstall ?? null);
     if (packedInstallDir) {
       await removePathBestEffort(packedInstallDir);
     }

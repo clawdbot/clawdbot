@@ -147,8 +147,8 @@ struct TalkPermissionPromptView: View {
         case .upgradeRequested:
             "Approve this request on your gateway. Talk will start automatically when approval lands."
         default:
-            "This iPhone needs gateway approval before Talk can use realtime voice. Audio will go directly from " +
-                "this phone to the voice provider."
+            "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from " +
+                "this device to the voice provider."
         }
     }
 

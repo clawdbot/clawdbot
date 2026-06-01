@@ -3,6 +3,7 @@ import { resolveStateDir } from "../config/paths.js";
 
 export { createAsyncLock, readJsonIfExists, tryReadJson, writeJson } from "./json-files.js";
 
+/** Resolve pending/paired JSON file locations for one pairing namespace. */
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
   const root = baseDir ?? resolveStateDir();
   const dir = path.join(root, subdir);
@@ -13,6 +14,7 @@ export function resolvePairingPaths(baseDir: string | undefined, subdir: string)
   };
 }
 
+/** Coerce persisted pairing maps, treating malformed arrays/scalars as empty state. */
 export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -20,6 +22,7 @@ export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
   return value as Record<string, T>;
 }
 
+/** Remove pending requests older than the caller's pairing TTL. */
 export function pruneExpiredPending<T extends { ts: number }>(
   pendingById: Record<string, T>,
   nowMs: number,
@@ -32,12 +35,14 @@ export function pruneExpiredPending<T extends { ts: number }>(
   }
 }
 
+/** Result shape for creating or refreshing a pending pairing request. */
 export type PendingPairingRequestResult<TPending> = {
   status: "pending";
   request: TPending;
   created: boolean;
 };
 
+/** Refresh one compatible pending request or replace a superseded request set atomically. */
 export async function reconcilePendingPairingRequests<
   TPending extends { requestId: string },
   TIncoming,

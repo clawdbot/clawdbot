@@ -19,10 +19,14 @@ type ModelsListView = ModelCatalogBrowseView;
 
 let loggedSlowModelsListCatalog = false;
 
+// Unknown views are rejected by protocol validation first; this helper keeps the
+// handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
 }
 
+// Runtime-only model params are useful inside provider routing, but exposing
+// them here would leak provider invocation details into the Control UI API.
 function omitRuntimeModelParams(entry: ModelCatalogEntry): ModelCatalogEntry {
   const { params: _params, ...rest } = entry as ModelCatalogEntry & {
     params?: Record<string, unknown>;
@@ -34,6 +38,9 @@ function omitRuntimeModelParamsFromCatalog(catalog: ModelCatalogEntry[]): ModelC
   return catalog.map(omitRuntimeModelParams);
 }
 
+// The gateway model list is a browse API, not an auth probe. It reuses the
+// current runtime catalog snapshot and applies visibility rules without doing
+// extra runtime discovery on each request.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
     if (!validateModelsListParams(params)) {

@@ -359,7 +359,7 @@ describe("streamWithIdleTimeout", () => {
       streamSignal = options?.signal;
       return new Promise<AssistantMessageEventStream>((_resolve, reject) => {
         streamSignal?.addEventListener("abort", () => {
-          reject(streamSignal?.reason);
+          reject(toLintErrorObject(streamSignal?.reason, "Non-Error rejection"));
         });
       });
     });
@@ -427,7 +427,9 @@ describe("streamWithIdleTimeout", () => {
         return {
           async next() {
             if (count < 3) {
-              await new Promise((r) => setTimeout(r, 10)); // 10ms delay
+              await new Promise((r) => {
+                setTimeout(r, 10);
+              }); // 10ms delay
               return { done: false, value: { text: String(count++) } };
             }
             return { done: true, value: undefined };
@@ -487,3 +489,17 @@ describe("streamWithIdleTimeout", () => {
     expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

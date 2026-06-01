@@ -91,7 +91,7 @@ async function run() {
 
   for (const url of targets) {
     console.log(`\n=== ${url}`);
-    let localStatus = "skipped";
+    let localStatus;
     let localTitle = "";
     let localText = "";
     let localError: string | undefined;
@@ -165,7 +165,7 @@ async function run() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  run().catch((error) => {
+  run().catch((error: unknown) => {
     console.error(error);
     process.exit(1);
   });

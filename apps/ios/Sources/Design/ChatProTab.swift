@@ -50,6 +50,11 @@ struct ChatProTab: View {
         .onChange(of: self.appModel.chatSessionKey) { _, _ in
             self.syncChatViewModel()
         }
+        .onChange(of: self.appModel.isOperatorGatewayConnected) { _, connected in
+            guard connected else { return }
+            self.syncChatViewModel()
+            self.viewModel?.refresh()
+        }
     }
 
     private var header: some View {
@@ -151,7 +156,8 @@ struct ChatProTab: View {
     }
 
     private var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+        GatewayStatusBuilder.build(appModel: self.appModel) == .connected &&
+            self.appModel.isOperatorGatewayConnected
     }
 
     private var chatUserAccent: Color {

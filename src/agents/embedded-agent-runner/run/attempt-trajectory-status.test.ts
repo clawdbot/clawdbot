@@ -11,6 +11,7 @@ function baseParams(
 ): ResolveAttemptTrajectoryTerminalParams {
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
     assistantTexts: [],
     toolMetas: [],
@@ -177,6 +178,21 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("marks internally aborted tool-use attempts without delivery as non-deliverable", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          aborted: true,
+          toolMetas: [{ toolName: "web_search" }],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
   it("keeps async-started media tool-use attempts as terminal progress", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
@@ -193,6 +209,11 @@ describe("attempt trajectory status", () => {
       resolveAttemptTrajectoryTerminal(baseParams({ promptError: new Error("boom") })),
     ).toEqual({ status: "error" });
     expect(resolveAttemptTrajectoryTerminal(baseParams({ timedOut: true }))).toEqual({
+      status: "interrupted",
+    });
+    expect(
+      resolveAttemptTrajectoryTerminal(baseParams({ aborted: true, externalAbort: true })),
+    ).toEqual({
       status: "interrupted",
     });
   });

@@ -43,7 +43,13 @@ export type ToolCallSummary = {
 
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
-  toolMetas: Array<{ toolName?: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas: Array<{
+    toolName?: string;
+    meta?: string;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;

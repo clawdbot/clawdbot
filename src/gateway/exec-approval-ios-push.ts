@@ -309,7 +309,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
         const deliveryState: ApprovalDeliveryState = {
           nodeIds: plan.targets.map((target) => target.nodeId),
           requestPushPromise: sendRequestedPushes({ request, plan, log: params.log }).catch(
-            (err) => {
+            (err: unknown) => {
               const message = formatErrorMessage(err);
               params.log.error?.(`exec approvals: iOS request push failed: ${message}`);
               return { attempted: plan.targets.length, delivered: 0 };

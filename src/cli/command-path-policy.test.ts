@@ -303,19 +303,21 @@ describe("command-path-policy", () => {
       const actual = await importOriginal<typeof import("./command-catalog.js")>();
       return { ...actual, cliCommandCatalog: catalog };
     });
-    const { resolveCliCatalogCommandPath, resolveCliNetworkProxyPolicy } = await importFreshModule<
-      typeof import("./command-path-policy.js")
-    >(import.meta.url, "./command-path-policy.js?catalog-overrides");
+    const {
+      resolveCliCatalogCommandPath: resolveCliCatalogCommandPathLocal,
+      resolveCliNetworkProxyPolicy: resolveCliNetworkProxyPolicyLocal,
+    } = await importFreshModule<typeof import("./command-path-policy.js")>(
+      import.meta.url,
+      "./command-path-policy.js?catalog-overrides",
+    );
 
-    expect(resolveCliCatalogCommandPath(["node", "openclaw", "nodes", "camera", "snap"])).toEqual([
-      "nodes",
-      "camera",
-      "snap",
-    ]);
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "nodes", "camera", "snap"])).toBe(
+    expect(
+      resolveCliCatalogCommandPathLocal(["node", "openclaw", "nodes", "camera", "snap"]),
+    ).toEqual(["nodes", "camera", "snap"]);
+    expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "snap"])).toBe(
       "default",
     );
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "nodes", "camera", "list"])).toBe(
+    expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "list"])).toBe(
       "bypass",
     );
   });

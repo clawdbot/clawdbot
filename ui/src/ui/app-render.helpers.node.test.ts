@@ -134,7 +134,6 @@ function createSettings(): AppViewState["settings"] {
     navCollapsed: false,
     navGroupsCollapsed: {},
     borderRadius: 50,
-    chatFocusMode: false,
     chatShowThinking: false,
     chatShowToolCalls: true,
   };

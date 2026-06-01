@@ -51,13 +51,16 @@ const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
+const TAB_REFERENCE_DESCRIPTION =
+  "Tab reference. Prefer suggestedTargetId, tabId, or label from tabs output; raw CDP targetId and unique raw prefixes remain supported for compatibility.";
+
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
 // The discriminator (kind) determines which properties are relevant; runtime validates.
 const BrowserActSchema = Type.Object({
   kind: stringEnum(BROWSER_ACT_KINDS),
   // Common fields
-  targetId: Type.Optional(Type.String()),
+  targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
   ref: Type.Optional(Type.String()),
   // click
   doubleClick: Type.Optional(Type.Boolean()),
@@ -103,7 +106,7 @@ export const BrowserToolSchema = Type.Object({
   profile: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
-  targetId: Type.Optional(Type.String()),
+  targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
   label: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema(),
   maxChars: optionalNonNegativeIntegerSchema(),

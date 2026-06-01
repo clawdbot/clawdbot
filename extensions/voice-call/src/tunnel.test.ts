@@ -103,7 +103,9 @@ describe("voice-call tunnels", () => {
 
     const settled = await Promise.race([
       result.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 20);
+      }),
     ]);
     expect(settled).toBe(true);
 

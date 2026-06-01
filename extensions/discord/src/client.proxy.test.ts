@@ -163,7 +163,7 @@ describe("createDiscordRestClient proxy support", () => {
             },
           })
           .catch((err: unknown) => {
-            reject(err);
+            reject(toLintErrorObject(err, "Non-Error rejection"));
             server.close();
           });
       });
@@ -175,3 +175,17 @@ describe("createDiscordRestClient proxy support", () => {
     expect(received.body).toContain('"attachments":[{"id":0,"filename":"image.png"}]');
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

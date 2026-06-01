@@ -37,34 +37,29 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("retries up to three times before giving up", async () => {
-    vi.useFakeTimers();
+    const delay = vi.fn(async () => undefined);
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
 
-    const resultPromise = isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.advanceTimersByTimeAsync(150);
-
-    await expect(resultPromise).resolves.toBe(false);
+    expect(await isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir)).toBe(false);
     expect(probe).toHaveBeenCalledTimes(3);
+    expect(delay).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenNthCalledWith(1, 50);
+    expect(delay).toHaveBeenNthCalledWith(2, 150);
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
-    vi.useFakeTimers();
+    const delay = vi.fn(async () => undefined);
     let calls = 0;
     const probe = vi.fn(async () => {
       calls += 1;
       return calls >= 2;
     });
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
 
-    const resultPromise = isCliBindingFlushed("sid-late", "claude-cli", workspaceDir);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(50);
-
-    await expect(resultPromise).resolves.toBe(true);
+    expect(await isCliBindingFlushed("sid-late", "claude-cli", workspaceDir)).toBe(true);
     expect(probe).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledExactlyOnceWith(50);
   });
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";
@@ -68,6 +67,7 @@ export async function postJson(
       settled = true;
       if (timeout) {
         clearTimeout(timeout);
+        timeout = undefined;
       }
       if ("error" in result) {
         reject(result.error);

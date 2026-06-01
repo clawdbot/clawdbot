@@ -13,8 +13,8 @@ import {
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
   completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
+  createQueuedTaskRun as createQueuedTaskRunOrNull,
+  createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
   retryBlockedFlowAsQueuedTaskRun,
@@ -24,11 +24,12 @@ import {
   startTaskRunByRunId,
 } from "./task-executor.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
@@ -39,8 +40,37 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
 } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
+  const task = createQueuedTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected queued task creation to succeed");
+  }
+  return task;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();

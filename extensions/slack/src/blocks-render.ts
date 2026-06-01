@@ -1,5 +1,9 @@
 import type { Block, KnownBlock } from "@slack/web-api";
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
+import {
+  reduceInteractiveReply,
+  resolveMessagePresentationControlValue,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveReply,
   MessagePresentation,
@@ -45,8 +49,30 @@ function resolveSlackButtonStyle(
   return undefined;
 }
 
+function resolveSlackControlValue(control: {
+  action?: { type: "command"; command: string } | { type: "callback"; value: string };
+  value?: string;
+}): string | undefined {
+  if (control.action?.type === "command") {
+    const command = normalizeOptionalString(control.action.command);
+    if (command && parseExecApprovalCommandText(command)) {
+      return command;
+    }
+    const legacyValue = normalizeOptionalString(control.value);
+    return legacyValue && parseExecApprovalCommandText(legacyValue) ? legacyValue : undefined;
+  }
+  return resolveMessagePresentationControlValue(control);
+}
+
 function isWithinSlackLimit(value: string, maxLength: number): boolean {
   return value.length <= maxLength;
+}
+
+function isRenderableSlackOption(option: {
+  label: string;
+  value: string | undefined;
+}): option is { label: string; value: string } {
+  return option.value !== undefined && isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX);
 }
 
 function readSlackBlockId(block: SlackBlock): string | undefined {
@@ -115,9 +141,10 @@ export function buildSlackInteractiveBlocks(
     if (block.type === "buttons") {
       const elements = block.buttons
         .flatMap((button, choiceIndex) => {
+          const callbackData = resolveSlackControlValue(button);
           const value =
-            button.value && isWithinSlackLimit(button.value, SLACK_BUTTON_VALUE_MAX)
-              ? button.value
+            callbackData && isWithinSlackLimit(callbackData, SLACK_BUTTON_VALUE_MAX)
+              ? callbackData
               : undefined;
           const url =
             button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX)
@@ -153,10 +180,14 @@ export function buildSlackInteractiveBlocks(
       });
       return state;
     }
-    const options = block.options
-      .filter((option) => isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX))
+    const optionsLocal = block.options
+      .map((option) => ({
+        label: option.label,
+        value: resolveSlackControlValue(option),
+      }))
+      .filter(isRenderableSlackOption)
       .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
-    if (options.length === 0) {
+    if (optionsLocal.length === 0) {
       return state;
     }
     state.blocks.push({
@@ -174,7 +205,7 @@ export function buildSlackInteractiveBlocks(
             ),
             emoji: true,
           },
-          options: options.map((option, _choiceIndex) => ({
+          options: optionsLocal.map((option, _choiceIndex) => ({
             text: {
               type: "plain_text",
               text: truncateSlackText(option.label, SLACK_PLAIN_TEXT_MAX),
@@ -259,9 +290,10 @@ function buildSlackPresentationButtonBlock(
 ): SlackBlock | undefined {
   const elements = block.buttons
     .flatMap((button, choiceIndex) => {
+      const callbackData = resolveSlackControlValue(button);
       const value =
-        button.value && isWithinSlackLimit(button.value, SLACK_BUTTON_VALUE_MAX)
-          ? button.value
+        callbackData && isWithinSlackLimit(callbackData, SLACK_BUTTON_VALUE_MAX)
+          ? callbackData
           : undefined;
       const url =
         button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX) ? button.url : undefined;
@@ -299,7 +331,11 @@ function buildSlackPresentationSelectBlock(
   selectIndex: number,
 ): SlackBlock | undefined {
   const options = block.options
-    .filter((option) => isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX))
+    .map((option) => ({
+      label: option.label,
+      value: resolveSlackControlValue(option),
+    }))
+    .filter(isRenderableSlackOption)
     .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
   return options.length > 0
     ? {

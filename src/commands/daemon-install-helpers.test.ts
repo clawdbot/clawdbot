@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
+import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -101,6 +102,16 @@ function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<s
     throw new Error(`Expected ${label} first argument`);
   }
   return arg as Record<string, any>;
+}
+
+function writeSecurePluginEntrypoint(pathname: string): void {
+  fs.writeFileSync(pathname, "");
+  fs.chmodSync(pathname, 0o644);
+}
+
+function createSecurePluginRoot(pathname: string): void {
+  fs.mkdirSync(pathname);
+  fs.chmodSync(pathname, 0o755);
 }
 
 describe("resolveGatewayDevMode", () => {
@@ -469,8 +480,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -529,8 +540,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -657,8 +668,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -1486,5 +1497,48 @@ describe("gatewayInstallErrorHint", () => {
     expect(gatewayInstallErrorHint("linux")).toMatch(
       /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
     );
+  });
+});
+
+describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist", () => {
+  const managedKeys = new Set<string>();
+
+  it("continues to drop stale OPENCLAW_ALLOW_ROOT", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      { OPENCLAW_ALLOW_ROOT: "1" },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
+  });
+
+  it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+      },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+  });
+
+  it("still drops arbitrary OPENCLAW_FOO", () => {
+    const result = collectPreservedExistingServiceEnvVars({ OPENCLAW_FOO: "bar" }, managedKeys);
+    expect(result.OPENCLAW_FOO).toBeUndefined();
+  });
+
+  it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", () => {
+    const result = collectPreservedExistingServiceEnvVars(
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+        OPENCLAW_BAZ: "qux",
+      },
+      managedKeys,
+    );
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+    expect(result.OPENCLAW_BAZ).toBeUndefined();
   });
 });

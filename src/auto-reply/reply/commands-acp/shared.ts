@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { toAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
-import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";

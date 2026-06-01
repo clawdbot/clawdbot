@@ -1027,7 +1027,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
 
     releaseResolver();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();

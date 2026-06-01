@@ -704,7 +704,7 @@ export function createSubagentRegistryLifecycleController(params: {
           runId,
           entry,
           reason: "expiry",
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           defaultRuntime.log(
             `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
           );
@@ -802,29 +802,53 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!entry) {
       return;
     }
+    if (entry.expectsCompletionMessage === false) {
+      clearPendingFinalDelivery(entry);
+      entry.wakeOnDescendantSettle = undefined;
+      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        await safeRemoveAttachmentsDir(entry);
+      }
+      completeCleanupBookkeeping({
+        runId,
+        entry,
+        cleanup,
+        completedAt: Date.now(),
+      });
+      return;
+    }
     if (didAnnounce) {
-      if (!options?.skipAnnounce) {
-        const delivery = ensureDeliveryState(entry);
-        const deliveredAt = delivery.deliveredAt ?? Date.now();
+      const delivery = ensureDeliveryState(entry);
+      const shouldCreditDelivery =
+        !options?.skipAnnounce ||
+        delivery.status === "delivered" ||
+        typeof delivery.announcedAt === "number";
+      if (shouldCreditDelivery) {
+        const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
         delivery.deliveredAt = deliveredAt;
-        delivery.announcedAt = deliveredAt;
-        params.persist();
+        delivery.announcedAt = delivery.announcedAt ?? deliveredAt;
+        if (!options?.skipAnnounce) {
+          delivery.announcedAt = deliveredAt;
+          params.persist();
+        }
       }
       clearPendingFinalDelivery(entry);
-      const delivery = ensureDeliveryState(entry);
-      delivery.status = "delivered";
-      delivery.suspendedAt = undefined;
-      delivery.suspendedReason = undefined;
-      if (!options?.skipDeliveryStatus) {
+      const finalDelivery = ensureDeliveryState(entry);
+      if (shouldCreditDelivery) {
+        finalDelivery.status = "delivered";
+        finalDelivery.suspendedAt = undefined;
+        finalDelivery.suspendedReason = undefined;
+      }
+      if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           runId,
           childSessionKey: entry.childSessionKey,
           deliveryStatus: "delivered",
         });
       }
-      delivery.lastError = undefined;
-      delivery.lastDropReason = undefined;
+      finalDelivery.lastError = undefined;
+      finalDelivery.lastDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
       completion.fallbackResultText = undefined;
@@ -941,7 +965,7 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       void finalizeSubagentCleanup(runId, entry.cleanup, true, {
         skipAnnounce: true,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -974,7 +998,7 @@ export function createSubagentRegistryLifecycleController(params: {
           skipAnnounce: true,
           skipDeliveryStatus: true,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -1001,7 +1025,7 @@ export function createSubagentRegistryLifecycleController(params: {
         runId,
         entry.cleanup,
         didAnnounce || shouldCreditPriorDelivery,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -1056,7 +1080,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .then((didAnnounce) => {
         void finalizeAnnounceCleanup(didAnnounce);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );

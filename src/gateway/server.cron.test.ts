@@ -444,7 +444,7 @@ describe("gateway server cron", () => {
     });
 
     const cronEvents = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
@@ -491,22 +491,6 @@ describe("gateway server cron", () => {
       expect(missingGetRes.ok).toBe(false);
       expect(missingGetRes.error?.code).toBe("INVALID_REQUEST");
       expect(missingGetRes.error?.message).toContain("cron job not found: missing-job-id");
-
-      const wrappedAtMs = Date.now() + 1000;
-      const wrappedRes = await directCronReq(cronState, "cron.add", {
-        data: {
-          name: "wrapped",
-          schedule: { at: new Date(wrappedAtMs).toISOString() },
-          payload: { kind: "systemEvent", text: "hello" },
-        },
-      });
-      expect(wrappedRes.ok).toBe(true);
-      const wrappedPayload = wrappedRes.payload as
-        | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
-        | undefined;
-      expect(wrappedPayload?.sessionTarget).toBe("main");
-      expect(wrappedPayload?.wakeMode).toBe("now");
-      expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
     } finally {
       await cleanupCronTestRun({
         cronState,
@@ -524,7 +508,7 @@ describe("gateway server cron", () => {
     });
 
     const cronEvents = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
 
     try {
       const routeRes = await directCronReq(cronState, "cron.add", {
@@ -648,7 +632,7 @@ describe("gateway server cron", () => {
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: patchJobId,
         patch: {
-          schedule: { at: new Date(atMs).toISOString() },
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -716,6 +700,7 @@ describe("gateway server cron", () => {
         id: mergeJobId,
         patch: {
           payload: {
+            kind: "agentTurn",
             model: "anthropic/claude-sonnet-4-6",
           },
         },
@@ -780,7 +765,7 @@ describe("gateway server cron", () => {
       const jobIdUpdateRes = await directCronReq(cronState, "cron.update", {
         jobId,
         patch: {
-          schedule: { at: new Date(Date.now() + 2_000).toISOString() },
+          schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -1068,7 +1053,7 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     const events = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: events.broadcast });
+    const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
@@ -1106,6 +1091,7 @@ describe("gateway server cron", () => {
       const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
+      expect((entries as Array<{ jobName?: unknown }>).at(-1)?.jobName).toBe("log test");
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
       expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
         "not-requested",
@@ -1367,7 +1353,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
+  test("posts webhooks for delivery and completion destinations only when summary exists", async () => {
     const legacyNotifyJob = {
       id: "legacy-notify-job",
       name: "legacy notify job",
@@ -1439,13 +1425,27 @@ describe("gateway server cron", () => {
       expect(legacyRunRes.ok).toBe(true);
       expectEnqueuedRunPayload(legacyRunRes.payload);
       await legacyFinished;
-      const legacyCall = getWebhookCall(1);
-      expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
-      expect(legacyCall.init.method).toBe("POST");
-      expect(legacyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
-      const legacyBody = legacyCall.body;
-      expect(legacyBody.action).toBe("finished");
-      expect(legacyBody.jobId).toBe("legacy-notify-job");
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+
+      const completionJobId = await addWebhookCronJob({
+        ws,
+        name: "announce plus completion webhook",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/completion-destination",
+          },
+        },
+      });
+      await runCronJobAndWaitForFinished(ws, completionJobId);
+      const completionCall = getWebhookCall(1);
+      expect(completionCall.url).toBe("https://example.invalid/completion-destination");
+      expect(completionCall.init.method).toBe("POST");
+      expect(completionCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(completionCall.body.action).toBe("finished");
+      expect(completionCall.body.jobId).toBe(completionJobId);
 
       const silentRes = await rpcReq(ws, "cron.add", {
         name: "webhook disabled",

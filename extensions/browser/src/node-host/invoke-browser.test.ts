@@ -57,7 +57,10 @@ vi.mock("../sdk-node-runtime.js", () => ({
           new Promise<never>((_, reject) => {
             abortCtrl.signal.addEventListener(
               "abort",
-              () => reject(abortCtrl.signal.reason ?? timeoutError),
+              () =>
+                reject(
+                  toLintErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
+                ),
               { once: true },
             );
           }),
@@ -490,3 +493,17 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

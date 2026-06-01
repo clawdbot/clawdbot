@@ -2,7 +2,8 @@
   "id": "workboard",
   "enabledByDefault": false,
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": ["workboard"]
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
@@ -44,6 +45,13 @@
       "workboard_unblock"
     ]
   },
+  "commandAliases": [
+    {
+      "name": "workboard",
+      "kind": "runtime-slash",
+      "cliCommand": "workboard"
+    }
+  ],
   "toolMetadata": {
     "workboard_list": {
       "optional": true

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/copilot",
-  "version": "2026.5.30",
+  "version": "2026.6.1",
   "description": "OpenClaw GitHub Copilot agent runtime plugin (registers a `github-copilot` AgentHarness backed by @github/copilot-sdk over JSON-RPC to the GitHub Copilot CLI)",
   "repository": {
     "type": "git",
@@ -25,10 +25,10 @@
       "minHostVersion": ">=2026.5.28"
     },
     "compat": {
-      "pluginApi": ">=2026.5.30"
+      "pluginApi": ">=2026.6.1"
     },
     "build": {
-      "openclawVersion": "2026.5.30",
+      "openclawVersion": "2026.6.1",
       "bundledDist": false
     },
     "release": {

@@ -225,14 +225,13 @@ export async function syncMemoryWikiBridgeSources(params: {
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
-  let artifactCount = 0;
   const activeKeys = new Set<string>();
   const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
   const agentIdsByWorkspace = new Map<string, string[]>();
   for (const artifact of publicArtifacts) {
     agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
   }
-  artifactCount = artifacts.length;
+  const artifactCount = artifacts.length;
   for (const artifact of artifacts) {
     const stats = await fs.stat(artifact.absolutePath);
     activeKeys.add(artifact.syncKey);

@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.delay
 
+/** Full-screen white flash keyed by camera capture tokens. */
 @Composable
 fun CameraFlashOverlay(
   token: Long,
@@ -29,6 +30,8 @@ private fun CameraFlash(token: Long) {
   var alpha by remember { mutableFloatStateOf(0f) }
   LaunchedEffect(token) {
     if (token == 0L) return@LaunchedEffect
+    // Token changes replay the animation even when consecutive captures use
+    // the same HUD message.
     alpha = 0.85f
     delay(110)
     alpha = 0f

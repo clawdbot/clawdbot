@@ -1,4 +1,13 @@
 import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeEvent,
+  AcpRuntimeHandle,
+  AcpRuntimePromptMode,
+  AcpRuntimeSessionMode,
+  AcpRuntimeStatus,
+} from "@openclaw/acp-core/runtime/types";
+import type {
   SessionAcpIdentity,
   AcpSessionRuntimeOptions,
   SessionAcpMeta,
@@ -12,15 +21,6 @@ import {
   readAcpSessionEntry,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
-import type {
-  AcpRuntime,
-  AcpRuntimeCapabilities,
-  AcpRuntimeEvent,
-  AcpRuntimeHandle,
-  AcpRuntimePromptMode,
-  AcpRuntimeSessionMode,
-  AcpRuntimeStatus,
-} from "../runtime/types.js";
 
 export type AcpSessionResolution =
   | {
@@ -146,6 +146,53 @@ export type AcpSessionManagerDeps = {
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
 };
+
+export type WriteManagerSessionMeta = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mutate: (
+    current: SessionAcpMeta | undefined,
+    entry: SessionEntry | undefined,
+  ) => SessionAcpMeta | null | undefined;
+  failOnError?: boolean;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+}) => Promise<SessionEntry | null>;
+
+export type ResolveManagerSession = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}) => AcpSessionResolution;
+
+export type EnsureManagerRuntimeHandle = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  meta: SessionAcpMeta;
+}) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
+
+export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  meta: SessionAcpMeta;
+  runtimeStatus?: AcpRuntimeStatus;
+  failOnStatusError: boolean;
+}) => Promise<{
+  handle: AcpRuntimeHandle;
+  meta: SessionAcpMeta;
+  runtimeStatus?: AcpRuntimeStatus;
+}>;
+
+export type SetManagerSessionState = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  state: SessionAcpMeta["state"];
+  lastError?: string;
+  clearLastError?: boolean;
+}) => Promise<void>;
+
+export type WithManagerSessionActor = <T>(sessionKey: string, op: () => Promise<T>) => Promise<T>;
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,

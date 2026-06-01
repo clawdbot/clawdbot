@@ -56,8 +56,8 @@ describe("deliverMatrixReplies", () => {
       text: {
         resolveMarkdownTableMode: (params: unknown) => resolveMarkdownTableModeMock(params),
         convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
-        resolveChunkMode: (cfg: unknown, channel: unknown, accountId?: unknown) =>
-          resolveChunkModeMock(cfg, channel, accountId),
+        resolveChunkMode: (cfgLocal: unknown, channel: unknown, accountId?: unknown) =>
+          resolveChunkModeMock(cfgLocal, channel, accountId),
         chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
       },
     },

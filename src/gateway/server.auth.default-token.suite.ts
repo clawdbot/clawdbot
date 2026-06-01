@@ -67,7 +67,9 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(connectRes.error?.message ?? "").toContain(params.expectedMessage);
       expect(connectRes.error?.details?.code).toBe(params.expectedCode);
       expect(connectRes.error?.details?.reason).toBe(params.expectedReason);
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
     }
 
     async function expectStatusMissingScopeButHealthAvailable(ws: WebSocket): Promise<void> {
@@ -398,7 +400,9 @@ export function registerDefaultAuthTokenSuite(): void {
         ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
       );
       expect(connectRes.error?.details?.reason).toBe("device-signature");
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
     });
 
     test("sends connect challenge on open", async () => {
@@ -408,7 +412,9 @@ export function registerDefaultAuthTokenSuite(): void {
         event?: string;
         payload?: Record<string, unknown> | null;
       }> = onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
-      await new Promise<void>((resolve) => ws.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        ws.once("open", resolve);
+      });
       const evt = await evtPromise;
       const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
       expect(typeof nonce).toBe("string");
@@ -475,14 +481,18 @@ export function registerDefaultAuthTokenSuite(): void {
         (o) => o.type === "res" && o.id === "h1",
       );
       expect(res.ok).toBe(false);
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
     });
 
     test("requires nonce for device auth", async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "example.com" },
       });
-      await new Promise<void>((resolve) => ws.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        ws.once("open", resolve);
+      });
 
       const { device } = await createSignedDevice({
         token: "secret",
@@ -498,7 +508,9 @@ export function registerDefaultAuthTokenSuite(): void {
       });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("must have required property 'nonce'");
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
     });
 
     test("returns nonce-required detail code when nonce is blank", async () => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S pnpm tsx
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -64,6 +64,7 @@ interface Job {
 interface UpdateJobContext {
   append(chunk: string | Uint8Array): void;
   logPath: string;
+  signal: AbortSignal;
 }
 
 interface NpmUpdateSummary {
@@ -575,19 +576,19 @@ class NpmUpdateSmoke {
       startedAt,
     };
     job.promise = (async () => {
-      let log = "";
+      writeFileSync(logPath, "", "utf8");
       const append = (chunk: string | Uint8Array): void => {
         const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-        log += text;
+        appendFileSync(logPath, text, "utf8");
         this.noteJobOutput(job, text);
       };
       return await runTimedUpdateJob({
         append,
         label,
-        run: () => fn({ append, logPath }),
+        run: ({ signal }) => fn({ append, logPath, signal }),
         timeoutDescription: `${updateTimeoutSeconds}s plus cleanup backstop`,
         timeoutMs: updateTimeoutSeconds * 1000 + updateCleanupBackstopMs,
-        writeLog: () => writeFile(logPath, log, "utf8"),
+        writeLog: async () => undefined,
       });
     })().finally(() => {
       job.durationMs = Date.now() - job.startedAt;
@@ -637,25 +638,24 @@ class NpmUpdateSmoke {
     onOutput: (text: string) => void = () => undefined,
   ): Promise<number> {
     return new Promise((resolve, reject) => {
+      writeFileSync(logPath, "", "utf8");
       const child = spawn(command, args, {
         cwd: repoRoot,
         env: { ...process.env, ...env },
         stdio: ["ignore", "pipe", "pipe"],
       });
-      let log = "";
       child.stdout.on("data", (chunk: Buffer) => {
         const text = chunk.toString("utf8");
-        log += text;
+        appendFileSync(logPath, text, "utf8");
         onOutput(text);
       });
       child.stderr.on("data", (chunk: Buffer) => {
         const text = chunk.toString("utf8");
-        log += text;
+        appendFileSync(logPath, text, "utf8");
         onOutput(text);
       });
       child.on("error", reject);
-      child.on("close", async (code) => {
-        await writeFile(logPath, log, "utf8");
+      child.on("close", (code) => {
         resolve(code ?? 1);
       });
     });
@@ -664,7 +664,9 @@ class NpmUpdateSmoke {
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
     const pending = new Set(jobs.map((job) => job.label));
     while (pending.size > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 15_000);
+      });
       for (const job of jobs) {
         if (!pending.has(job.label)) {
           continue;
@@ -894,6 +896,7 @@ class NpmUpdateSmoke {
     return await new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         cwd: repoRoot,
+        detached: process.platform !== "win32",
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -902,16 +905,54 @@ class NpmUpdateSmoke {
       child.stderr.on("data", (chunk: Buffer) => ctx.append(chunk));
 
       let timedOut = false;
-      const timer = setTimeout(() => {
+      let killTimer: NodeJS.Timeout | undefined;
+      const signalChild = (signal: NodeJS.Signals): void => {
+        if (!child.pid) {
+          return;
+        }
+        try {
+          if (process.platform === "win32") {
+            child.kill(signal);
+          } else {
+            process.kill(-child.pid, signal);
+          }
+        } catch {
+          child.kill(signal);
+        }
+      };
+      const abort = (): void => {
+        if (timedOut) {
+          return;
+        }
         timedOut = true;
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
+        signalChild("SIGTERM");
+        killTimer = setTimeout(() => signalChild("SIGKILL"), 2_000);
+        killTimer.unref();
+      };
+      if (ctx.signal.aborted) {
+        abort();
+      } else {
+        ctx.signal.addEventListener("abort", abort, { once: true });
+      }
+      const timer = setTimeout(() => {
+        abort();
       }, timeoutMs);
 
-      child.on("error", reject);
+      child.on("error", (error) => {
+        ctx.signal.removeEventListener("abort", abort);
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        reject(error);
+      });
       child.on("close", (code, signal) => {
+        ctx.signal.removeEventListener("abort", abort);
         clearTimeout(timer);
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
         if (timedOut) {
+          signalChild("SIGKILL");
           resolve(124);
           return;
         }

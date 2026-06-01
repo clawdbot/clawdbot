@@ -215,7 +215,7 @@ async function verifyDoctorRepair(root: string) {
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
   const entries = await readJsonl(sessionFile);
-  const ids = entries.map((entry) => (entry as { id?: string }).id).filter(Boolean);
+  const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
   assert(
     JSON.stringify(ids) ===
       JSON.stringify(["broken-session", "parent", "plain-user", "plain-assistant"]),
@@ -223,7 +223,7 @@ async function verifyDoctorRepair(root: string) {
   );
   assert(
     entries.every(
-      (entry) => !messageText(entry.message?.content).includes("secret doctor context"),
+      (entryLocal) => !messageText(entryLocal.message?.content).includes("secret doctor context"),
     ),
     "doctor repair left runtime context in active transcript",
   );

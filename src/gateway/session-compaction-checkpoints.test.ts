@@ -130,7 +130,7 @@ describe("session-compaction-checkpoints", () => {
 
     const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-    let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
+    let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> | undefined;
     try {
       expect(await readSessionLeafIdFromTranscriptAsync(sessionFile)).toBe(leafId);
       snapshot = await captureCompactionCheckpointSnapshotAsync({
@@ -216,7 +216,7 @@ describe("session-compaction-checkpoints", () => {
 
     const openSpy = vi.spyOn(SessionManager, "open");
     const forkSpy = vi.spyOn(SessionManager, "forkFrom");
-    let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>> = null;
+    let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>>;
     try {
       forked = await forkCompactionCheckpointTranscriptAsync({
         sourceFile: sessionFile,

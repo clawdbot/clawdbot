@@ -13,11 +13,21 @@ vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliv
 import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
 } from "./media-generate-background-shared.js";
 
 beforeEach(() => {
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
+});
+
+describe("shouldDetachMediaGenerationTask", () => {
+  it("detaches session-backed media generation", () => {
+    expect(shouldDetachMediaGenerationTask("agent:main:discord:direct:123")).toBe(true);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media")).toBe(true);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media:run:run-123")).toBe(true);
+    expect(shouldDetachMediaGenerationTask(undefined)).toBe(false);
+  });
 });
 
 describe("scheduleMediaGenerationTaskCompletion", () => {

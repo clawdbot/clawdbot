@@ -313,12 +313,14 @@ describe("sendMessageMattermost", () => {
       cfg: TEST_CFG,
       mediaUrl: "file:///tmp/agent-workspace/photo.png",
       mediaLocalRoots: ["/tmp/agent-workspace"],
+      workspaceDir: "/tmp/agent-workspace",
     });
 
     expect(mockState.loadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "file:///tmp/agent-workspace/photo.png",
       {
         mediaLocalRoots: ["/tmp/agent-workspace"],
+        workspaceDir: "/tmp/agent-workspace",
       },
     );
     const uploadCall = uploadMattermostFileCall();
@@ -326,6 +328,27 @@ describe("sendMessageMattermost", () => {
     expect(uploadCall?.[1]?.channelId).toBe("town-square");
     expect(uploadCall?.[1]?.fileName).toBe("photo.png");
     expect(uploadCall?.[1]?.contentType).toBe("image/png");
+  });
+
+  it("fails instead of posting text-only when required media cannot be loaded", async () => {
+    mockState.loadOutboundMediaFromUrl.mockRejectedValueOnce(new Error("local root denied"));
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+
+    await expect(
+      sendMessageMattermost("channel:town-square", "hello", {
+        cfg: TEST_CFG,
+        mediaUrl: "file:///tmp/agent-workspace/photo.png",
+        mediaLocalRoots: ["/tmp/agent-workspace"],
+        requireMediaUpload: true,
+      }),
+    ).rejects.toThrow("Mattermost media upload failed: local root denied");
+
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 
   it("builds interactive button props when buttons are provided", async () => {

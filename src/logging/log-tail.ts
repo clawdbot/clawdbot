@@ -79,7 +79,7 @@ async function readLogSlice(params: {
       : undefined;
   let reset = false;
   let truncated = false;
-  let start = 0;
+  let start;
 
   if (cursor != null) {
     if (cursor > size) {

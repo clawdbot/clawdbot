@@ -169,6 +169,11 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for agent without legacy state",
+      commandPath: ["agent"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "runs doctor flow for commands that may mutate state without legacy state",
       commandPath: ["message"],
       expectedDoctorCalls: 1,
@@ -207,14 +212,32 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
+  it("runs doctor flow before agent commands when the legacy plugin install index exists", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
+    ["Discord thread bindings", "discord/thread-bindings.json"],
     ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
     ["Telegram bot info cache", "telegram/bot-info-default.json"],
     ["Telegram update offset", "telegram/update-offset-default.json"],
     ["Telegram sticker cache", "telegram/sticker-cache.json"],
     ["Telegram thread bindings", "telegram/thread-bindings-default.json"],
     ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
+    ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
+    ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
+    ["iMessage catchup cursor", "imessage/catchup/default.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
     const root = useTempOpenClawHome();

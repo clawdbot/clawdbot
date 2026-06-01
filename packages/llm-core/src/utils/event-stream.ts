@@ -4,7 +4,7 @@ import type {
   AssistantMessageEventStreamContract,
 } from "../types.js";
 
-// Generic event stream class for async iteration
+/** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
   private queue: T[] = [];
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
@@ -32,7 +32,6 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
       this.resolveFinalResult(this.extractResult(event));
     }
 
-    // Deliver to waiting consumer or queue it
     const waiter = this.waiting.shift();
     if (waiter) {
       waiter({ value: event, done: false });
@@ -46,7 +45,6 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     if (result !== undefined) {
       this.resolveFinalResult(result);
     }
-    // Notify all waiting consumers that we're done
     while (this.waiting.length > 0) {
       const waiter = this.waiting.shift()!;
       waiter({ value: undefined as unknown, done: true });
@@ -60,9 +58,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
       } else if (this.done) {
         return;
       } else {
-        const result = await new Promise<IteratorResult<T>>((resolve) =>
-          this.waiting.push(resolve),
-        );
+        const result = await new Promise<IteratorResult<T>>((resolve) => {
+          this.waiting.push(resolve);
+        });
         if (result.done) {
           return;
         }
@@ -76,6 +74,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
   }
 }
 
+/** Assistant-message event stream that resolves on done/error terminal events. */
 export class AssistantMessageEventStream
   extends EventStream<AssistantMessageEvent, AssistantMessage>
   implements AssistantMessageEventStreamContract
@@ -95,7 +94,7 @@ export class AssistantMessageEventStream
   }
 }
 
-/** Factory function for AssistantMessageEventStream (for use in extensions) */
+/** Creates an assistant-message stream for provider and plugin adapters. */
 export function createAssistantMessageEventStream(): AssistantMessageEventStream {
   return new AssistantMessageEventStream();
 }

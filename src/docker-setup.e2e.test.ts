@@ -208,14 +208,14 @@ async function runDockerSetupWithUnsetGatewayToken(
 
 async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Promise<T> {
   const server = createServer();
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolveValue, reject) => {
     const onError = (error: Error) => {
       server.off("listening", onListening);
       reject(error);
     };
     const onListening = () => {
       server.off("error", onError);
-      resolve();
+      resolveValue();
     };
     server.once("error", onError);
     server.once("listening", onListening);
@@ -225,7 +225,9 @@ async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Pro
   try {
     return await run();
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolveLocal) => {
+      server.close(() => resolveLocal());
+    });
     await rm(socketPath, { force: true });
   }
 }

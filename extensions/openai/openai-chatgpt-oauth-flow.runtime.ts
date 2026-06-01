@@ -448,7 +448,7 @@ export async function loginOpenAICodex(options: {
           manualCode = input;
           server.cancelWait();
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           manualError = err instanceof Error ? err : new Error(String(err));
           server.cancelWait();
         });
@@ -480,7 +480,7 @@ export async function loginOpenAICodex(options: {
       if (!code) {
         await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
-          throw manualError;
+          throw toLintErrorObject(manualError, "Non-Error thrown");
         }
         if (manualCode) {
           const parsed = parseOAuthAuthorizationInput(manualCode);
@@ -605,3 +605,17 @@ export const testing = {
   resolveCallbackHost,
   resolveRedirectUri,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

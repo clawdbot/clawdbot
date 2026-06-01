@@ -315,9 +315,17 @@ export async function fetchBrowserJson<T>(
 
     let abortListener: (() => void) | undefined;
     const abortPromise: Promise<never> = abortCtrl.signal.aborted
-      ? Promise.reject(abortCtrl.signal.reason ?? new Error("aborted"))
+      ? Promise.reject(
+          toLintErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+        )
       : new Promise((_, reject) => {
-          abortListener = () => reject(abortCtrl.signal.reason ?? new Error("aborted"));
+          abortListener = () =>
+            reject(
+              toLintErrorObject(
+                abortCtrl.signal.reason ?? new Error("aborted"),
+                "Non-Error rejection",
+              ),
+            );
           abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
         });
 
@@ -382,3 +390,17 @@ export const testApi = {
   withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
 };
 export { testApi as __test };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

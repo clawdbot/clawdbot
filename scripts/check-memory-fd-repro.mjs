@@ -222,7 +222,9 @@ function logStep(message) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function getFreePort() {
@@ -759,10 +761,12 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  main().catch((error) => {
-    console.error(
-      `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(
+        `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    },
+  );
 }

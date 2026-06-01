@@ -50,7 +50,7 @@ export function enqueueCredsSave(
   const previous = credsSaveQueues.get(authDir) ?? Promise.resolve();
   const next = previous
     .then(() => saveCreds())
-    .catch((error) => {
+    .catch((error: unknown) => {
       onError(error);
     })
     .finally(() => {

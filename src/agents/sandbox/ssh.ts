@@ -677,7 +677,7 @@ export async function uploadDirectoryToSshTarget(params: {
     const fail = (error: unknown) => {
       tar.kill("SIGKILL");
       ssh.kill("SIGKILL");
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
 
     tar.on("error", fail);
@@ -777,4 +777,18 @@ async function writeSecretMaterial(
   });
   await fs.chmod(pathname, 0o600);
   return pathname;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

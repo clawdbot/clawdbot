@@ -26,6 +26,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
+/**
+ * Full-screen talk-mode presence indicator with pulsing rings and status fallback text.
+ */
 @Composable
 fun TalkOrbOverlay(
   seamColor: Color,

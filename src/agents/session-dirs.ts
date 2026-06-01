@@ -10,7 +10,7 @@ function mapAgentSessionDirs(agentsDir: string, entries: Dirent[]): string[] {
 }
 
 export async function resolveAgentSessionDirsFromAgentsDir(agentsDir: string): Promise<string[]> {
-  let entries: Dirent[] = [];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(agentsDir, { withFileTypes: true });
   } catch (err) {
@@ -25,7 +25,7 @@ export async function resolveAgentSessionDirsFromAgentsDir(agentsDir: string): P
 }
 
 export function resolveAgentSessionDirsFromAgentsDirSync(agentsDir: string): string[] {
-  let entries: Dirent[] = [];
+  let entries: Dirent[];
   try {
     entries = fsSync.readdirSync(agentsDir, { withFileTypes: true });
   } catch (err) {

@@ -186,7 +186,9 @@ describe("followup queue deduplication", () => {
 
       scheduleFollowupDrain(key, runFollowup);
       await done.promise;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(
         enqueueB.enqueueFollowupRun(

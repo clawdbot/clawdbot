@@ -18,14 +18,15 @@ describe("check-workflows", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("missing workflow linter");
-    expect(result.stderr).toContain("install actionlint or Go");
+    expect(result.stderr).toContain("install actionlint, Go");
   });
 
-  it("uses the pinned go fallback when actionlint is unavailable", () => {
+  it("uses the pinned go fallback and audits all workflows with zizmor", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "check-workflows-"));
     try {
       const binDir = path.join(tempDir, "bin");
       const markerPath = path.join(tempDir, "go-run.txt");
+      const preCommitMarkerPath = path.join(tempDir, "pre-commit.txt");
       mkdirSync(binDir);
       writeFileSync(
         path.join(binDir, "go"),
@@ -34,6 +35,17 @@ describe("check-workflows", () => {
           'if [ "$1" = "version" ]; then exit 0; fi',
           'if [ "$1" = "run" ]; then printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"; exit 0; fi',
           "exit 1",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(binDir, "pre-commit"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "--version" ]; then exit 0; fi',
+          'printf "%s\\n" "$*" >> "$PRE_COMMIT_MARKER"',
+          "exit 0",
           "",
         ].join("\n"),
         { mode: 0o755 },
@@ -47,6 +59,7 @@ describe("check-workflows", () => {
         env: {
           ...process.env,
           GO_FALLBACK_MARKER: markerPath,
+          PRE_COMMIT_MARKER: preCommitMarkerPath,
           PATH: binDir,
         },
       });
@@ -55,6 +68,10 @@ describe("check-workflows", () => {
       expect(readFileSync(markerPath, "utf8")).toContain(
         "github.com/rhysd/actionlint/cmd/actionlint@v1.7.11",
       );
+      const preCommitArgs = readFileSync(preCommitMarkerPath, "utf8");
+      expect(preCommitArgs).toContain("run --config .pre-commit-config.yaml zizmor --files");
+      expect(preCommitArgs).toContain(".github/workflows/ci.yml");
+      expect(preCommitArgs).toContain(".github/workflows/windows-testbox-probe.yml");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }

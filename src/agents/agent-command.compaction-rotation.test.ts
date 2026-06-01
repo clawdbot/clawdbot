@@ -5,12 +5,23 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
+import type { loadManifestModelCatalog } from "./model-catalog.js";
+
+type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
+type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
+type RunAgentAttempt = typeof runAgentAttempt;
 
 const state = vi.hoisted(() => ({
   cfg: undefined as OpenClawConfig | undefined,
   workspaceDir: undefined as string | undefined,
   agentDir: undefined as string | undefined,
-  runAgentAttemptMock: vi.fn(),
+  runAgentAttemptMock: vi.fn<RunAgentAttempt>(),
+  loadManifestModelCatalogMock: vi.fn((_params: LoadManifestModelCatalogParams) => []),
+  normalizeProviderModelIdWithRuntimeMock: vi.fn(
+    (_params: ProviderModelNormalizationParams) => undefined,
+  ),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
 }));
 
@@ -51,7 +62,15 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
 }));
 
 vi.mock("./model-catalog.js", () => ({
-  loadManifestModelCatalog: () => [],
+  loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>
+    state.loadManifestModelCatalogMock(params),
+}));
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: {
+    provider: string;
+    context: { modelId: string };
+  }) => state.normalizeProviderModelIdWithRuntimeMock(params),
 }));
 
 vi.mock("./harness/runtime-plugin.js", () => ({
@@ -119,7 +138,7 @@ vi.mock("./command/attempt-execution.runtime.js", async () => {
   );
   return {
     ...actual,
-    runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
+    runAgentAttempt: (...args: Parameters<RunAgentAttempt>) => state.runAgentAttemptMock(...args),
   };
 });
 
@@ -145,6 +164,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  state.loadManifestModelCatalogMock.mockReturnValue([]);
+  state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
   state.deliveryFreshEntries = [];
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rotation-e2e-"));
   state.workspaceDir = path.join(tmpDir, "workspace");
@@ -180,14 +201,14 @@ function makeResult(params: {
   sessionFile?: string;
   text: string;
   compactionCount?: number;
-}) {
+}): EmbeddedAgentRunResult {
   return {
     payloads: [{ text: params.text }],
     meta: {
       durationMs: 1,
       stopReason: "end_turn",
       executionTrace: {
-        runner: "embedded",
+        runner: "embedded" as const,
         fallbackUsed: false,
         winnerProvider: "openai",
         winnerModel: "gpt-5.5",
@@ -223,6 +244,78 @@ function requireStorePath(): string {
 }
 
 describe("agentCommand compaction transcript rotation", () => {
+  it("does not re-normalize an exact configured custom provider through plugin runtime", async () => {
+    state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(
+      ({ provider }: ProviderModelNormalizationParams) => {
+        if (provider === "tui-pty-mock") {
+          throw new Error("custom provider should not use plugin runtime normalization");
+        }
+        return undefined;
+      },
+    );
+    state.cfg = {
+      ...state.cfg,
+      plugins: {
+        enabled: false,
+      },
+      agents: {
+        defaults: {
+          model: { primary: "tui-pty-mock/gpt-5.5" },
+          models: {
+            "tui-pty-mock/gpt-5.5": {},
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          "tui-pty-mock": {
+            baseUrl: "http://127.0.0.1:9/v1",
+            apiKey: "test",
+            request: { allowPrivateNetwork: true },
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT 5.5",
+                api: "openai-responses",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 16_384,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({
+        sessionId: "custom-provider-session",
+        text: "custom answer",
+      }),
+    );
+
+    await agentCommand({
+      message: "custom provider prompt",
+      sessionId: "custom-provider-session",
+      cwd: state.workspaceDir,
+    });
+
+    const attempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
+      | { providerOverride?: string; modelOverride?: string; pluginsEnabled?: boolean }
+      | undefined;
+    expect(attempt).toMatchObject({
+      providerOverride: "tui-pty-mock",
+      modelOverride: "gpt-5.5",
+      pluginsEnabled: false,
+    });
+    expect(state.normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "tui-pty-mock" }),
+    );
+    expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
+  });
+
   it("keeps sessions.json on the rotated successor", async () => {
     const storePath = requireStorePath();
     const sessionsDir = await fs.realpath(path.dirname(storePath));

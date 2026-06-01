@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
+  OpenClawPluginService,
   PluginCommandContext,
 } from "./runtime-api.js";
 
@@ -18,6 +27,8 @@ function createApi(params: {
   getConfig: () => Record<string, unknown>;
   writeConfig: (next: Record<string, unknown>) => Promise<void>;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerService?: (service: OpenClawPluginService) => void;
+  openKeyedStore?: OpenClawPluginApi["runtime"]["state"]["openKeyedStore"];
 }): OpenClawPluginApi {
   return createTestPluginApi({
     id: "phone-control",
@@ -28,6 +39,13 @@ function createApi(params: {
     runtime: {
       state: {
         resolveStateDir: () => params.stateDir,
+        openKeyedStore:
+          params.openKeyedStore ??
+          ((options: OpenKeyedStoreOptions) =>
+            createPluginStateKeyedStoreForTests("phone-control", {
+              ...options,
+              env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+            })),
       },
       config: {
         current: () => params.getConfig(),
@@ -55,6 +73,7 @@ function createApi(params: {
       },
     } as unknown as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
+    ...(params.registerService ? { registerService: params.registerService } : {}),
   });
 }
 
@@ -82,6 +101,25 @@ function createPhoneControlConfig(): Record<string, unknown> {
         denyCommands: [...WRITE_COMMANDS],
       },
     },
+  };
+}
+
+function createMockOpenKeyedStore(params: {
+  lookup: ReturnType<typeof vi.fn>;
+  delete?: ReturnType<typeof vi.fn>;
+}): OpenClawPluginApi["runtime"]["state"]["openKeyedStore"] {
+  return <T>() => {
+    const store: PluginStateKeyedStore<T> = {
+      register: vi.fn(async () => {}),
+      registerIfAbsent: vi.fn(async () => true),
+      update: vi.fn(async () => true),
+      lookup: params.lookup as (key: string) => Promise<T | undefined>,
+      consume: vi.fn(async () => undefined),
+      delete: (params.delete ?? vi.fn(async () => true)) as (key: string) => Promise<boolean>,
+      entries: vi.fn(async () => []),
+      clear: vi.fn(async () => {}),
+    };
+    return store;
   };
 }
 
@@ -126,6 +164,10 @@ async function withRegisteredPhoneControl(
 }
 
 describe("phone-control plugin", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("arms sms.send as part of the writes group", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");
@@ -318,5 +360,120 @@ describe("phone-control plugin", () => {
       expect(res?.text ?? "").toContain("disarmed");
       expect(writeConfigFile).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("does not block service startup on the initial expiry check", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), PHONE_CONTROL_STATE_PREFIX));
+    try {
+      const lookup = vi.fn(async () => undefined);
+      let service: OpenClawPluginService | undefined;
+
+      registerPhoneControl.register(
+        createApi({
+          stateDir,
+          getConfig: createPhoneControlConfig,
+          writeConfig: async () => {},
+          registerCommand: () => {},
+          registerService: (registeredService) => {
+            service = registeredService;
+          },
+          openKeyedStore: createMockOpenKeyedStore({ lookup }),
+        }),
+      );
+
+      if (!service) {
+        throw new Error("phone-control plugin did not register its service");
+      }
+
+      await service.start({
+        config: createPhoneControlConfig(),
+        stateDir,
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      });
+
+      expect(lookup).not.toHaveBeenCalled();
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(lookup).toHaveBeenCalledWith("current");
+
+      await service.stop?.({
+        config: createPhoneControlConfig(),
+        stateDir,
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears expired active allows before service startup completes", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), PHONE_CONTROL_STATE_PREFIX));
+    try {
+      let config: Record<string, unknown> = {
+        gateway: {
+          nodes: {
+            allowCommands: [...WRITE_COMMANDS],
+            denyCommands: [],
+          },
+        },
+      };
+      const writeConfigFile = vi.fn(async (next: Record<string, unknown>) => {
+        config = next;
+      });
+      const lookup = vi.fn(async () => ({
+        version: 2,
+        armedAtMs: Date.now() - 120_000,
+        expiresAtMs: Date.now() - 60_000,
+        group: "writes",
+        armedCommands: [...WRITE_COMMANDS],
+        addedToAllow: [...WRITE_COMMANDS],
+        removedFromDeny: [...WRITE_COMMANDS],
+      }));
+      const removeState = vi.fn(async () => true);
+      let service: OpenClawPluginService | undefined;
+
+      registerPhoneControl.register(
+        createApi({
+          stateDir,
+          getConfig: () => config,
+          writeConfig: writeConfigFile,
+          registerCommand: () => {},
+          registerService: (registeredService) => {
+            service = registeredService;
+          },
+          openKeyedStore: createMockOpenKeyedStore({ lookup, delete: removeState }),
+        }),
+      );
+
+      if (!service) {
+        throw new Error("phone-control plugin did not register its service");
+      }
+
+      await service.start({
+        config,
+        stateDir,
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      });
+
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(removeState).toHaveBeenCalledWith("current");
+      expect(
+        (config.gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }).nodes,
+      ).toEqual({
+        allowCommands: [],
+        denyCommands: [...WRITE_COMMANDS],
+      });
+
+      await service.stop?.({
+        config,
+        stateDir,
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

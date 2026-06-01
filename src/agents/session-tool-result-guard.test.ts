@@ -370,6 +370,31 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("does not synthesize older pending results before a new assistant tool-call turn", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "exec" });
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "real output" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
+    expect((messages[2] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
+      "call_1",
+    );
+    expect((messages[2] as { isError?: boolean }).isError).toBe(false);
+    expect(JSON.stringify(messages)).not.toContain("missing tool result");
+    expect(guard.getPendingIds()).toStrictEqual(["call_2"]);
+  });
+
   it("clears pending when a sanitized assistant message is dropped and synthetic results are disabled", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {

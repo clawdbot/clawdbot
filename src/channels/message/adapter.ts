@@ -16,6 +16,7 @@ type ChannelMessageAdapterWithDefaultReceive<TAdapter extends ChannelMessageAdap
       : NonNullable<TAdapter["receive"]>;
   };
 
+/** Defines a message adapter while defaulting receive acknowledgement to manual. */
 export function defineChannelMessageAdapter<const TAdapter extends ChannelMessageAdapterShape>(
   adapter: TAdapter,
 ): ChannelMessageAdapter<ChannelMessageAdapterWithDefaultReceive<TAdapter>> {

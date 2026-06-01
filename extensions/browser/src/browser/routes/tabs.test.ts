@@ -16,6 +16,9 @@ const { registerBrowserTabRoutes } = await import("./tabs.js");
 type ProfileContext = ReturnType<typeof createProfileContext>;
 type TabFixture = {
   targetId: string;
+  suggestedTargetId?: string;
+  tabId?: string;
+  label?: string;
   title: string;
   url: string;
   type: "page";
@@ -284,6 +287,31 @@ describe("browser tab routes", () => {
     expect(response.statusCode).toBe(409);
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("resolves friendly tab references before focusing tabs", async () => {
+    const profileCtx = createProfileWithTabs([
+      publicTab({
+        targetId: "T1_RAW",
+        suggestedTargetId: "docs",
+        tabId: "t1",
+        label: "docs",
+      }),
+    ]);
+
+    const labelResponse = await callTabsFocus({
+      profileCtx,
+      body: { targetId: "docs" },
+    });
+    const tabIdResponse = await callTabsFocus({
+      profileCtx,
+      body: { targetId: "t1" },
+    });
+
+    expect(labelResponse.statusCode).toBe(200);
+    expect(tabIdResponse.statusCode).toBe(200);
+    expect(profileCtx.focusTab).toHaveBeenNthCalledWith(1, "T1_RAW");
+    expect(profileCtx.focusTab).toHaveBeenNthCalledWith(2, "T1_RAW");
   });
 
   it("blocks /tabs/action select when target tab URL fails SSRF checks", async () => {

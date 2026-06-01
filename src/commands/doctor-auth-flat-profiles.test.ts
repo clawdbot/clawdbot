@@ -525,6 +525,9 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
       order: {
         "openai-codex": ["openai-codex:work"],
       },
+      lastGood: {
+        "openai-codex": "openai-codex:work",
+      },
       usageStats: {
         "openai-codex:work": {
           blockedUntil: 9999999999999,
@@ -558,6 +561,9 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
       },
       order: {
         openai: ["openai:work"],
+      },
+      lastGood: {
+        openai: "openai:work",
       },
       usageStats: {
         "openai:work": {

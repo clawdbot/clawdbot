@@ -332,6 +332,7 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("agents-delete-command");
     expect(loaded.modules).not.toContain("agents-identity-command");
     expect(loaded.modules).not.toContain("agents-list-command");
+    expect(loaded.modules).not.toContain("default-runtime");
   });
 
   it("keeps secrets help out of secrets action modules", async () => {

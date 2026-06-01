@@ -108,7 +108,9 @@ describe("gateway pre-auth hardening", () => {
       resolvedAuth,
     });
 
-    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
     const address = httpServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
 
@@ -123,9 +125,9 @@ describe("gateway pre-auth hardening", () => {
       });
     } finally {
       wss.close();
-      await new Promise<void>((resolve, reject) =>
-        httpServer.close((err) => (err ? reject(err) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
     }
   });
 

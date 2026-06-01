@@ -1,15 +1,18 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
+/** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
   roles: string[];
   scopes: string[];
 };
 
+/** Caller-provided bootstrap profile before role/scope normalization and bounding. */
 export type DeviceBootstrapProfileInput = {
   roles?: readonly string[];
   scopes?: readonly string[];
 };
 
+/** Operator scopes allowed to cross the short-lived bootstrap handoff boundary. */
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
   "operator.approvals",
   "operator.read",
@@ -19,6 +22,7 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
+/** Default setup-code/QR bootstrap profile for native onboarding handoff. */
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   // QR/setup-code bootstrap must hand off both tokens for native onboarding:
   // iOS/Android suppress the operator loop while bootstrap auth is active and
@@ -27,6 +31,7 @@ export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
+/** Return whether an input exactly matches the current setup-code bootstrap profile. */
 export function isPairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
@@ -43,6 +48,7 @@ export function isPairingSetupBootstrapProfile(
   );
 }
 
+/** Resolve the subset of requested scopes a bootstrap profile may carry for one role. */
 export function resolveBootstrapProfileScopesForRole(
   role: string,
   scopes: readonly string[],
@@ -55,6 +61,7 @@ export function resolveBootstrapProfileScopesForRole(
   return [];
 }
 
+/** Resolve bounded bootstrap handoff scopes across a role set. */
 export function resolveBootstrapProfileScopesForRoles(
   roles: readonly string[],
   scopes: readonly string[],
@@ -64,6 +71,7 @@ export function resolveBootstrapProfileScopesForRoles(
   );
 }
 
+/** Normalize a requested bootstrap profile and strip scopes outside the handoff allowlist. */
 export function normalizeDeviceBootstrapHandoffProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): DeviceBootstrapProfile {
@@ -89,6 +97,7 @@ function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[]
   return [...out].toSorted();
 }
 
+/** Normalize caller-provided bootstrap roles/scopes without applying handoff bounds. */
 export function normalizeDeviceBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): DeviceBootstrapProfile {

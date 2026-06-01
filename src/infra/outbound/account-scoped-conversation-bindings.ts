@@ -13,6 +13,7 @@ import {
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
+/** In-memory binding record scoped to one channel account and conversation id. */
 export type AccountScopedConversationBindingRecord<TKind extends string = string> = {
   accountId: string;
   conversationId: string;
@@ -25,6 +26,7 @@ export type AccountScopedConversationBindingRecord<TKind extends string = string
   lastActivityAt: number;
 };
 
+/** Account-local binding manager exposed by channel-specific conversation stores. */
 export type AccountScopedConversationBindingManager<TKind extends string = string> = {
   accountId: string;
   getByConversationId: (
@@ -115,6 +117,7 @@ function toSessionBindingRecord<TKind extends string>(params: {
   };
 }
 
+/** Creates a channel/account binding manager and registers it as a session-binding adapter. */
 export function createAccountScopedConversationBindingManager<TKind extends string>(params: {
   channel: string;
   cfg: OpenClawConfig;
@@ -156,7 +159,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       if (!normalizedConversationId || !normalizedTargetSessionKey) {
         return null;
       }
-      const existing = getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
+      const existingLocal = getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
         resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
       );
       const now = Date.now();
@@ -168,15 +171,15 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         agentId:
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : (existing?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
+            : (existingLocal?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()
-            : existing?.label,
+            : existingLocal?.label,
         boundBy:
           typeof metadata?.boundBy === "string" && metadata.boundBy.trim()
             ? metadata.boundBy.trim()
-            : existing?.boundBy,
+            : existingLocal?.boundBy,
         boundAt: now,
         lastActivityAt: now,
       };
@@ -338,6 +341,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   return manager;
 }
 
+/** Stops registered managers and clears account-scoped binding state for one test key. */
 export function resetAccountScopedConversationBindingsForTests(params: { stateKey: symbol }) {
   const state = getState(params.stateKey);
   for (const manager of state.managersByAccountId.values()) {

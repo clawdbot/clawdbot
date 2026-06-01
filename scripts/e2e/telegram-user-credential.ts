@@ -76,9 +76,9 @@ function parseArgs(argv: string[]) {
   return { command, opts };
 }
 
-async function readJson(path: string): Promise<JsonObject> {
+async function readJson(pathCandidate: string): Promise<JsonObject> {
   try {
-    return JSON.parse(await readFile(expandHome(path), "utf8")) as JsonObject;
+    return JSON.parse(await readFile(expandHome(pathCandidate), "utf8")) as JsonObject;
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return {};
@@ -87,8 +87,8 @@ async function readJson(path: string): Promise<JsonObject> {
   }
 }
 
-function fileExists(path: string) {
-  return readFile(expandHome(path))
+function fileExists(pathEntry: string) {
+  return readFile(expandHome(pathEntry))
     .then(() => true)
     .catch((error: unknown) => {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
@@ -98,12 +98,12 @@ function fileExists(path: string) {
     });
 }
 
-async function readEnvFile(path: string) {
-  if (!(await fileExists(path))) {
+async function readEnvFile(pathResult: string) {
+  if (!(await fileExists(pathResult))) {
     return {};
   }
   const env: Record<string, string> = {};
-  const text = await readFile(expandHome(path), "utf8");
+  const text = await readFile(expandHome(pathResult), "utf8");
   for (const line of text.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) {
@@ -111,7 +111,7 @@ async function readEnvFile(path: string) {
     }
     const separator = trimmed.indexOf("=");
     if (separator < 1) {
-      throw new Error(`Invalid env line in ${path}.`);
+      throw new Error(`Invalid env line in ${pathResult}.`);
     }
     const key = trimmed.slice(0, separator).trim();
     const value = trimmed
@@ -160,14 +160,14 @@ function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>):
   return normalizeCredentialPayloadForKind(TELEGRAM_USER_QA_CREDENTIAL_KIND, payload);
 }
 
-async function fileSha256(path: string) {
+async function fileSha256(pathValue: string) {
   return createHash("sha256")
-    .update(await readFile(path))
+    .update(await readFile(pathValue))
     .digest("hex");
 }
 
-async function tgzBase64(path: string) {
-  return (await readFile(path)).toString("base64");
+async function tgzBase64(pathLocal: string) {
+  return (await readFile(pathLocal)).toString("base64");
 }
 
 function joinBrokerEndpoint(siteUrl: string, endpoint: string) {

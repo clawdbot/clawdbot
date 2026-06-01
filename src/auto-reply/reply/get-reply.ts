@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
+  hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
@@ -354,10 +355,11 @@ export async function getReplyFromConfig(
 
   const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
     resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
-      const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+      const workspaceDirRawLocal =
+        resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
       return {
-        workspaceDirRaw,
-        workspaceDirForNativeCommand: workspaceDirRaw,
+        workspaceDirRaw: workspaceDirRawLocal,
+        workspaceDirForNativeCommand: workspaceDirRawLocal,
         agentDir: resolveAgentDir(cfg, agentId),
         timeoutMs: resolveAgentTimeoutMs({
           cfg,
@@ -609,10 +611,13 @@ export async function getReplyFromConfig(
     primaryProvider,
     primaryModel,
   });
+  const staleLegacyAutoFallbackWithoutOrigin =
+    storedModelOverride?.source === "session" && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
-    !staleHeartbeatAutoFallbackOverride
+    !staleHeartbeatAutoFallbackOverride &&
+    !staleLegacyAutoFallbackWithoutOrigin
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
@@ -628,7 +633,9 @@ export async function getReplyFromConfig(
       })
     : undefined;
   const hasEffectiveSessionModelOverride =
-    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+    hasSessionModelOverride &&
+    !staleHeartbeatAutoFallbackOverride &&
+    !staleLegacyAutoFallbackWithoutOrigin;
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasEffectiveSessionModelOverride &&

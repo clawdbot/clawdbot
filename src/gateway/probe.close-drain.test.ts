@@ -1,51 +1,41 @@
-import fs from "node:fs/promises";
 import { type AddressInfo, Socket } from "node:net";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { type RawData, WebSocketServer } from "ws";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "./minimal-gateway.test-helpers.js";
 import { probeGateway } from "./probe.js";
 
-const tempRoots: string[] = [];
-
-function rawWsDataToString(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
+const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-probe-close-drain-" });
 
 function activeClientSocketsToPort(port: number): Socket[] {
   // Node has no public active-handle API; this regression must prove the probe
   // promise does not resolve while the client-side socket handle is still live.
-  // oxlint-disable no-underscore-dangle
-  const handles =
-    (process as typeof process & { _getActiveHandles?: () => unknown[] })._getActiveHandles?.() ??
-    [];
-  // oxlint-enable no-underscore-dangle
+  const getActiveHandles = Reflect.get(process, "_getActiveHandles") as
+    | (() => unknown[])
+    | undefined;
+  const handles = getActiveHandles?.() ?? [];
   return handles.filter(
     (handle): handle is Socket => handle instanceof Socket && handle.remotePort === port,
   );
 }
 
 async function createTempStateDir(): Promise<string> {
-  const tempRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-probe-close-drain-"));
-  tempRoots.push(tempRoot);
-  return tempRoot;
+  return await tempDirs.make("state");
 }
 
 describe("probeGateway close drain", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-    );
+  beforeAll(async () => {
+    await tempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await tempDirs.cleanup();
   });
 
   it("waits for the real WebSocket client socket to close before resolving", async () => {
@@ -53,48 +43,27 @@ describe("probeGateway close drain", () => {
     let sawConnect = false;
 
     wss.on("connection", (ws) => {
-      ws.send(
-        JSON.stringify({
-          type: "event",
-          event: "connect.challenge",
-          payload: { nonce: "test-nonce" },
-        }),
-      );
+      sendMinimalGatewayConnectChallenge(ws);
       ws.on("message", (raw) => {
-        const frame = JSON.parse(rawWsDataToString(raw)) as {
-          id?: string;
-          method?: string;
-          type?: string;
-        };
+        const frame = parseMinimalGatewayRequestFrame(raw);
         if (frame.type !== "req" || frame.method !== "connect" || !frame.id) {
           return;
         }
         sawConnect = true;
-        ws.send(
-          JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: true,
-            payload: {
-              type: "hello-ok",
-              protocol: PROTOCOL_VERSION,
-              server: { version: "test", connId: "conn-test" },
-              features: { methods: [], events: ["connect.challenge"] },
-              snapshot: {},
-              auth: { role: "operator", scopes: ["operator.read"] },
-              policy: {
-                maxPayload: 1_000_000,
-                maxBufferedBytes: 1_000_000,
-                tickIntervalMs: 60_000,
-              },
-            },
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            auth: { role: "operator", scopes: ["operator.read"] },
           }),
         );
       });
     });
 
     try {
-      await new Promise<void>((resolve) => wss.once("listening", resolve));
+      await new Promise<void>((resolve) => {
+        wss.once("listening", resolve);
+      });
       const port = (wss.address() as AddressInfo).port;
 
       const result = await probeGateway({
@@ -109,12 +78,7 @@ describe("probeGateway close drain", () => {
       expect(sawConnect).toBe(true);
       expect(activeClientSocketsToPort(port)).toHaveLength(0);
     } finally {
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        wss.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeMinimalGatewayServer(wss);
     }
   });
 });

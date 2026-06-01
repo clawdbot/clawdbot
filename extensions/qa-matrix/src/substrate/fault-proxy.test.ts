@@ -11,19 +11,21 @@ async function startTargetServer(params?: { responseBody?: string }) {
     method: string;
     url: string;
   }> = [];
-  const server = createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    }
-    requests.push({
-      ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
-      body: Buffer.concat(chunks).toString("utf8"),
-      method: req.method ?? "GET",
-      url: req.url ?? "/",
-    });
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(params?.responseBody ?? JSON.stringify({ forwarded: true }));
+  const server = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      }
+      requests.push({
+        ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
+        body: Buffer.concat(chunks).toString("utf8"),
+        method: req.method ?? "GET",
+        url: req.url ?? "/",
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(params?.responseBody ?? JSON.stringify({ forwarded: true }));
+    })();
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

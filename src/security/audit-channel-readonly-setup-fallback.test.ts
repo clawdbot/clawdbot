@@ -16,7 +16,7 @@ const {
     },
   ]),
   collectEnabledInsecureOrDangerousFlagsMock: vi.fn(
-    (configForTest: OpenClawConfig): string[] => [],
+    (_configForTest: OpenClawConfig): string[] => [],
   ),
   listReadOnlyChannelPluginsForConfigMock: vi.fn(),
   hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),

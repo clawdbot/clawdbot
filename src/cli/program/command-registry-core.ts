@@ -115,12 +115,19 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
     ]),
   ),
   defineImportedCommandGroupSpec(
-    ["agent", "agents"],
-    () => import("./register.agent.js"),
+    ["agent"],
+    () => import("./register.agent-turn.js"),
     (mod, { program, ctx }) => {
-      mod.registerAgentCommands(program, {
+      mod.registerAgentTurnCommand(program, {
         agentChannelOptions: ctx.agentChannelOptions,
       });
+    },
+  ),
+  defineImportedCommandGroupSpec(
+    ["agents"],
+    () => import("./register.agent.js"),
+    (mod, { program }) => {
+      mod.registerAgentsCommands(program);
     },
   ),
   ...withProgramOnlySpecs(

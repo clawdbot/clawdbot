@@ -409,7 +409,6 @@ describe("handleFeishuCommentEvent", () => {
         "```",
         "",
         "Ask the bot owner to approve with:",
-        "openclaw pairing approve feishu TESTCODE",
         "```",
         "openclaw pairing approve feishu TESTCODE",
         "```",

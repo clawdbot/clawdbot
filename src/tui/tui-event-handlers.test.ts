@@ -376,7 +376,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it("shows finishing context for a pending run before chat registration", () => {
     const { state, tui, setActivityStatus, handleAgentEvent, isLocalRunId } = createHandlersHarness(
       {
-        localMode: true,
         state: {
           activeChatRunId: null,
           pendingChatRunId: "run-pending",
@@ -397,6 +396,63 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(isLocalRunId("run-pending")).toBe(true);
     expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
     expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("does not reload history after lifecycle binds a gateway pending run", () => {
+    const { state, chatLog, loadHistory, handleAgentEvent, handleChatEvent, isLocalRunId } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          pendingChatRunId: "run-pending",
+          pendingOptimisticUserMessage: true,
+        },
+      });
+
+    handleAgentEvent({
+      runId: "run-pending",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(isLocalRunId("run-pending")).toBe(false);
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("preserves a pending local run when the session key catches up before the first event", () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent, isLocalRunId } =
+      createHandlersHarness({
+        state: {
+          currentSessionKey: "agent:main:initial",
+          activeChatRunId: null,
+          pendingChatRunId: "run-pending",
+          pendingOptimisticUserMessage: true,
+        },
+      });
+    noteLocalRunId("run-pending");
+    state.currentSessionKey = "agent:main:restored";
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: "agent:main:restored",
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(isLocalRunId("run-pending")).toBe(false);
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
+    expect(loadHistory).not.toHaveBeenCalled();
   });
 
   it("shows finishing context for a known run after assistant final", () => {
@@ -834,18 +890,43 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
-  it("refreshes history after a non-local chat final", () => {
-    const { state, loadHistory, handleChatEvent } = createHandlersHarness({
+  it("does not reload history on final with displayable text for external runs (#87922)", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
 
+    // Simulate an external (non-local) run delivering a final event with text.
+    // loadHistory() must NOT be called because it does clearAll() + rebuild
+    // from server data, and the server may not have persisted this message
+    // yet, causing the just-rendered message to vanish.
     handleChatEvent({
-      runId: "external-run",
+      runId: "run-external",
       sessionKey: state.currentSessionKey,
       state: "final",
-      message: { content: [{ type: "text", text: "done" }] },
+      message: { content: [{ type: "text", text: "assistant reply" }] },
     });
 
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      expect.stringContaining("assistant reply"),
+      "run-external",
+    );
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("reloads history on final when external run has no message", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    // When the final event has no message, the reload is needed to sync
+    // with server state since there is no local content to preserve.
+    handleChatEvent({
+      runId: "run-external-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-external-empty");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
@@ -870,9 +951,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
-    const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
-    });
+    const { state, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+      });
+    noteLocalRunId("run-gateway");
 
     handleChatEvent({
       runId: "run-gateway",
@@ -884,6 +967,136 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.pendingOptimisticUserMessage).toBe(false);
     expect(state.activeChatRunId).toBeNull();
     expect(isLocalRunId("run-gateway")).toBe(false);
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("does not bind unknown gateway run ids while an optimistic message is pending", () => {
+    const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+    });
+
+    handleChatEvent({
+      runId: "run-unknown",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(state.activeChatRunId).toBeNull();
+    expect(isLocalRunId("run-unknown")).toBe(false);
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("binds a pending run final to the optimistic message even while another run is active", () => {
+    const { state, chatLog, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-active",
+        pendingChatRunId: "run-pending",
+        pendingOptimisticUserMessage: true,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(isLocalRunId("run-pending")).toBe(false);
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("does not let unrelated same-session events claim a pending optimistic run", () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          pendingChatRunId: "run-pending",
+          pendingOptimisticUserMessage: true,
+        },
+      });
+    noteLocalRunId("run-pending");
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "other done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBe("run-pending");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(isLocalRunId("run-other")).toBe(false);
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let the active local run claim a queued optimistic run", () => {
+    const { state, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: "run-active",
+          pendingChatRunId: "run-pending",
+          pendingOptimisticUserMessage: true,
+        },
+      });
+    noteLocalRunId("run-active");
+    noteLocalRunId("run-pending");
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "active done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBe("run-pending");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(isLocalRunId("run-active")).toBe(false);
+    expect(isLocalRunId("run-pending")).toBe(true);
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("binds an early final to the optimistic message before pendingChatRunId is assigned", () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: "run-active",
+          pendingChatRunId: null,
+          pendingOptimisticUserMessage: true,
+        },
+      });
+    noteLocalRunId("run-early-final");
+
+    handleChatEvent({
+      runId: "run-early-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(isLocalRunId("run-early-final")).toBe(false);
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-early-final");
     expect(loadHistory).not.toHaveBeenCalled();
   });
 

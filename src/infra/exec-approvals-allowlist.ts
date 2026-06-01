@@ -36,6 +36,7 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+import { isSafeBuiltinSegment } from "./exec-safe-builtins.js";
 import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -131,7 +132,13 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "inlineChain" | "skills" | null;
+export type ExecSegmentSatisfiedBy =
+  | "allowlist"
+  | "safeBins"
+  | "inlineChain"
+  | "safeBuiltins"
+  | "skills"
+  | null;
 export type SkillBinTrustEntry = {
   name: string;
   resolvedPath: string;
@@ -146,6 +153,7 @@ type ExecAllowlistContext = {
   trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: readonly SkillBinTrustEntry[];
   autoAllowSkills?: boolean;
+  allowShellBuiltins?: boolean;
 };
 
 function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistContext {
@@ -159,6 +167,7 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
+    allowShellBuiltins: params.allowShellBuiltins,
   };
 }
 
@@ -482,6 +491,12 @@ function resolveSegmentSatisfaction(params: {
   });
   if (safe) {
     return "safeBins";
+  }
+  if (
+    params.context.allowShellBuiltins === true &&
+    isSafeBuiltinSegment({ segment: params.segment, platform: params.context.platform })
+  ) {
+    return "safeBuiltins";
   }
   const skillAllow = isSkillAutoAllowedSegment({
     segment: params.segment,
@@ -1118,7 +1133,10 @@ export function evaluateShellAllowlist(
     env?: NodeJS.ProcessEnv;
   } & ExecAllowlistContext,
 ): ExecAllowlistAnalysis {
-  const allowlistContext = pickExecAllowlistContext(params);
+  const allowlistContext = {
+    ...pickExecAllowlistContext(params),
+    allowShellBuiltins: true,
+  };
   const analysisFailure = (): ExecAllowlistAnalysis => ({
     analysisOk: false,
     allowlistSatisfied: false,

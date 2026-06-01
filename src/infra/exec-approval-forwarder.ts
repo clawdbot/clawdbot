@@ -286,7 +286,7 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
       : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
-  lines.push(`Reply with: /approve <id> ${decisionText}`);
+  lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
       "Allow Always is unavailable because the effective policy requires approval every time.",
@@ -580,7 +580,7 @@ function createApprovalHandlers<
           buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
           deliver: params.deliver,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         log.error(
           `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
         );
@@ -627,7 +627,7 @@ function createApprovalHandlers<
       },
       deliver: params.deliver,
       shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
       );

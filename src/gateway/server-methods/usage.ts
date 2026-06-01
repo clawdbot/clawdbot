@@ -106,6 +106,7 @@ function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): v
 
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
+    // Prefer evicting settled entries so duplicate callers can still join active loads.
     if (!entry.inFlight) {
       return key;
     }
@@ -374,6 +375,7 @@ function buildStoreBySessionId(
 
   const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
   for (const [sessionId, matches] of matchesBySessionId) {
+    // Multiple store keys can point at one transcript; choose the UI-facing canonical key.
     const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
     if (!preferredKey) {
       continue;
@@ -468,6 +470,7 @@ function maybeMergeFamilyEntry(params: {
     params.base.storeEntry,
     params.base.sessionId,
   );
+  // Family rows keep historical transcript ids so usage survives session resets.
   const sessionFamilyKey = resolveUsageFamilyKey({
     key: params.base.key,
     entry: params.base.storeEntry,
@@ -797,8 +800,9 @@ async function loadCostUsageSummaryCached(params: {
       });
       return summary;
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       if (entry.summary) {
+        // Serve the stale summary if background refresh fails; callers asked for usage, not repair.
         return entry.summary;
       }
       throw err;
@@ -1118,6 +1122,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           });
         } else {
           if (groupingMode === "family" && storeFamilySessionIds.has(discovered.sessionId)) {
+            // The current store row will load this historical transcript through included ids.
             continue;
           }
           // Unnamed session - use session ID as key, no label

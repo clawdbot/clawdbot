@@ -733,6 +733,26 @@ describe("applyExtraParamsToAgent", () => {
     expect(messages[2]).not.toHaveProperty("reasoning_content");
   });
 
+  it("does not add DeepSeek V4 thinking params on the Foundry fallback path", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "microsoft-foundry",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "microsoft-foundry",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.reasoning_effort).toBe("high");
+    expect(payload).not.toHaveProperty("thinking");
+  });
+
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
@@ -2871,6 +2891,32 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
+  });
+
+  it("keeps Responses replay item ids enabled for direct OpenAI store-enabled requests", () => {
+    let capturedOptions:
+      | (SimpleStreamOptions & {
+          replayResponsesItemIds?: boolean;
+        })
+      | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+
+    void streamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(capturedOptions?.replayResponsesItemIds).toBe(true);
   });
 
   it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {

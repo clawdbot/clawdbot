@@ -95,6 +95,13 @@ function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   return compat?.supportsReasoningEffort === false;
 }
 
+function shouldPreserveReasoningContentReplay(params: {
+  modelId?: string | null;
+  model?: ProviderRuntimeModel;
+}): boolean {
+  return params.model?.reasoning === true || requiresReasoningContentReplay(params.modelId);
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -153,7 +160,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
       ? { dropThinkingBlocks: true }
       : {}),
     ...(isStrictOpenAiCompatible
-      ? { dropReasoningFromHistory: !requiresReasoningContentReplay(params.modelId) }
+      ? { dropReasoningFromHistory: !shouldPreserveReasoningContentReplay(params) }
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
@@ -268,6 +275,7 @@ function resolveTranscriptPolicyCacheKey(params: {
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
     dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
+    preservesReasoningContentReplay: params.model?.reasoning === true,
     workspaceDir: params.workspaceDir ?? "",
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,

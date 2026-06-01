@@ -192,9 +192,9 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
       progressSummary: params.progressSummary,
     },
   };
-  const previousEntries = (recentMediaGenerationTaskStarts.get(key) ?? []).filter((entry) =>
+  const previousEntries = (recentMediaGenerationTaskStarts.get(key) ?? []).filter((entryLocal) =>
     isRecentMediaGenerationTaskRecord({
-      task: entry.task,
+      task: entryLocal.task,
       maxAgeMs: RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS,
       nowMs,
     }),

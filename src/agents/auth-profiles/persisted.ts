@@ -106,7 +106,14 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (!("type" in entry) && typeof entry["mode"] === "string") {
     entry["type"] = entry["mode"];
   }
-  if (!("key" in entry) && typeof entry["apiKey"] === "string") {
+  if (entry.type === "apiKey") {
+    entry.type = "api_key";
+  }
+  if (
+    !("key" in entry) &&
+    !coerceSecretRef(entry["keyRef"]) &&
+    typeof entry["apiKey"] === "string"
+  ) {
     entry["key"] = entry["apiKey"];
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
@@ -119,11 +126,10 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     const key = normalizeOptionalCredentialString(entry.key);
     const keyRef = coerceSecretRef(entry.keyRef);
     const metadata = normalizeCredentialMetadata(entry.metadata);
-    if (key !== undefined) {
-      normalized.key = key;
-    }
     if (keyRef) {
       normalized.keyRef = keyRef;
+    } else if (key !== undefined) {
+      normalized.key = key;
     }
     if (metadata) {
       normalized.metadata = metadata;
@@ -524,7 +530,10 @@ export function mergeAuthProfileStores(
         Object.entries(mergedOrder)
           .map(([provider, profileIds]) => [
             provider,
-            profileIds.filter((profileId) => profiles[profileId]),
+            profileIds.filter(
+              (profileId) =>
+                profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
+            ),
           ])
           .filter(([, profileIds]) => profileIds.length > 0),
       )

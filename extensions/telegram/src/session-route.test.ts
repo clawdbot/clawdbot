@@ -14,6 +14,37 @@ describe("telegram session route", () => {
     expect(route?.threadId).toBe(99);
   });
 
+  it("keeps same direct topic ids distinct across chats", async () => {
+    const first = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "12345:topic:99",
+    });
+    const second = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "67890:topic:99",
+    });
+
+    expect(first?.sessionKey).toBe("agent:main:main:thread:12345:99");
+    expect(second?.sessionKey).toBe("agent:main:main:thread:67890:99");
+    expect(first?.threadId).toBe(99);
+    expect(second?.threadId).toBe(99);
+  });
+
+  it("returns native topic ids for username direct topic targets", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "@alice:topic:99",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:main:thread:@alice:99");
+    expect(route?.baseSessionKey).toBe("agent:main:main");
+    expect(route?.threadId).toBe(99);
+    expect(route?.from).toBe("telegram:@alice:topic:99");
+  });
+
   it("aligns isolated direct topic sessions with inbound reply routing", async () => {
     const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: { session: { dmScope: "per-account-channel-peer" } },
@@ -42,6 +73,20 @@ describe("telegram session route", () => {
     expect(route?.baseSessionKey).toBe("agent:main:telegram:direct:12345");
     expect(route?.threadId).toBe(99);
     expect(route?.from).toBe("telegram:12345:topic:99");
+  });
+
+  it("recovers username direct topic thread routes from currentSessionKey", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: { session: { dmScope: "per-channel-peer" } },
+      agentId: "main",
+      target: "@alice",
+      currentSessionKey: "agent:main:telegram:direct:@alice:thread:@alice:99",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:telegram:direct:@alice:thread:@alice:99");
+    expect(route?.baseSessionKey).toBe("agent:main:telegram:direct:@alice");
+    expect(route?.threadId).toBe(99);
+    expect(route?.from).toBe("telegram:@alice:topic:99");
   });
 
   it('does not recover currentSessionKey threads for shared dmScope "main" DMs', async () => {

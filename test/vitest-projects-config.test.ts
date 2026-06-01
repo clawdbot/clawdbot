@@ -232,6 +232,7 @@ describe("projects vitest config", () => {
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
     expect(config.test.fileParallelism).toBe(false);
     expect(config.test.maxWorkers).toBe(1);
+    expect(config.test.sequence).toMatchObject({ groupOrder: 1 });
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {

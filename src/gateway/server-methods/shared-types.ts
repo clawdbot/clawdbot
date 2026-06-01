@@ -36,6 +36,7 @@ export type GatewayClient = {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     pluginRuntimeOwnerId?: string;
+    agentRunTracking?: "plugin_subagent";
   };
 };
 

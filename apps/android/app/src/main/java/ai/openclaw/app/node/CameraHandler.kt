@@ -16,8 +16,14 @@ import kotlinx.serialization.json.put
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
 
+/**
+ * Raw MP4 size guard before base64 encoding the clip into a node.invoke response.
+ */
 internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean = rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
+/**
+ * Gateway camera command adapter that adds HUD feedback and payload-size enforcement.
+ */
 class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
@@ -26,6 +32,7 @@ class CameraHandler(
   private val triggerCameraFlash: () -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
+  /** Handles camera.list by exposing CameraX devices through gateway metadata. */
   suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
     try {
       val devices = camera.listDevices()
@@ -53,6 +60,7 @@ class CameraHandler(
       GatewaySession.InvokeResult.error(code = code, message = message)
     }
 
+  /** Handles camera.snap with HUD progress, flash feedback, and normalized invoke errors. */
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
 
@@ -92,6 +100,7 @@ class CameraHandler(
     }
   }
 
+  /** Handles camera.clip and keeps external audio capture paused while camera audio is active. */
   suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
     val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
 
@@ -124,6 +133,7 @@ class CameraHandler(
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
         clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
+        // Delete oversized clips before returning so cache files do not accumulate after failed invokes.
         withContext(Dispatchers.IO) { filePayload.file.delete() }
         showCameraHud("Clip too large", CameraHudKind.Error, 2400)
         return GatewaySession.InvokeResult.error(
@@ -152,6 +162,7 @@ class CameraHandler(
       clipLog("stack: ${err.stackTraceToString().take(2000)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
+      // Prevent talk/transcription capture from competing with camera audio after every exit path.
       if (includeAudio) externalAudioCaptureActive.value = false
     }
   }

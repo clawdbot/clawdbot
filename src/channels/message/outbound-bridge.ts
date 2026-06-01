@@ -19,11 +19,13 @@ const defaultManualReceiveAdapter = {
   supportedAckPolicies: ["manual"],
 } as const satisfies ChannelMessageReceiveAdapterShape;
 
+/** Send result accepted from legacy outbound bridge methods before receipt normalization. */
 export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
   messageId?: string;
 };
 
+/** Legacy outbound adapter shape bridged into the channel message adapter contract. */
 export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
@@ -42,6 +44,7 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   ) => Promise<ChannelMessageOutboundBridgeResult>;
 };
 
+/** Options for building a message adapter from legacy outbound send functions. */
 export type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
   id?: string;
   outbound: ChannelMessageOutboundBridgeAdapter<TConfig>;
@@ -117,6 +120,7 @@ function resolvePayloadReceiptKind(
   return "unknown";
 }
 
+/** Converts legacy outbound send methods into a typed channel message adapter. */
 export function createChannelMessageAdapterFromOutbound<TConfig = unknown>(
   params: CreateChannelMessageAdapterFromOutboundParams<TConfig>,
 ): ChannelMessageAdapterShape<TConfig> {

@@ -14,7 +14,6 @@ import {
   isSafeToOverwriteStoredOAuthIdentity,
   OAuthManagerRefreshError,
 } from "./oauth-manager.js";
-import { resolveAuthStorePath } from "./paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,

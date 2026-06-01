@@ -11,6 +11,7 @@
   "dependencies": {
     "@create-markdown/preview": "2.0.3",
     "@noble/ed25519": "3.1.0",
+    "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
     "dompurify": "3.4.7",
     "highlight.js": "11.11.1",

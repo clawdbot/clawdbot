@@ -946,6 +946,29 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "thinking", thinking: "Reasoning output" }]);
   });
 
+  it("drops provider-returned thinking for non-reasoning models", () => {
+    const response = {
+      model: "minimax-m2.7:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        thinking: "Thinking output",
+      },
+      done: true,
+      prompt_eval_count: 10,
+      eval_count: 6,
+    };
+    const result = buildAssistantMessage(response, {
+      ...modelInfo,
+      id: "minimax-m2.7:cloud",
+      reasoning: false,
+    });
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([]);
+    expect(result.usage.output).toBe(6);
+  });
+
   it("strips inline reasoning prefix from kimi cloud visible text", () => {
     const response = {
       model: "kimi-k2.6:cloud",
@@ -1869,7 +1892,9 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(
         await Promise.race([
           pendingStartEvent.then(() => "event" as const),
-          new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
+          new Promise<"timeout">((resolve) => {
+            setTimeout(() => resolve("timeout"), 100);
+          }),
         ]),
       ).toBe("timeout");
 
@@ -2715,9 +2740,34 @@ describe("createOllamaStreamFn", () => {
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1}',
       ],
       [{ type: "thinking", thinking: "reasoned output" }],
+    );
+  });
+
+  it("drops streamed reasoning chunks for non-reasoning models", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { reasoning: false },
+        });
+        const events = await collectStreamEvents(stream);
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.message.content).toEqual([]);
+        expect(doneEvent.message.usage.output).toBeGreaterThan(0);
+        expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+      },
     );
   });
 

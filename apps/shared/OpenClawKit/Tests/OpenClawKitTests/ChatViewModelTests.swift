@@ -1092,6 +1092,75 @@ extension TestChatTransportState {
         }
     }
 
+    @Test func appendsGlobalSessionUserMessageForSelectedAgent() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:work:global",
+            historyResponses: [historyPayload(sessionKey: "agent:work:global")])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "global",
+                    agentId: "work",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "global transcript",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now),
+                    messageId: "msg-global-work",
+                    messageSeq: 1)))
+
+        try await waitUntil("selected agent global transcript visible") {
+            await MainActor.run {
+                vm.messages.count == 1 &&
+                    vm.messages.first?.role == "user" &&
+                    vm.messages.first?.content.first?.text == "global transcript"
+            }
+        }
+    }
+
+    @Test func ignoresGlobalSessionUserMessageForDifferentAgent() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:work:global",
+            historyResponses: [historyPayload(sessionKey: "agent:work:global")])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "global",
+                    agentId: "main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "wrong global transcript",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now),
+                    messageId: "msg-global-main",
+                    messageSeq: 1)))
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await MainActor.run { vm.messages.isEmpty })
+    }
+
     @Test func ignoresAgentMainSessionMessageForDifferentCurrentMainAlias() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
@@ -1119,6 +1188,126 @@ extension TestChatTransportState {
 
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(await MainActor.run { vm.messages.isEmpty })
+    }
+
+    @Test func appendsExternalSessionAssistantMessageWhileRunPending() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "ping")
+        try await waitUntil("local run pending") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "assistant",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "agent reply",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now + 1),
+                    messageId: "msg-assistant-1",
+                    messageSeq: 2)))
+
+        try await waitUntil("assistant transcript visible while pending") {
+            await MainActor.run {
+                vm.messages.contains(where: { msg in
+                    msg.role == "assistant" &&
+                        msg.content.first?.text == "agent reply"
+                })
+            }
+        }
+    }
+
+    @Test func dedupesGatewayEchoOfLocalUserMessage() async throws {
+        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "echo me")
+        try await waitUntil("optimistic user message visible") {
+            await MainActor.run {
+                vm.messages.count == 1 && vm.messages.first?.content.first?.text == "echo me"
+            }
+        }
+
+        // Gateway echoes the same user turn over the session-message stream with a
+        // server-assigned timestamp that differs from the optimistic local one.
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "echo me",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: Date().timeIntervalSince1970 * 1000 + 5_000),
+                    messageId: "srv-echo-1",
+                    messageSeq: 1)))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await MainActor.run {
+            vm.messages.filter { msg in
+                msg.role == "user" && msg.content.first?.text == "echo me"
+            }.count == 1
+        })
+    }
+
+    @Test func appendsSameContentUserTranscriptWhenItIsNotLocalEcho() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(messages: [
+                    chatTextMessage(role: "user", text: "repeat", timestamp: now),
+                ]),
+            ])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") {
+            await MainActor.run { vm.messages.count == 1 }
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "repeat",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now + 1_000),
+                    messageId: "msg-repeat-2",
+                    messageSeq: 2)))
+
+        try await waitUntil("repeated user transcript appended") {
+            await MainActor.run {
+                vm.messages.filter { msg in
+                    msg.role == "user" && msg.content.first?.text == "repeat"
+                }.count == 2
+            }
+        }
     }
 
     @Test func ignoresExternalSessionUserMessageForOtherSession() async throws {

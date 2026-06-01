@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";

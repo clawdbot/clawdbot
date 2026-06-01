@@ -390,8 +390,12 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
 
     const inflight = approvalRuntime.handleRequested(request);
     // Flush microtasks so deliverPending resolves and bindPending parks at the gate.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
 
     // stop() flips the stopped flag while bindPending is parked.
     await approvalRuntime.stop();
@@ -435,8 +439,12 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
 
     const inflight = approvalRuntime.handleRequested(request);
     // Flush microtasks so deliverPending is awaited and parked at the gate.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
 
     // stop() flips the stopped flag while deliverPending is still pending.
     await approvalRuntime.stop();
@@ -482,8 +490,12 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
 
     const inflight = approvalRuntime.handleRequested(request);
     // Flush microtasks so deliverPending resolves and bindPending awaits the gate.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
 
     // stop() flips the stopped flag while bindPending is parked; it then resolves to null.
     await approvalRuntime.stop();

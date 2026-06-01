@@ -83,7 +83,7 @@ describe("applyProviderAuthConfigPatch", () => {
   });
 
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
-    const base = {
+    const baseLocal = {
       agents: {
         defaults: {
           contextPruning: {
@@ -103,7 +103,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch(base, patch);
+    const next = applyProviderAuthConfigPatch(baseLocal, patch);
 
     expect(next).toEqual({
       agents: {

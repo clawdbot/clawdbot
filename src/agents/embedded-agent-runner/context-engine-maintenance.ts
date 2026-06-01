@@ -611,6 +611,10 @@ function scheduleDeferredTurnMaintenance(
     buildTurnMaintenanceTaskDescriptor({
       sessionKey,
     });
+  if (!task) {
+    log.warn("[context-engine] failed to create deferred turn maintenance task", { sessionKey });
+    return undefined;
+  }
   log.info(
     `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${resolveDeferredTurnMaintenanceLane(sessionKey)}`,
@@ -642,8 +646,26 @@ function scheduleDeferredTurnMaintenance(
     });
     return undefined;
   }
+  const cleanupDeferredTurnMaintenance = async () => {
+    schedulerAbort.dispose();
+    const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
+    if (current !== state) {
+      return;
+    }
+    const shutdownTriggered = schedulerAbort.abortSignal?.aborted === true;
+    const rerunParams =
+      current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
+    const discardedRerunParams =
+      current.rerunRequested && shutdownTriggered ? current.latestParams : undefined;
+    activeDeferredTurnMaintenanceRuns.delete(sessionKey);
+    if (rerunParams) {
+      await scheduleDeferredTurnMaintenance(rerunParams);
+    } else if (discardedRerunParams?.disposeContextEngineAfterMaintenance) {
+      await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
+    }
+  };
   const trackedPromise = runPromise
-    .catch((err) => {
+    .catch((err: unknown) => {
       params.onScheduleFailure?.(err);
       markDeferredTurnMaintenanceTaskScheduleFailure({
         sessionKey,
@@ -651,23 +673,9 @@ function scheduleDeferredTurnMaintenance(
         error: err,
       });
     })
-    .finally(async () => {
-      schedulerAbort.dispose();
-      const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
-      if (current !== state) {
-        return;
-      }
-      const shutdownTriggered = schedulerAbort.abortSignal?.aborted === true;
-      const rerunParams =
-        current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
-      const discardedRerunParams =
-        current.rerunRequested && shutdownTriggered ? current.latestParams : undefined;
-      activeDeferredTurnMaintenanceRuns.delete(sessionKey);
-      if (rerunParams) {
-        await scheduleDeferredTurnMaintenance(rerunParams);
-      } else if (discardedRerunParams?.disposeContextEngineAfterMaintenance) {
-        await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
-      }
+    .then(cleanupDeferredTurnMaintenance, async (err: unknown) => {
+      await cleanupDeferredTurnMaintenance();
+      throw err;
     });
   const state: DeferredTurnMaintenanceRunState = {
     promise: trackedPromise,

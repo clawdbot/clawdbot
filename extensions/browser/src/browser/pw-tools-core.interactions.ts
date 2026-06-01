@@ -192,7 +192,7 @@ async function assertObservedDelayedNavigations(opts: {
     });
   }
   if (subframeError) {
-    throw subframeError;
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
   }
 }
 
@@ -276,7 +276,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
     const settle = (err?: unknown) => {
       cleanup();
       if (err) {
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -428,11 +428,11 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   }
 
   if (subframeError) {
-    throw subframeError;
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
   }
 
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -478,12 +478,14 @@ function createAbortPromiseWithListener(
   const abortPromise: Promise<never> = signal.aborted
     ? (() => {
         onAbort?.(signal.reason);
-        return Promise.reject(signal.reason ?? new Error("aborted"));
+        return Promise.reject(
+          toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+        );
       })()
     : new Promise((_, reject) => {
         abortListener = () => {
           onAbort?.(signal.reason);
-          reject(signal.reason ?? new Error("aborted"));
+          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         };
         signal.addEventListener("abort", abortListener, { once: true });
       });
@@ -581,7 +583,9 @@ export async function clickViaPlaywright(opts: {
             abortPromise,
             reconcileRemoteDialog,
           );
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         if (opts.doubleClick) {
           await awaitActionWithAbort(
@@ -1709,4 +1713,18 @@ export async function batchViaPlaywright(opts: {
     }
   }
   return { results };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

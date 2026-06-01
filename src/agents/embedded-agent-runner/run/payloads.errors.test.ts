@@ -156,6 +156,61 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "req_synthetic_provider_request_001");
   });
 
+  it("suppresses raw assistant error messages in user-facing reply payloads", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "SECRET_CANARY_69737",
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
+  });
+
+  it("suppresses structured provider error messages in user-facing reply payloads", () => {
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET_CANARY_69737"}}';
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
+    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+  });
+
+  it("suppresses escaped structured provider error messages in user-facing reply payloads", () => {
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET\\nCANARY_69737"}}';
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET");
+    expectNoPayloadTextContaining(payloads, "CANARY_69737");
+    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+  });
+
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
@@ -196,6 +251,24 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
   });
 
+  it("suppresses raw aborted assistant error messages in user-facing reply payloads", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "SECRET_CANARY_69737",
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
+  });
+
   it("suppresses aborted assistant reasoning text as well as partial answer text", () => {
     const payloads = buildPayloads({
       runAborted: true,
@@ -217,6 +290,20 @@ describe("buildEmbeddedRunPayloads", () => {
     });
     expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
     expectNoPayloadTextContaining(payloads, "partial answer that should not leak");
+  });
+
+  it("preserves aborted-without-error behavior without adding a generic error payload", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
   });
 
   it("does not replay a stale previous assistant when an aborted run has no new text", () => {

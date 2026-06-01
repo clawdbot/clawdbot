@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -21,7 +22,6 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
@@ -49,6 +49,12 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  isToolChoiceConstraintSatisfied,
+  resolveUnsatisfiedToolChoiceMessage,
+  toolChoiceConstraintPrompt,
+  type ToolChoiceConstraint,
+} from "./openai-tool-choice.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -208,6 +214,7 @@ function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition
 function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice: unknown }): {
   tools: ClientToolDefinition[];
   extraSystemPrompt?: string;
+  constraint?: ToolChoiceConstraint;
 } {
   const { tools, toolChoice } = params;
   if (toolChoice == null || toolChoice === "auto") {
@@ -217,12 +224,34 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
     return { tools: [] };
   }
   if (toolChoice === "required") {
-    throw new Error("tool_choice=required is not supported");
+    if (tools.length === 0) {
+      throw new Error("tool_choice=required but no tools were provided");
+    }
+    const constraint: ToolChoiceConstraint = { type: "required" };
+    return { tools, extraSystemPrompt: toolChoiceConstraintPrompt(constraint), constraint };
   }
   if (typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
     throw new Error("tool_choice must be a string or object");
   }
   const choiceType = (toolChoice as { type?: unknown }).type;
+  if (choiceType === "function") {
+    const targetName = normalizeOptionalString(
+      (toolChoice as { function?: { name?: unknown } }).function?.name,
+    );
+    if (!targetName) {
+      throw new Error("tool_choice.function.name is required");
+    }
+    const matched = tools.filter((tool) => tool.function?.name === targetName);
+    if (matched.length === 0) {
+      throw new Error(`tool_choice requested unknown tool: ${targetName}`);
+    }
+    const constraint: ToolChoiceConstraint = { type: "function", name: targetName };
+    return {
+      tools: matched,
+      extraSystemPrompt: toolChoiceConstraintPrompt(constraint),
+      constraint,
+    };
+  }
   if (typeof choiceType !== "string") {
     throw new Error("unsupported tool_choice type");
   }
@@ -952,8 +981,9 @@ export async function handleOpenAiHttpRequest(
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
-  let resolvedClientTools: ClientToolDefinition[] = [];
+  let resolvedClientTools: ClientToolDefinition[];
   let toolChoicePrompt: string | undefined;
+  let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   try {
     const parsedClientTools = extractClientToolsFromChatRequest(payload.tools);
     const toolChoiceResult = applyChatToolChoice({
@@ -962,6 +992,7 @@ export async function handleOpenAiHttpRequest(
     });
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
+    toolChoiceConstraint = toolChoiceResult.constraint;
   } catch (err) {
     sendJson(res, 400, {
       error: {
@@ -971,7 +1002,7 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
-  let images: ImageContent[] = [];
+  let images: ImageContent[];
   try {
     images = await resolveImagesForRequest(activeTurnContext, limits);
   } catch (err) {
@@ -1028,6 +1059,25 @@ export async function handleOpenAiHttpRequest(
       const usage = resolveChatCompletionUsage(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+
+      // `tool_choice` is an HTTP client-tool contract. The provider may still
+      // ignore the prompt, so enforce after the run using structured pending
+      // client tool calls instead of accepting prose that only says it called.
+      if (
+        toolChoiceConstraint &&
+        !isToolChoiceConstraintSatisfied({
+          constraint: toolChoiceConstraint,
+          pendingToolCalls,
+        })
+      ) {
+        sendJson(res, 502, {
+          error: {
+            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            type: "api_error",
+          },
+        });
+        return true;
+      }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         const commentary = resolveAgentResponseCommentary(result);
@@ -1101,6 +1151,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let bufferedAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
@@ -1152,6 +1203,14 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      // Hold prose until the run proves the requested client-tool call exists.
+      // If the provider ignores `tool_choice`, no partial text should leak
+      // before the stream fails with an OpenAI-compatible error payload.
+      if (toolChoiceConstraint) {
+        bufferedAssistantContent += content;
+        return;
+      }
+
       if (!wroteRole) {
         wroteRole = true;
         writeAssistantRoleChunk(res, { runId, model });
@@ -1196,13 +1255,37 @@ export async function handleOpenAiHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
+      // Streaming enforces the same post-run client-tool contract as the
+      // non-streaming path; buffered assistant prose is only flushed when the
+      // matching structured call is present.
+      if (
+        toolChoiceConstraint &&
+        !isToolChoiceConstraintSatisfied({
+          constraint: toolChoiceConstraint,
+          pendingToolCalls,
+        })
+      ) {
+        closed = true;
+        stopWatchingDisconnect();
+        unsubscribe();
+        writeSse(res, {
+          error: {
+            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            type: "api_error",
+          },
+        });
+        writeDone(res);
+        res.end();
+        return;
+      }
+
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         if (!wroteRole) {
           wroteRole = true;
           writeAssistantRoleChunk(res, { runId, model });
         }
         if (!sawAssistantDelta) {
-          const commentary = resolveAgentResponseCommentary(result);
+          const commentary = bufferedAssistantContent || resolveAgentResponseCommentary(result);
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {

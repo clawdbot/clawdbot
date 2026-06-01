@@ -467,8 +467,8 @@ export function buildInboundUserContextPrefix(
   const chatWindowCoversReplyContext =
     replyChainPayload.length > 0
       ? replyChainPayload.every((entry) => {
-          const messageId = normalizePromptMetadataString(entry["message_id"]);
-          return messageId ? chatWindowMessageIds.has(messageId) : false;
+          const messageIdLocal = normalizePromptMetadataString(entry["message_id"]);
+          return messageIdLocal ? chatWindowMessageIds.has(messageIdLocal) : false;
         })
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);

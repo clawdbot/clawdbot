@@ -115,7 +115,7 @@ describe("Telegram message dispatch replay guard", () => {
     await expect(reader.warmup("default")).resolves.toBe(keys.length);
   });
 
-  it("falls back to same-process replay protection when plugin-state cannot open", async () => {
+  it("falls back to same-process replay protection when plugin-state is unavailable", async () => {
     setTelegramMessageDispatchDedupeStoreForTest(undefined);
     const errors: unknown[] = [];
     const storePath = createStorePath();
@@ -142,7 +142,7 @@ describe("Telegram message dispatch replay guard", () => {
       }),
     ).resolves.toEqual({ kind: "duplicate" });
     await expect(guard.hasRecent(first.key, { namespace: "default" })).resolves.toBe(true);
-    expect(errors.length).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
   });
 
   it("keeps same-process replay protection when plugin-state commit fails", async () => {

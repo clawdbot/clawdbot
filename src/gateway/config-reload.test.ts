@@ -411,6 +411,20 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+  it("hot-reloads auth cooldown changes without a gateway restart", () => {
+    const changedPaths = [
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata("auth.cooldowns.billingBackoffHours").kind).toBe("hot");
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);
@@ -463,6 +477,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "auth.cooldowns.billingBackoffHours",
+      expectRestartGateway: false,
+      expectHotPath: "auth.cooldowns.billingBackoffHours",
     },
     {
       path: "gateway.auth.token",
@@ -1329,6 +1348,57 @@ describe("startGatewayConfigReloader", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.hotReasons).toEqual(["plugins.entries.telegram.enabled"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("keeps external auth cooldown writes on the hot reload path", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      auth: {
+        cooldowns: {
+          billingBackoffHours: 1,
+          billingBackoffHoursByProvider: { anthropic: 2 },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      auth: {
+        cooldowns: {
+          billingBackoffHours: 3,
+          billingBackoffHoursByProvider: { anthropic: 4 },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "external-auth-cooldowns-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual([
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual([
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ]);
+    expect(plan.noopPaths).toStrictEqual([]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

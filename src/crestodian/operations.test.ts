@@ -86,8 +86,8 @@ const mockConfig = vi.hoisted(() => {
       state.config = {};
       state.hash = "mock-hash-0";
     },
-    missing(path: string) {
-      state.path = path;
+    missing(pathLocal: string) {
+      state.path = pathLocal;
       state.exists = false;
       state.config = {};
       state.hash = undefined;

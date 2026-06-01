@@ -17,6 +17,7 @@ import {
   type MemoryReadParams,
 } from "./memory-tool-manager-mock.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { testing as memoryToolsTesting } from "./tools.js";
 import {
   asOpenClawConfig,
   createAutoCitationsMemorySearchTool,
@@ -51,6 +52,7 @@ async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> 
 
 beforeEach(() => {
   clearMemoryPluginState();
+  memoryToolsTesting.resetMemorySearchToolCooldowns();
   resetMemoryToolMockState({
     backend: "builtin",
     searchImpl: async () => [
@@ -445,6 +447,105 @@ describe("memory tools", () => {
       ["memory", "MEMORY.md"],
     ]);
     expect(getMemorySearchManagerMockCalls()).toBe(1);
+  });
+
+  it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return [
+          {
+            path: "MEMORY.md",
+            startLine: 5,
+            endLine: 7,
+            score: 0.9,
+            snippet: "@@ -5,3 @@\nAssistant: noted",
+            source: "memory" as const,
+          },
+        ];
+      });
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => await new Promise(() => {}),
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const stalledAllResultPromise = tool.execute("call_all_stalled_wiki", {
+        query: "alpha",
+        corpus: "all",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const stalledAllResult = await stalledAllResultPromise;
+      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+
+      const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
+        query: "alpha",
+      });
+      const details = memoryResult.details as { results: Array<{ corpus: string; path: string }> };
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["memory", "MEMORY.md"],
+      ]);
+      expect(searchCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cooldowns primary memory when corpus=all memory search stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return await new Promise(() => {});
+      });
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => [
+          {
+            corpus: "wiki",
+            path: "entities/alpha.md",
+            title: "Alpha",
+            kind: "entity",
+            score: 4,
+            snippet: "Alpha wiki entry",
+          },
+        ],
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const stalledAllResultPromise = tool.execute("call_all_stalled_memory", {
+        query: "alpha",
+        corpus: "all",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const stalledAllResult = await stalledAllResultPromise;
+      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+
+      const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {
+        query: "alpha",
+        corpus: "all",
+      });
+      const details = wikiOnlyResult.details as {
+        results: Array<{ corpus: string; path: string }>;
+      };
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["wiki", "entities/alpha.md"],
+      ]);
+      expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {

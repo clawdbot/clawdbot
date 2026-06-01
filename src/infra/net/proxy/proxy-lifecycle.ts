@@ -1,12 +1,3 @@
-/**
- * High-level lifecycle management for OpenClaw's operator-managed network
- * proxy routing.
- *
- * OpenClaw does not spawn or configure the filtering proxy. When enabled, it
- * routes process-wide HTTP clients through the configured forward proxy URL and
- * restores the previous process state on shutdown.
- */
-
 import {
   installGlobalProxy,
   type ProxylineHandle,
@@ -31,6 +22,7 @@ import {
   resolveManagedProxyCaFileForUrl,
 } from "./proxy-tls.js";
 
+/** Process-wide managed proxy handle returned to CLI/gateway startup owners. */
 export type ProxyHandle = {
   /** The operator-managed proxy URL injected into process.env. */
   proxyUrl: string;
@@ -57,6 +49,7 @@ const MANAGED_PROXY_UNDICI_OPTIONS = Object.freeze({
   allowH2: false,
 }) satisfies ProxylineUndiciOptions;
 
+/** Resets process-wide proxy lifecycle state between tests that share a worker. */
 export function resetProxyLifecycleForTests(): void {
   baseProxyEnvSnapshot = null;
   proxylineHandle?.stop();
@@ -127,6 +120,8 @@ function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   proxylineHandle = null;
   restoreProxyEnv(snapshot);
   forceResetGlobalDispatcher();
+  // If this process itself is a child of an active managed proxy, restoring the
+  // local lifecycle should keep inherited proxy routing active.
   ensureInheritedManagedProxyRoutingActive();
 }
 
@@ -184,6 +179,7 @@ function redactProxyUrlForLog(value: string): string {
   }
 }
 
+/** Reinstalls Proxyline routing in child processes that inherited active proxy env. */
 export function ensureInheritedManagedProxyRoutingActive(): void {
   if (process.env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
     return;
@@ -207,6 +203,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   forceResetGlobalDispatcher({ preserveProxylineManaged: true });
 }
 
+/** Starts process-wide managed proxy routing and returns the owner stop handle. */
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
   if (config?.enabled !== true) {
     return null;
@@ -218,6 +215,8 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
   const activeProxyUrl = getActiveManagedProxyUrl();
   if (activeProxyUrl) {
+    // Nested starts share the existing process-wide proxy when URL, loopback
+    // mode, and TLS options match; each caller still receives its own handle.
     const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
       loopbackMode,
       proxyTls,
@@ -282,6 +281,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   return handle;
 }
 
+/** Stops a managed proxy handle if one was started. */
 export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
   if (!handle) {
     return;
@@ -313,6 +313,7 @@ function getGatewayControlPlaneBypassAuthority(value: string): string | null {
   return url.port ? `${url.hostname}:${url.port}` : url.hostname;
 }
 
+/** Registers a temporary direct route for trusted Gateway loopback control-plane URLs. */
 export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
   const authority = getGatewayControlPlaneBypassAuthority(url);
   if (!authority) {

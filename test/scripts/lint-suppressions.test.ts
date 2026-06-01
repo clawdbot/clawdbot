@@ -162,6 +162,13 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
   return [...counts.entries()].map(([key, count]) => `${key}|${count}`).toSorted();
 }
 
+function filterExpectedSuppressionsForPresentFiles(entries: readonly string[]): string[] {
+  return entries.filter((entry) => {
+    const [file] = entry.split("|", 1);
+    return fs.existsSync(path.join(repoRoot, file));
+  });
+}
+
 collectProductionLintSuppressions();
 
 describe("production lint suppressions", () => {
@@ -175,65 +182,54 @@ describe("production lint suppressions", () => {
   });
 
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
-    expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
-      "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
-      "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
-      "extensions/telegram/src/telegram-ingress-worker.runtime.ts|unicorn/require-post-message-target-origin|1",
-      "extensions/telegram/src/telegram-ingress-worker.ts|unicorn/require-post-message-target-origin|1",
-      "extensions/whatsapp/src/document-filename.ts|no-control-regex|1",
-      "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
-      "scripts/lib/extension-package-boundary.ts|typescript/no-unnecessary-type-parameters|1",
-      "scripts/lib/plugin-npm-release.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/agents/agent-scope.ts|no-control-regex|1",
-      "src/agents/code-mode.worker.ts|unicorn/require-post-message-target-origin|1",
-      "src/agents/embedded-agent-runner/run/images.ts|no-control-regex|1",
-      "src/agents/subagent-spawn.ts|no-control-regex|1",
-      "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
-      "src/cli/cli-utils.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/config/types.channels.ts|@typescript-eslint/no-explicit-any|1",
-      "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/infra/channel-runtime-context.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
-      "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/node-host/invoke.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/channel-entry-contract.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/facade-loader.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
-      "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/test-helpers/package-manifest-contract.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/host-hook-runtime.ts|typescript/no-unnecessary-type-parameters|2",
-      "src/plugins/host-hook-state.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
-      "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
-      "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/version.ts|eslint/no-underscore-dangle|1",
-      "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
-    ]);
+    expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
+      filterExpectedSuppressionsForPresentFiles([
+        "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
+        "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
+        "src/cli/cli-utils.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/channel-runtime-context.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
+        "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/node-host/invoke.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/channel-entry-contract.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/facade-loader.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
+        "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/host-hook-runtime.ts|typescript/no-unnecessary-type-parameters|2",
+        "src/plugins/host-hook-state.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
+        "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
+        "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/version.ts|eslint/no-underscore-dangle|1",
+      ]),
+    );
   });
 
   it("keeps production no-explicit-any suppressions on an explicit allowlist", () => {

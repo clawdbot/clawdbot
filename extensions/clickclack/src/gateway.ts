@@ -190,7 +190,9 @@ export async function startClickClackGatewayAccount(
       socket.on("error", reject);
     });
     if (!ctx.abortSignal.aborted) {
-      await new Promise((resolve) => setTimeout(resolve, account.reconnectMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, account.reconnectMs);
+      });
     }
   }
   ctx.setStatus({ accountId: account.accountId, running: false });

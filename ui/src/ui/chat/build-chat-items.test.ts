@@ -413,6 +413,122 @@ describe("buildChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
+  it("renders submitted queued sends as user turns before chat.send ACK", () => {
+    const groups = messageGroups({
+      messages: [{ role: "assistant", content: "Ready.", timestamp: 1 }],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "first visible send",
+          createdAt: 2,
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "first visible send" },
+    ]);
+  });
+
+  it("renders submitted queued attachment sends with attachment blocks before chat.send ACK", () => {
+    const groups = messageGroups({
+      queue: [
+        {
+          id: "pending-attachment-send-1",
+          text: "see attached",
+          createdAt: 2,
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+          attachments: [
+            {
+              id: "attachment-1",
+              mimeType: "image/png",
+              fileName: "screenshot.png",
+              previewUrl: "/media/screenshot.png",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "see attached" },
+      {
+        type: "image",
+        url: "/media/screenshot.png",
+        source: { type: "url", url: "/media/screenshot.png" },
+      },
+    ]);
+  });
+
+  it("does not collapse pending sends with matching history text", () => {
+    const groups = messageGroups({
+      messages: [{ role: "user", content: "same prompt", timestamp: 1 }],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "same prompt",
+          createdAt: 2,
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+    expect(groups[0].messages[1].duplicateCount).toBeUndefined();
+  });
+
+  it("keeps failed queued sends out of the thread", () => {
+    const groups = messageGroups({
+      queue: [
+        {
+          id: "failed-send-1",
+          text: "restore me to the composer",
+          createdAt: 1,
+          sendSubmittedAtMs: 10,
+          sendState: "failed",
+        },
+      ],
+    });
+
+    expect(groups).toStrictEqual([]);
+  });
+
+  it("filters submitted queued sends while chat search is active", () => {
+    const groups = messageGroups({
+      searchOpen: true,
+      searchQuery: "matching",
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "matching prompt",
+          createdAt: 1,
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+        {
+          id: "pending-send-2",
+          text: "unrelated prompt",
+          createdAt: 2,
+          sendSubmittedAtMs: 11,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "matching prompt" },
+    ]);
+  });
+
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
     const groups = messageGroups({
       messages: [

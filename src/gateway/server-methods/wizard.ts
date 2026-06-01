@@ -21,6 +21,7 @@ function readWizardStatus(session: WizardSession) {
   };
 }
 
+/** Resolves a live wizard session or sends the public not-found error. */
 function findWizardSessionOrRespond(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
@@ -34,6 +35,7 @@ function findWizardSessionOrRespond(params: {
   return session;
 }
 
+/** Gateway handlers for the interactive setup wizard session lifecycle. */
 export const wizardHandlers: GatewayRequestHandlers = {
   "wizard.start": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
@@ -55,6 +57,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {
+      // Completed sessions cannot accept later answers; purge immediately so
+      // clients get a clean not-found response for stale session ids.
       context.purgeWizardSession(sessionId);
     }
     respond(true, { sessionId, ...result }, undefined);
@@ -83,6 +87,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const result = await session.next();
     if (result.done) {
+      // The final step may be reached after an answer, so cleanup mirrors
+      // wizard.start's immediate-completion path.
       context.purgeWizardSession(sessionId);
     }
     respond(true, result, undefined);

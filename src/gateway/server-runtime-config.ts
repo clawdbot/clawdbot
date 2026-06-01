@@ -41,6 +41,7 @@ type GatewayRuntimeConfig = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
 };
 
+/** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
@@ -95,6 +96,8 @@ export async function resolveGatewayRuntimeConfig(params: {
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
     params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
+  // HSTS is opt-in and must stay absent for blank strings; local HTTP and reverse-proxy
+  // setups rely on not emitting a malformed or accidentally inherited header.
   const strictTransportSecurityHeader =
     strictTransportSecurityConfig === false
       ? undefined
@@ -122,6 +125,8 @@ export async function resolveGatewayRuntimeConfig(params: {
   const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
   const hasPassword =
     typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
+  // Non-loopback binds need a concrete shared secret unless auth is delegated to a
+  // trusted proxy; mode alone is not enough because env/config resolution may be empty.
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
@@ -155,12 +160,16 @@ export async function resolveGatewayRuntimeConfig(params: {
     controlUiAllowedOrigins.length === 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
+    // Remote Control UI must use explicit origins unless the operator deliberately accepts
+    // Host-header fallback; otherwise any reachable host name can become a browser origin.
     throw new Error(
       "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
     );
   }
 
   if (authMode === "trusted-proxy") {
+    // Trusted-proxy auth trusts headers only after the request has matched an allowed proxy IP.
+    // Starting without that list would convert the mode into unauthenticated header spoofing.
     if (trustedProxies.length === 0) {
       throw new Error(
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",

@@ -15,17 +15,45 @@ function makeTempDir(): string {
   return root;
 }
 
-function writeStallingOpenClaw(root: string): string {
+function writeStallingOpenClaw(
+  root: string,
+  options: {
+    gatewayDescendantMarkerPath?: string;
+    gatewayMarkerPath?: string;
+    ignoreGatewaySigterm?: boolean;
+  } = {},
+): string {
+  const descendantScript = options.gatewayDescendantMarkerPath
+    ? [
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(
+          options.gatewayDescendantMarkerPath,
+        )}, "x"), 20);`,
+      ].join("\n")
+    : "";
   const scriptPath = path.join(root, "fake-openclaw.mjs");
   fs.writeFileSync(
     scriptPath,
     [
       "#!/usr/bin/env node",
+      "import childProcess from 'node:child_process';",
+      "import fs from 'node:fs';",
       "import { setTimeout as delay } from 'node:timers/promises';",
       "const args = process.argv.slice(2);",
       "if (args[0] === 'gateway' && args[1] === 'run') {",
-      "  process.once('SIGTERM', () => process.exit(0));",
+      options.gatewayDescendantMarkerPath
+        ? `  childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`
+        : "",
+      options.ignoreGatewaySigterm
+        ? "  process.once('SIGTERM', () => {});"
+        : "  process.once('SIGTERM', () => process.exit(0));",
       "  process.once('SIGINT', () => process.exit(0));",
+      options.gatewayMarkerPath
+        ? `  setInterval(() => fs.appendFileSync(${JSON.stringify(options.gatewayMarkerPath)}, "x"), 20);`
+        : "",
       "  await delay(60_000);",
       "  process.exit(0);",
       "}",
@@ -42,7 +70,32 @@ function writeStallingOpenClaw(root: string): string {
   return scriptPath;
 }
 
-function runProofHarness(root: string, fakeOpenClaw: string, mode: "start" | "status") {
+function writeLeakingStartupOpenClaw(root: string): string {
+  const scriptPath = path.join(root, "fake-leaking-openclaw.mjs");
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'gateway' && args[1] === 'run') {",
+      "  process.stderr.write('x'.repeat(2048));",
+      "  process.stderr.write('proof-gateway-token-v1');",
+      "  process.exit(1);",
+      "}",
+      "process.exit(2);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return scriptPath;
+}
+
+function runProofHarness(
+  root: string,
+  fakeOpenClaw: string,
+  mode: "start" | "startup-fails" | "status",
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
   return spawnSync(process.execPath, [harnessPath, proofScriptPath, root, mode], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -51,6 +104,7 @@ function runProofHarness(root: string, fakeOpenClaw: string, mode: "start" | "st
       OPENCLAW_ENTRY: fakeOpenClaw,
       OPENCLAW_SECRET_PROOF_READY_MS: "60",
       OPENCLAW_SECRET_PROOF_RPC_MS: "1000",
+      ...envOverrides,
     },
     timeout: 5_000,
   });
@@ -95,6 +149,110 @@ describe("secret provider integration proof harness", () => {
     const payload = JSON.parse(result.stdout);
     expect(payload.message).toContain("gateway did not become ready");
     expect(payload.elapsedMs).toBeLessThan(750);
+  });
+
+  it("kills a stalled startup gateway before returning a readiness failure", async () => {
+    const root = makeTempDir();
+    const markerPath = path.join(root, "gateway-marker.txt");
+    const fakeOpenClaw = writeStallingOpenClaw(root, {
+      gatewayDescendantMarkerPath: markerPath,
+    });
+    const result = runProofHarness(root, fakeOpenClaw, "start", {
+      OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS: "100",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.message).toContain("gateway did not become ready");
+    expect(payload.elapsedMs).toBeLessThan(1250);
+
+    const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
+    const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+    expect(sizeAfterWait).toBe(sizeAfterReturn);
+  });
+
+  it("bounds captured command output", async () => {
+    const previousLimit = process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
+    process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = "1024";
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=output-${Date.now()}`
+      );
+      const result = await proof.runCommand(process.execPath, [
+        "--input-type=module",
+        "--eval",
+        "process.stdout.write('x'.repeat(4096));",
+      ]);
+
+      expect(result.stdout.length).toBeLessThan(1400);
+      expect(result.stdout).toContain("stdout truncated after 1024 bytes");
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out command process groups",
+    async () => {
+      const root = makeTempDir();
+      const markerPath = path.join(root, "command-descendant-marker.txt");
+      const scriptPath = path.join(root, "spawn-descendant.mjs");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        `fs.appendFileSync(${JSON.stringify(markerPath)}, "x");`,
+        "process.on('SIGTERM', () => {});",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+      ].join("\n");
+      fs.writeFileSync(
+        scriptPath,
+        [
+          "import childProcess from 'node:child_process';",
+          "import { setTimeout as delay } from 'node:timers/promises';",
+          `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "await delay(60_000);",
+          "",
+        ].join("\n"),
+      );
+      const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=timeout-${Date.now()}`);
+
+      await expect(
+        proof.runCommand(process.execPath, [scriptPath], {
+          timeoutMs: 150,
+        }),
+      ).rejects.toThrow(/command timed out/u);
+
+      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+      const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      expect(sizeAfterWait).toBe(sizeAfterReturn);
+    },
+  );
+
+  it("detects startup secret leaks after the retained output cap", () => {
+    const root = makeTempDir();
+    const fakeOpenClaw = writeLeakingStartupOpenClaw(root);
+    const result = runProofHarness(root, fakeOpenClaw, "startup-fails", {
+      OPENCLAW_SECRET_PROOF_OUTPUT_BYTES: "128",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.message).toContain("leaked a secret value");
+    expect(payload.message).not.toContain("proof-gateway-token-v1");
   });
 
   it("keeps stalled managed status probes inside the ready deadline", async () => {

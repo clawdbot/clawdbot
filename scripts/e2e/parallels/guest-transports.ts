@@ -36,7 +36,9 @@ function timeoutBefore(deadline: number, fallbackMs: number): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function throwIfFailed(label: string, result: CommandResult, check: boolean | undefined): void {

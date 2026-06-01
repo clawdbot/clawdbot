@@ -48,7 +48,7 @@ export async function waitForDiscordGatewayStop(
         gateway?.disconnect?.();
       } finally {
         cleanup();
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       }
     };
     const onAbort = () => {
@@ -72,4 +72,18 @@ export async function waitForDiscordGatewayStop(
     params.gatewaySupervisor?.attachLifecycle(onGatewayEvent);
     params.registerForceStop?.(onForceStop);
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

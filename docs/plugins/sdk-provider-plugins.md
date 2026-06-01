@@ -448,6 +448,13 @@ API key auth, and dynamic model resolution.
           return await fetchAcmeUsage(ctx.token, ctx.timeoutMs);
         },
         ```
+
+        `resolveUsageAuth` has three outcomes. Return `{ token, accountId? }`
+        when the provider has a usage/billing credential. Return
+        `{ handled: true }` only when the provider has definitively handled usage
+        auth but has no usable usage token, and OpenClaw must skip generic
+        API-key/OAuth fallback. Return `null` or `undefined` when the provider did
+        not handle the request and OpenClaw should continue with generic fallback.
       </Tab>
     </Tabs>
 
@@ -657,6 +664,24 @@ API key auth, and dynamic model resolution.
           id: "acme-ai",
           capabilities: ["image", "audio"],
           describeImage: async (req) => ({ text: "A photo of..." }),
+          transcribeAudio: async (req) => ({ text: "Transcript..." }),
+        });
+        ```
+
+        Local or self-hosted media providers that intentionally do not require
+        credentials can expose `resolveAuth` and return `kind: "none"`.
+        OpenClaw still keeps the normal auth gate for providers that do not
+        explicitly opt in. Existing providers can keep reading `req.apiKey`;
+        new providers should prefer `req.auth`.
+
+        ```typescript
+        api.registerMediaUnderstandingProvider({
+          id: "local-audio",
+          capabilities: ["audio"],
+          resolveAuth: () => ({
+            kind: "none",
+            source: "local-audio plugin no-auth",
+          }),
           transcribeAudio: async (req) => ({ text: "Transcript..." }),
         });
         ```

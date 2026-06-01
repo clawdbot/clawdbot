@@ -943,7 +943,7 @@ function discoverInDirectory(params: {
     }
     params.visitedDirectories?.add(resolvedDir);
   }
-  let entries: fs.Dirent[] = [];
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(params.dir, { withFileTypes: true });
   } catch (err) {

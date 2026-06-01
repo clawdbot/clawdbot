@@ -312,314 +312,318 @@ export async function startQaLabServer(
     return result;
   }
 
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-    if (await handleQaBusRequest({ req, res, state })) {
-      return;
-    }
-
-    try {
-      if (controlUiProxyTarget && isControlUiProxyPath(url.pathname)) {
-        await proxyHttpRequest({
-          req,
-          res,
-          target: controlUiProxyTarget,
-          pathname: url.pathname,
-          search: url.search,
-          authorizationToken: controlUiProxyToken,
-        });
+      if (await handleQaBusRequest({ req, res, state })) {
         return;
       }
 
-      if (req.method === "GET" && url.pathname === "/api/bootstrap") {
-        void ensureRunnerModelCatalog();
-        const resolvedControlUiUrl = controlUiProxyTarget
-          ? `${publicBaseUrl}/control-ui/`
-          : controlUiUrl;
-        const safeControlUiUrl = sanitizeControlUiPublicUrl(resolvedControlUiUrl);
-        writeJson(res, 200, {
-          baseUrl: publicBaseUrl,
-          latestReport,
-          controlUiUrl: safeControlUiUrl,
-          controlUiEmbeddedUrl: safeControlUiUrl,
-          kickoffTask: scenarioCatalog.kickoffTask,
-          scenarios: scenarioCatalog.scenarios,
-          defaults: bootstrapDefaults,
-          runner: runnerSnapshot,
-          runnerCatalog: {
-            status: runnerModelCatalogStatus,
-            real: runnerModelOptions,
-          },
-        });
-        return;
-      }
-      if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-        writeJson(res, 200, { ok: true, status: "live" });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/state") {
-        writeJson(res, 200, state.getSnapshot());
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/report") {
-        writeJson(res, 200, { report: latestReport });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/ui-version") {
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-        });
-        res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/outcomes") {
-        writeJson(res, 200, { run: latestScenarioRun });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
-        writeJson(res, 200, {
-          sessions: captureStore.listSessions(50),
-        });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/capture/startup-status") {
-        const proxyUrl = captureSettings.proxyUrl || "http://127.0.0.1:7799";
-        const gatewayUrl = controlUiUrl || "http://127.0.0.1:18789/";
-        const [proxy, gateway] = await Promise.all([
-          probeTcpReachability(proxyUrl),
-          probeTcpReachability(gatewayUrl),
-        ]);
-        writeJson(res, 200, {
-          status: {
-            proxy: {
-              ...proxy,
-              label: "Proxy",
-            },
-            gateway: {
-              ...gateway,
-              label: "Gateway",
-            },
-            qaLab: {
-              label: "QA Lab",
-              url: publicBaseUrl,
-              ok: true,
-            },
-          },
-        });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/capture/events") {
-        const sessionId = url.searchParams.get("sessionId")?.trim();
-        writeJson(res, 200, {
-          events: sessionId
-            ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
-            : [],
-        });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/capture/coverage") {
-        const sessionId = url.searchParams.get("sessionId")?.trim();
-        if (!sessionId) {
-          writeError(res, 400, "Missing sessionId");
+      try {
+        if (controlUiProxyTarget && isControlUiProxyPath(url.pathname)) {
+          await proxyHttpRequest({
+            req,
+            res,
+            target: controlUiProxyTarget,
+            pathname: url.pathname,
+            search: url.search,
+            authorizationToken: controlUiProxyToken,
+          });
           return;
         }
-        writeJson(res, 200, {
-          coverage: captureStore.summarizeSessionCoverage(sessionId),
-        });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/capture/query") {
-        const preset = url.searchParams.get("preset")?.trim();
-        const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
-        if (!preset) {
-          writeError(res, 400, "Missing preset");
-          return;
-        }
-        if (!isCaptureQueryPreset(preset)) {
-          writeError(res, 400, "Unknown preset");
-          return;
-        }
-        writeJson(res, 200, {
-          rows: captureStore.queryPreset(preset, sessionId),
-        });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/capture/blob") {
-        const blobId = url.searchParams.get("id")?.trim();
-        if (!blobId) {
-          writeError(res, 400, "Missing blob id");
-          return;
-        }
-        const content = captureStore.readBlob(blobId);
-        if (content == null) {
-          writeError(res, 404, "Blob not found");
-          return;
-        }
-        writeJson(res, 200, { id: blobId, content });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
-        const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
-        const sessionIds = Array.isArray(body.sessionIds)
-          ? body.sessionIds.filter((value): value is string => typeof value === "string")
-          : [];
-        writeJson(res, 200, {
-          result: captureStore.deleteSessions(sessionIds),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/capture/purge") {
-        writeJson(res, 200, {
-          result: captureStore.purgeAll(),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/reset") {
-        if (activeSuiteRun) {
-          writeError(res, 409, "QA suite run already in progress");
-          return;
-        }
-        state.reset();
-        latestReport = null;
-        latestScenarioRun = null;
-        runnerSnapshot = {
-          ...runnerSnapshot,
-          status: "idle",
-          artifacts: null,
-          error: null,
-          startedAt: undefined,
-          finishedAt: undefined,
-        };
-        writeJson(res, 200, { ok: true });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/inbound/message") {
-        const body = await readQaJsonBody(req);
-        writeJson(res, 200, {
-          message: state.addInboundMessage(body as Parameters<QaBusState["addInboundMessage"]>[0]),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/kickoff") {
-        writeJson(res, 200, {
-          message: injectKickoffMessage({
-            state,
-            defaults: bootstrapDefaults,
+
+        if (req.method === "GET" && url.pathname === "/api/bootstrap") {
+          void ensureRunnerModelCatalog();
+          const resolvedControlUiUrl = controlUiProxyTarget
+            ? `${publicBaseUrl}/control-ui/`
+            : controlUiUrl;
+          const safeControlUiUrl = sanitizeControlUiPublicUrl(resolvedControlUiUrl);
+          writeJson(res, 200, {
+            baseUrl: publicBaseUrl,
+            latestReport,
+            controlUiUrl: safeControlUiUrl,
+            controlUiEmbeddedUrl: safeControlUiUrl,
             kickoffTask: scenarioCatalog.kickoffTask,
-          }),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/scenario/self-check") {
-        if (activeSuiteRun) {
-          writeError(res, 409, "QA suite run already in progress");
+            scenarios: scenarioCatalog.scenarios,
+            defaults: bootstrapDefaults,
+            runner: runnerSnapshot,
+            runnerCatalog: {
+              status: runnerModelCatalogStatus,
+              real: runnerModelOptions,
+            },
+          });
           return;
         }
-        const result = await runSelfCheck();
-        writeJson(res, 200, serializeSelfCheck(result));
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/scenario/suite") {
-        if (activeSuiteRun) {
-          writeError(res, 409, "QA suite run already in progress");
+        if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
+          writeJson(res, 200, { ok: true, status: "live" });
           return;
         }
-        const selection = normalizeQaRunSelection(
-          await readQaJsonBody(req),
-          scenarioCatalog.scenarios,
-        );
-        state.reset();
-        latestReport = null;
-        latestScenarioRun = null;
-        const startedAt = new Date().toISOString();
-        runnerSnapshot = {
-          status: "running",
-          selection,
-          startedAt,
-          finishedAt: undefined,
-          artifacts: null,
-          error: null,
-        };
-        activeSuiteRun = (async () => {
-          try {
-            const { runQaSuite } = await import("./suite.js");
-            const result = await runQaSuite({
-              lab: labHandle ?? undefined,
-              startLab: startQaLabServer,
-              outputDir: createQaRunOutputDir(repoRoot),
-              providerMode: selection.providerMode,
-              primaryModel: selection.primaryModel,
-              alternateModel: selection.alternateModel,
-              scenarioIds: selection.scenarioIds,
-            });
-            runnerSnapshot = {
-              status: "completed",
-              selection,
-              startedAt,
-              finishedAt: new Date().toISOString(),
-              artifacts: {
-                outputDir: result.outputDir,
-                reportPath: result.reportPath,
-                summaryPath: result.summaryPath,
-                watchUrl: result.watchUrl,
+        if (req.method === "GET" && url.pathname === "/api/state") {
+          writeJson(res, 200, state.getSnapshot());
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/report") {
+          writeJson(res, 200, { report: latestReport });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/ui-version") {
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/outcomes") {
+          writeJson(res, 200, { run: latestScenarioRun });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
+          writeJson(res, 200, {
+            sessions: captureStore.listSessions(50),
+          });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/capture/startup-status") {
+          const proxyUrl = captureSettings.proxyUrl || "http://127.0.0.1:7799";
+          const gatewayUrl = controlUiUrl || "http://127.0.0.1:18789/";
+          const [proxy, gatewayLocal] = await Promise.all([
+            probeTcpReachability(proxyUrl),
+            probeTcpReachability(gatewayUrl),
+          ]);
+          writeJson(res, 200, {
+            status: {
+              proxy: {
+                ...proxy,
+                label: "Proxy",
               },
-              error: null,
-            };
-          } catch (error) {
-            runnerSnapshot = {
-              status: "failed",
-              selection,
-              startedAt,
-              finishedAt: new Date().toISOString(),
-              artifacts: null,
-              error: formatErrorMessage(error),
-            };
-          } finally {
-            activeSuiteRun = null;
+              gateway: {
+                ...gatewayLocal,
+                label: "Gateway",
+              },
+              qaLab: {
+                label: "QA Lab",
+                url: publicBaseUrl,
+                ok: true,
+              },
+            },
+          });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/capture/events") {
+          const sessionId = url.searchParams.get("sessionId")?.trim();
+          writeJson(res, 200, {
+            events: sessionId
+              ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+              : [],
+          });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/capture/coverage") {
+          const sessionId = url.searchParams.get("sessionId")?.trim();
+          if (!sessionId) {
+            writeError(res, 400, "Missing sessionId");
+            return;
           }
-        })();
-        writeJson(res, 202, {
-          ok: true,
-          runner: runnerSnapshot,
-        });
-        return;
-      }
+          writeJson(res, 200, {
+            coverage: captureStore.summarizeSessionCoverage(sessionId),
+          });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/capture/query") {
+          const preset = url.searchParams.get("preset")?.trim();
+          const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
+          if (!preset) {
+            writeError(res, 400, "Missing preset");
+            return;
+          }
+          if (!isCaptureQueryPreset(preset)) {
+            writeError(res, 400, "Unknown preset");
+            return;
+          }
+          writeJson(res, 200, {
+            rows: captureStore.queryPreset(preset, sessionId),
+          });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/capture/blob") {
+          const blobId = url.searchParams.get("id")?.trim();
+          if (!blobId) {
+            writeError(res, 400, "Missing blob id");
+            return;
+          }
+          const content = captureStore.readBlob(blobId);
+          if (content == null) {
+            writeError(res, 404, "Blob not found");
+            return;
+          }
+          writeJson(res, 200, { id: blobId, content });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
+          const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
+          const sessionIds = Array.isArray(body.sessionIds)
+            ? body.sessionIds.filter((value): value is string => typeof value === "string")
+            : [];
+          writeJson(res, 200, {
+            result: captureStore.deleteSessions(sessionIds),
+          });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/capture/purge") {
+          writeJson(res, 200, {
+            result: captureStore.purgeAll(),
+          });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/reset") {
+          if (activeSuiteRun) {
+            writeError(res, 409, "QA suite run already in progress");
+            return;
+          }
+          state.reset();
+          latestReport = null;
+          latestScenarioRun = null;
+          runnerSnapshot = {
+            ...runnerSnapshot,
+            status: "idle",
+            artifacts: null,
+            error: null,
+            startedAt: undefined,
+            finishedAt: undefined,
+          };
+          writeJson(res, 200, { ok: true });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/inbound/message") {
+          const body = await readQaJsonBody(req);
+          writeJson(res, 200, {
+            message: state.addInboundMessage(
+              body as Parameters<QaBusState["addInboundMessage"]>[0],
+            ),
+          });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/kickoff") {
+          writeJson(res, 200, {
+            message: injectKickoffMessage({
+              state,
+              defaults: bootstrapDefaults,
+              kickoffTask: scenarioCatalog.kickoffTask,
+            }),
+          });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/scenario/self-check") {
+          if (activeSuiteRun) {
+            writeError(res, 409, "QA suite run already in progress");
+            return;
+          }
+          const result = await runSelfCheck();
+          writeJson(res, 200, serializeSelfCheck(result));
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/api/scenario/suite") {
+          if (activeSuiteRun) {
+            writeError(res, 409, "QA suite run already in progress");
+            return;
+          }
+          const selection = normalizeQaRunSelection(
+            await readQaJsonBody(req),
+            scenarioCatalog.scenarios,
+          );
+          state.reset();
+          latestReport = null;
+          latestScenarioRun = null;
+          const startedAt = new Date().toISOString();
+          runnerSnapshot = {
+            status: "running",
+            selection,
+            startedAt,
+            finishedAt: undefined,
+            artifacts: null,
+            error: null,
+          };
+          activeSuiteRun = (async () => {
+            try {
+              const { runQaSuite } = await import("./suite.js");
+              const result = await runQaSuite({
+                lab: labHandle ?? undefined,
+                startLab: startQaLabServer,
+                outputDir: createQaRunOutputDir(repoRoot),
+                providerMode: selection.providerMode,
+                primaryModel: selection.primaryModel,
+                alternateModel: selection.alternateModel,
+                scenarioIds: selection.scenarioIds,
+              });
+              runnerSnapshot = {
+                status: "completed",
+                selection,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                artifacts: {
+                  outputDir: result.outputDir,
+                  reportPath: result.reportPath,
+                  summaryPath: result.summaryPath,
+                  watchUrl: result.watchUrl,
+                },
+                error: null,
+              };
+            } catch (error) {
+              runnerSnapshot = {
+                status: "failed",
+                selection,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                artifacts: null,
+                error: formatErrorMessage(error),
+              };
+            } finally {
+              activeSuiteRun = null;
+            }
+          })();
+          writeJson(res, 202, {
+            ok: true,
+            runner: runnerSnapshot,
+          });
+          return;
+        }
 
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        writeError(res, 404, "not found");
-        return;
-      }
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          writeError(res, 404, "not found");
+          return;
+        }
 
-      const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir, repoRoot);
-      if (!asset) {
-        const html = missingUiHtml();
+        const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir, repoRoot);
+        if (!asset) {
+          const html = missingUiHtml();
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": Buffer.byteLength(html),
+          });
+          if (req.method === "HEAD") {
+            res.end();
+            return;
+          }
+          res.end(html);
+          return;
+        }
+
+        const body = fs.readFileSync(asset);
         res.writeHead(200, {
-          "content-type": "text/html; charset=utf-8",
-          "content-length": Buffer.byteLength(html),
+          "content-type": detectContentType(asset),
+          "content-length": body.byteLength,
         });
         if (req.method === "HEAD") {
           res.end();
           return;
         }
-        res.end(html);
-        return;
+        res.end(body);
+      } catch (error) {
+        writeQaLabServerError(res, error);
       }
-
-      const body = fs.readFileSync(asset);
-      res.writeHead(200, {
-        "content-type": detectContentType(asset),
-        "content-length": body.byteLength,
-      });
-      if (req.method === "HEAD") {
-        res.end();
-        return;
-      }
-      res.end(body);
-    } catch (error) {
-      writeQaLabServerError(res, error);
-    }
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {

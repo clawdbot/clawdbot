@@ -95,7 +95,9 @@ describe("archive helpers", () => {
 
   it("rejects when archive work exceeds the timeout", async () => {
     vi.useFakeTimers();
-    const late = new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 50));
+    const late = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("ok"), 50);
+    });
     const result = withTimeout(late, 1, "extract tar");
     const pending = expect(result).rejects.toThrow("extract tar timed out after 1ms");
     await vi.advanceTimersByTimeAsync(1);

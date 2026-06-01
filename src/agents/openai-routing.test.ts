@@ -43,6 +43,22 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe("openai");
   });
 
+  it("normalizes OpenAI provider keys before checking custom base URLs", () => {
+    const config = {
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "https://example.test/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(openAIProviderUsesCodexRuntimeByDefault({ provider: "openai", config })).toBe(false);
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
+  });
+
   it("uses canonical OpenAI context config under the Codex runtime", () => {
     expect(
       resolveContextConfigProviderForRuntime({

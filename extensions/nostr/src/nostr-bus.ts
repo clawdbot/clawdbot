@@ -423,7 +423,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         lastProcessedAt,
         gatewayStartedAt,
         recentEventIds,
-      }).catch((err) => onError?.(err as Error, "persist state"));
+      }).catch((err: unknown) => onError?.(err as Error, "persist state"));
     }, STATE_PERSIST_DEBOUNCE_MS);
   }
 
@@ -619,7 +619,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   >[1];
   const relayAbort = new AbortController();
   const sub = pool.subscribeMany(relays, dmFilter, {
-    onevent: handleEvent,
+    onevent: (event) => {
+      void handleEvent(event);
+    },
     oneose: () => {
       // EOSE handler - called when all stored events have been received
       for (const relay of relays) {
@@ -684,11 +686,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   // Get profile state function
   const getProfileState = async () => {
-    const state = await readNostrProfileState({ accountId });
+    const stateLocal = await readNostrProfileState({ accountId });
     return {
-      lastPublishedAt: state?.lastPublishedAt ?? null,
-      lastPublishedEventId: state?.lastPublishedEventId ?? null,
-      lastPublishResults: state?.lastPublishResults ?? null,
+      lastPublishedAt: stateLocal?.lastPublishedAt ?? null,
+      lastPublishedEventId: stateLocal?.lastPublishedEventId ?? null,
+      lastPublishResults: stateLocal?.lastPublishResults ?? null,
     };
   };
 
@@ -696,7 +698,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close: () => {
       relayAbort.abort("closed by caller");
       void Promise.resolve(sub.close("closed by caller"))
-        .catch((err) => onError?.(err as Error, "close subscription"))
+        .catch((err: unknown) => onError?.(err as Error, "close subscription"))
         .finally(() => {
           pool.close(relays);
         });
@@ -711,7 +713,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           lastProcessedAt,
           gatewayStartedAt,
           recentEventIds,
-        }).catch((err) => onError?.(err as Error, "persist state on close"));
+        }).catch((err: unknown) => onError?.(err as Error, "persist state on close"));
       }
     },
     publicKey: pk,
@@ -766,10 +768,11 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      const [publishPromise] = pool.publish([relay], reply);
-      if (!publishPromise) {
+      const publishPromises = pool.publish([relay], reply);
+      if (publishPromises.length === 0) {
         throw new Error(`Failed to create publish promise for relay ${relay}`);
       }
+      const publishPromise = publishPromises[0];
       await publishPromise;
       const latency = Date.now() - startTime;
 

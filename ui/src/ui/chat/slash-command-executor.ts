@@ -34,15 +34,7 @@ export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
-  action?:
-    | "refresh"
-    | "export"
-    | "new-session"
-    | "reset"
-    | "stop"
-    | "clear"
-    | "toggle-focus"
-    | "navigate-usage";
+  action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
   /** Optional session-level directive changes that the caller should mirror locally. */
   sessionPatch?: {
     modelOverride?: ChatModelOverride | null;
@@ -103,8 +95,6 @@ export async function executeSlashCommand(
       return { content: "Stopping current run...", action: "stop" };
     case "clear":
       return { content: "Chat history cleared.", action: "clear" };
-    case "focus":
-      return { content: "Toggled focus mode.", action: "toggle-focus" };
     case "compact":
       return await executeCompact(client, sessionKey, context);
     case "model":
@@ -587,17 +577,13 @@ function resolveThinkingLevelOptionsForSession(
   if (session?.thinkingLevels?.length) {
     return session.thinkingLevels;
   }
-  const sessionModelMatchesDefaults =
-    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
-    (!session?.model || session.model === defaults?.model);
-  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
+  const matchesDefaults = sessionModelMatchesDefaults(session, defaults);
+  if (matchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
     (session?.thinkingOptions?.length ? session.thinkingOptions : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
-      ? defaults.thinkingOptions
-      : null) ??
+    (matchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null) ??
     formatThinkingLevels(
       session?.modelProvider ?? defaults?.modelProvider,
       session?.model ?? defaults?.model,
@@ -606,6 +592,16 @@ function resolveThinkingLevelOptionsForSession(
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,
   }));
+}
+
+function sessionModelMatchesDefaults(
+  session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model)
+  );
 }
 
 async function loadCurrentSession(
@@ -691,7 +687,7 @@ function resolveCurrentThinkingLevel(
   if (session?.thinkingDefault) {
     return session.thinkingDefault;
   }
-  if (defaults?.thinkingDefault) {
+  if ((!session || sessionModelMatchesDefaults(session, defaults)) && defaults?.thinkingDefault) {
     return defaults.thinkingDefault;
   }
   const provider = session?.modelProvider ?? defaults?.modelProvider;

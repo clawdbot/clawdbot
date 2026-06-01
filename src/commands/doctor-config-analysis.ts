@@ -13,8 +13,8 @@ type UnrecognizedKeysIssue = ZodIssue & {
   keys: PropertyKey[];
 };
 
-function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
-  return path.filter((part): part is string | number => typeof part !== "symbol");
+function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
+  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
 }
 
 function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
@@ -36,9 +36,9 @@ export function formatConfigPath(parts: Array<string | number>): string {
   return out || "<root>";
 }
 
-export function resolveConfigPathTarget(root: unknown, path: Array<string | number>): unknown {
+export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
   let current: unknown = root;
-  for (const part of path) {
+  for (const part of pathLocal) {
     if (typeof part === "number") {
       if (!Array.isArray(current)) {
         return null;

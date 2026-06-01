@@ -584,6 +584,10 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
+| `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                        | `true`                               |
+| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set | `true`                               |
+| `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                               | inherited                            |
+| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                            | inherited                            |
 
 ---
 

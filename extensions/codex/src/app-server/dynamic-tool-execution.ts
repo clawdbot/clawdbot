@@ -250,6 +250,12 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
   );
 }
 
+export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
+  response: CodexDynamicToolCallResponse,
+): boolean {
+  return response.asyncStarted !== true;
+}
+
 export type TerminalDynamicToolBatchAction =
   | "idle"
   | "wait"

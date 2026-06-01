@@ -34,6 +34,7 @@ function formatDeliveryDetail(params: {
   return params.resolved ? "explicit" : (params.error ?? "unresolved");
 }
 
+/** Builds the user-visible cron delivery preview for one job without sending anything. */
 export async function resolveCronDeliveryPreview(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
@@ -65,6 +66,8 @@ export async function resolveCronDeliveryPreview(params: {
     { dryRun: true },
   );
   if (!resolved.ok) {
+    // Preview mirrors runtime fail-closed behavior for "last" delivery so the
+    // UI can show unresolved routes before the cron job actually runs.
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -88,6 +91,7 @@ export async function resolveCronDeliveryPreview(params: {
   };
 }
 
+/** Builds cron delivery previews keyed by job id. */
 export async function resolveCronDeliveryPreviews(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;

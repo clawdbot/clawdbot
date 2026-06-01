@@ -159,7 +159,8 @@ describe("TwitchClientManager", () => {
 
   describe("getClient", () => {
     it("should create a new client connection", async () => {
-      const clientForTest = await manager.getClient(testAccount);
+      const ignoredClientForTest = await manager.getClient(testAccount);
+      void ignoredClientForTest;
 
       // New implementation: connect is called, channels are passed to constructor
       expect(mockConnect).toHaveBeenCalledTimes(1);

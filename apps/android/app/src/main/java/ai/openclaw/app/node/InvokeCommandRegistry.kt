@@ -16,6 +16,7 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 
+/** Runtime feature flags used to decide which node tools are advertised. */
 data class NodeRuntimeFlags(
   val cameraEnabled: Boolean,
   val locationEnabled: Boolean,
@@ -30,6 +31,7 @@ data class NodeRuntimeFlags(
   val debugBuild: Boolean,
 )
 
+/** Per-command availability gates checked before advertising invoke methods. */
 enum class InvokeCommandAvailability {
   Always,
   CameraEnabled,
@@ -44,6 +46,7 @@ enum class InvokeCommandAvailability {
   DebugBuild,
 }
 
+/** Per-capability availability gates for the node capabilities manifest. */
 enum class NodeCapabilityAvailability {
   Always,
   CameraEnabled,
@@ -55,11 +58,13 @@ enum class NodeCapabilityAvailability {
   MotionAvailable,
 }
 
+/** Capability entry reported to the gateway when its availability gate passes. */
 data class NodeCapabilitySpec(
   val name: String,
   val availability: NodeCapabilityAvailability = NodeCapabilityAvailability.Always,
 )
 
+/** Invoke method entry advertised to gateway plus foreground routing metadata. */
 data class InvokeCommandSpec(
   val name: String,
   val requiresForeground: Boolean = false,
@@ -67,6 +72,7 @@ data class InvokeCommandSpec(
 )
 
 object InvokeCommandRegistry {
+  /** Capabilities mirror gateway protocol ids and are filtered by device state. */
   val capabilityManifest: List<NodeCapabilitySpec> =
     listOf(
       NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
@@ -106,6 +112,7 @@ object InvokeCommandRegistry {
       ),
     )
 
+  /** Complete Android node command catalog before runtime availability filtering. */
   val all: List<InvokeCommandSpec> =
     listOf(
       InvokeCommandSpec(
@@ -240,8 +247,10 @@ object InvokeCommandRegistry {
 
   private val byNameInternal: Map<String, InvokeCommandSpec> = all.associateBy { it.name }
 
+  /** Finds the command metadata used by dispatch and advertised-method builders. */
   fun find(command: String): InvokeCommandSpec? = byNameInternal[command]
 
+  /** Returns gateway capability ids the current Android device can actually serve. */
   fun advertisedCapabilities(flags: NodeRuntimeFlags): List<String> =
     capabilityManifest
       .filter { spec ->
@@ -257,6 +266,7 @@ object InvokeCommandRegistry {
         }
       }.map { it.name }
 
+  /** Returns gateway invoke method ids available under current permissions/build flags. */
   fun advertisedCommands(flags: NodeRuntimeFlags): List<String> =
     all
       .filter { spec ->

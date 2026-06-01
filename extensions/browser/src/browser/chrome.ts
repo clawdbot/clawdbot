@@ -519,7 +519,9 @@ export async function launchOpenClawChrome(
       if (exists(localStatePath) && exists(preferencesPath)) {
         break;
       }
-      await new Promise((r) => setTimeout(r, CHROME_BOOTSTRAP_PREFS_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CHROME_BOOTSTRAP_PREFS_POLL_MS);
+      });
     }
     try {
       bootstrap.kill("SIGTERM");
@@ -531,7 +533,9 @@ export async function launchOpenClawChrome(
       if (bootstrap.exitCode != null) {
         break;
       }
-      await new Promise((r) => setTimeout(r, CHROME_BOOTSTRAP_EXIT_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CHROME_BOOTSTRAP_EXIT_POLL_MS);
+      });
     }
   }
 
@@ -577,7 +581,9 @@ export async function launchOpenClawChrome(
           launchHttpReachable = true;
           break;
         }
-        await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
+        await new Promise((r) => {
+          setTimeout(r, CHROME_LAUNCH_READY_POLL_MS);
+        });
       }
 
       if (!launchHttpReachable) {
@@ -682,7 +688,9 @@ export async function stopOpenClawChrome(
         return;
       }
       const remainingMs = timeoutMs - (Date.now() - start);
-      await new Promise((r) => setTimeout(r, Math.max(1, Math.min(100, remainingMs))));
+      await new Promise((r) => {
+        setTimeout(r, Math.max(1, Math.min(100, remainingMs)));
+      });
     }
 
     try {

@@ -657,7 +657,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: off.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
     );
     expect(setMax.content).toBe("Thinking level set to **max**.");
   });
@@ -709,7 +709,44 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: high.\nOptions: default, off, minimal, low, medium, high.",
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
+    );
+  });
+
+  it("does not report global thinkingDefault for a session with a different model", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: {
+            modelProvider: "minimax",
+            model: "MiniMax-M2.7",
+            thinkingDefault: "off",
+          },
+          sessions: [
+            row("agent:main:main", {
+              modelProvider: "deepseek",
+              model: "deepseek-v4-flash",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "deepseek-v4-flash", provider: "deepseek", reasoning: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const status = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "",
+    );
+
+    expect(status.content).toBe(
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
     );
   });
 

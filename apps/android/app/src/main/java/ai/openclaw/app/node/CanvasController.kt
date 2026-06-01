@@ -23,6 +23,9 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
 
+/**
+ * Owns the Android WebView canvas surface used by canvas and A2UI commands.
+ */
 class CanvasController {
   enum class SnapshotFormat(
     val rawValue: String,
@@ -60,19 +63,23 @@ class CanvasController {
     return scale(maxWidth, scaledHeight)
   }
 
+  /** Attaches the active WebView and replays state that may have arrived before the view existed. */
   fun attach(webView: WebView) {
     this.webView = webView
+    // Replay persisted state because WebView attachment can happen after gateway events arrive.
     reload()
     applyDebugStatus()
     applyHomeCanvasState()
   }
 
+  /** Detaches only the currently attached WebView instance. */
   fun detach(webView: WebView) {
     if (this.webView === webView) {
       this.webView = null
     }
   }
 
+  /** Navigates the canvas to a remote URL or back to the bundled scaffold for blank/root input. */
   fun navigate(url: String) {
     val trimmed = url.trim()
     this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
@@ -113,6 +120,7 @@ class CanvasController {
     if (Looper.myLooper() == Looper.getMainLooper()) {
       block(wv)
     } else {
+      // WebView APIs must run on the main thread.
       wv.post { block(wv) }
     }
   }
@@ -178,6 +186,7 @@ class CanvasController {
     }
   }
 
+  /** Evaluates JavaScript against the attached WebView on the main thread. */
   suspend fun eval(javaScript: String): String =
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
@@ -206,6 +215,7 @@ class CanvasController {
       }
     }
 
+  /** Captures the WebView as PNG/JPEG base64 with optional width and quality bounds. */
   suspend fun snapshotBase64(
     format: SnapshotFormat,
     quality: Double?,
@@ -246,17 +256,22 @@ class CanvasController {
     }
 
   companion object {
+    /**
+     * Parsed canvas.snapshot options used by invoke dispatch.
+     */
     data class SnapshotParams(
       val format: SnapshotFormat,
       val quality: Double?,
       val maxWidth: Int?,
     )
 
+    /** Parses canvas.navigate params and returns blank when the payload is missing or invalid. */
     fun parseNavigateUrl(paramsJson: String?): String {
       val obj = parseParamsObject(paramsJson) ?: return ""
       return obj.string("url").trim()
     }
 
+    /** Parses non-blank JavaScript from canvas.eval params. */
     fun parseEvalJs(paramsJson: String?): String? {
       val obj = parseParamsObject(paramsJson) ?: return null
       val js = obj.string("javaScript").trim()
@@ -286,9 +301,11 @@ class CanvasController {
       if (!obj.containsKey("quality")) return null
       val q = obj.double("quality") ?: Double.NaN
       if (!q.isFinite()) return null
+      // Keep JPEG quality inside encoder-safe bounds; PNG ignores it.
       return q.coerceIn(0.1, 1.0)
     }
 
+    /** Parses canvas.snapshot params using JPEG defaults and encoder-safe bounds. */
     fun parseSnapshotParams(paramsJson: String?): SnapshotParams =
       SnapshotParams(
         format = parseSnapshotFormat(paramsJson),

@@ -4,6 +4,7 @@ import type {
   DiscordComponentBlock,
   DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
+  DiscordComponentCallbackDataKind,
   DiscordComponentMessageSpec,
   DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
@@ -47,6 +48,20 @@ function readOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function readOptionalCallbackDataKind(
+  value: unknown,
+  label: string,
+): DiscordComponentCallbackDataKind | undefined {
+  const kind = readOptionalString(value);
+  if (kind === undefined) {
+    return undefined;
+  }
+  if (kind === "command" || kind === "callback") {
+    return kind;
+  }
+  throw new Error(`${label} must be one of command, callback`);
 }
 
 function readOptionalStringArray(value: unknown, label: string): string[] | undefined {
@@ -138,7 +153,6 @@ export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle
       return ButtonStyle.Danger;
     case "link":
       return ButtonStyle.Link;
-    case "primary":
     default:
       return ButtonStyle.Primary;
   }
@@ -187,6 +201,10 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     style,
     url,
     callbackData: readOptionalString(obj.callbackData),
+    callbackDataKind: readOptionalCallbackDataKind(
+      obj.callbackDataKind,
+      `${label}.callbackDataKind`,
+    ),
     emoji: readOptionalEmoji(obj.emoji, `${label}.emoji`),
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
@@ -209,6 +227,10 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
   return {
     type,
     callbackData: readOptionalString(obj.callbackData),
+    callbackDataKind: readOptionalCallbackDataKind(
+      obj.callbackDataKind,
+      `${label}.callbackDataKind`,
+    ),
     placeholder: readOptionalString(obj.placeholder),
     minValues: readOptionalInteger(obj.minValues, `${label}.minValues`, { min: 0, max: 25 }),
     maxValues: readOptionalInteger(obj.maxValues, `${label}.maxValues`, { min: 1, max: 25 }),

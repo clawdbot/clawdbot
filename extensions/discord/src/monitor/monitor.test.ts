@@ -397,6 +397,27 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not execute opaque callback actions as built-in fallback commands", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        createButtonEntry({
+          callbackData: "/codex permissions yolo",
+          callbackDataKind: "callback",
+        }),
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves selected values for select fallback when no plugin handler matches", async () => {
     registerDiscordComponentEntries({
       entries: [
@@ -424,6 +445,74 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Alpha from "Pick".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses selected command action values for select fallback", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "command",
+          selectType: "string",
+          options: [{ value: "/codex permissions yolo", label: "Yolo" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction({
+      values: ["/codex permissions yolo"],
+    });
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex permissions yolo");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches selected callback action values to plugin interactive handlers", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "callback",
+          selectType: "string",
+          options: [{ value: "inspect:123", label: "Inspect" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction({
+      values: ["inspect:123"],
+    });
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    const pluginDispatch = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      -1,
+      "dispatchPluginInteractiveHandler",
+    ) as { data?: unknown; ctx?: { interaction?: { values?: unknown } } };
+    expect(pluginDispatch.data).toBe("inspect:123");
+    expect(pluginDispatch.ctx?.interaction?.values).toEqual(["Inspect"]);
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Inspect from "Pick".');
   });
 
   it("keeps reusable buttons active after use", async () => {

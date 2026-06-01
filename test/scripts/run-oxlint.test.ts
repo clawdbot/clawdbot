@@ -12,6 +12,7 @@ import {
   resolveShardKillGraceMs,
   resolveShardHeartbeatMs,
   resolveShardTimeoutMs,
+  resolveOxlintShardConcurrency,
   resolveWindowsExtensionChunkSize,
   runShard,
   shouldRunOxlintShardsSerial,
@@ -67,7 +68,7 @@ describe("run-oxlint", () => {
     expect(childSkipIndex).toBeGreaterThan(lockIndex);
   });
 
-  it("lets dev update preflight run oxlint shards serially", () => {
+  it("keeps a serial oxlint shard path available", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
@@ -141,6 +142,61 @@ describe("run-oxlint", () => {
         hostResources: roomyHost,
       }),
     ).toBe(false);
+  });
+
+  it("bounds split-core shard parallelism on roomy CI hosts", () => {
+    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+
+    expect(
+      resolveOxlintShardConcurrency({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: roomyHost,
+        splitCore: true,
+      }),
+    ).toBe(4);
+  });
+
+  it("keeps split-core shard runs serial on constrained hosts", () => {
+    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
+
+    expect(
+      resolveOxlintShardConcurrency({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: constrainedHost,
+        splitCore: true,
+      }),
+    ).toBe(1);
+  });
+
+  it("does not let local throttled mode serialize remote changed gates", () => {
+    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+
+    expect(
+      resolveOxlintShardConcurrency({
+        env: {
+          OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
+          OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+        },
+        platform: "linux",
+        hostResources: roomyHost,
+        splitCore: true,
+      }),
+    ).toBe(4);
+  });
+
+  it("honors explicit oxlint shard concurrency overrides", () => {
+    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+
+    expect(
+      resolveOxlintShardConcurrency({
+        env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" },
+        platform: "linux",
+        hostResources: roomyHost,
+        splitCore: true,
+      }),
+    ).toBe(2);
   });
 
   it("uses a bounded oxlint shard heartbeat by default", () => {

@@ -17,8 +17,9 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `action="tabs"` before opening a new tab if retries/timeouts may have left windows behind.
 2. Prefer stable tab handles:
    - Open important tabs with `label`, for example `label="meet"`.
-   - Use `tabId` handles like `t1` or labels like `meet` as `targetId` in later calls.
-   - Avoid relying on raw DevTools `targetId` unless the tool just returned it.
+   - After `action="tabs"` or `action="open"`, store `suggestedTargetId` and pass it as `targetId` in later calls.
+   - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
+   - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.

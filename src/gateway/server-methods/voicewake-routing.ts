@@ -35,6 +35,8 @@ export const voicewakeRoutingHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      // Validate first for caller-friendly errors, then normalize before
+      // persistence so broadcasts carry the canonical routing shape.
       const normalized = normalizeVoiceWakeRoutingConfig(params.config);
       const config = await setVoiceWakeRoutingConfig(normalized);
       context.broadcastVoiceWakeRoutingChanged(config);

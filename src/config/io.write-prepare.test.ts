@@ -761,7 +761,7 @@ describe("config io write prepare", () => {
         },
       },
     } satisfies OpenClawConfig;
-    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
+    (runtimeConfig.channels!.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {

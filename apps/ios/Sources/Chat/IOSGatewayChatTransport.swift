@@ -5,7 +5,7 @@ import OpenClawProtocol
 import OSLog
 
 struct IOSGatewayChatTransport: OpenClawChatTransport {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "ios.chat.transport")
+    static let logger = Logger(subsystem: "ai.openclaw", category: "ios.chat.transport")
     static let defaultChatSendTimeoutMs = 30000
     private let gateway: GatewayNodeSession
 
@@ -167,8 +167,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {
-        // Operator clients receive chat events without node-style subscriptions.
-        // (chat.subscribe is a node event, not an operator RPC method.)
+        struct Params: Codable { var key: String }
+        let data = try JSONEncoder().encode(Params(key: sessionKey))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(
+            method: "sessions.messages.subscribe",
+            paramsJSON: json,
+            timeoutSeconds: 10)
     }
 
     func resetSession(sessionKey: String) async throws {
@@ -257,35 +262,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 let stream = await self.gateway.subscribeServerEvents()
                 for await evt in stream {
                     if Task.isCancelled { return }
-                    switch evt.event {
-                    case "tick":
-                        continuation.yield(.tick)
-                    case "seqGap":
-                        continuation.yield(.seqGap)
-                    case "health":
-                        guard let payload = evt.payload else { break }
-                        let ok = (try? GatewayPayloadDecoding.decode(
-                            payload,
-                            as: OpenClawGatewayHealthOK.self))?.ok ?? true
-                        continuation.yield(.health(ok: ok))
-                    case "chat":
-                        guard let payload = evt.payload else { break }
-                        if let chatPayload = try? GatewayPayloadDecoding.decode(
-                            payload,
-                            as: OpenClawChatEventPayload.self)
-                        {
-                            continuation.yield(.chat(chatPayload))
-                        }
-                    case "agent":
-                        guard let payload = evt.payload else { break }
-                        if let agentPayload = try? GatewayPayloadDecoding.decode(
-                            payload,
-                            as: OpenClawAgentEventPayload.self)
-                        {
-                            continuation.yield(.agent(agentPayload))
-                        }
-                    default:
-                        break
+                    if let mapped = Self.mapEventFrame(evt) {
+                        continuation.yield(mapped)
                     }
                 }
             }
@@ -293,6 +271,50 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             continuation.onTermination = { @Sendable _ in
                 task.cancel()
             }
+        }
+    }
+
+    static func mapEventFrame(_ evt: EventFrame) -> OpenClawChatTransportEvent? {
+        switch evt.event {
+        case "tick":
+            return .tick
+        case "seqGap":
+            return .seqGap
+        case "health":
+            guard let payload = evt.payload else { return nil }
+            let ok = (try? GatewayPayloadDecoding.decode(
+                payload,
+                as: OpenClawGatewayHealthOK.self))?.ok ?? true
+            return .health(ok: ok)
+        case "chat":
+            guard let payload = evt.payload else { return nil }
+            guard let chatPayload = try? GatewayPayloadDecoding.decode(
+                payload,
+                as: OpenClawChatEventPayload.self)
+            else {
+                return nil
+            }
+            return .chat(chatPayload)
+        case "session.message":
+            guard let payload = evt.payload else { return nil }
+            guard let message = try? GatewayPayloadDecoding.decode(
+                payload,
+                as: OpenClawSessionMessageEventPayload.self)
+            else {
+                return nil
+            }
+            return .sessionMessage(message)
+        case "agent":
+            guard let payload = evt.payload else { return nil }
+            guard let agentPayload = try? GatewayPayloadDecoding.decode(
+                payload,
+                as: OpenClawAgentEventPayload.self)
+            else {
+                return nil
+            }
+            return .agent(agentPayload)
+        default:
+            return nil
         }
     }
 }

@@ -82,13 +82,17 @@ describe("GatewayClient", () => {
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
     if (httpsServer) {
       httpsServer.closeAllConnections?.();
       httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        httpsServer?.close(() => resolve());
+      });
       httpsServer = null;
     }
   });

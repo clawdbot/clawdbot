@@ -29,15 +29,7 @@ const mocks = vi.hoisted(() => ({
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
 
-vi.mock("../../infra/push-apns.js", () => ({
-  clearApnsRegistrationIfCurrent: mocks.clearApnsRegistrationIfCurrent,
-  loadApnsRegistration: mocks.loadApnsRegistration,
-  resolveApnsAuthConfigFromEnv: mocks.resolveApnsAuthConfigFromEnv,
-  resolveApnsRelayConfigFromEnv: mocks.resolveApnsRelayConfigFromEnv,
-  sendApnsBackgroundWake: mocks.sendApnsBackgroundWake,
-  sendApnsAlert: mocks.sendApnsAlert,
-  shouldClearStoredApnsRegistration: mocks.shouldClearStoredApnsRegistration,
-}));
+vi.mock("../../infra/push-apns.js", () => mocks);
 
 import { testing as wakeTesting } from "./nodes-wake-state.js";
 import { maybeWakeNodeWithApns } from "./nodes.js";

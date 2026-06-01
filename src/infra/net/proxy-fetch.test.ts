@@ -27,10 +27,10 @@ const {
   getLastAgent,
   loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
-  const undiciFetch = vi.fn();
-  const proxyAgentSpy = vi.fn();
-  const envAgentSpy = vi.fn();
-  class MockUndiciFormData {
+  const undiciFetchLocal = vi.fn();
+  const proxyAgentSpyLocal = vi.fn();
+  const envAgentSpyLocal = vi.fn();
+  class MockUndiciFormDataLocal {
     readonly [Symbol.toStringTag] = "FormData";
     readonly entriesList: [string, unknown, string | undefined][] = [];
 
@@ -48,32 +48,32 @@ const {
     constructor(public readonly options: { uri?: string; proxyTls?: unknown } | string) {
       this.proxyUrl = typeof options === "string" ? options : options.uri;
       ProxyAgent.lastCreated = this;
-      proxyAgentSpy(options);
+      proxyAgentSpyLocal(options);
     }
   }
-  class EnvHttpProxyAgent {
-    static lastCreated: EnvHttpProxyAgent | undefined;
+  class EnvHttpProxyAgentLocal {
+    static lastCreated: EnvHttpProxyAgentLocal | undefined;
     constructor(public readonly options?: Record<string, unknown>) {
-      EnvHttpProxyAgent.lastCreated = this;
-      envAgentSpy(options);
+      EnvHttpProxyAgentLocal.lastCreated = this;
+      envAgentSpyLocal(options);
     }
   }
-  const loadUndiciRuntimeDeps = vi.fn(() => ({
+  const loadUndiciRuntimeDepsLocal = vi.fn(() => ({
     ProxyAgent,
-    EnvHttpProxyAgent,
-    FormData: MockUndiciFormData,
-    fetch: undiciFetch,
+    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
+    FormData: MockUndiciFormDataLocal,
+    fetch: undiciFetchLocal,
   }));
 
   return {
     ProxyAgent,
-    EnvHttpProxyAgent,
-    MockUndiciFormData,
-    undiciFetch,
-    proxyAgentSpy,
-    envAgentSpy,
+    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
+    MockUndiciFormData: MockUndiciFormDataLocal,
+    undiciFetch: undiciFetchLocal,
+    proxyAgentSpy: proxyAgentSpyLocal,
+    envAgentSpy: envAgentSpyLocal,
     getLastAgent: () => ProxyAgent.lastCreated,
-    loadUndiciRuntimeDeps,
+    loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
   };
 });
 

@@ -128,6 +128,7 @@ runs:
         if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
           mkdir -p "$PNPM_CONFIG_MODULES_DIR"
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+          export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
         fi
         pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
         if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then

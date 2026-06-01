@@ -149,7 +149,7 @@ function createContextHandler(): ContextHandler {
         handler = fn as ContextHandler;
       }
     },
-    appendEntry: (_type: string, dataValue?: unknown) => {},
+    appendEntry: (_type: string, _dataValue?: unknown) => {},
   } as unknown as ExtensionAPI;
 
   contextPruningExtension(api);

@@ -6,6 +6,9 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/**
+ * Android bridge for applying gateway A2UI messages to the canvas WebView.
+ */
 class A2UIHandler(
   private val canvas: CanvasController,
   private val json: Json,
@@ -21,6 +24,7 @@ class A2UIHandler(
   fun resolveA2uiHostUrl(): String? {
     val nodeRaw = getNodeCanvasHostUrl()?.trim().orEmpty()
     val operatorRaw = getOperatorCanvasHostUrl()?.trim().orEmpty()
+    // Prefer node-advertised canvas host; operator URL is a fallback for older hello payloads.
     val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
     if (raw.isBlank()) return null
     val base = raw.trimEnd('/')
@@ -36,6 +40,7 @@ class A2UIHandler(
     }
 
     canvas.navigate(a2uiUrl)
+    // A2UI host bootstraps asynchronously after navigation; poll briefly before failing the command.
     repeat(50) {
       try {
         val ready = canvas.eval(a2uiReadyCheckJS)
@@ -65,6 +70,7 @@ class A2UIHandler(
     if (command == "canvas.a2ui.pushJSONL" || (!hasMessagesArray && jsonlField.isNotBlank())) {
       val jsonl = jsonlField
       if (jsonl.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: jsonl required")
+      // JSONL keeps large A2UI streams model-friendly while still validating each message.
       val messages =
         jsonl
           .lineSequence()
@@ -98,6 +104,7 @@ class A2UIHandler(
     lineNumber: Int,
   ) {
     if (msg.containsKey("createSurface")) {
+      // Android scaffold currently implements A2UI v0.8, not the v0.9 createSurface shape.
       throw IllegalArgumentException(
         "A2UI JSONL line $lineNumber: looks like A2UI v0.9 (`createSurface`). Canvas supports v0.8 messages only.",
       )

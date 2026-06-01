@@ -93,5 +93,19 @@ export async function executeWithApiKeyRotation<T>(
   if (lastError === undefined) {
     throw new Error(`Failed to run API request for ${params.provider}.`);
   }
-  throw lastError;
+  throw toLintErrorObject(lastError, "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -3,12 +3,15 @@ import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
+  getActivePluginGatewayCommandRegistry,
   getActivePluginHttpRouteRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   recordImportedPluginId,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
@@ -87,6 +90,7 @@ async function waitForCleanupSignal(signal: Promise<void>, label: string): Promi
 
 describe("plugin runtime route registry", () => {
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     releasePinnedPluginHttpRouteRegistry();
     resetPluginRuntimeStateForTest();
   });
@@ -146,6 +150,64 @@ describe("plugin runtime route registry", () => {
 
     expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
     expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
+  it("resolves the gateway command registry from pinned startup surfaces before active churn", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+    startupRegistry.commands.push({
+      pluginId: "startup",
+      command: {
+        name: "startup",
+        description: "Startup command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(startupRegistry);
+  });
+
+  it("falls through from an empty pinned startup registry to the active command surface", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+    laterRegistry.commands.push({
+      pluginId: "later",
+      command: {
+        name: "later",
+        description: "Later command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(laterRegistry);
+  });
+
+  it("prefers channel-pinned command registries over route-only pins", () => {
+    const routeRegistry = createRegistryWithRoute("/demo");
+    const channelRegistry = createEmptyPluginRegistry();
+    channelRegistry.commands.push({
+      pluginId: "channel",
+      command: {
+        name: "channel",
+        description: "Channel command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(routeRegistry);
+    pinActivePluginHttpRouteRegistry(routeRegistry);
+    pinActivePluginChannelRegistry(channelRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(channelRegistry);
   });
 
   it.each([
@@ -245,13 +307,13 @@ describe("setActivePluginRegistry", () => {
   it.each([
     {
       name: "same active registry is refreshed",
-      refresh(nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) {
+      refresh: (nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) => {
         setActivePluginRegistry(nextRegistry);
       },
     },
     {
       name: "active registry advances again",
-      refresh() {
+      refresh: () => {
         setActivePluginRegistry(createEmptyPluginRegistry());
       },
     },

@@ -15,6 +15,7 @@ const sharedUiTestConfig = {
 } as const;
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/chat-responsive.browser.test.ts",
+  "src/ui/form-controls.browser.test.ts",
   "src/ui/views/sessions.browser.test.ts",
 ] as const;
 
@@ -24,6 +25,10 @@ export default defineConfig({
       {
         find: /^@openclaw\/normalization-core\/(.+)$/u,
         replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
+      },
+      {
+        find: /^@openclaw\/media-core\/(.+)$/u,
+        replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
       },
     ],
   },

@@ -1,7 +1,7 @@
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
-import { extractToolCards } from "./tool-cards.ts";
+import { extractToolCardsCached } from "./tool-cards.ts";
 
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
@@ -35,7 +35,7 @@ export function syncToolCardExpansionState(
       continue;
     }
     for (const entry of item.messages) {
-      const cards = extractToolCards(entry.message, entry.key);
+      const cards = extractToolCardsCached(entry.message, entry.key);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
         const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
         currentToolCardIds.add(disclosureId);

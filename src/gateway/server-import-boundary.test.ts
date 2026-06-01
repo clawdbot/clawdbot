@@ -57,7 +57,7 @@ describe("gateway startup import boundaries", () => {
 
   it("marks gateway close before awaiting gateway_stop hooks", () => {
     const serverImpl = readSource("src/gateway/server.impl.ts");
-    const closeStart = serverImpl.indexOf("close: async (opts)");
+    const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
     const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");

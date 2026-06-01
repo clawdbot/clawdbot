@@ -17,8 +17,10 @@ const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
 const APNS_REACHABILITY_REASON = "InvalidProviderToken";
 
+/** Describes where the effective proxy validation URL came from. */
 export type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";
 
+/** Normalized proxy validation input plus actionable config errors. */
 export type ProxyValidationResolvedConfig = {
   enabled: boolean;
   proxyUrl?: string;
@@ -27,8 +29,10 @@ export type ProxyValidationResolvedConfig = {
   errors: string[];
 };
 
+/** Validation probe categories reported to CLI output. */
 export type ProxyValidationCheckKind = "allowed" | "denied" | "apns";
 
+/** Result for one proxy validation probe. */
 export type ProxyValidationCheck = {
   kind: ProxyValidationCheckKind;
   url: string;
@@ -37,12 +41,14 @@ export type ProxyValidationCheck = {
   error?: string;
 };
 
+/** Complete proxy validation result consumed by CLI formatting. */
 export type ProxyValidationResult = {
   ok: boolean;
   config: ProxyValidationResolvedConfig;
   checks: ProxyValidationCheck[];
 };
 
+/** Parameters for fetch-based proxy validation probes. */
 export type ProxyValidationFetchCheckParams = {
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
@@ -50,16 +56,19 @@ export type ProxyValidationFetchCheckParams = {
   timeoutMs: number;
 };
 
+/** Result from a fetch-based probe, including optional denied-canary evidence. */
 export type ProxyValidationFetchCheckResult = {
   ok: boolean;
   status: number;
   deniedCanaryToken?: string;
 };
 
+/** Injectable fetch probe used by tests and the default runtime validator. */
 export type ProxyValidationFetchCheck = (
   params: ProxyValidationFetchCheckParams,
 ) => Promise<ProxyValidationFetchCheckResult>;
 
+/** Parameters for APNs reachability validation through the proxy tunnel. */
 export type ProxyValidationApnsCheckParams = {
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
@@ -75,10 +84,12 @@ export type ProxyValidationApnsCheckResult = {
   apnsReason?: string;
 };
 
+/** Injectable APNs probe used by tests and the default HTTP/2 validator. */
 export type ProxyValidationApnsCheck = (
   params: ProxyValidationApnsCheckParams,
 ) => Promise<ProxyValidationApnsCheckResult>;
 
+/** Inputs used to resolve proxy validation config before network probes run. */
 export type ResolveProxyValidationConfigOptions = {
   config?: ProxyConfig;
   env?: NodeJS.ProcessEnv | Partial<Record<"OPENCLAW_PROXY_URL", string | undefined>>;
@@ -86,6 +97,7 @@ export type ResolveProxyValidationConfigOptions = {
   proxyCaFileOverride?: string;
 };
 
+/** Full proxy validation runner options, including probe overrides for tests. */
 export type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
   allowedUrls?: readonly string[];
   deniedUrls?: readonly string[];
@@ -138,6 +150,7 @@ function validateResolvedProxy(
   return [...validateProxyUrl(value), ...validateProxyEnabled(source, enabled)];
 }
 
+/** Resolves validation config precedence: explicit override, config, then env. */
 export function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
 ): ProxyValidationResolvedConfig {
@@ -270,6 +283,8 @@ function hasApnsReachabilityProof(result: ProxyValidationApnsCheckResult): boole
   if (result.apnsId) {
     return true;
   }
+  // APNs returns InvalidProviderToken for the intentionally invalid probe. That
+  // body proves the CONNECT tunnel reached Apple even without an apns-id header.
   return result.status === 403 && result.apnsReason === APNS_REACHABILITY_REASON;
 }
 
@@ -314,6 +329,8 @@ function closeServer(server: Server): Promise<void> {
 
 async function createLoopbackDeniedCanary(): Promise<DeniedCanary> {
   const token = randomUUID();
+  // The default denied probe targets loopback and expects the proxy to block it.
+  // If a proxy returns this token, it forwarded a destination it should deny.
   const server = createServer((_request, response) => {
     response.writeHead(204, {
       [DENIED_CANARY_HEADER]: token,
@@ -521,6 +538,7 @@ async function runApnsReachabilityCheck(params: {
   }
 }
 
+/** Runs allowed, denied, and optional APNs proxy validation probes. */
 export async function runProxyValidation(
   options: RunProxyValidationOptions,
 ): Promise<ProxyValidationResult> {

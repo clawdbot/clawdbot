@@ -39,16 +39,6 @@ async function expectAbortError(promise: Promise<unknown>) {
     name: "AbortError",
   });
 }
-
-function expectMockCallOptions(
-  mock: ReturnType<typeof vi.fn>,
-  callIndex: number,
-  fields: Record<string, unknown>,
-) {
-  const call = (mock.mock.calls as unknown[][])[callIndex]?.[0];
-  expectRecordFields(requireRecord(call, `mock call ${callIndex + 1} options`), fields);
-}
-
 function expectSomeMockCallOptions(
   mock: ReturnType<typeof vi.fn>,
   fields: Record<string, unknown>,
@@ -623,7 +613,7 @@ describe("MatrixClient request hardening", () => {
   it("aborts requests after timeout", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_: URL | string, init?: RequestInit) => {
-      return new Promise<Response>((_, reject) => {
+      return new Promise<Response>((_Value, reject) => {
         init?.signal?.addEventListener("abort", () => {
           reject(new Error("aborted"));
         });
@@ -646,7 +636,7 @@ describe("MatrixClient request hardening", () => {
   it("falls back to the default timeout for non-finite localTimeoutMs", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_: URL | string, init?: RequestInit) => {
-      return new Promise<Response>((_, reject) => {
+      return new Promise<Response>((_Local, reject) => {
         init?.signal?.addEventListener("abort", () => {
           reject(new Error("aborted"));
         });
@@ -1858,13 +1848,13 @@ describe("MatrixClient crypto bootstrapping", () => {
       localTimeoutMs: 1,
     });
     vi.spyOn(client, "getRoomKeyBackupStatus").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     vi.spyOn(client, "getDeviceVerificationStatus").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     vi.spyOn(client, "listOwnDevices").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
 
     const status = await client.getOwnDeviceVerificationStatus();

@@ -42,7 +42,9 @@ const REQUEST_TIMEOUT_MS = 8 * 60_000;
 const WAIT_TIMEOUT_MS = 8 * 60_000;
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 type LiveSubagentModelConfig = {
@@ -350,7 +352,7 @@ describeLive("subagent announce live", () => {
 
       const completedRunBeforeDelivery = await waitFor("issue 82913 child completion", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
@@ -539,7 +541,7 @@ describeLive("subagent announce live", () => {
         listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
       const spawnedRun = await waitFor("steered child spawn", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSteeredChildRuns()[0];
       });
@@ -548,7 +550,7 @@ describeLive("subagent announce live", () => {
       expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
       const runBeforeSteer = await waitFor("steered child bash tool start", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         const currentRun =
           listSteeredChildRuns().find((run) => run.runId === spawnedRun.runId) ?? spawnedRun;
@@ -590,7 +592,7 @@ describeLive("subagent announce live", () => {
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSteeredChildRuns().find(
           (run) =>
@@ -612,7 +614,7 @@ describeLive("subagent announce live", () => {
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return inProcessAgentDispatches.some((entry) => entry.phase === "started")
           ? true
@@ -623,7 +625,7 @@ describeLive("subagent announce live", () => {
         "in-process subagent completion agent dispatch",
         () => {
           if (initialError) {
-            throw initialError;
+            throw toLintErrorObject(initialError, "Non-Error thrown");
           }
           return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
         },
@@ -632,7 +634,7 @@ describeLive("subagent announce live", () => {
       expect(
         inProcessAgentDispatches.some((entry) => {
           if (initialError) {
-            throw initialError;
+            throw toLintErrorObject(initialError, "Non-Error thrown");
           }
           return entry.phase === "started";
         }),
@@ -759,7 +761,7 @@ describeLive("subagent announce live", () => {
 
       const completedRuns = await waitFor("three Gemini stress child completions", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         const runs = listSubagentRunsForRequester(sessionKey).filter((run) =>
           run.taskName?.startsWith("gemini_stress_"),
@@ -787,3 +789,17 @@ describeLive("subagent announce live", () => {
     12 * 60_000,
   );
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

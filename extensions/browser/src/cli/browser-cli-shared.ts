@@ -15,6 +15,9 @@ export type BrowserParentOpts = GatewayRpcOpts & {
   browserProfile?: string;
 };
 
+export const BROWSER_TAB_REFERENCE_HELP =
+  "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix";
+
 type BrowserRequestParams = {
   method: "GET" | "POST" | "DELETE";
   path: string;

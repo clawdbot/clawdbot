@@ -396,7 +396,9 @@ async function acquireWithRetry(config) {
           "ETIMEDOUT",
         );
       }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
   }
 }
@@ -451,7 +453,9 @@ async function heartbeat(opts) {
       config.heartbeatIntervalMs,
       "heartbeatIntervalMs",
     );
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, intervalMs);
+    });
   }
 }
 

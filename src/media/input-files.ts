@@ -1,3 +1,7 @@
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
+import { detectMime } from "@openclaw/media-core/mime";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,12 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
-import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
-import { parseMediaContentLength } from "./content-length.js";
 import { convertHeicToJpeg } from "./media-services.js";
-import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
 
 export type InputImageContent = PdfExtractedImage;
 

@@ -80,9 +80,27 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
+const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
+  /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
+
+const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
+  /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
+
+const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
+  /(other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
+
+export function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
+  return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+}
+
+export function isSplittableMemoryEmbeddingTransportError(message: string): boolean {
+  return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+}
+
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day|fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|read ECONN|timed out)/i.test(
-    message,
+  return (
+    RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
+    isRetryableMemoryEmbeddingTransportError(message)
   );
 }
 
@@ -107,9 +125,9 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   maxAttempts: number;
   baseDelayMs: number;
 }): Promise<T> {
-  let attempt = 0;
-  let delayMs = params.baseDelayMs;
-  while (true) {
+  const attempts = Math.max(1, params.maxAttempts);
+  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
+    const delayMs = params.baseDelayMs * 2 ** (attempt - 1);
     try {
       return await params.run();
     } catch (err) {
@@ -118,9 +136,46 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
         throw err;
       }
       await params.waitForRetry(delayMs);
-      delayMs *= 2;
-      attempt += 1;
     }
+  }
+  throw new Error("retry loop exhausted");
+}
+
+export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
+  items: TInput[];
+  run: (items: TInput[]) => Promise<TOutput[]>;
+  isRetryable: (message: string) => boolean;
+  isSplittable: (message: string) => boolean;
+  waitForRetry: (delayMs: number) => Promise<void>;
+  maxAttempts: number;
+  baseDelayMs: number;
+  onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
+}): Promise<TOutput[]> {
+  try {
+    return await runMemoryEmbeddingRetryLoop({
+      run: async () => await params.run(params.items),
+      isRetryable: params.isRetryable,
+      waitForRetry: params.waitForRetry,
+      maxAttempts: params.maxAttempts,
+      baseDelayMs: params.baseDelayMs,
+    });
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    if (params.items.length <= 1 || !params.isSplittable(message)) {
+      throw err;
+    }
+
+    const splitAt = Math.ceil(params.items.length / 2);
+    params.onSplit?.({ itemCount: params.items.length, splitAt, message });
+    const left = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(0, splitAt),
+    });
+    const right = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(splitAt),
+    });
+    return [...left, ...right];
   }
 }
 

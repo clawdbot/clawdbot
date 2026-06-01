@@ -1,7 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 
 describe("Codex app-server steering queue", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -16,7 +20,9 @@ describe("Codex app-server steering queue", () => {
       signal: new AbortController().signal,
     });
 
-    await queue.queue("accepted", { debounceMs: 0 });
+    const queued = queue.queue("accepted", { debounceMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    await queued;
 
     expect(request).toHaveBeenCalledWith("turn/steer", {
       threadId: "thread-1",
@@ -37,9 +43,10 @@ describe("Codex app-server steering queue", () => {
       signal: new AbortController().signal,
     });
 
-    await expect(queue.queue("rejected", { debounceMs: 0 })).rejects.toThrow(
-      "cannot steer a compact turn",
-    );
+    const queued = queue.queue("rejected", { debounceMs: 0 });
+    const rejected = expect(queued).rejects.toThrow("cannot steer a compact turn");
+    await vi.advanceTimersByTimeAsync(0);
+    await rejected;
     expect(request).toHaveBeenCalledWith("turn/steer", {
       threadId: "thread-1",
       expectedTurnId: "turn-1",
@@ -48,7 +55,6 @@ describe("Codex app-server steering queue", () => {
   });
 
   it("rejects queued steering when the run aborts before debounce flush", async () => {
-    vi.useFakeTimers();
     const controller = new AbortController();
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
     const queue = createCodexSteeringQueue({

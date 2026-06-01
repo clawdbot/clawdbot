@@ -38,7 +38,6 @@ type SettingsHost = {
     lastActiveSessionKey: string;
     theme: ThemeName;
     themeMode: ThemeMode;
-    chatFocusMode: boolean;
     chatShowThinking: boolean;
     chatShowToolCalls: boolean;
     splitRatio: number;
@@ -138,7 +137,6 @@ const createHost = (tab: Tab): SettingsHost => ({
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "system",
-    chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
     splitRatio: 0.6,

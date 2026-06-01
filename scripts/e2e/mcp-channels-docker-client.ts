@@ -141,7 +141,7 @@ async function main() {
         );
       },
       240_000,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       throw new Error(
         `timeout waiting for seeded MCP conversation: ${JSON.stringify(
           lastMcpConversationList,
@@ -182,7 +182,7 @@ async function main() {
         return currentMessages.length >= 2 ? currentMessages : undefined;
       },
       240_000,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       throw new Error(
         `timeout waiting for seeded transcript messages: ${JSON.stringify(lastHistory, null, 2)}`,
         { cause: error },
@@ -271,20 +271,20 @@ async function main() {
     const userEvent = await waitFor(
       "MCP user session.message event",
       async () => {
-        const polled = await callTool<{
+        const polledValue = await callTool<{
           structuredContent?: { events?: Array<Record<string, unknown>> };
         }>({
           name: "events_poll",
           arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
         });
-        return (polled.structuredContent?.events ?? []).find(
+        return (polledValue.structuredContent?.events ?? []).find(
           (entry) => entry.text === channelMessage,
         );
       },
       60_000,
     ).catch(() => undefined);
     if (userEvent?.text !== channelMessage) {
-      const polled = await callTool<{
+      const polledLocal = await callTool<{
         structuredContent?: { events?: Array<Record<string, unknown>> };
       }>({
         name: "events_poll",
@@ -295,7 +295,7 @@ async function main() {
           {
             userEvent: userEvent ?? null,
             rawGatewayUserMessage: rawGatewayUserMessage ?? null,
-            mcpEventsAfterAssistant: polled.structuredContent?.events ?? [],
+            mcpEventsAfterAssistant: polledLocal.structuredContent?.events ?? [],
             recentGatewayEvents: gateway.events.slice(-10).map((entry) => ({
               event: entry.event,
               sessionKey: entry.payload.sessionKey,

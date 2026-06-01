@@ -1,4 +1,4 @@
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -11,8 +11,8 @@ import type {
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
-  resolveAvailableAgentHarnessPolicy,
   resolveAgentHarnessPolicy,
+  resolveAvailableAgentHarnessPolicy,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
@@ -21,6 +21,10 @@ import type { AgentHarness } from "./types.js";
 const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
   createAttemptResult("openclaw"),
 );
+const compactAuthMocks = vi.hoisted(() => ({
+  getApiKeyForModel: vi.fn(),
+  resolveModelAsync: vi.fn(),
+}));
 
 vi.mock("./builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: (): AgentHarness => ({
@@ -31,11 +35,21 @@ vi.mock("./builtin-openclaw.js", () => ({
     runAttempt: agentRunAttempt,
   }),
 }));
+vi.mock("../model-auth.js", () => ({
+  getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
+}));
+vi.mock("../embedded-agent-runner/model.js", () => ({
+  resolveModelAsync: compactAuthMocks.resolveModelAsync,
+}));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
   clearAgentHarnesses();
+  compactAuthMocks.resolveModelAsync.mockResolvedValue({
+    model: { id: "gpt-5.5", provider: "openai" },
+  });
+  compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
       providers: [],
@@ -65,6 +79,8 @@ afterEach(() => {
   clearAgentHarnesses();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
+  compactAuthMocks.resolveModelAsync.mockReset();
+  compactAuthMocks.getApiKeyForModel.mockReset();
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
@@ -757,7 +773,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("honors selected plugin harness pins during compaction preflight", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -779,10 +798,68 @@ describe("selectAgentHarness", () => {
         provider: "openai",
         model: "gpt-5.5",
         agentHarnessId: "codex",
+        config: {
+          agents: {
+            list: [{ id: "main", default: true, agentDir: "/tmp/main-agent" }],
+            defaults: {
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).toMatchObject({
+      agentDir: "/tmp/main-agent",
+      agentId: "main",
+    });
+  });
+
+  it("keeps compaction recoverable when auth profile lookup fails", async () => {
+    compactAuthMocks.getApiKeyForModel.mockRejectedValue(new Error("missing auth profile"));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        authProfileId: "deleted-profile",
+        agentHarnessId: "codex",
         config: agentModelRuntimeConfig("openai/gpt-5.5", "openclaw"),
       }),
     ).resolves.toEqual({ ok: true, compacted: false });
     expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledWith(
+      "openai",
+      "gpt-5.5",
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({
+        authProfileId: "deleted-profile",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("does not compact a selected plugin harness through OpenClaw when the plugin has no compactor", async () => {
@@ -807,7 +884,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("uses agent-scoped runtime policy during compaction preflight", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -836,7 +916,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("uses sandbox session key for compaction preflight runtime policy", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -863,10 +946,14 @@ describe("selectAgentHarness", () => {
       }),
     ).resolves.toEqual({ ok: true, compacted: false });
     expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
   });
 
   it("keeps explicit agent id for non-agent sandbox policy keys during compaction preflight", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",

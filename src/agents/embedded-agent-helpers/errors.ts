@@ -71,6 +71,9 @@ export {
 
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "LLM request failed: provider rejected the request schema or tool payload.";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -287,6 +290,8 @@ export type ProviderRuntimeFailureKind =
   | "callback_timeout"
   | "callback_validation"
   | "auth_html"
+  /** Plain provider HTTP 401 auth failure that should not leak raw text to chat users. */
+  | "auth_invalid_token"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
@@ -347,6 +352,8 @@ const TIMEOUT_ERROR_CODES = new Set([
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
+const AUTH_INVALID_TOKEN_HINT_RE =
+  /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const PROXY_ERROR_RE =
@@ -356,6 +363,8 @@ const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
+const THINKING_SIGNATURE_ERROR_RE =
+  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -471,7 +480,11 @@ function isDnsTransportErrorMessage(raw: string): boolean {
 }
 
 function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw);
+  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
+}
+
+function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
+  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
 }
 
 function isSandboxBlockedErrorMessage(raw: string): boolean {
@@ -1104,6 +1117,24 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
   }
+  // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
+  // same failover reason also covers plain 403 and status-less auth payloads.
+  // Require positive 401 evidence so we do not claim the wrong HTTP status.
+  const messageMentions401 = /\b401\b/.test(message);
+  const messageMentions403 = /\b403\b/.test(message);
+  const has401Evidence =
+    status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
+  const hasPermissionScopeSignal =
+    AUTH_SCOPE_HINT_RE.test(message) || AUTH_SCOPE_NAME_RE.test(message);
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "auth" &&
+    has401Evidence &&
+    AUTH_INVALID_TOKEN_HINT_RE.test(message) &&
+    !hasPermissionScopeSignal
+  ) {
+    return "auth_invalid_token";
+  }
   if (
     failoverClassification?.kind === "reason" &&
     (failoverClassification.reason === "timeout" || failoverClassification.reason === "overloaded")
@@ -1208,6 +1239,14 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (providerRuntimeFailureKind === "auth_invalid_token") {
+    return (
+      "Authentication failed (provider returned HTTP 401). " +
+      "Your provider token may have expired — try the request again in a moment. " +
+      "If the failure persists, re-authenticate this provider."
+    );
+  }
+
   if (providerRuntimeFailureKind === "upstream_html") {
     return (
       "The provider returned an HTML error page instead of an API response. " +
@@ -1296,7 +1335,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return "LLM request failed: provider rejected the request schema or tool payload.";
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "replay_invalid") {
@@ -1319,6 +1358,48 @@ export function formatAssistantErrorText(
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+}
+
+export function isRawAssistantErrorPassthrough(params: {
+  friendlyError?: string;
+  rawError?: string;
+}): boolean {
+  const friendlyError = params.friendlyError?.trim();
+  const rawError = params.rawError?.trim();
+  if (!friendlyError || !rawError) {
+    return false;
+  }
+  const parsedMessage = parseApiErrorInfo(rawError)?.message?.trim();
+  const leadingStatusRest = extractLeadingHttpStatus(rawError)?.rest?.trim();
+  const hasRawDerivedProviderPrefix =
+    friendlyError.startsWith("LLM request rejected:") ||
+    friendlyError.startsWith("LLM error") ||
+    friendlyError.startsWith("HTTP ");
+  return (
+    friendlyError === rawError ||
+    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
+    Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
+  );
+}
+
+export function formatUserFacingAssistantErrorText(
+  msg: AssistantMessage,
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+): string {
+  const friendlyError = formatAssistantErrorText(msg, opts);
+  const rawError = msg.errorMessage?.trim();
+  const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
+  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
+  const rawProviderSchemaError =
+    friendlyError?.startsWith("LLM request rejected:") ||
+    parsedErrorType.includes("invalid_request");
+  const safeFriendlyError = rawPassthrough
+    ? rawProviderSchemaError
+      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+      : undefined
+    : friendlyError;
+  return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

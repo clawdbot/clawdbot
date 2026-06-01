@@ -104,9 +104,9 @@ async function createMigrationPlanWithProgress(
     { label: `Scanning ${opts.provider} migration…`, indeterminate: true },
     async (progress) => {
       progress.setLabel("Reading migration source…");
-      const plan = await createPlan();
+      const planLocal = await createPlan();
       progress.tick();
-      return plan;
+      return planLocal;
     },
   );
   return selectMigrationItems(plan, opts);

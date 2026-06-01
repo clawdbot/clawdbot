@@ -60,7 +60,7 @@ export async function runFfprobe(args: string[], options?: MediaExecOptions): Pr
     let stdinWriteError: Error | undefined;
     const proc = execFile(requireSystemBin("ffprobe"), args, execOptions, (err, stdout) => {
       if (err) {
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
         return;
       }
       if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
@@ -110,4 +110,18 @@ export function parseFfprobeCodecAndSampleRate(stdout: string): {
     codec,
     sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

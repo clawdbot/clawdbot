@@ -100,7 +100,9 @@ describe("enqueueKeyedTask", () => {
         }),
       ).rejects.toThrow("boom");
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);

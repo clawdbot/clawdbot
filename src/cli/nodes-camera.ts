@@ -169,7 +169,7 @@ export async function writeUrlToFile(
 
     if (thrown) {
       await fs.unlink(filePath).catch(() => {});
-      throw thrown;
+      throw toLintErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
     await release();
@@ -249,4 +249,18 @@ export async function writeCameraClipPayloadToFile(params: {
     invalidPayloadMessage: "invalid camera.clip payload",
   });
   return filePath;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

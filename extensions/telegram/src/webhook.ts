@@ -366,7 +366,7 @@ export async function startTelegramWebhook(opts: {
             durationMs: Date.now() - startTime,
           });
         }
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         const errMsg = formatErrorMessage(err);
         if (diagnosticsEnabled) {
           logWebhookError({
@@ -377,7 +377,7 @@ export async function startTelegramWebhook(opts: {
         }
         runtime.log?.(`webhook update processing failed after ack: ${errMsg}`);
       });
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       const errMsg = formatErrorMessage(err);
       if (diagnosticsEnabled) {
         logWebhookError({

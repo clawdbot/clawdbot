@@ -657,6 +657,7 @@ describe("ensureSkillsWatcher", () => {
       workspaceDir: "/tmp/ws-a",
       config: { skills: { load: { extraDirs: ["/tmp/shared"], watch: false } } },
     });
+    seen.length = 0;
 
     const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
@@ -671,6 +672,99 @@ describe("ensureSkillsWatcher", () => {
       changedPath: "/tmp/shared/demo/SKILL.md",
     });
     expect(seen.some((change) => change.workspaceDir === "/tmp/ws-a")).toBe(false);
+  });
+
+  it("clears workspace version state on watch disable without losing pending invalidation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const workspaceDir = "/tmp/workspace-version-cleanup";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    const firstVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch",
+      changedPath: `${workspaceDir}/skills/demo/SKILL.md`,
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watch: false } } },
+    });
+
+    const nextVersion = refreshModule.getSkillsSnapshotVersion(workspaceDir);
+    expect(nextVersion).toBeGreaterThan(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
+    vi.setSystemTime(new Date(nextVersion));
+    const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch",
+    });
+    expect(followupVersion).toBeGreaterThan(nextVersion);
+  });
+
+  it("evicts idle workspace subscriptions on a later ensure call", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const idleWorkspaceDir = "/tmp/workspace-idle";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: idleWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
+    const idleSkillsIndex = callPaths.findIndex(
+      (target) => target === `${idleWorkspaceDir}/skills`,
+    );
+    expect(idleSkillsIndex).toBeGreaterThanOrEqual(0);
+    const firstVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir: idleWorkspaceDir,
+      reason: "watch",
+    });
+
+    vi.advanceTimersByTime(60 * 60_000 + 1_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace-active",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
+    const evictedVersion = refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir);
+    expect(evictedVersion).toBeGreaterThan(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
+    vi.setSystemTime(new Date(evictedVersion));
+    const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir: idleWorkspaceDir,
+    });
+    expect(followupVersion).toBeGreaterThan(evictedVersion);
+  });
+
+  it("keeps refreshed workspace subscriptions within the idle TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const activeWorkspaceDir = "/tmp/workspace-active-refresh";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: activeWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
+    const activeSkillsIndex = callPaths.findIndex(
+      (target) => target === `${activeWorkspaceDir}/skills`,
+    );
+    expect(activeSkillsIndex).toBeGreaterThanOrEqual(0);
+
+    vi.advanceTimersByTime(30 * 60_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: activeWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    vi.advanceTimersByTime(31 * 60_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace-other",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    expect(createdWatchers[activeSkillsIndex]?.close).not.toHaveBeenCalled();
   });
 
   it("rebuilds a shared watcher with last-writer debounce while preserving subscribers", async () => {

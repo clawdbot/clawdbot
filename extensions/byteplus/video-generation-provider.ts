@@ -193,8 +193,6 @@ async function pollBytePlusTask(params: {
         throw new Error(
           readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
         );
-      case "queued":
-      case "running":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;

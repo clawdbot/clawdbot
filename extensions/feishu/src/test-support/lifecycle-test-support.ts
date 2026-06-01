@@ -37,10 +37,12 @@ type FeishuLifecycleReplyDispatcher = {
     sendFinalReply: AsyncUnknownMock;
     waitForIdle: AsyncUnknownMock;
     getQueuedCounts: UnknownMock;
+    getFailedCounts: UnknownMock;
     markComplete: UnknownMock;
   };
   replyOptions: Record<string, never>;
   markDispatchIdle: UnknownMock;
+  ensureNoVisibleReplyFallback: AsyncUnknownMock;
 };
 
 export function setFeishuLifecycleStateDir(prefix: string) {
@@ -69,10 +71,12 @@ export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDisp
       sendFinalReply: vi.fn(async () => true),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     },
     replyOptions: {},
     markDispatchIdle: vi.fn(),
+    ensureNoVisibleReplyFallback: vi.fn(async () => false),
   };
 }
 

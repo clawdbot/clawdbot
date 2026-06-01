@@ -125,15 +125,15 @@ export async function modelsListCommand(
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async (opts?: {
+  const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
   }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, {
       providerFilter,
-      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: opts?.loadAvailability,
+      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: optsLocal?.loadAvailability,
       workspaceDir,
     });
     modelRegistry = loaded.registry;

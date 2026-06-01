@@ -23,18 +23,21 @@ import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 
 export type { InboundEventKind } from "../inbound-event/kind.js";
 
+/** Admission decision for an inbound channel event before agent dispatch. */
 export type ChannelTurnAdmission =
   | { kind: "dispatch"; reason?: string }
   | { kind: "observeOnly"; reason: string }
   | { kind: "handled"; reason: string }
   | { kind: "drop"; reason: string; recordHistory?: boolean };
 
+/** Coarse event classification used to decide whether an event can start an agent turn. */
 export type ChannelEventClass = {
   kind: "message" | "command" | "interaction" | "reaction" | "lifecycle" | "unknown";
   canStartAgentTurn: boolean;
   requiresImmediateAck?: boolean;
 };
 
+/** Normalized inbound event text and raw payload after channel-specific ingestion. */
 export type NormalizedTurnInput = {
   id: string;
   timestamp?: number;
@@ -44,6 +47,7 @@ export type NormalizedTurnInput = {
   raw?: unknown;
 };
 
+/** Sender identity facts projected into channel access, routing, and prompt context. */
 export type SenderFacts = {
   id?: string;
   name?: string;
@@ -55,6 +59,7 @@ export type SenderFacts = {
   displayLabel?: string;
 };
 
+/** Conversation identity and threading facts for a channel turn. */
 export type ConversationFacts = {
   kind: "direct" | "group" | "channel";
   id: string;
@@ -69,6 +74,7 @@ export type ConversationFacts = {
   };
 };
 
+/** Session routing facts derived before dispatch. */
 export type RouteFacts = {
   agentId: string;
   accountId?: string;
@@ -81,6 +87,7 @@ export type RouteFacts = {
   createIfMissing?: boolean;
 };
 
+/** Reply target and source-delivery facts for a channel turn. */
 export type ReplyPlanFacts = {
   to: string;
   originatingTo?: string;
@@ -94,6 +101,7 @@ export type ReplyPlanFacts = {
   sourceReplyDeliveryMode?: "thread" | "reply" | "channel" | "direct" | "none";
 };
 
+/** Allowlist projection used by access checks without exposing raw configured entries. */
 export type ProjectedAllowlistAccessFacts = {
   configured: boolean;
   matched: boolean;
@@ -110,6 +118,7 @@ export type ProjectedAllowlistAccessFacts = {
   };
 };
 
+/** Event-level access projection for commands, reactions, buttons, and native events. */
 export type ProjectedEventAccessFacts = {
   kind:
     | "message"
@@ -127,6 +136,7 @@ export type ProjectedEventAccessFacts = {
   originSubjectMatched: boolean;
 };
 
+/** Access decisions for DMs, groups, commands, events, and mention gating. */
 export type AccessFacts = {
   dm?: {
     decision: "allow" | "pairing" | "deny";
@@ -177,6 +187,7 @@ export type AccessFacts = {
   };
 };
 
+/** Message text/history facts passed into templating and dispatch. */
 export type MessageFacts = {
   inboundEventKind?: InboundEventKind;
   body?: string;
@@ -189,6 +200,7 @@ export type MessageFacts = {
   inboundHistory?: HistoryEntry[];
 };
 
+/** Parsed command facts for command-like channel turns. */
 export type CommandFacts = {
   kind: CommandTurnKind;
   body?: string;
@@ -196,6 +208,7 @@ export type CommandFacts = {
   authorized?: boolean;
 };
 
+/** Quoted, forwarded, thread, and untrusted context facts attached to an inbound turn. */
 export type SupplementalContextFacts = {
   quote?: {
     id?: string;
@@ -228,6 +241,7 @@ export type SupplementalContextFacts = {
   untrustedGroupSystemPrompt?: string;
 };
 
+/** Inbound media facts supplied to the agent context. */
 export type InboundMediaFacts = {
   path?: string;
   url?: string;
@@ -239,6 +253,7 @@ export type InboundMediaFacts = {
 
 type MaybePromise<T> = T | Promise<T>;
 
+/** Adapter preflight output assembled before turn resolution. */
 export type PreflightFacts = {
   admission?: ChannelTurnAdmission;
   command?: CommandFacts;
@@ -252,16 +267,19 @@ export type PreflightFacts = {
   history?: ChannelTurnDroppedHistoryOptions;
 };
 
+/** Delivery metadata for one reply payload dispatch. */
 export type ChannelDeliveryInfo = {
   kind: ReplyDispatchKind;
 };
 
+/** Durable delivery queue intent recorded when a reply is deferred. */
 export type ChannelDeliveryIntent = {
   id: string;
   kind: "outbound_queue";
   queuePolicy: OutboundDeliveryQueuePolicy;
 };
 
+/** Result returned after delivering one channel reply payload. */
 export type ChannelDeliveryResult = {
   messageIds?: string[];
   receipt?: MessageReceipt;
@@ -271,6 +289,7 @@ export type ChannelDeliveryResult = {
   deliveryIntent?: ChannelDeliveryIntent;
 };
 
+/** Durable outbound delivery options available to channel turn delivery adapters. */
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
   "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
@@ -280,6 +299,7 @@ export type ChannelTurnDurableDeliveryOptions = Pick<
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
+/** Delivery adapter used by channel turns to send reply payloads. */
 export type ChannelEventDeliveryAdapter = {
   preparePayload?: (
     payload: ReplyPayload,
@@ -307,6 +327,7 @@ export type ChannelEventDeliveryAdapter = {
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 
+/** Options for recording inbound session route state around a turn. */
 export type ChannelTurnRecordOptions = {
   groupResolution?: GroupKeyResolution | null;
   createIfMissing?: boolean;
@@ -315,6 +336,7 @@ export type ChannelTurnRecordOptions = {
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 };
 
+/** Options for finalizing visible conversation history after dispatch. */
 export type ChannelTurnHistoryFinalizeOptions = {
   isGroup?: boolean;
   historyKey?: string;
@@ -322,6 +344,7 @@ export type ChannelTurnHistoryFinalizeOptions = {
   limit?: number;
 };
 
+/** Options for recording history when an inbound event is dropped before dispatch. */
 export type ChannelTurnDroppedHistoryOptions = {
   key: string;
   limit: number;
@@ -331,16 +354,19 @@ export type ChannelTurnDroppedHistoryOptions = {
   shouldRecord?: () => boolean;
 };
 
+/** Dispatcher options excluding delivery hooks owned by the channel turn adapter. */
 export type ChannelTurnDispatcherOptions = Omit<
   ReplyDispatcherWithTypingOptions,
   "deliver" | "onError"
 >;
 
+/** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
 export type ChannelTurnReplyPipelineOptions = Omit<
   CreateChannelReplyPipelineParams,
   "cfg" | "agentId" | "channel" | "accountId"
 >;
 
+/** Fully assembled channel turn ready to build the dispatch runner. */
 export type AssembledChannelTurn = {
   cfg: OpenClawConfig;
   channel: string;
@@ -364,6 +390,7 @@ export type AssembledChannelTurn = {
   messageId?: string;
 };
 
+/** Channel turn with dispatch runner already prepared. */
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   channel: string;
   accountId?: string;
@@ -382,6 +409,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   messageId?: string;
 };
 
+/** Resolved turn shape returned by adapters before final run/dispatch handling. */
 export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
   | (AssembledChannelTurn & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
@@ -390,6 +418,7 @@ export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     });
 
+/** Ordered lifecycle stage names emitted to channel turn log hooks. */
 export type ChannelTurnStage =
   | "ingest"
   | "classify"
@@ -401,6 +430,7 @@ export type ChannelTurnStage =
   | "dispatch"
   | "finalize";
 
+/** Structured channel turn log event. */
 export type ChannelTurnLogEvent = {
   stage: ChannelTurnStage;
   event: "start" | "done" | "drop" | "handled" | "error";
@@ -413,6 +443,7 @@ export type ChannelTurnLogEvent = {
   error?: unknown;
 };
 
+/** Final result for a channel turn, dispatched or admitted without dispatch. */
 export type ChannelTurnResult<TDispatchResult = DispatchFromConfigResult> =
   | DispatchedChannelTurnResult<TDispatchResult>
   | {
@@ -422,6 +453,7 @@ export type ChannelTurnResult<TDispatchResult = DispatchFromConfigResult> =
       routeSessionKey?: string;
     };
 
+/** Successful dispatch result for a channel turn. */
 export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResult> = {
   admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   dispatched: true;
@@ -430,6 +462,7 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
   dispatchResult: TDispatchResult;
 };
 
+/** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */
 export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
@@ -450,6 +483,7 @@ export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult>
   onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 
+/** Parameters for running one raw channel event through the turn kernel. */
 export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   channel: string;
   accountId?: string;

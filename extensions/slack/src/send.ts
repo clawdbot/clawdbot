@@ -270,13 +270,13 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 }
 
 function delaySlackDnsRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt)),
-  );
+  return new Promise((resolve) => {
+    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt));
+  });
 }
 
 async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt += 1) {
+  for (const attempt of Array.from({ length: SLACK_DNS_RETRY_ATTEMPTS + 1 }, (_, index) => index)) {
     try {
       return await fn();
     } catch (err) {
@@ -289,6 +289,7 @@ async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<
       await delaySlackDnsRetry(attempt + 1);
     }
   }
+  throw new Error("unreachable Slack DNS retry loop exit");
 }
 
 function isSlackCustomizeScopeError(err: unknown): boolean {

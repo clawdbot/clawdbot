@@ -164,7 +164,7 @@ describe("custom theme import helpers", () => {
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
     ).rejects.toThrow("unreadable theme payload");
-    expect(response.text).not.toHaveBeenCalled();
+    expect(response["text"]).not.toHaveBeenCalled();
   });
 
   it("rejects redirected tweakcn import responses", async () => {
@@ -289,7 +289,7 @@ describe("custom theme import helpers", () => {
 
     vi.stubGlobal("document", {
       head: documentStub.head,
-      createElement: documentStub.createElement,
+      createElement: documentStub["createElement"],
       getElementById: vi.fn(() => style),
     } as unknown as Document);
 

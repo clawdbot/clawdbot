@@ -381,12 +381,12 @@ describe("googlechat google auth runtime", () => {
     try {
       const transport = await getGoogleAuthTransport();
       const transportDefaults = transport.defaults as { fetchImplementation?: unknown };
-      const requestInterceptorAdd = transport.interceptors.request.add as unknown as ReturnType<
+      const requestInterceptorAdd = transport.interceptors.request["add"] as unknown as ReturnType<
         typeof vi.fn
       >;
-      const responseInterceptorAdd = transport.interceptors.response.add as unknown as ReturnType<
-        typeof vi.fn
-      >;
+      const responseInterceptorAdd = transport.interceptors.response[
+        "add"
+      ] as unknown as ReturnType<typeof vi.fn>;
       const requestInterceptor = mockCallArg(requestInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
@@ -414,10 +414,10 @@ describe("googlechat google auth runtime", () => {
 
     expect(first).not.toBe(second);
     expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
-    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(first.interceptors.request["add"]).toHaveBeenCalledOnce();
+    expect(first.interceptors.response["add"]).toHaveBeenCalledOnce();
+    expect(second.interceptors.request["add"]).toHaveBeenCalledOnce();
+    expect(second.interceptors.response["add"]).toHaveBeenCalledOnce();
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", () => {

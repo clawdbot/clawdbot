@@ -1,3 +1,11 @@
+import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
+import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import {
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "@openclaw/media-core/read-response-with-limit";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   fetchWithSsrFGuard,
@@ -9,11 +17,6 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import { MAX_DOCUMENT_BYTES } from "./constants.js";
-import { parseMediaContentLength } from "./content-length.js";
-import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
-import { detectMime, extensionForMime } from "./mime.js";
-import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -405,10 +408,10 @@ async function readChunkWithIdleTimeout(
           resolve(result);
         }
       },
-      (err) => {
+      (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(err);
+          reject(toLintErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -632,10 +635,10 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
-        onOverflow: ({ maxBytes, res }) =>
+        onOverflow: ({ maxBytes, res: resLocal }) =>
           new MediaFetchError(
             "max_bytes",
-            `Failed to fetch media from ${redactMediaUrl(res.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
+            `Failed to fetch media from ${redactMediaUrl(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
           ),
         chunkTimeoutMs: options.readIdleTimeoutMs,
       });
@@ -679,4 +682,18 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       await release();
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

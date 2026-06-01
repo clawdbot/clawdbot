@@ -1,7 +1,7 @@
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
@@ -330,7 +330,8 @@ export async function readProviderBinaryResponse(
   assertProviderBinaryResponseContent(response, label, kind);
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
-    onOverflow: ({ maxBytes }) => new Error(`${label}: ${kind} response exceeds ${maxBytes} bytes`),
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
   });
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);

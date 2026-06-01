@@ -449,11 +449,13 @@ export async function executePreparedCliRun(
         });
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
+        let observedCliActivity = false;
         const emitCliToolUseStart = (event: {
           toolCallId: string;
           name: string;
           args: Record<string, unknown>;
         }) => {
+          observedCliActivity = true;
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -471,6 +473,7 @@ export async function executePreparedCliRun(
           isError: boolean;
           result?: unknown;
         }) => {
+          observedCliActivity = true;
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -505,6 +508,9 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: ({ text, delta }) => {
+              if (text || delta) {
+                observedCliActivity = true;
+              }
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
@@ -546,6 +552,9 @@ export async function executePreparedCliRun(
               backend,
               providerId: context.backendResolved.id,
               onAssistantDelta: ({ text, delta }) => {
+                if (text || delta) {
+                  observedCliActivity = true;
+                }
                 emitAgentEvent({
                   runId: params.runId,
                   stream: "assistant",
@@ -677,7 +686,18 @@ export async function executePreparedCliRun(
             cliBackendLog.warn(
               `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
             );
-            if (params.sessionKey) {
+            const retryableNoOutputTimeout =
+              !observedCliActivity &&
+              stdoutDiagnostic.length === 0 &&
+              stderrDiagnostic.length === 0;
+            const deferWatchdogNoticeForFreshRetry =
+              retryableNoOutputTimeout &&
+              Boolean(cliSessionIdToUse) &&
+              Boolean(resolvedSessionId) &&
+              Boolean(context.openClawHistoryPrompt) &&
+              Boolean(params.sessionKey) &&
+              params.timeoutMs - (Date.now() - context.started) > 0;
+            if (params.sessionKey && !deferWatchdogNoticeForFreshRetry) {
               const stallNotice = [
                 `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
                 "It may have been waiting for interactive input or an approval prompt.",
@@ -711,6 +731,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus("timeout"),
+              code: retryableNoOutputTimeout ? "cli_no_output_timeout" : undefined,
             });
           }
           if (result.reason === "overall-timeout") {
@@ -722,6 +743,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus("timeout"),
+              code: "cli_overall_timeout",
             });
           }
           const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
@@ -746,6 +768,13 @@ export async function executePreparedCliRun(
           const err = structuredError || classifiedErrorText || errorCandidates[0] || "CLI failed.";
           reason = reason ?? "unknown";
           const status = resolveFailoverStatus(reason);
+          const retryCode =
+            reason === "unknown" &&
+            result.reason === "exit" &&
+            errorCandidates.length === 0 &&
+            !observedCliActivity
+              ? "cli_unknown_empty_failure"
+              : undefined;
           throw new FailoverError(err, {
             reason,
             provider: params.provider,
@@ -753,6 +782,7 @@ export async function executePreparedCliRun(
             sessionId: params.sessionId,
             lane: params.lane,
             status,
+            code: retryCode,
           });
         }
 

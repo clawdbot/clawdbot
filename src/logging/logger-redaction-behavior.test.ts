@@ -207,6 +207,39 @@ describe("file log redaction", () => {
     expect(record.message).toBe("request completed");
   });
 
+  it("retries hostname resolution after an empty value and caches the first real value", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const hostnames = ["", "lr-macbook", "changed-host"];
+    const resolvedHostnames: string[] = [];
+    loggerTest.setHostnameResolverForTests(() => {
+      const hostname = hostnames.shift() ?? "changed-host";
+      resolvedHostnames.push(hostname);
+      return hostname;
+    });
+
+    getLogger().info({ route: "/api/health" }, "first request");
+    getLogger().info({ route: "/api/health" }, "second request");
+    getLogger().info({ route: "/api/health" }, "third request");
+
+    const records = fs
+      .readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toHaveLength(3);
+    expect(resolvedHostnames).toEqual(["", "lr-macbook"]);
+    expect(records[0]?.hostname).toBe("unknown");
+    expect(records[0]?.message).toBe("first request");
+    expect(records[1]?.hostname).toBe("lr-macbook");
+    expect(records[1]?.message).toBe("second request");
+    expect(records[2]?.hostname).toBe("lr-macbook");
+    expect(records[2]?.message).toBe("third request");
+    expect((records[1]?.["_meta"] as Record<string, unknown> | undefined)?.hostname).toBe(
+      "lr-macbook",
+    );
+  });
+
   it("promotes agent, session, and channel context to top-level JSONL fields", () => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });

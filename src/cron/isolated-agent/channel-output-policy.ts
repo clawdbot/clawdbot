@@ -11,6 +11,7 @@ async function loadChannelPluginRuntime() {
   return await channelPluginRuntimeLoader.load();
 }
 
+/** Resolves channel-specific cron output preferences from loaded channel plugins. */
 export async function resolveCronChannelOutputPolicy(channel: string | undefined): Promise<{
   preferFinalAssistantVisibleText: boolean;
 }> {
@@ -25,6 +26,7 @@ export async function resolveCronChannelOutputPolicy(channel: string | undefined
   };
 }
 
+/** Resolves the provider-specific current-thread target for a delivery address. */
 export async function resolveCurrentChannelTarget(params: {
   channel?: string;
   to?: string;

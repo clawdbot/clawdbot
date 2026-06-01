@@ -541,4 +541,54 @@ describe("cron run log", () => {
       await writePromise.catch(() => undefined);
     });
   });
+
+  it("stamps jobNameById onto single-job page entries", async () => {
+    await withRunLogDir("openclaw-cron-log-jobname-", async (dir) => {
+      const storePath = storePathForDir(dir);
+      for (const entry of [
+        {
+          ts: 1,
+          jobId: "job-rename",
+          action: "finished" as const,
+          status: "ok" as const,
+          runId: "manual:job-rename:1:0",
+        },
+        {
+          ts: 2,
+          jobId: "job-rename",
+          action: "finished" as const,
+          status: "error" as const,
+          runId: "manual:job-rename:2:0",
+        },
+      ]) {
+        await appendCronRunLog({
+          storePath,
+          entry,
+        });
+      }
+
+      const withoutName = await readCronRunLogEntriesPage({
+        storePath,
+        limit: 10,
+        jobId: "job-rename",
+        sortDir: "asc",
+      });
+      expect(withoutName.entries).toHaveLength(2);
+      for (const entry of withoutName.entries) {
+        expect((entry as { jobName?: string }).jobName).toBeUndefined();
+      }
+
+      const withName = await readCronRunLogEntriesPage({
+        storePath,
+        limit: 10,
+        jobId: "job-rename",
+        jobNameById: { "job-rename": "Current Name" },
+        sortDir: "asc",
+      });
+      expect(withName.entries).toHaveLength(2);
+      for (const entry of withName.entries) {
+        expect((entry as { jobName?: string }).jobName).toBe("Current Name");
+      }
+    });
+  });
 });

@@ -341,12 +341,12 @@ async function sendVoiceWithTimeout(
         }
         return r;
       }),
-      new Promise<{ channel: string; error: string }>((resolve) =>
+      new Promise<{ channel: string; error: string }>((resolve) => {
         setTimeout(() => {
           ac.abort();
           resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" });
-        }, voiceTimeout),
-      ),
+        }, voiceTimeout);
+      }),
     ]);
     if (result.error) {
       log?.error(`sendVoice error: ${result.error}`);

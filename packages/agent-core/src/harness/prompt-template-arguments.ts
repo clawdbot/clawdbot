@@ -33,7 +33,12 @@ function parseSafeNonNegativeInteger(raw: string): number | undefined {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-/** Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments. */
+/**
+ * Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments.
+ *
+ * Unsafe integer placeholders resolve to empty text instead of throwing, so malformed templates cannot abort prompt
+ * loading or invocation.
+ */
 export function substituteArgs(content: string, args: string[]): string {
   let result = content;
   result = result.replace(/\$(\d+)/g, (_, num: string) => {
@@ -50,6 +55,8 @@ export function substituteArgs(content: string, args: string[]): string {
       if (parsedStart === undefined) {
         return "";
       }
+      // Keep shell-style `${@:0:...}` compatibility: start 0 includes `$0` in shell, but
+      // prompt templates have no command name, so it maps to the first provided argument.
       let start = parsedStart - 1;
       if (start < 0) {
         start = 0;

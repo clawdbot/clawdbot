@@ -24,6 +24,11 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--wizard", "Run interactive onboarding", false)
     .option("--non-interactive", "Run onboarding without prompts", false)
+    .option(
+      "--accept-risk",
+      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
     .option("--mode <mode>", "Onboard mode: local|remote")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
     .option("--import-source <path>", "Source agent home for --import-from")
@@ -36,6 +41,7 @@ export function registerSetupCommand(program: Command): void {
         const hasWizardFlags = hasExplicitOptions(command, [
           "wizard",
           "nonInteractive",
+          "acceptRisk",
           "mode",
           "importFrom",
           "importSource",
@@ -49,6 +55,7 @@ export function registerSetupCommand(program: Command): void {
             {
               workspace: opts.workspace as string | undefined,
               nonInteractive: Boolean(opts.nonInteractive),
+              acceptRisk: Boolean(opts.acceptRisk),
               mode: opts.mode as "local" | "remote" | undefined,
               importFrom: opts.importFrom as string | undefined,
               importSource: opts.importSource as string | undefined,

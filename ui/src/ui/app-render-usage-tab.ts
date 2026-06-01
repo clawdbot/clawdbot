@@ -134,7 +134,7 @@ export function renderUsageTab(state: AppViewState) {
           state.usageSessionLogs = null;
           void loadUsage(state);
         },
-        onRefresh: () => loadUsage(state),
+        onRefresh: () => void loadUsage(state),
         onTimeZoneChange: (zone) => {
           state.usageTimeZone = zone;
           state.usageSelectedDays = [];

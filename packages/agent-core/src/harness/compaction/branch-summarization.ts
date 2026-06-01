@@ -51,11 +51,15 @@ export interface CollectEntriesResult {
   commonAncestorId: string | null;
 }
 
+/** Minimal tree entry shape needed to compare two session branches. */
 export interface BranchPathEntry {
+  /** Stable entry id. */
   id: string;
+  /** Parent entry id, or null for the session root. */
   parentId: string | null;
 }
 
+/** Branch entries selected after comparing old and target paths. */
 export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> {
   /** Entries to summarize in chronological order. */
   entries: TEntry[];
@@ -106,7 +110,7 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
   return { entries: oldBranch.slice(firstSummarizedIndex), commonAncestorId };
 }
 
-/** Collect entries that should be summarized before navigating to a different session tree entry. */
+/** Collect concrete session entries to summarize before moving from one leaf to another. */
 export async function collectEntriesForBranchSummary(
   session: Session,
   oldLeafId: string | null,
@@ -191,6 +195,8 @@ export function prepareBranchEntries(
 
     const tokens = estimateTokens(message);
     if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
+      // Prefer already-compressed summaries when the budget is almost filled; they
+      // preserve older branch context better than dropping the whole prefix.
       if (entry.type === "compaction" || entry.type === "branch_summary") {
         if (totalTokens < tokenBudget * 0.9) {
           messages.unshift(message);

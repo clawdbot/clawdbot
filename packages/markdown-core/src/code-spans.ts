@@ -5,6 +5,7 @@ export type InlineCodeState = {
   ticks: number;
 };
 
+/** Creates the carry-forward state used when scanning inline code across chunks. */
 export function createInlineCodeState(): InlineCodeState {
   return { open: false, ticks: 0 };
 }
@@ -20,6 +21,7 @@ type CodeSpanIndex = {
   isInside: (index: number) => boolean;
 };
 
+/** Builds a lookup for fenced and inline code spans while preserving scanner state. */
 export function buildCodeSpanIndex(
   text: string,
   inlineState?: InlineCodeState,

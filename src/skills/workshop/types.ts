@@ -11,6 +11,13 @@ export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quaranti
 export type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
 export type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
 
+export type SkillProposalOrigin = {
+  agentId?: string;
+  sessionKey?: string;
+  runId?: string;
+  messageId?: string;
+};
+
 export type SkillProposalScan = {
   state: SkillProposalScannerState;
   scannedAt: string;
@@ -47,6 +54,7 @@ export type SkillProposalRecord = {
   createdAt: string;
   updatedAt: string;
   createdBy: SkillProposalSource;
+  origin?: SkillProposalOrigin;
   proposedVersion: string;
   draftFile: "PROPOSAL.md";
   draftHash: string;
@@ -110,6 +118,7 @@ export type SkillProposalCreateInput = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
+  origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;
 };
@@ -122,6 +131,7 @@ export type SkillProposalUpdateInput = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
+  origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;
 };

@@ -681,12 +681,12 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, catalog, command, arg }) => {
+          choices: ({ provider, model, catalog, command: commandLocal, arg }) => {
             seen = {
               provider,
               model,
               catalogLength: catalog?.length,
-              commandKey: command.key,
+              commandKey: commandLocal.key,
               argName: arg.name,
             };
             return ["low", "high"];

@@ -259,7 +259,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     }
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
-      void this.flush().catch((err) => {
+      void this.flush().catch((err: unknown) => {
         LogService.warn("MatrixFileSyncStore", "Failed to persist Matrix sync store:", err);
       });
     }, PERSIST_DEBOUNCE_MS);

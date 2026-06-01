@@ -118,56 +118,59 @@ describe("registerPreActionHooks", () => {
     | null = null;
 
   function buildProgram() {
-    const program = new Command().name("openclaw");
-    program
+    const programLocal = new Command().name("openclaw");
+    programLocal
       .command("agent")
       .requiredOption("-m, --message <text>")
       .option("--local")
       .option("--json")
       .action(() => {});
-    program
+    programLocal
       .command("status")
       .option("--json")
       .action(() => {});
-    program
+    programLocal
       .command("backup")
       .command("create")
       .option("--json")
       .action(() => {});
-    program.command("doctor").option("--lint").action(() => {});
-    program.command("completion").action(() => {});
-    program.command("secrets").action(() => {});
-    program
+    programLocal
+      .command("doctor")
+      .option("--lint")
+      .action(() => {});
+    programLocal.command("completion").action(() => {});
+    programLocal.command("secrets").action(() => {});
+    programLocal
       .command("agents")
       .command("list")
       .option("--json")
       .action(() => {});
-    program.command("configure").action(() => {});
-    program.command("onboard").action(() => {});
-    const channels = program.command("channels");
+    programLocal.command("configure").action(() => {});
+    programLocal.command("onboard").action(() => {});
+    const channels = programLocal.command("channels");
     channels.command("add").action(() => {});
     channels
       .command("send")
       .option("--json")
       .action(() => {});
     applyParentDefaultHelpAction(channels);
-    program
+    programLocal
       .command("plugins")
       .command("install")
       .argument("<spec>")
       .option("--marketplace <marketplace>")
       .action(() => {});
-    program
+    programLocal
       .command("update")
       .command("status")
       .option("--json")
       .action(() => {});
-    program
+    programLocal
       .command("message")
       .command("send")
       .option("--json")
       .action(() => {});
-    const config = program.command("config");
+    const config = programLocal.command("config");
     config.option("--section <section>");
     setCommandJsonMode(config.command("set"), "parse-only")
       .argument("<path>")
@@ -179,8 +182,8 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     config.command("schema").action(() => {});
-    registerPreActionHooks(program, "9.9.9-test");
-    return program;
+    registerPreActionHooks(programLocal, "9.9.9-test");
+    return programLocal;
   }
 
   function resolveActionCommand(parseArgv: string[]): Command {

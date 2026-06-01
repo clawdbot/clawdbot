@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listBundledChannelLegacySessionSurfaces,
@@ -18,6 +19,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -32,6 +34,17 @@ import {
   type PluginDoctorStateMigrationContext,
   type PluginDoctorStateMigration,
 } from "../plugins/doctor-contract-registry.js";
+import {
+  parseInstalledPluginIndex,
+  readPersistedInstalledPluginIndexSync,
+  resolveLegacyInstalledPluginIndexStorePath,
+  writePersistedInstalledPluginIndexSync,
+} from "../plugins/installed-plugin-index-store.js";
+import {
+  INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+  INSTALLED_PLUGIN_INDEX_VERSION,
+  type InstalledPluginIndex,
+} from "../plugins/installed-plugin-index.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -92,9 +105,18 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  pluginInstallIndex: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   taskStateSidecars: {
     taskRunsPath: string;
     flowRunsPath: string;
+    hasLegacy: boolean;
+  };
+  deliveryQueues: {
+    outboundPath: string;
+    sessionPath: string;
     hasLegacy: boolean;
   };
   preview: string[];
@@ -138,6 +160,14 @@ type DetectedPluginDoctorStateMigrationPlan = {
 
 const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const LEGACY_DELIVERY_QUEUE_DIRS = [
+  { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
+  { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
+] as const;
+type LegacyDeliveryQueueFile = {
+  sourcePath: string;
+  status: "pending" | "failed";
+};
 
 class LegacyPluginStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
@@ -269,6 +299,131 @@ function archiveLegacyPluginStateSidecar(params: {
   );
 }
 
+function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPluginIndex | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
+    const current = parseInstalledPluginIndex(parsed);
+    if (current) {
+      return current;
+    }
+    const installRecords =
+      readLegacyTopLevelInstallRecords(parsed) ?? readLegacyEmbeddedInstallRecords(parsed);
+    if (!installRecords || typeof installRecords !== "object" || Array.isArray(installRecords)) {
+      return null;
+    }
+    return parseInstalledPluginIndex({
+      version: INSTALLED_PLUGIN_INDEX_VERSION,
+      hostContractVersion: "legacy",
+      compatRegistryVersion: "legacy",
+      migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+      policyHash: "legacy",
+      generatedAtMs: 0,
+      installRecords,
+      plugins: [],
+      diagnostics: [],
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readLegacyTopLevelInstallRecords(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const legacy = parsed as { installRecords?: unknown; records?: unknown };
+  return legacy.installRecords ?? legacy.records;
+}
+
+function readLegacyEmbeddedInstallRecords(parsed: unknown): Record<string, unknown> | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const plugins = (parsed as { plugins?: unknown }).plugins;
+  if (!Array.isArray(plugins)) {
+    return null;
+  }
+  const records: Record<string, unknown> = {};
+  for (const plugin of plugins) {
+    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+      continue;
+    }
+    const pluginId = (plugin as { pluginId?: unknown }).pluginId;
+    const installRecord = (plugin as { installRecord?: unknown }).installRecord;
+    if (
+      typeof pluginId === "string" &&
+      pluginId.trim() &&
+      installRecord &&
+      typeof installRecord === "object" &&
+      !Array.isArray(installRecord)
+    ) {
+      records[pluginId] = installRecord;
+    }
+  }
+  return Object.keys(records).length > 0 ? records : null;
+}
+
+function legacyInstalledPluginIndexMatches(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): boolean {
+  return (
+    JSON.stringify(current.installRecords) === JSON.stringify(legacy.installRecords) &&
+    JSON.stringify(current.plugins) === JSON.stringify(legacy.plugins) &&
+    JSON.stringify(current.diagnostics) === JSON.stringify(legacy.diagnostics)
+  );
+}
+
+function mergeLegacyInstalledPluginIndexRecords(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): { merged: InstalledPluginIndex; addedCount: number; conflicts: string[] } {
+  const installRecords = { ...current.installRecords };
+  const conflicts: string[] = [];
+  let addedCount = 0;
+  for (const [pluginId, legacyRecord] of Object.entries(legacy.installRecords)) {
+    const currentRecord = installRecords[pluginId];
+    if (!currentRecord) {
+      installRecords[pluginId] = legacyRecord;
+      addedCount += 1;
+      continue;
+    }
+    if (JSON.stringify(currentRecord) !== JSON.stringify(legacyRecord)) {
+      conflicts.push(pluginId);
+    }
+  }
+  return {
+    merged: {
+      ...current,
+      installRecords,
+    },
+    addedCount,
+    conflicts,
+  };
+}
+
+function archiveLegacyInstalledPluginIndex(params: {
+  sourcePath: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  if (fileExists(archivedPath)) {
+    params.warnings.push(
+      `Left migrated plugin install index in place because archive already exists: ${archivedPath}`,
+    );
+    return;
+  }
+  try {
+    fs.renameSync(params.sourcePath, archivedPath);
+    params.changes.push(`Archived plugin install index legacy source → ${archivedPath}`);
+  } catch (err) {
+    params.warnings.push(
+      `Failed archiving plugin install index ${params.sourcePath}: ${String(err)}`,
+    );
+  }
+}
+
 function archiveLegacyTaskStateSidecar(params: {
   sourcePath: string;
   label: string;
@@ -300,6 +455,51 @@ function archiveLegacyTaskStateSidecar(params: {
   params.changes.push(
     `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
   );
+}
+
+function hardenLegacyImportSource(params: {
+  sourcePath: string;
+  label: string;
+  warnings: string[];
+}): boolean {
+  try {
+    fs.chmodSync(params.sourcePath, 0o600);
+    return true;
+  } catch (err) {
+    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(err)}`);
+    return false;
+  }
+}
+
+function archiveLegacyImportSource(params: {
+  sourcePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  if (fileExists(archivedPath)) {
+    params.warnings.push(
+      `Left migrated ${params.label} source in place because ${archivedPath} already exists`,
+    );
+    return;
+  }
+  if (!hardenLegacyImportSource(params)) {
+    return;
+  }
+  try {
+    fs.renameSync(params.sourcePath, archivedPath);
+    try {
+      fs.chmodSync(archivedPath, 0o600);
+    } catch (err) {
+      params.warnings.push(
+        `Failed securing archived ${params.label} legacy source: ${String(err)}`,
+      );
+    }
+    params.changes.push(`Archived ${params.label} legacy source → ${archivedPath}`);
+  } catch (err) {
+    params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
+  }
 }
 
 function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {
@@ -813,6 +1013,284 @@ async function migrateLegacyTaskStateSidecars(params: {
   };
 }
 
+function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string): string {
+  return path.join(stateDir, dirName);
+}
+
+function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
+  const pending = safeReadDir(queueDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
+  const failedDir = path.join(queueDir, "failed");
+  const failed = safeReadDir(failedDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => ({
+      sourcePath: path.join(failedDir, entry.name),
+      status: "failed" as const,
+    }));
+  return [...pending, ...failed];
+}
+
+function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {
+  return safeReadDir(queueDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".delivered"))
+    .map((entry) => path.join(queueDir, entry.name));
+}
+
+function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function legacyQueueMetadata(entry: Record<string, unknown>): {
+  entryKind: string | null;
+  sessionKey: string | null;
+  channel: string | null;
+  target: string | null;
+  accountId: string | null;
+} {
+  const session = entry.session as { key?: unknown } | undefined;
+  const route = entry.route as { channel?: unknown; to?: unknown; accountId?: unknown } | undefined;
+  const deliveryContext = entry.deliveryContext as
+    | { channel?: unknown; to?: unknown; accountId?: unknown }
+    | undefined;
+  const stringOrNull = (value: unknown) => (typeof value === "string" ? value : null);
+  return {
+    entryKind: stringOrNull(entry.kind) ?? "outbound",
+    sessionKey: stringOrNull(entry.sessionKey) ?? stringOrNull(session?.key),
+    channel:
+      stringOrNull(entry.channel) ??
+      stringOrNull(route?.channel) ??
+      stringOrNull(deliveryContext?.channel),
+    target: stringOrNull(entry.to) ?? stringOrNull(route?.to) ?? stringOrNull(deliveryContext?.to),
+    accountId:
+      stringOrNull(entry.accountId) ??
+      stringOrNull(route?.accountId) ??
+      stringOrNull(deliveryContext?.accountId),
+  };
+}
+
+function buildLegacyDeliveryQueueRow(params: {
+  queueName: string;
+  id: string;
+  status: "pending" | "failed";
+  entry: Record<string, unknown>;
+  now: number;
+}): SqliteBindRow {
+  const enqueuedAt =
+    typeof params.entry.enqueuedAt === "number" ? params.entry.enqueuedAt : params.now;
+  const retryCount = typeof params.entry.retryCount === "number" ? params.entry.retryCount : 0;
+  const failedAt =
+    params.status === "failed"
+      ? typeof params.entry.failedAt === "number"
+        ? params.entry.failedAt
+        : typeof params.entry.lastAttemptAt === "number"
+          ? params.entry.lastAttemptAt
+          : enqueuedAt
+      : null;
+  const meta = legacyQueueMetadata(params.entry);
+  return {
+    queue_name: params.queueName,
+    id: params.id,
+    status: params.status,
+    entry_kind: meta.entryKind,
+    session_key: meta.sessionKey,
+    channel: meta.channel,
+    target: meta.target,
+    account_id: meta.accountId,
+    retry_count: retryCount,
+    last_attempt_at:
+      typeof params.entry.lastAttemptAt === "number" ? params.entry.lastAttemptAt : null,
+    last_error: typeof params.entry.lastError === "string" ? params.entry.lastError : null,
+    recovery_state:
+      typeof params.entry.recoveryState === "string" ? params.entry.recoveryState : null,
+    platform_send_started_at:
+      typeof params.entry.platformSendStartedAt === "number"
+        ? params.entry.platformSendStartedAt
+        : null,
+    entry_json: JSON.stringify({ ...params.entry, id: params.id, enqueuedAt, retryCount }),
+    enqueued_at: enqueuedAt,
+    updated_at: params.now,
+    failed_at: failedAt,
+  };
+}
+
+function legacyDeliveryQueueRowsMatch(
+  existing: Record<string, unknown>,
+  incoming: SqliteBindRow,
+): boolean {
+  return [
+    "status",
+    "entry_kind",
+    "session_key",
+    "channel",
+    "target",
+    "account_id",
+    "retry_count",
+    "last_attempt_at",
+    "last_error",
+    "recovery_state",
+    "platform_send_started_at",
+    "entry_json",
+    "enqueued_at",
+    "failed_at",
+  ].every((column) => {
+    const left = existing[column];
+    const right = incoming[column];
+    if (typeof left === "bigint" || typeof right === "bigint") {
+      return (
+        normalizeLegacySqliteInteger(left as number | bigint | null) ===
+        normalizeLegacySqliteInteger(right as number | bigint | null)
+      );
+    }
+    return left === right;
+  });
+}
+
+function removeLegacyDeliveryQueueDir(params: {
+  queueDir: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  try {
+    fs.rmSync(params.queueDir, { recursive: true });
+    params.changes.push(`Removed ${params.label} legacy source ${params.queueDir}`);
+  } catch (err) {
+    params.warnings.push(`Failed removing ${params.label} ${params.queueDir}: ${String(err)}`);
+  }
+}
+
+function removeLegacyDeliveryQueueMarkers(
+  markerPaths: string[],
+  label: string,
+  warnings: string[],
+): number | null {
+  let removed = 0;
+  for (const markerPath of markerPaths) {
+    try {
+      fs.rmSync(markerPath, { force: true });
+      removed++;
+    } catch (err) {
+      warnings.push(`Failed removing ${label} marker ${markerPath}: ${String(err)}`);
+      return null;
+    }
+  }
+  return removed;
+}
+
+async function migrateLegacyDeliveryQueues(params: {
+  stateDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const queue of LEGACY_DELIVERY_QUEUE_DIRS) {
+    const queueDir = resolveLegacyDeliveryQueuePath(params.stateDir, queue.dirName);
+    const files = listLegacyDeliveryQueueFiles(queueDir);
+    const markerPaths = listLegacyDeliveryQueueDeliveredMarkers(queueDir);
+    if (files.length === 0 && markerPaths.length === 0) {
+      continue;
+    }
+    let imported = 0;
+    let skipped = 0;
+    const conflicts: string[] = [];
+    try {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const insert = db.prepare(
+            `
+            INSERT INTO delivery_queue_entries (
+              queue_name, id, status, entry_kind, session_key, channel, target, account_id,
+              retry_count, last_attempt_at, last_error, recovery_state,
+              platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at
+            ) VALUES (
+              @queue_name, @id, @status, @entry_kind, @session_key, @channel, @target,
+              @account_id, @retry_count, @last_attempt_at, @last_error, @recovery_state,
+              @platform_send_started_at, @entry_json, @enqueued_at, @updated_at, @failed_at
+            )
+          `,
+          );
+          const now = Date.now();
+          for (const file of files) {
+            const entry = readLegacyDeliveryQueueEntry(file.sourcePath);
+            const id =
+              typeof entry?.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
+            if (!entry || !id) {
+              skipped++;
+              continue;
+            }
+            const row = buildLegacyDeliveryQueueRow({
+              queueName: queue.queueName,
+              id,
+              status: file.status,
+              entry,
+              now,
+            });
+            const existing = db
+              .prepare(
+                `
+                SELECT status, entry_kind, session_key, channel, target, account_id,
+                       retry_count, last_attempt_at, last_error, recovery_state,
+                       platform_send_started_at, entry_json, enqueued_at, failed_at
+                  FROM delivery_queue_entries
+                 WHERE queue_name = ? AND id = ?
+              `,
+              )
+              .get(queue.queueName, id);
+            if (existing) {
+              if (!legacyDeliveryQueueRowsMatch(existing as Record<string, unknown>, row)) {
+                conflicts.push(id);
+              }
+              continue;
+            }
+            insert.run(row);
+            imported++;
+          }
+        },
+        { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+      );
+    } catch (err) {
+      warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(err)}`);
+      continue;
+    }
+    const removedMarkers = removeLegacyDeliveryQueueMarkers(markerPaths, queue.label, warnings);
+    if (removedMarkers === null) {
+      continue;
+    }
+    if (removedMarkers > 0) {
+      changes.push(
+        `Removed ${removedMarkers} ${queue.label} delivered ${removedMarkers === 1 ? "marker" : "markers"}`,
+      );
+    }
+    if (imported > 0) {
+      changes.push(
+        `Migrated ${imported} ${queue.label} ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
+      );
+    }
+    if (skipped > 0) {
+      warnings.push(
+        `Skipped ${skipped} malformed ${queue.label} ${skipped === 1 ? "entry" : "entries"}`,
+      );
+      warnings.push(`Left ${queue.label} in place because malformed entries need manual cleanup`);
+      continue;
+    }
+    if (conflicts.length > 0) {
+      warnings.push(
+        `Left ${queue.label} in place because ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} already existed in shared state: ${conflicts[0]}`,
+      );
+      continue;
+    }
+    removeLegacyDeliveryQueueDir({ queueDir, label: queue.label, changes, warnings });
+  }
+  return { changes, warnings };
+}
+
 async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
@@ -918,6 +1396,70 @@ async function migrateLegacyPluginStateSidecar(params: {
   return { changes, warnings };
 }
 
+async function migrateLegacyInstalledPluginIndex(params: {
+  stateDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
+  if (!fileExists(sourcePath)) {
+    return { changes: [], warnings: [] };
+  }
+
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const legacy = readLegacyInstalledPluginIndex(sourcePath);
+  if (!legacy) {
+    return {
+      changes,
+      warnings: [`Left plugin install index in place because ${sourcePath} is invalid`],
+    };
+  }
+
+  const storeOptions = { stateDir: params.stateDir };
+  const current = readPersistedInstalledPluginIndexSync(storeOptions);
+  if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
+    const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
+    if (merged.addedCount > 0) {
+      try {
+        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
+        changes.push(
+          `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
+        );
+      } catch (err) {
+        return {
+          changes,
+          warnings: [`Failed merging plugin install index ${sourcePath}: ${String(err)}`],
+        };
+      }
+    }
+    if (merged.conflicts.length > 0) {
+      return {
+        changes,
+        warnings: [
+          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
+        ],
+      };
+    }
+  }
+
+  if (!current) {
+    try {
+      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
+      const recordCount = Object.keys(legacy.installRecords).length;
+      changes.push(
+        `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
+      );
+    } catch (err) {
+      return {
+        changes,
+        warnings: [`Failed migrating plugin install index ${sourcePath}: ${String(err)}`],
+      };
+    }
+  }
+
+  archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
+  return { changes, warnings };
+}
+
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
   return scopeKey ? `${scopeKey}:${key}` : key;
 }
@@ -959,8 +1501,8 @@ async function runLegacyMigrationPlans(
   for (const plan of plans) {
     if (plan.kind === "plugin-state-import") {
       await withPluginStateImportEnv(plan, async () => {
-        let storeEntries: Array<{ key: string; value: unknown }> = [];
-        let pluginEntryCount = 0;
+        let storeEntries: Array<{ key: string; value: unknown }>;
+        let pluginEntryCount;
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
           maxEntries: plan.maxEntries,
@@ -978,7 +1520,13 @@ async function runLegacyMigrationPlans(
         const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
         const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
-        const entries = await plan.readEntries();
+        let entries: Awaited<ReturnType<typeof plan.readEntries>>;
+        try {
+          entries = await plan.readEntries();
+        } catch (err) {
+          warnings.push(`Failed reading ${plan.label} legacy source: ${String(err)}`);
+          return;
+        }
         const candidateEntries: Array<{
           key: string;
           targetKey: string;
@@ -1073,26 +1621,20 @@ async function runLegacyMigrationPlans(
           cleanupKeys = expectedKeys;
         }
         const allEntriesCovered =
-          entries.length > 0 &&
-          entries.every(
-            ({ key }) =>
-              cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
-              !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-          );
+          (entries.length === 0 && plan.cleanupWhenEmpty === true) ||
+          (entries.length > 0 &&
+            entries.every(
+              ({ key }) =>
+                cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
+                !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+            ));
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
-          const archivedPath = `${plan.sourcePath}.migrated`;
-          if (fileExists(archivedPath)) {
-            warnings.push(
-              `Left migrated ${plan.label} source in place because ${archivedPath} already exists`,
-            );
-            return;
-          }
-          try {
-            fs.renameSync(plan.sourcePath, archivedPath);
-            changes.push(`Archived ${plan.label} legacy source → ${archivedPath}`);
-          } catch (err) {
-            warnings.push(`Failed archiving ${plan.label} legacy source: ${String(err)}`);
-          }
+          archiveLegacyImportSource({
+            sourcePath: plan.sourcePath,
+            label: plan.label,
+            changes,
+            warnings,
+          });
         }
       });
       continue;
@@ -1710,13 +2252,27 @@ export async function autoMigrateLegacyStateDir(params: {
   }
   autoMigrateStateDirChecked = true;
 
+  const homedir = params.homedir ?? os.homedir;
   const env = params.env ?? process.env;
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
+  const warnings: string[] = [];
+  const changes: string[] = [];
+  const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
+  const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
+  const migratePluginInstallIndex = async () => {
+    const result = await migrateLegacyInstalledPluginIndex({ stateDir: targetDir });
+    changes.push(...result.changes);
+    warnings.push(...result.warnings);
+  };
+  if (hasCustomStateDir) {
+    await migratePluginInstallIndex();
+    return {
+      migrated: changes.length > 0,
+      skipped: changes.length === 0 && warnings.length === 0,
+      changes,
+      warnings,
+    };
   }
 
-  const homedir = params.homedir ?? os.homedir;
-  const targetDir = resolveNewStateDir(homedir);
   const legacyDirs = resolveLegacyStateDirs(homedir);
   let legacyDir = legacyDirs.find((dir) => {
     try {
@@ -1725,17 +2281,16 @@ export async function autoMigrateLegacyStateDir(params: {
       return false;
     }
   });
-  const warnings: string[] = [];
-  const changes: string[] = [];
 
-  let legacyStat: fs.Stats | null = null;
+  let legacyStat: fs.Stats | null;
   try {
     legacyStat = legacyDir ? fs.lstatSync(legacyDir) : null;
   } catch {
     legacyStat = null;
   }
   if (!legacyStat) {
-    return { migrated: false, skipped: false, changes, warnings };
+    await migratePluginInstallIndex();
+    return { migrated: changes.length > 0, skipped: false, changes, warnings };
   }
   if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
     warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
@@ -1752,7 +2307,8 @@ export async function autoMigrateLegacyStateDir(params: {
       return { migrated: false, skipped: false, changes, warnings };
     }
     if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
-      return { migrated: false, skipped: false, changes, warnings };
+      await migratePluginInstallIndex();
+      return { migrated: changes.length > 0, skipped: false, changes, warnings };
     }
     if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
       legacyDir = legacyTarget;
@@ -1784,12 +2340,14 @@ export async function autoMigrateLegacyStateDir(params: {
 
   if (isDirPath(targetDir)) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
-      return { migrated: false, skipped: false, changes, warnings };
+      await migratePluginInstallIndex();
+      return { migrated: changes.length > 0, skipped: false, changes, warnings };
     }
+    await migratePluginInstallIndex();
     warnings.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
-    return { migrated: false, skipped: false, changes, warnings };
+    return { migrated: changes.length > 0, skipped: false, changes, warnings };
   }
 
   try {
@@ -1843,6 +2401,7 @@ export async function autoMigrateLegacyStateDir(params: {
     }
   }
 
+  await migratePluginInstallIndex();
   return { migrated: changes.length > 0, skipped: false, changes, warnings };
 }
 
@@ -1892,8 +2451,8 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   // Legacy state detection belongs on a narrow setup-entry surface so doctor
   // does not cold-load unrelated runtime channel code.
   const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
-  for (const detectLegacyStateMigrations of detectors) {
-    const detected = await detectLegacyStateMigrations({
+  for (const detectLegacyStateMigrationsLocal of detectors) {
+    const detected = await detectLegacyStateMigrationsLocal({
       cfg: params.cfg,
       env: params.env,
       stateDir: params.stateDir,
@@ -1999,9 +2558,20 @@ export async function detectLegacyStateMigrations(params: {
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
+  const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
+  const hasPluginInstallIndex = fileExists(pluginInstallIndexPath);
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
   const hasTaskStateSidecars = fileExists(taskRunsSidecarPath) || fileExists(flowRunsSidecarPath);
+  const deliveryQueuePaths = {
+    outboundPath: resolveLegacyDeliveryQueuePath(stateDir, "delivery-queue"),
+    sessionPath: resolveLegacyDeliveryQueuePath(stateDir, "session-delivery-queue"),
+  };
+  const hasDeliveryQueues =
+    listLegacyDeliveryQueueFiles(deliveryQueuePaths.outboundPath).length > 0 ||
+    listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.outboundPath).length > 0 ||
+    listLegacyDeliveryQueueFiles(deliveryQueuePaths.sessionPath).length > 0 ||
+    listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.sessionPath).length > 0;
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
@@ -2028,11 +2598,17 @@ export async function detectLegacyStateMigrations(params: {
   if (hasPluginStateSidecar) {
     preview.push(`- Plugin state sidecar: ${pluginStateSidecarPath} → shared SQLite state`);
   }
+  if (hasPluginInstallIndex) {
+    preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+  }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
   }
   if (fileExists(flowRunsSidecarPath)) {
     preview.push(`- Task flow sidecar: ${flowRunsSidecarPath} → shared SQLite state`);
+  }
+  if (hasDeliveryQueues) {
+    preview.push("- Delivery queues: legacy JSON queue files → shared SQLite state");
   }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
@@ -2072,10 +2648,18 @@ export async function detectLegacyStateMigrations(params: {
       sourcePath: pluginStateSidecarPath,
       hasLegacy: hasPluginStateSidecar,
     },
+    pluginInstallIndex: {
+      sourcePath: pluginInstallIndexPath,
+      hasLegacy: hasPluginInstallIndex,
+    },
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
       flowRunsPath: flowRunsSidecarPath,
       hasLegacy: hasTaskStateSidecars,
+    },
+    deliveryQueues: {
+      ...deliveryQueuePaths,
+      hasLegacy: hasDeliveryQueues,
     },
     preview,
   };
@@ -2084,6 +2668,7 @@ export async function detectLegacyStateMigrations(params: {
 async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
+  options: { recoverCorruptTargetStore?: boolean } = {},
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -2128,11 +2713,12 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
   });
+  let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
     const latest = pickLatestLegacyDirectEntry(legacyStore);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
-      changes.push(`Migrated latest direct-chat session → ${mainKey}`);
+      migratedDirectChatKey = mainKey;
     }
   }
 
@@ -2142,7 +2728,29 @@ async function migrateLegacySessions(
     );
   }
 
+  const targetExists = fileExists(detected.sessions.targetStorePath);
+  let targetReadable = !targetExists || targetParsed.ok;
+  if (!targetReadable) {
+    if (options.recoverCorruptTargetStore) {
+      const archivedTargetPath = `${detected.sessions.targetStorePath}.corrupt-${now()}`;
+      try {
+        fs.renameSync(detected.sessions.targetStorePath, archivedTargetPath);
+        changes.push(`Archived corrupt target sessions store → ${archivedTargetPath}`);
+        targetReadable = true;
+      } catch (err) {
+        warnings.push(
+          `Target sessions store unreadable; failed to archive ${detected.sessions.targetStorePath}: ${String(err)}`,
+        );
+      }
+    } else {
+      warnings.push(
+        `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}. Run openclaw doctor --fix to archive it and retry the legacy merge.`,
+      );
+    }
+  }
+
   if (
+    targetReadable &&
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
@@ -2157,10 +2765,17 @@ async function migrateLegacySessions(
     await saveSessionStore(detected.sessions.targetStorePath, normalized, {
       skipMaintenance: true,
     });
+    if (migratedDirectChatKey) {
+      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
+    }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
     }
+  }
+
+  if (!targetReadable) {
+    return { changes, warnings };
   }
 
   const entries = safeReadDir(detected.sessions.legacyDir);
@@ -2184,7 +2799,7 @@ async function migrateLegacySessions(
     }
   }
 
-  if (legacyParsed.ok) {
+  if (legacyParsed.ok && targetReadable) {
     try {
       if (fileExists(detected.sessions.legacyStorePath)) {
         fs.rmSync(detected.sessions.legacyStorePath, { force: true });
@@ -2291,13 +2906,20 @@ export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   config?: OpenClawConfig;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
   const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
     stateDir: detected.stateDir,
   });
+  const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
+    stateDir: detected.stateDir,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
+    stateDir: detected.stateDir,
+  });
+  const deliveryQueues = await migrateLegacyDeliveryQueues({
     stateDir: detected.stateDir,
   });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
@@ -2307,7 +2929,14 @@ export async function runLegacyStateMigrations(params: {
     detected,
     config: params.config ?? ({} as OpenClawConfig),
   });
-  const sessions = await migrateLegacySessions(detected, now);
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.config ?? ({} as OpenClawConfig),
+    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2315,19 +2944,25 @@ export async function runLegacyStateMigrations(params: {
   return {
     changes: [
       ...pluginStateSidecar.changes,
+      ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
+      ...deliveryQueues.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
+      ...acpSessionMetadata.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
     ],
     warnings: [
       ...pluginStateSidecar.warnings,
+      ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
+      ...deliveryQueues.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
+      ...acpSessionMetadata.warnings,
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
@@ -2493,6 +3128,80 @@ export async function migrateOrphanedSessionKeys(params: {
   return { changes, warnings };
 }
 
+async function migrateLegacyAcpSessionMetadata(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const env = params.env ?? process.env;
+  const now = params.now ?? (() => Date.now());
+  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const scope = params.cfg.session?.scope as SessionScope | undefined;
+  const seenStorePaths = new Set<string>();
+
+  for (const target of targets) {
+    const storePath = target.storePath;
+    if (seenStorePaths.has(storePath) || !fileExists(storePath)) {
+      continue;
+    }
+    seenStorePaths.add(storePath);
+    let parsed: ReturnType<typeof readSessionStoreJson5>;
+    try {
+      parsed = readSessionStoreJson5(storePath);
+    } catch (err) {
+      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      continue;
+    }
+    if (!parsed.ok) {
+      continue;
+    }
+
+    const normalized: Record<string, SessionEntry> = {};
+    let migrated = 0;
+    for (const [sessionKey, entry] of Object.entries(parsed.store)) {
+      const normalizedEntry = normalizeSessionEntry(entry);
+      if (!normalizedEntry) {
+        continue;
+      }
+      if (normalizedEntry.acp) {
+        const canonicalSessionKey = canonicalizeSessionKeyForAgent({
+          key: sessionKey,
+          agentId: target.agentId,
+          mainKey,
+          scope,
+          skipCrossAgentRemap: true,
+        });
+        writeAcpSessionMetaForMigration({
+          sessionKey: canonicalSessionKey,
+          sessionId: normalizedEntry.sessionId,
+          meta: normalizedEntry.acp,
+          env,
+          now,
+        });
+        delete normalizedEntry.acp;
+        migrated++;
+      }
+      normalized[sessionKey] = normalizedEntry;
+    }
+    if (migrated === 0) {
+      continue;
+    }
+    try {
+      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      changes.push(
+        `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
+      );
+    } catch (err) {
+      warnings.push(`Failed to write ACP metadata migration source ${storePath}: ${String(err)}`);
+    }
+  }
+
+  return { changes, warnings };
+}
+
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
@@ -2512,6 +3221,7 @@ export async function autoMigrateLegacyState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -2536,6 +3246,11 @@ export async function autoMigrateLegacyState(params: {
   const orphanKeys = await migrateOrphanedSessionKeys({
     cfg: params.cfg,
     env,
+  });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.cfg,
+    env,
+    now: params.now,
   });
 
   const logMigrationResults = (changes: string[], warnings: string[]) => {
@@ -2562,7 +3277,13 @@ export async function autoMigrateLegacyState(params: {
     const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
       stateDir: detected.stateDir,
     });
+    const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
+      stateDir: detected.stateDir,
+    });
     const taskStateSidecars = await migrateLegacyTaskStateSidecars({
+      stateDir: detected.stateDir,
+    });
+    const deliveryQueues = await migrateLegacyDeliveryQueues({
       stateDir: detected.stateDir,
     });
     const preSessionChannelPlans = await runLegacyMigrationPlans(
@@ -2575,16 +3296,22 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...orphanKeys.changes,
+      ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
+      ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
+      ...deliveryQueues.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
       ...orphanKeys.warnings,
+      ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
+      ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
+      ...deliveryQueues.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
@@ -2593,8 +3320,11 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         orphanKeys.changes.length > 0 ||
+        acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
+        pluginInstallIndex.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
+        deliveryQueues.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
       skipped: true,
@@ -2608,13 +3338,26 @@ export async function autoMigrateLegacyState(params: {
     !detected.channelPlans.hasLegacy &&
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
-    !detected.taskStateSidecars.hasLegacy
+    !detected.pluginInstallIndex.hasLegacy &&
+    !detected.taskStateSidecars.hasLegacy &&
+    !detected.deliveryQueues.hasLegacy
   ) {
-    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
-    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+    const changes = [
+      ...stateDirResult.changes,
+      ...orphanKeys.changes,
+      ...acpSessionMetadata.changes,
+    ];
+    const warnings = [
+      ...stateDirResult.warnings,
+      ...orphanKeys.warnings,
+      ...acpSessionMetadata.warnings,
+    ];
     logMigrationResults(changes, warnings);
     return {
-      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
+      migrated:
+        stateDirResult.migrated ||
+        orphanKeys.changes.length > 0 ||
+        acpSessionMetadata.changes.length > 0,
       skipped: false,
       changes,
       warnings,
@@ -2625,7 +3368,13 @@ export async function autoMigrateLegacyState(params: {
   const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
     stateDir: detected.stateDir,
   });
+  const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
+    stateDir: detected.stateDir,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
+    stateDir: detected.stateDir,
+  });
+  const deliveryQueues = await migrateLegacyDeliveryQueues({
     stateDir: detected.stateDir,
   });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
@@ -2635,7 +3384,14 @@ export async function autoMigrateLegacyState(params: {
     detected,
     config: params.cfg,
   });
-  const sessions = await migrateLegacySessions(detected, now);
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
+  const postSessionAcpMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.cfg,
+    env,
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2643,22 +3399,30 @@ export async function autoMigrateLegacyState(params: {
   const changes = [
     ...stateDirResult.changes,
     ...orphanKeys.changes,
+    ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
+    ...pluginInstallIndex.changes,
     ...taskStateSidecars.changes,
+    ...deliveryQueues.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
     ...sessions.changes,
+    ...postSessionAcpMetadata.changes,
     ...agentDir.changes,
     ...channelPlans.changes,
   ];
   const warnings = [
     ...stateDirResult.warnings,
     ...orphanKeys.warnings,
+    ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,
+    ...pluginInstallIndex.warnings,
     ...taskStateSidecars.warnings,
+    ...deliveryQueues.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
     ...sessions.warnings,
+    ...postSessionAcpMetadata.warnings,
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];

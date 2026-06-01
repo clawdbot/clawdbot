@@ -136,7 +136,7 @@ function resolveBundledSessionConversationFallback(params: {
     return null;
   }
   const dirName = normalizeResolvedChannel(params.channel);
-  let loaded: BundledSessionKeyModule | null = null;
+  let loaded: BundledSessionKeyModule | null;
   try {
     loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
       dirName,
@@ -145,13 +145,13 @@ function resolveBundledSessionConversationFallback(params: {
   } catch {
     return null;
   }
-  const resolveSessionConversation = loaded?.resolveSessionConversation;
-  if (typeof resolveSessionConversation !== "function") {
+  const resolveSessionConversationLocal = loaded?.resolveSessionConversation;
+  if (typeof resolveSessionConversationLocal !== "function") {
     return null;
   }
 
   return normalizeSessionConversationResolution(
-    resolveSessionConversation({
+    resolveSessionConversationLocal({
       kind: params.kind,
       rawId: params.rawId,
     }),

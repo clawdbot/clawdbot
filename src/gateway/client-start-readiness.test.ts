@@ -14,13 +14,13 @@ describe("startGatewayClientWhenEventLoopReady", () => {
     const promise = startGatewayClientWhenEventLoopReady(client, { timeoutMs: 100 });
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(client.start).not.toHaveBeenCalled();
+    expect(client["start"]).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     const readiness = await promise;
     expect(readiness.ready).toBe(true);
     expect(readiness.aborted).toBe(false);
 
-    expect(client.start).toHaveBeenCalledTimes(1);
+    expect(client["start"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not start the client after an aborted readiness wait", async () => {
@@ -37,6 +37,6 @@ describe("startGatewayClientWhenEventLoopReady", () => {
     const readiness = await promise;
     expect(readiness.ready).toBe(false);
     expect(readiness.aborted).toBe(true);
-    expect(client.start).not.toHaveBeenCalled();
+    expect(client["start"]).not.toHaveBeenCalled();
   });
 });

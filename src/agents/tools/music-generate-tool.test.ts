@@ -629,7 +629,7 @@ describe("createMusicGenerateTool", () => {
       applied: 120_000,
       minimum: 120_000,
     });
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     if (!scheduledWork) {
       throw new Error("expected scheduled music generation work");
     }

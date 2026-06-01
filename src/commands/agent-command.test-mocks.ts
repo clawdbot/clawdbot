@@ -81,12 +81,13 @@ vi.mock("../agents/model-selection.js", () => {
     return { provider: defaultProvider, model: value };
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: provider.trim().toLowerCase(),
+    provider: normalizeProviderId(provider),
     model: model.trim(),
   });
   const modelKey = (provider: string, model: string) =>
-    `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+    `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
     if (allowedKeys.has(key)) {
       return true;
@@ -184,6 +185,8 @@ vi.mock("../agents/model-selection.js", () => {
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>

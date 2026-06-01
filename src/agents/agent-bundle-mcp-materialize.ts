@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -150,7 +150,7 @@ function addMcpUtilityTool(params: {
   serverName: string;
   safeServerName: string;
   executionMode: AnyAgentTool["executionMode"];
-  operation: string;
+  operation: Exclude<PluginToolMcpMeta["operation"], "tool">;
   label: string;
   description: string;
   parameters: Record<string, unknown>;
@@ -177,6 +177,12 @@ function addMcpUtilityTool(params: {
   setPluginToolMeta(agentTool, {
     pluginId: "bundle-mcp",
     optional: false,
+    mcp: {
+      serverName: params.serverName,
+      safeServerName: params.safeServerName,
+      toolName: params.operation,
+      operation: params.operation,
+    },
   });
   params.tools.push(agentTool);
 }
@@ -242,6 +248,12 @@ export function buildBundleMcpToolsFromCatalog(params: {
     setPluginToolMeta(agentTool, {
       pluginId: "bundle-mcp",
       optional: false,
+      mcp: {
+        serverName: tool.serverName,
+        safeServerName: tool.safeServerName,
+        toolName: tool.toolName,
+        operation: "tool",
+      },
     });
     tools.push(agentTool);
   }

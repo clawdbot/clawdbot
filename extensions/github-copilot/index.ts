@@ -42,6 +42,17 @@ type GithubCopilotPluginConfig = {
   };
 };
 
+function compatSupportsXHigh(
+  compat: { supportedReasoningEfforts?: readonly string[] | null } | null | undefined,
+) {
+  return (
+    Array.isArray(compat?.supportedReasoningEfforts) &&
+    compat.supportedReasoningEfforts.some(
+      (effort) => normalizeOptionalLowercaseString(effort) === "xhigh",
+    )
+  );
+}
+
 async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
@@ -450,20 +461,22 @@ export default definePluginEntry({
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
-      resolveThinkingProfile: ({ modelId }) => ({
-        levels: [
-          { id: "off" },
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          ...(COPILOT_XHIGH_MODEL_IDS.includes(
+      resolveThinkingProfile: ({ modelId, compat }) => {
+        const modelSupportsXHigh =
+          COPILOT_XHIGH_MODEL_IDS.includes(
             (normalizeOptionalLowercaseString(modelId) ?? "") as never,
-          )
-            ? [{ id: "xhigh" as const }]
-            : []),
-        ],
-      }),
+          ) || compatSupportsXHigh(compat);
+        return {
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            ...(modelSupportsXHigh ? [{ id: "xhigh" as const }] : []),
+          ],
+        };
+      },
       prepareRuntimeAuth: async (ctx) => {
         const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
         const token = await resolveCopilotApiToken({

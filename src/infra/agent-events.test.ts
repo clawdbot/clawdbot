@@ -30,6 +30,44 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
+  test("stamps the owning sessionId onto lifecycle events for reset-stale guarding (#88538)", () => {
+    registerAgentRunContext("run-1", { sessionKey: "main", sessionId: "old-session-id" });
+    const seen: Array<{ stream: string; sessionId?: string }> = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-1") {
+        seen.push({ stream: evt.stream, sessionId: evt.sessionId });
+      }
+    });
+
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "error" } });
+    emitAgentEvent({ runId: "run-1", stream: "item", data: {} });
+
+    stop();
+
+    expect(seen.find((evt) => evt.stream === "lifecycle")?.sessionId).toBe("old-session-id");
+    // Only lifecycle events carry the sessionId; other streams stay unstamped.
+    expect(seen.find((evt) => evt.stream === "item")?.sessionId).toBeUndefined();
+  });
+
+  test("refreshes the stamped sessionId when run context is re-registered (#88538)", () => {
+    registerAgentRunContext("run-1", { sessionKey: "main", sessionId: "start-id" });
+    // Callers that already persisted a rotation can re-register the new owner.
+    registerAgentRunContext("run-1", { sessionId: "rotated-id" });
+    let stamped: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-1" && evt.stream === "lifecycle") {
+        stamped = evt.sessionId;
+      }
+    });
+
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } });
+
+    stop();
+    // Terminal event carries the rotated id, so persistence won't treat the
+    // run as stale against the row it rotated to.
+    expect(stamped).toBe("rotated-id");
+  });
+
   test("maintains monotonic seq per runId", () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {

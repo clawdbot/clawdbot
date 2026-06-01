@@ -1357,7 +1357,7 @@ export class MatrixClient {
       return await fail("Matrix recovery key is required");
     }
 
-    let stagedKeyId: string | null = null;
+    let stagedKeyId: string | null;
     try {
       stagedKeyId = (await this.resolveDefaultSecretStorageKeyId(crypto)) ?? null;
       this.recoveryKeyStore.stageEncodedRecoveryKey({

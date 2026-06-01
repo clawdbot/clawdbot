@@ -108,7 +108,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch((err) => ({ error: String(err) }));
+  }).catch((err: unknown) => ({ error: String(err) }));
 }
 
 export async function resolveStatusGatewayDiagnosticsSafe(params: {

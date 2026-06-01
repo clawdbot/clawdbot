@@ -5,6 +5,7 @@ import type { ChatQueueItem } from "../ui-types.ts";
 import {
   loadChatComposerSnapshot,
   persistChatComposerState,
+  removeStoredChatComposerQueueItem,
   restoreChatComposerState,
 } from "./composer-persistence.ts";
 
@@ -188,6 +189,60 @@ describe("chat composer persistence", () => {
         "agent:lily:main",
       ),
     ).toBeNull();
+  });
+
+  it("restores pre-request model-wait sends for manual retry only", () => {
+    persistChatComposerState(
+      createState({
+        chatQueue: [
+          {
+            id: "waiting-model-1",
+            text: "not sent yet",
+            createdAt: 1,
+            sendRunId: "run-waiting-model",
+            sendState: "waiting-model",
+          },
+        ],
+      }),
+    );
+
+    const restored = createState();
+    expect(restoreChatComposerState(restored)).toBe(true);
+
+    expect(restored.chatQueue).toEqual([
+      {
+        id: "waiting-model-1",
+        text: "not sent yet",
+        createdAt: 1,
+        sendRunId: "run-waiting-model",
+        sendState: "failed",
+        sendError: "Model selection was interrupted. Review and retry when ready.",
+      },
+    ]);
+  });
+
+  it("removes one stored queued item without dropping the stored draft", () => {
+    persistChatComposerState(
+      createState({
+        chatMessage: "keep this draft",
+        chatQueue: [
+          { id: "remove-me", text: "stale queued send", createdAt: 1 },
+          { id: "keep-me", text: "still queued", createdAt: 2 },
+        ],
+      }),
+    );
+
+    removeStoredChatComposerQueueItem(createState(), "agent:lily:main", "remove-me");
+
+    expect(
+      loadChatComposerSnapshot(
+        { settings: { gatewayUrl: "ws://gateway.test/control" } },
+        "agent:lily:main",
+      ),
+    ).toEqual({
+      draft: "keep this draft",
+      queue: [{ id: "keep-me", text: "still queued", createdAt: 2 }],
+    });
   });
 
   it("does not restore steered messages tied to a previous active run", () => {

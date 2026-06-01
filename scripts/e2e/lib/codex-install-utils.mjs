@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readJson } from "./fixtures/common.mjs";
+import { readPluginInstallRecords } from "./plugin-index-sqlite.mjs";
 
 export { readJson };
 
@@ -34,9 +35,7 @@ export function assertPathInside(parentPath, childPath, label) {
 }
 
 export function readInstallRecords(fallbackRecords = {}) {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  return index.installRecords || index.records || fallbackRecords || {};
+  return readPluginInstallRecords({ fallbackRecords });
 }
 
 export function npmProjectRootForInstalledPackage(installPath, packageName) {

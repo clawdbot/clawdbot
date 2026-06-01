@@ -620,7 +620,7 @@ export async function monitorMSTeamsProvider(
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
       log.error("msteams server error", { error: formatUnknownError(err) });
-      reject(err);
+      reject(toLintErrorObject(err, "MSTeams server failed"));
     };
     httpServer.once("listening", onListening);
     httpServer.once("error", onError);
@@ -651,6 +651,20 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
 
 /**

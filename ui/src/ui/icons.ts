@@ -494,9 +494,9 @@ export function renderEmojiIcon(
   return html`<span class=${className} aria-hidden="true">${iconContent}</span>`;
 }
 
-export function setEmojiIcon(target: HTMLElement | null, icon: string): void {
+export function setEmojiIcon(target: HTMLElement | null, iconLocal: string): void {
   if (!target) {
     return;
   }
-  target.textContent = icon;
+  target.textContent = iconLocal;
 }

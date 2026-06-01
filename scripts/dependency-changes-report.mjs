@@ -299,7 +299,7 @@ export async function main(argv = process.argv.slice(2)) {
   await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeArtifact(options.markdownPath, renderMarkdownReport(report));
   const artifactHint =
-    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+    typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(
     `INFO dependency change report: ${report.summary.addedPackages} added, ` +
       `${report.summary.removedPackages} removed, ${report.summary.changedPackages} changed ` +
@@ -314,7 +314,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     (exitCode) => {
       process.exitCode = exitCode;
     },
-    (error) => {
+    /** @param {unknown} error */ (error) => {
       process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
       process.exitCode = 1;
     },

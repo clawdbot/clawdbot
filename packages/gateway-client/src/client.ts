@@ -1,14 +1,10 @@
 import { randomUUID } from "node:crypto";
-import {
-  type ConnectParams,
-  type EventFrame,
-  type HelloOk,
-  MIN_CLIENT_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-  type RequestFrame,
-  validateEventFrame,
-  validateRequestFrame,
-  validateResponseFrame,
+import type {
+  ConnectParams,
+  EventFrame,
+  HelloOk,
+  RequestFrame,
+  ResponseFrame,
 } from "@openclaw/gateway-protocol";
 import {
   GATEWAY_CLIENT_MODES,
@@ -25,6 +21,7 @@ import {
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
@@ -78,6 +75,63 @@ function normalizeOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isGatewayClientErrorShape(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (!isNonEmptyString(value.code) || !isNonEmptyString(value.message)) {
+    return false;
+  }
+  if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
+    return false;
+  }
+  if (value.retryAfterMs !== undefined && !isNonNegativeInteger(value.retryAfterMs)) {
+    return false;
+  }
+  return true;
+}
+
+function isGatewayEventFrame(value: unknown): value is EventFrame {
+  if (!isRecord(value) || value.type !== "event" || !isNonEmptyString(value.event)) {
+    return false;
+  }
+  return value.seq === undefined || isNonNegativeInteger(value.seq);
+}
+
+function isGatewayResponseFrame(value: unknown): value is ResponseFrame {
+  if (
+    !isRecord(value) ||
+    value.type !== "res" ||
+    !isNonEmptyString(value.id) ||
+    typeof value.ok !== "boolean"
+  ) {
+    return false;
+  }
+  return value.error === undefined || isGatewayClientErrorShape(value.error);
+}
+
+function validateClientRequestFrame(frame: RequestFrame): string | null {
+  if (!isNonEmptyString(frame.id)) {
+    return "id must be a non-empty string";
+  }
+  if (!isNonEmptyString(frame.method)) {
+    return "method must be a non-empty string";
+  }
+  return null;
 }
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
@@ -824,7 +878,7 @@ export class GatewayClient {
         this.startTickWatch();
         this.opts.onHelloOk?.(helloOk);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         this.pendingConnectErrorDetails =
@@ -1233,7 +1287,7 @@ export class GatewayClient {
       this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(err)}`);
       return;
     }
-    if (validateEventFrame(parsed)) {
+    if (isGatewayEventFrame(parsed)) {
       this.lastTick = Date.now();
       const evt = parsed;
       if (evt.event === "connect.challenge") {
@@ -1267,7 +1321,7 @@ export class GatewayClient {
       }
       return;
     }
-    if (validateResponseFrame(parsed)) {
+    if (isGatewayResponseFrame(parsed)) {
       this.lastTick = Date.now();
       const pending = this.pending.get(parsed.id);
       if (!pending) {
@@ -1454,10 +1508,9 @@ export class GatewayClient {
     }
     const id = randomUUID();
     const frame: RequestFrame = { type: "req", id, method, params };
-    if (!validateRequestFrame(frame)) {
-      throw new Error(
-        `invalid request frame: ${JSON.stringify(validateRequestFrame.errors, null, 2)}`,
-      );
+    const requestFrameError = validateClientRequestFrame(frame);
+    if (requestFrameError) {
+      throw new Error(`invalid request frame: ${requestFrameError}`);
     }
     const expectFinal = opts?.expectFinal === true;
     const timeoutMs =

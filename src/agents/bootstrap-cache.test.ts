@@ -81,6 +81,24 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(r2).toBe(files2);
     expect(mockLoad()).toHaveBeenCalledTimes(2);
   });
+
+  it("evicts the oldest snapshot once the cache exceeds its cap", async () => {
+    for (let index = 0; index <= 64; index += 1) {
+      await getOrLoadBootstrapFiles({
+        workspaceDir: "/ws",
+        sessionKey: `session-${index}`,
+      });
+    }
+
+    expect(mockLoad()).toHaveBeenCalledTimes(65);
+
+    await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-0",
+    });
+
+    expect(mockLoad()).toHaveBeenCalledTimes(66);
+  });
 });
 
 describe("clearBootstrapSnapshot", () => {

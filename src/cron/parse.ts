@@ -17,6 +17,7 @@ function normalizeUtcIso(raw: string) {
   return raw;
 }
 
+/** Parses absolute cron timestamps from epoch milliseconds or ISO-like strings normalized to UTC. */
 export function parseAbsoluteTimeMs(input: string): number | null {
   const raw = input.trim();
   if (!raw) {

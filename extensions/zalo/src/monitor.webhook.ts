@@ -266,7 +266,7 @@ export async function handleZaloWebhookRequest(
         update,
         processUpdate,
         nowMs,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 

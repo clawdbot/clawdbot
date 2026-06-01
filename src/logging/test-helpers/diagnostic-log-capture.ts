@@ -7,7 +7,9 @@ export type CapturedDiagnosticLogRecord = Extract<DiagnosticEventPayload, { type
 
 export async function flushDiagnosticLogRecords(): Promise<void> {
   for (let index = 0; index < 3; index += 1) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 

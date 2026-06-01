@@ -84,6 +84,7 @@ function turnStartResult(turnId = "turn-1") {
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
@@ -92,6 +93,7 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     resetAgentEventsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();

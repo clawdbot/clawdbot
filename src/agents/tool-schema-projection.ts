@@ -24,6 +24,65 @@ export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" 
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 
+type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters">> =
+  | {
+      readonly ok: true;
+      readonly tool: TTool;
+      readonly toolIndex: number;
+    }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RuntimeToolSchemaDiagnostic;
+    };
+
+type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
+
+function unreadableRuntimeToolEntry(
+  toolIndex: number,
+): RuntimeToolEntryRead<Pick<AnyAgentTool, "name" | "parameters">> {
+  return {
+    ok: false,
+    diagnostic: {
+      toolName: `tool[${toolIndex}]`,
+      toolIndex,
+      violations: [`tool[${toolIndex}] is unreadable`],
+    },
+  };
+}
+
+function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
+  tools: readonly TTool[],
+): RuntimeToolEntryRead<TTool>[] {
+  let length: number;
+  try {
+    length = tools.length;
+  } catch {
+    return [unreadableRuntimeToolEntry(0) as RuntimeToolEntryRead<TTool>];
+  }
+  const entries: RuntimeToolEntryRead<TTool>[] = [];
+  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
+    try {
+      entries.push({ ok: true, tool: tools[toolIndex], toolIndex });
+    } catch {
+      entries.push(unreadableRuntimeToolEntry(toolIndex) as RuntimeToolEntryRead<TTool>);
+    }
+  }
+  return entries;
+}
+
+function readToolProjectionField<TField extends "name" | "parameters">(
+  tool: Pick<AnyAgentTool, "name" | "parameters">,
+  field: TField,
+):
+  | { readable: true; value: Pick<AnyAgentTool, "name" | "parameters">[TField] }
+  | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
 function isJsonValue(value: unknown): value is RuntimeToolInputSchemaJson {
   if (value === null) {
     return true;
@@ -140,29 +199,82 @@ export function projectRuntimeToolInputSchema(
   };
 }
 
+function inspectToolSchema(
+  tool: Pick<AnyAgentTool, "name" | "parameters">,
+  toolIndex: number,
+  mode: ToolSchemaInspectionMode,
+): RuntimeToolSchemaDiagnostic | undefined {
+  const nameRead = readToolProjectionField(tool, "name");
+  const toolName =
+    nameRead.readable && typeof nameRead.value === "string" && nameRead.value
+      ? nameRead.value
+      : `tool[${toolIndex}]`;
+  const descriptorViolations = nameRead.readable ? [] : [`${toolName}.name is unreadable`];
+  const parametersRead = readToolProjectionField(tool, "parameters");
+  if (!parametersRead.readable) {
+    return {
+      toolName,
+      toolIndex,
+      violations: [...descriptorViolations, `${toolName}.parameters is unreadable`],
+    };
+  }
+  if (mode === "provider-normalizable" && parametersRead.value === undefined) {
+    return descriptorViolations.length > 0
+      ? { toolName, toolIndex, violations: descriptorViolations }
+      : undefined;
+  }
+
+  const schemaPath = `${toolName}.parameters`;
+  const projection = projectRuntimeToolInputSchema(parametersRead.value, schemaPath);
+  const projectionViolations =
+    mode === "runtime"
+      ? projection.violations
+      : projection.violations.filter(
+          (violation) =>
+            violation !== `${schemaPath}.$dynamicRef` &&
+            violation !== `${schemaPath}.$dynamicAnchor` &&
+            !violation.endsWith(".$dynamicRef") &&
+            !violation.endsWith(".$dynamicAnchor"),
+        );
+  const violations = [...descriptorViolations, ...projectionViolations];
+  return violations.length > 0 ? { toolName, toolIndex, violations } : undefined;
+}
+
+function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
+  entries: readonly RuntimeToolEntryRead<TTool>[],
+  mode: ToolSchemaInspectionMode,
+): RuntimeToolSchemaInspection<TTool> {
+  const diagnostics: RuntimeToolSchemaDiagnostic[] = [];
+  const compatibleTools: TTool[] = [];
+  for (const entry of entries) {
+    if (!entry.ok) {
+      diagnostics.push(entry.diagnostic);
+      continue;
+    }
+    const diagnostic = inspectToolSchema(entry.tool, entry.toolIndex, mode);
+    if (diagnostic) {
+      diagnostics.push(diagnostic);
+      continue;
+    }
+    compatibleTools.push(entry.tool);
+  }
+  return { tools: compatibleTools, diagnostics };
+}
+
 export function inspectRuntimeToolInputSchemas(
   tools: readonly Pick<AnyAgentTool, "name" | "parameters">[],
 ): RuntimeToolSchemaDiagnostic[] {
-  return tools.flatMap((tool, toolIndex) => {
-    const toolName = tool.name || `tool[${toolIndex}]`;
-    const projection = projectRuntimeToolInputSchema(tool.parameters, `${toolName}.parameters`);
-    if (projection.violations.length === 0) {
-      return [];
-    }
-    return [{ toolName, toolIndex, violations: projection.violations }];
-  });
+  return [...inspectToolEntries(readRuntimeToolEntries(tools), "runtime").diagnostics];
 }
 
 export function filterRuntimeCompatibleTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
-  const diagnostics = inspectRuntimeToolInputSchemas(tools);
-  if (diagnostics.length === 0) {
-    return { tools, diagnostics };
-  }
-  const blockedIndexes = new Set(diagnostics.map((diagnostic) => diagnostic.toolIndex));
-  return {
-    tools: tools.filter((_tool, index) => !blockedIndexes.has(index)),
-    diagnostics,
-  };
+  return inspectToolEntries(readRuntimeToolEntries(tools), "runtime");
+}
+
+export function filterProviderNormalizableTools<
+  TTool extends Pick<AnyAgentTool, "name" | "parameters">,
+>(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
+  return inspectToolEntries(readRuntimeToolEntries(tools), "provider-normalizable");
 }

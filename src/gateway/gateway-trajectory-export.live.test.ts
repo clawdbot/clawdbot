@@ -131,7 +131,9 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
       await fs.stat(filePath);
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
     }
   }
   throw new Error(`timed out waiting for ${filePath}`);

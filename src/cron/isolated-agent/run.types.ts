@@ -1,5 +1,6 @@
 import type { CronDeliveryTrace, CronRunOutcome, CronRunTelemetry } from "../types.js";
 
+/** Final isolated cron turn result merged into service state and run logs. */
 export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;

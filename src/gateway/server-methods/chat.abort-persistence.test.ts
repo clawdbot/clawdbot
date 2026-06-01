@@ -837,6 +837,86 @@ describe("chat abort transcript persistence", () => {
     );
   });
 
+  it("does not abort hidden pending internal agent runs by visible session key", async () => {
+    const respond = vi.fn();
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-hidden", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-hidden",
+        sessionKey: "main",
+        status: "accepted",
+        controlUiVisible: false,
+        ownerConnId: "conn-hidden",
+      },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: {
+        sessionKey: "main",
+      },
+      client: { connId: "conn-hidden" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    const actual = expectRecord(payload, "abort payload");
+    expect(actual.aborted).toBe(false);
+    expect(actual.runIds).toEqual([]);
+    expect(context.dedupe.get("agent:run-hidden")).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          status: "accepted",
+          controlUiVisible: false,
+        }),
+      }),
+    );
+  });
+
+  it("aborts hidden pending internal agent runs by explicit owner run id", async () => {
+    const respond = vi.fn();
+    const context = createChatAbortContext();
+    context.dedupe.set("agent:run-hidden", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "run-hidden",
+        sessionKey: "main",
+        status: "accepted",
+        controlUiVisible: false,
+        ownerConnId: "conn-hidden",
+      },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: {
+        sessionKey: "main",
+        runId: "run-hidden",
+      },
+      client: { connId: "conn-hidden" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-hidden"] });
+    expect(context.dedupe.get("agent:run-hidden")).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          status: "timeout",
+          controlUiVisible: false,
+          stopReason: "rpc",
+        }),
+      }),
+    );
+  });
+
   it("does not abort pending agent-prefixed global aliases for another selected agent", async () => {
     const respond = vi.fn();
     const context = createChatAbortContext({
@@ -1080,6 +1160,36 @@ describe("chat abort transcript persistence", () => {
     const context = createChatAbortContext({
       chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
       chatRunBuffers: new Map([[runId, "  \n\t  "]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: [runId] });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = findMessageWithIdempotencyKey(lines, `${runId}:assistant`);
+    expect(persisted).toBeUndefined();
+  });
+
+  it("skips run-scoped transcript persistence for hidden internal runs", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-run-hidden-",
+    );
+    const runId = "idem-abort-run-hidden";
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        [runId, createActiveRun("main", { sessionId, controlUiVisible: false })],
+      ]),
+      chatRunBuffers: new Map([[runId, "Hidden partial"]]),
       chatDeltaSentAt: new Map([[runId, Date.now()]]),
     });
 

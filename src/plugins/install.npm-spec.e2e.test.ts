@@ -30,7 +30,9 @@ const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
   for (const key of envKeys) {
     const original = originalEnv[key];
@@ -217,7 +219,9 @@ async function startStaticRegistry(
     response.end(`not found: ${url.pathname}`);
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   servers.push(server);
   return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 }
@@ -296,7 +300,9 @@ async function startMutableRegistry(params: {
     response.end(`not found: ${url.pathname}`);
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   servers.push(server);
   return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 }

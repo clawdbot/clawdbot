@@ -1,7 +1,7 @@
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
-import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -120,6 +120,7 @@ export function applyToolPolicyPipeline(params: {
   toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
+  auditLogLevel?: ToolPolicyAuditLogLevel;
 }): AnyAgentTool[] {
   const coreToolNames = new Set(
     params.tools
@@ -191,6 +192,7 @@ export function applyToolPolicyPipeline(params: {
       policy: expanded,
       before,
       after: filtered,
+      logLevel: params.auditLogLevel,
     });
   }
   return filtered;

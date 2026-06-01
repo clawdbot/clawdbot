@@ -159,6 +159,15 @@ export function scheduleControlUiTabVisibleTiming(
     .then(() => runAfterPaint(record));
 }
 
+export function scheduleControlUiAfterPaint(
+  host: Pick<ControlUiPerformanceHost, "updateComplete">,
+  callback: () => void,
+) {
+  void Promise.resolve(host.updateComplete)
+    .catch(() => undefined)
+    .then(() => runAfterPaint(callback));
+}
+
 export function beginControlUiRefresh(
   host: ControlUiPerformanceHost,
   tab: Tab,

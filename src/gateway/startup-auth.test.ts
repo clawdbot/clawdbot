@@ -33,6 +33,15 @@ describe("mergeGatewayTailscaleConfig", () => {
       ),
     ).toEqual({ mode: "serve", resetOnExit: false, preserveFunnel: true });
   });
+
+  it("preserves explicit serviceName overrides", () => {
+    expect(
+      mergeGatewayTailscaleConfig(
+        { mode: "serve", serviceName: "svc:old-openclaw", resetOnExit: false },
+        { serviceName: "svc:openclaw" },
+      ),
+    ).toEqual({ mode: "serve", serviceName: "svc:openclaw", resetOnExit: false });
+  });
 });
 
 describe("ensureGatewayStartupAuth", () => {

@@ -1,3 +1,4 @@
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -31,7 +32,6 @@ import {
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   isCronSessionKey,
@@ -86,10 +86,12 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
   return { text: next, strippedTrailingSilentToken };
 }
 
+/** Returns whether cron delivery should tolerate per-payload send failures. */
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return job.delivery?.bestEffort === true;
 }
 
+/** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
@@ -124,6 +126,7 @@ type DispatchCronDeliveryParams = {
   ) => RunCronAgentTurnResult;
 };
 
+/** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
 export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
@@ -241,6 +244,7 @@ async function logCronDeliveryError(message: string): Promise<void> {
   logError(message);
 }
 
+/** Deletes or retires ephemeral direct-delivery cron sessions for delete-after-run jobs. */
 export async function cleanupDirectCronSession(params: {
   job: CronJob;
   agentSessionKey: string;
@@ -680,10 +684,12 @@ async function appendDirectCronDeliveryTranscriptMirror(params: {
   }
 }
 
+/** Clears the direct-delivery idempotency cache for deterministic tests. */
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
 
+/** Returns the direct-delivery idempotency cache size for tests. */
 export function getCompletedDirectCronDeliveriesCountForTests(): number {
   return COMPLETED_DIRECT_CRON_DELIVERIES.size;
 }
@@ -725,16 +731,14 @@ async function retryTransientDirectCronDelivery<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  let retryIndex = 0;
-  for (;;) {
+  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
     if (params.signal?.aborted) {
       throw new Error("cron delivery aborted");
     }
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
+      if (!isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
@@ -742,12 +746,16 @@ async function retryTransientDirectCronDelivery<T>(params: {
       await logCronDeliveryWarn(
         `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
       );
-      retryIndex += 1;
       await sleepWithAbort(delayMs, params.signal);
     }
   }
+  if (params.signal?.aborted) {
+    throw new Error("cron delivery aborted");
+  }
+  return await params.run();
 }
 
+/** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {

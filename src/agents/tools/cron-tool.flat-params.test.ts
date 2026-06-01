@@ -92,6 +92,24 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("leaves out-of-range flat atMs for gateway validation", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    const invalidAtMs = 8_640_000_000_000_001;
+
+    await tool.execute("call-flat-invalid-atms-add", {
+      action: "add",
+      name: "bad date",
+      atMs: invalidAtMs,
+      message: "send reminder",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: { at?: unknown; kind?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({ kind: "at", at: invalidAtMs });
+  });
+
   it("recovers flat cron schedule shorthand for update", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 

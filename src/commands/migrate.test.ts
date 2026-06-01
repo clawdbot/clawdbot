@@ -768,8 +768,8 @@ describe("migrateApplyCommand", () => {
         (
           (
             (
-              appliedPlan.items.find((item) => item.id === "config:codex-plugins")?.details
-                ?.value as Record<string, unknown>
+              appliedPlan.items.find((item) => item.id === "config:codex-plugins")!.details!
+                .value as Record<string, unknown>
             ).config as Record<string, unknown>
           ).codexPlugins as Record<string, unknown>
         ).plugins as Record<string, unknown>,

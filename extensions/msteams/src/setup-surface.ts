@@ -283,7 +283,9 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
             {
               isRemote: true,
               openUrl: openDelegatedOAuthUrl,
-              log: (msg) => params.prompter.note(msg),
+              log: (msg) => {
+                void params.prompter.note(msg);
+              },
               note: (msg, title) => params.prompter.note(msg, title),
               prompt: (msg) => params.prompter.text({ message: msg }),
               progress,

@@ -54,6 +54,6 @@ function loadChannelRuntime() {
 export async function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  const { monitorWebChannel } = await loadChannelRuntime();
-  return await monitorWebChannel(...args);
+  const { monitorWebChannel: monitorWebChannelLocal } = await loadChannelRuntime();
+  return await monitorWebChannelLocal(...args);
 }

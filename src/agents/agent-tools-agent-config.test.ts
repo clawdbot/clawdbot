@@ -251,9 +251,9 @@ describe("Agent-specific tool filtering", () => {
       );
       const readError = await fs.readFile(escapedPath, "utf8").then(
         () => undefined,
-        (err: NodeJS.ErrnoException) => err,
+        (err: unknown) => err,
       );
-      expect(readError?.code).toBe("ENOENT");
+      expect(readError).toMatchObject({ code: "ENOENT" });
     });
   });
 

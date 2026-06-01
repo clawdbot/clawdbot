@@ -525,6 +525,10 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
     expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
     expect(relay.shouldRelayEvent("permission_request")).toBe(true);
+    expect(relay.commandForEvent("pre_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable noop --timeout 1234`,
+    );
   });
 
   it("builds pre-tool relay commands only when before-tool policy is active", () => {
@@ -751,7 +755,9 @@ describe("native hook relay registry", () => {
       },
     });
     await staleRequest.connected;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
 
     const second = registerNativeHookRelay({
       provider: "codex",
@@ -911,7 +917,9 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
       generationMismatchGraceMs: 1,
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     await expect(
       invokeNativeHookRelayBridge({
@@ -941,7 +949,9 @@ describe("native hook relay registry", () => {
     });
     const before = await waitForNativeHookRelayBridgeRecord(relay.relayId);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
     relay.renew(20_000);
 
     const after = await waitForNativeHookRelayBridgeRecord(relay.relayId);
@@ -3188,6 +3198,21 @@ describe("native hook relay command builder", () => {
       }),
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 5000",
+    );
+  });
+
+  it("includes explicit unavailable noop mode only for PreToolUse", () => {
+    expect(
+      buildNativeHookRelayCommand({
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "noop",
+        executable: "openclaw",
+      }),
+    ).toBe(
+      "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
     );
   });
 });

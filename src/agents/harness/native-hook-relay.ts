@@ -439,6 +439,10 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
+        preToolUseUnavailable:
+          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
+            ? "noop"
+            : undefined,
         nice: params.command?.nice,
         timeoutMs: params.command?.timeoutMs,
         executable: params.command?.executable,
@@ -517,6 +521,7 @@ export function buildNativeHookRelayCommand(params: {
   relayId: string;
   generation?: string;
   event: NativeHookRelayEvent;
+  preToolUseUnavailable?: "noop";
   timeoutMs?: number;
   executable?: string;
   nice?: number | false;
@@ -541,6 +546,9 @@ export function buildNativeHookRelayCommand(params: {
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
+    ...(params.event === "pre_tool_use" && params.preToolUseUnavailable
+      ? ["--pre-tool-use-unavailable", params.preToolUseUnavailable]
+      : []),
     "--timeout",
     String(timeoutMs),
   ]);
@@ -752,6 +760,7 @@ export async function invokeNativeHookRelayBridge(
 export function renderNativeHookRelayUnavailableResponse(params: {
   provider: unknown;
   event: unknown;
+  preToolUseUnavailable?: unknown;
   message?: string;
 }): NativeHookRelayProcessResponse {
   const provider = readNativeHookRelayProvider(params.provider);
@@ -759,6 +768,12 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
+    // The standalone CLI cannot reconstruct the originating registration after
+    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
+    // generated command explicitly recorded that no before-tool policy existed.
+    if (params.preToolUseUnavailable === "noop") {
+      return adapter.renderNoopResponse(event);
+    }
     return adapter.renderPreToolUseBlockResponse(message);
   }
   if (event === "permission_request") {
@@ -1192,7 +1207,7 @@ function postNativeHookRelayBridgeRecord(params: {
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       }
     };
     const req = httpRequest(
@@ -1316,7 +1331,9 @@ function nativeHookRelayBridgeKey(relayId: string): string {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, ms));
+  });
 }
 
 async function processNativeHookRelayInvocation(params: {
@@ -2015,10 +2032,10 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(params.signal!.reason);
+      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(params.signal!.reason);
+    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -2221,11 +2238,11 @@ function isJsonValue(value: unknown): value is JsonValue {
       continue;
     }
     if (Array.isArray(current.value)) {
-      for (const value of current.value) {
+      for (const valueLocal of current.value) {
         if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
-        stack.push({ value, depth: current.depth + 1 });
+        stack.push({ value: valueLocal, depth: current.depth + 1 });
       }
       continue;
     }
@@ -2329,3 +2346,17 @@ export const testing = {
   },
 } as const;
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

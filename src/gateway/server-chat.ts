@@ -23,7 +23,10 @@ import type {
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
+import {
+  deriveGatewaySessionLifecycleSnapshot,
+  isStaleLifecycleEventForSession,
+} from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -333,21 +336,26 @@ export function createAgentEventHandler({
   ) => {
     const row = loadGatewaySessionRowForSnapshot(sessionKey, agentId ? { agentId } : undefined);
     const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
-    const lifecyclePatch = evt
-      ? deriveGatewaySessionLifecycleSnapshot({
-          session: row
-            ? {
-                updatedAt: row.updatedAt ?? undefined,
-                status: row.status,
-                startedAt: row.startedAt,
-                endedAt: row.endedAt,
-                runtimeMs: row.runtimeMs,
-                abortedLastRun: row.abortedLastRun,
-              }
-            : undefined,
-          event: evt,
-        })
-      : {};
+    const lifecyclePatch =
+      evt &&
+      !isStaleLifecycleEventForSession({
+        owningSessionId: evt.sessionId,
+        currentSessionId: row?.sessionId,
+      })
+        ? deriveGatewaySessionLifecycleSnapshot({
+            session: row
+              ? {
+                  updatedAt: row.updatedAt ?? undefined,
+                  status: row.status,
+                  startedAt: row.startedAt,
+                  endedAt: row.endedAt,
+                  runtimeMs: row.runtimeMs,
+                  abortedLastRun: row.abortedLastRun,
+                }
+              : undefined,
+            event: evt,
+          })
+        : {};
     const session = row ? { ...row, ...lifecyclePatch } : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;

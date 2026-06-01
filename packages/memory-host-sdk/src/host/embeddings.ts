@@ -41,7 +41,7 @@ async function disposeResources(
     }
   }
   if (firstError) {
-    throw firstError;
+    throw toLintErrorObject(firstError, "Non-Error thrown");
   }
 }
 
@@ -136,25 +136,25 @@ export async function createLocalEmbeddingProviderInProcess(
   return {
     id: "local",
     model: modelPath,
-    embedQuery: async (text, options) => {
+    embedQuery: async (text, optionsValue) => {
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsValue?.signal?.throwIfAborted();
       const ctx = await ensureContext();
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsValue?.signal?.throwIfAborted();
       const embedding = await ctx.getEmbeddingFor(text);
       return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
     },
-    embedBatch: async (texts, options) => {
+    embedBatch: async (texts, optionsLocal) => {
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsLocal?.signal?.throwIfAborted();
       const ctx = await ensureContext();
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsLocal?.signal?.throwIfAborted();
       const embeddings: number[][] = [];
       for (const text of texts) {
         throwIfClosed();
-        options?.signal?.throwIfAborted();
+        optionsLocal?.signal?.throwIfAborted();
         const embedding = await ctx.getEmbeddingFor(text);
         embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
       }
@@ -180,4 +180,18 @@ export async function createLocalEmbeddingProviderInProcess(
       return closePromise;
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -337,7 +337,7 @@ describe("resolveTextChunkLimit", () => {
       expected: 4000,
     },
     {
-      name: "honors webchat textChunkLimit override from config",
+      name: "ignores retired webchat textChunkLimit channel config",
       cfg: {
         channels: {
           webchat: { textChunkLimit: 16000 },
@@ -346,7 +346,7 @@ describe("resolveTextChunkLimit", () => {
       provider: "webchat" as const,
       accountId: undefined,
       options: undefined,
-      expected: 16000,
+      expected: 4000,
     },
     {
       name: "falls back to default when webchat has no override",
@@ -621,7 +621,7 @@ describe("resolveChunkMode", () => {
       cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
       provider: "webchat",
       accountId: undefined,
-      expected: "newline",
+      expected: "length",
     },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",

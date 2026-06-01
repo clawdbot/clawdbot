@@ -1,7 +1,7 @@
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { AcpRuntimeError } from "./errors.js";
-import type { AcpRuntime } from "./types.js";
 
 export type AcpRuntimeBackend = {
   id: string;

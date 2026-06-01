@@ -394,7 +394,7 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.acceptRequested = false;
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
@@ -516,7 +516,7 @@ export class MatrixVerificationManager {
         .then(() => {
           this.touchVerificationSession(session);
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           session.error = formatMatrixErrorMessage(err);
           this.touchVerificationSession(session);
         });
@@ -545,7 +545,7 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
       });
@@ -655,7 +655,7 @@ export class MatrixVerificationManager {
     if (!crypto) {
       throw new Error("Matrix crypto is not available");
     }
-    let request: MatrixVerificationRequestLike | null = null;
+    let request: MatrixVerificationRequestLike | null;
     if (params.ownUser) {
       request = await crypto.requestOwnUserVerification();
     } else if (params.userId && params.deviceId && crypto.requestDeviceVerification) {

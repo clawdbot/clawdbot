@@ -9,8 +9,8 @@ import type {
   wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType,
 } from "../agent-tools.before-tool-call.js";
 import type {
-  recordToolCall as RecordToolCallType,
   recordToolCallOutcome as RecordToolCallOutcomeType,
+  recordToolCall as RecordToolCallType,
 } from "../tool-loop-detection.js";
 import type { PostCompactionLoopPersistedError as PostCompactionLoopPersistedErrorType } from "./post-compaction-loop-guard.js";
 import {
@@ -19,16 +19,12 @@ import {
   makeOverflowError,
 } from "./run.overflow-compaction.fixture.js";
 import {
+  overflowBaseRunParams as baseParams,
   loadRunOverflowCompactionHarness,
   mockedCompactDirect,
-  mockedContextEngine,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
-  mockedLog,
   mockedRunEmbeddedAttempt,
-  mockedSessionLikelyHasOversizedToolResults,
-  mockedTruncateOversizedToolResultsInSession,
-  overflowBaseRunParams as baseParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 

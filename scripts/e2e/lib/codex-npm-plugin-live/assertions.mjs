@@ -359,8 +359,8 @@ function assertAgentTurn() {
     path.join(agentDir, "codex-home"),
     path.join(agentDir, "agent", "codex-home"),
     path.join(path.dirname(agentDir), "codex-home"),
-  ].filter((entry, index, entries) => entries.indexOf(entry) === index);
-  const codexHome = codexHomes.find((entry) => fs.existsSync(entry));
+  ].filter((entryValue, index, entries) => entries.indexOf(entryValue) === index);
+  const codexHome = codexHomes.find((entryLocal) => fs.existsSync(entryLocal));
   if (!codexHome) {
     throw new Error(`missing isolated Codex home; checked ${codexHomes.join(", ")}`);
   }

@@ -68,7 +68,9 @@ describe("GatewayClient OpenClaw wrapper watchdog integration", () => {
         for (const socket of server.clients) {
           socket.terminate();
         }
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
     }
   }, 5000);

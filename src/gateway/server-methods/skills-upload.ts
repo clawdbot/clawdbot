@@ -33,6 +33,7 @@ function mapUploadError(err: unknown): ErrorShape {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err));
 }
 
+/** Gateway handlers for the staged uploaded-skill archive flow. */
 export const skillsUploadHandlers: GatewayRequestHandlers = {
   "skills.upload.begin": makeUploadHandler(
     "skills.upload.begin",
@@ -51,6 +52,7 @@ export const skillsUploadHandlers: GatewayRequestHandlers = {
   ),
 };
 
+/** Wraps each upload stage with feature gating, protocol validation, and error mapping. */
 function makeUploadHandler<P, R>(
   name: string,
   validator: ProtocolValidator<P>,

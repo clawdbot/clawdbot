@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** Settings screen for gateway nodes, paired devices, and pending pairing requests. */
 @Composable
 internal fun NodesDevicesSettingsScreen(
   viewModel: MainViewModel,
@@ -41,6 +42,8 @@ internal fun NodesDevicesSettingsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Refresh once on connection; user-triggered refresh handles later changes
+      // so device admin state is not polled from Compose.
       viewModel.refreshNodesDevices()
     }
   }
@@ -195,6 +198,7 @@ private fun DeviceListRow(
   )
 }
 
+/** True when the gateway returned no node or device rows to render. */
 private fun GatewayNodesDevicesSummary.isEmpty(): Boolean = nodes.isEmpty() && pendingDevices.isEmpty() && pairedDevices.isEmpty()
 
 private fun nodeSubtitle(node: GatewayNodeSummary): String {

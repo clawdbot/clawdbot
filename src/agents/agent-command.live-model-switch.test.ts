@@ -157,7 +157,7 @@ vi.mock("../acp/runtime/errors.js", () => ({
     error instanceof Error ? error : new Error(String(error)),
 }));
 
-vi.mock("../acp/runtime/session-identifiers.js", () => ({
+vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
   resolveAcpSessionCwd: () => "/tmp",
 }));
 
@@ -330,6 +330,7 @@ vi.mock("../utils/message-channel.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   clearAutoFallbackPrimaryProbeSelection: vi.fn(),
   entryMatchesAutoFallbackPrimaryProbe: () => true,
+  hasLegacyAutoFallbackWithoutOrigin: () => false,
   hasSessionAutoModelFallbackProvenance: () => false,
   listAgentEntries: () => [],
   listAgentIds: () => ["default"],
@@ -372,6 +373,7 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => {
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const buildAllowedModelSet = ({
     cfg,
     catalog,
@@ -439,7 +441,6 @@ vi.mock("./model-selection.js", () => {
       allowAny: false,
     };
   };
-
   return {
     buildAllowedModelSet,
     createModelVisibilityPolicy: (params: {
@@ -536,7 +537,9 @@ vi.mock("./model-selection.js", () => {
       return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
     modelKey: (p: string, m: string) => `${p}/${m}`,
-    normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
+    normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
@@ -610,8 +613,11 @@ vi.mock("./model-visibility-policy.js", () => ({
         const fallback = allowedCatalog[0];
         return fallback ? { provider: fallback.provider, model: fallback.id } : null;
       },
-      visibleCatalog: ({ catalog }: { catalog: Array<{ provider: string; id: string }> }) =>
-        catalog,
+      visibleCatalog: ({
+        catalog: catalogLocal,
+      }: {
+        catalog: Array<{ provider: string; id: string }>;
+      }) => catalogLocal,
     };
   },
 }));
@@ -701,6 +707,7 @@ beforeAll(async () => {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  sessionId?: string;
   run: (provider: string, model: string) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
@@ -966,6 +973,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const secondCall = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
     expect(secondCall.provider).toBe("openai");
     expect(secondCall.model).toBe("gpt-5.4");
+    expect(secondCall.sessionId).toBe("session-1");
 
     const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };

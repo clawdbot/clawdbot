@@ -8,15 +8,21 @@ import kotlinx.serialization.json.JsonPrimitive
 
 private const val LOGCAT_PATH = "/system/bin/logcat"
 
+/**
+ * Debug-only node.invoke commands for Android cryptography and log diagnostics.
+ */
 class DebugHandler(
   private val appContext: Context,
   private val identityStore: DeviceIdentityStore,
 ) {
+  /**
+   * Runs an Ed25519 self-test and returns redacted diagnostics for debug builds.
+   */
   fun handleEd25519(): GatewaySession.InvokeResult {
     if (!BuildConfig.DEBUG) {
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
     }
-    // Self-test Ed25519 signing and return diagnostic info
+    // Self-test Ed25519 signing without returning full private/public key material.
     try {
       val identity = identityStore.loadOrCreate()
       val testPayload = "test|${identity.deviceId}|${System.currentTimeMillis()}"
@@ -25,15 +31,14 @@ class DebugHandler(
       results.add("publicKeyRawBase64: ${identity.publicKeyRawBase64.take(20)}...")
       results.add("privateKeyPkcs8Base64: ${identity.privateKeyPkcs8Base64.take(20)}...")
 
-      // Test publicKeyBase64Url
+      // Public-key URL encoding must match the gateway device-auth payload contract.
       val pubKeyUrl = identityStore.publicKeyBase64Url(identity)
       results.add("publicKeyBase64Url: ${pubKeyUrl ?: "NULL (FAILED)"}")
 
-      // Test signing
+      // Sign/verify through DeviceIdentityStore to catch provider and key-format failures together.
       val signature = identityStore.signPayload(testPayload, identity)
       results.add("signPayload: ${if (signature != null) "${signature.take(20)}... (OK)" else "NULL (FAILED)"}")
 
-      // Test self-verify
       if (signature != null) {
         val verifyOk = identityStore.verifySelfSignature(testPayload, signature, identity)
         results.add("verifySelfSignature: $verifyOk")
@@ -74,6 +79,9 @@ class DebugHandler(
     }
   }
 
+  /**
+   * Returns a filtered logcat snapshot plus CameraX debug log for debug builds.
+   */
   fun handleLogs(): GatewaySession.InvokeResult {
     if (!BuildConfig.DEBUG) {
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
@@ -81,7 +89,7 @@ class DebugHandler(
     val pid = android.os.Process.myPid()
     val rt = Runtime.getRuntime()
     val info = "v6 pid=$pid thread=${Thread.currentThread().name} free=${rt.freeMemory() / 1024}K total=${rt.totalMemory() / 1024}K max=${rt.maxMemory() / 1024}K uptime=${android.os.SystemClock.elapsedRealtime() / 1000}s sdk=${android.os.Build.VERSION.SDK_INT} device=${android.os.Build.MODEL}\n"
-    // Run logcat on current dispatcher thread (no withContext) with file redirect
+    // Capture only this process and redirect through a temp file to avoid blocking on pipe backpressure.
     val logResult =
       try {
         val tmpFile = java.io.File(appContext.cacheDir, "debug_logs.txt")
@@ -123,6 +131,7 @@ class DebugHandler(
           if (line.isBlank()) continue
           if (spamPatterns.any { line.contains(it) }) continue
           if (sb.length + line.length > 16000) {
+            // Keep debug.invoke responses small enough for the gateway WebSocket frame budget.
             sb.append("\n(truncated)")
             break
           }
@@ -133,7 +142,7 @@ class DebugHandler(
       } catch (e: Throwable) {
         "(logcat error: ${e::class.java.simpleName}: ${e.message})"
       }
-    // Also include camera debug log if it exists
+    // Camera capture writes a separate debug file because CameraX failures often happen off logcat's hot path.
     val camLogFile = java.io.File(appContext.cacheDir, "camera_debug.log")
     val camLog =
       if (camLogFile.exists() && camLogFile.length() > 0) {

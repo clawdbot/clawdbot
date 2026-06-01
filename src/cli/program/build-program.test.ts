@@ -41,7 +41,7 @@ describe("buildProgram", () => {
   }
 
   async function expectCommanderExit(promise: Promise<unknown>, exitCode: number) {
-    const error = await promise.catch((err) => err);
+    const error = await promise.catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(CommanderError);
     expect((error as CommanderError).exitCode).toBe(exitCode);

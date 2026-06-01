@@ -25,7 +25,7 @@ export function startStaleCallReaper(params: {
         console.log(
           `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
         );
-        void params.manager.endCall(call.callId).catch((err) => {
+        void params.manager.endCall(call.callId).catch((err: unknown) => {
           console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
         });
       }

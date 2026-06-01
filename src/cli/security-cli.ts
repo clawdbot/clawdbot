@@ -119,7 +119,9 @@ export function registerSecurityCli(program: Command) {
         token,
         password,
       });
-      const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
+      const fixResult = opts.fix
+        ? await fixSecurityFootguns().catch((_err: unknown) => null)
+        : null;
 
       const sourceConfig = getRuntimeConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =

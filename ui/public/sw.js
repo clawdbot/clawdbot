@@ -49,6 +49,14 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Skip top-level navigations so the browser can handle HTTP auth
+  // challenges natively — WWW-Authenticate dialogs are bypassed when the
+  // response comes from a service worker, breaking reverse-proxy setups
+  // with basic/digest auth in front of the gateway.
+  if (event.request.mode === "navigate") {
+    return;
+  }
+
   // Skip non-UI routes — API, RPC, and plugin routes should never be cached.
   if (
     url.pathname.startsWith("/api/") ||

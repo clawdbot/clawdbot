@@ -63,6 +63,36 @@ openclaw_live_stage_node_modules() {
   mkdir -p "$target_dir/.vite-temp"
 }
 
+openclaw_live_scrub_staged_plugin_index() {
+  local dest_dir="${1:?destination directory required}"
+  local db_path="$dest_dir/state/openclaw.sqlite"
+
+  if [ ! -f "$db_path" ]; then
+    return 0
+  fi
+
+  node - "$db_path" <<'NODE'
+const dbPath = process.argv[2];
+let db;
+try {
+  const { DatabaseSync } = await import("node:sqlite");
+  db = new DatabaseSync(dbPath);
+  try {
+    db.exec("PRAGMA secure_delete = ON;");
+    db.prepare("DELETE FROM installed_plugin_index WHERE index_key = ?").run("installed-plugin-index");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    db.exec("VACUUM;");
+  } catch (err) {
+    if (!String(err?.message ?? err).includes("no such table")) {
+      throw err;
+    }
+  }
+} finally {
+  db?.close();
+}
+NODE
+}
+
 openclaw_live_stage_state_dir() {
   local dest_dir="${1:?destination directory required}"
   local source_dir="${HOME}/.openclaw"
@@ -70,9 +100,9 @@ openclaw_live_stage_state_dir() {
   mkdir -p "$dest_dir"
   if [ -d "$source_dir" ]; then
     # Sandbox workspaces can accumulate root-owned artifacts from prior Docker
-    # runs. The persisted plugin registry contains host-absolute paths that are
-    # not portable into Linux containers. Neither is needed for live-test
-    # auth/config staging, so keep them out of the staged state copy.
+    # runs. Persisted plugin registry state contains host-absolute paths that
+    # are not portable into Linux containers. Live-test auth/config staging does
+    # not need the old JSON source or the SQLite installed_plugin_index row.
     set +e
     tar -C "$source_dir" \
       --warning=no-file-changed \
@@ -80,6 +110,7 @@ openclaw_live_stage_state_dir() {
       --exclude=workspace \
       --exclude=sandboxes \
       --exclude=plugins/installs.json \
+      --exclude=plugins/installs.json.migrated \
       --exclude=relay.sock \
       --exclude='*.sock' \
       --exclude='*/*.sock' \
@@ -90,6 +121,7 @@ openclaw_live_stage_state_dir() {
       return "$status"
     fi
     chmod -R u+rwX "$dest_dir" || true
+    openclaw_live_scrub_staged_plugin_index "$dest_dir"
     if [ -d "$source_dir/workspace" ] && [ ! -e "$dest_dir/workspace" ]; then
       ln -s "$source_dir/workspace" "$dest_dir/workspace"
     fi

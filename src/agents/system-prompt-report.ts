@@ -52,7 +52,7 @@ function buildToolSchemaStats(
   if (cached) {
     return cached;
   }
-  let schemaJson = "";
+  let schemaJson;
   try {
     schemaJson = JSON.stringify(parameters);
   } catch {

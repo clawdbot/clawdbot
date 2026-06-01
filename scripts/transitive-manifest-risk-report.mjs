@@ -668,7 +668,7 @@ export async function main(argv = process.argv.slice(2)) {
     renderTransitiveManifestRiskMarkdownReport(report),
   );
   const artifactHint =
-    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+    typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(
     `INFO transitive manifest risk report: inspected ${report.packageVersions} resolved ` +
       `package manifests; ${report.findingCount} reported risk signals, ` +
@@ -682,7 +682,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     (exitCode) => {
       process.exitCode = exitCode;
     },
-    (error) => {
+    /** @param {unknown} error */ (error) => {
       process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
       process.exitCode = 1;
     },

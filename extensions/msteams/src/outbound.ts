@@ -140,8 +140,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const result = await sendPayloadMediaSequence({
         text,
         mediaUrls,
-        send: async ({ text, mediaUrl }) =>
-          await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile }),
+        send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
+          await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
       });
       if (result) {
         return attachChannelToResult("msteams", result);

@@ -1,5 +1,6 @@
 import { isCanonicalDottedDecimalIPv4 } from "./ip.js";
 
+/** Validates the custom-bind IPv4 input and returns the user-facing error text. */
 export function validateDottedDecimalIPv4Input(value: string | undefined): string | undefined {
   if (!value) {
     return "IP address is required for custom bind mode";

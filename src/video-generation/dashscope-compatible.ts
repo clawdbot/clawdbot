@@ -1,3 +1,4 @@
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -12,7 +13,6 @@ import {
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProviderCapabilities,

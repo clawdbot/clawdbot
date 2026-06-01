@@ -9,6 +9,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
+import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import { shortenHomePath } from "../utils.js";
 
 const execFileAsync = promisify(execFile);
@@ -51,12 +52,16 @@ export async function noteMacLaunchAgentOverrides() {
 export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  env?: NodeJS.ProcessEnv;
 }): Promise<string | null> {
   const platform = deps?.platform ?? process.platform;
   if (platform !== "darwin") {
     return null;
   }
-  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)().catch(() => []);
+  const scanEnv = deps?.env ?? process.env;
+  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)(scanEnv).catch(
+    () => [],
+  );
   if (jobs.length === 0) {
     return null;
   }
@@ -78,9 +83,18 @@ export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
 export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  env?: NodeJS.ProcessEnv;
+  service?: Pick<GatewayService, "readCommand">;
   noteFn?: typeof note;
 }) {
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps);
+  const platform = deps?.platform ?? process.platform;
+  const serviceEnv =
+    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
+  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
+    env: serviceEnv,
+    findJobs: deps?.findJobs,
+    platform,
+  });
   if (warning) {
     (deps?.noteFn ?? note)(warning, "Gateway (macOS)");
   }
@@ -171,19 +185,47 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 }
 
+async function resolveGatewayServiceEnvForPlatformNotes(deps?: {
+  env?: NodeJS.ProcessEnv;
+  service?: Pick<GatewayService, "readCommand">;
+}): Promise<NodeJS.ProcessEnv> {
+  const baseEnv = deps?.env ?? process.env;
+  const service = deps?.service ?? resolveGatewayService();
+  const command = await service.readCommand(baseEnv).catch(() => null);
+  return command?.environment
+    ? ({
+        ...baseEnv,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : baseEnv;
+}
+
 export async function collectMacGatewayPlatformWarnings(
   cfg: OpenClawConfig,
+  deps?: {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    service?: Pick<GatewayService, "readCommand">;
+    findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  },
 ): Promise<readonly string[]> {
+  const platform = deps?.platform ?? process.platform;
   const warnings: string[] = [];
-  const launchAgentWarning = collectMacLaunchAgentOverrideWarning();
+  const launchAgentWarning = collectMacLaunchAgentOverrideWarning({ platform });
   if (launchAgentWarning) {
     warnings.push(launchAgentWarning);
   }
-  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
+  const serviceEnv =
+    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
+  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
+    env: serviceEnv,
+    findJobs: deps?.findJobs,
+    platform,
+  });
   if (staleUpdateWarning) {
     warnings.push(staleUpdateWarning);
   }
-  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
+  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, { platform });
   if (launchctlWarning) {
     warnings.push(launchctlWarning);
   }

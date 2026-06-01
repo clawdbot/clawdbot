@@ -2,9 +2,10 @@ import { writeSync } from "node:fs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { withBundledPluginEnablementCompat } from "../plugins/bundled-compat.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
@@ -16,6 +17,7 @@ import {
 } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
@@ -60,9 +62,14 @@ import {
   isLiveRateLimitDrift,
   shouldSkipLiveProviderDrift,
 } from "./live-test-provider-drift.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import {
+  getApiKeyForModel,
+  requireApiKey,
+  resolveUsableCustomProviderApiKey,
+} from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import type { StreamFn } from "./runtime/index.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 const LIVE = isLiveTestEnabled();
@@ -86,7 +93,27 @@ const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs(
 );
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
+const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
+const OLLAMA_LOCAL_API_KEY_MARKER = "ollama-local";
+const OLLAMA_REMOTE_API_KEY_ENV = "OLLAMA_API_KEY";
+const LOCAL_OLLAMA_HOSTNAMES = new Set([
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+  "::",
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
 let activeLiveCompletionConfig: OpenClawConfig | undefined;
+
+type OllamaRuntimeApi = {
+  createConfiguredOllamaStreamFn: (params: {
+    model: { baseUrl?: string; headers?: unknown };
+    providerBaseUrl?: string;
+  }) => StreamFn;
+};
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -135,6 +162,19 @@ function formatExplicitLiveModelRef(ref: { provider: string; id: string }): stri
   return `${ref.provider}/${ref.id}`;
 }
 
+function filterLiveModelRefsByProvider(
+  refs: readonly { provider: string; id: string }[],
+  providerFilter: Set<string> | null,
+): Array<{ provider: string; id: string }> {
+  if (!providerFilter) {
+    return [...refs];
+  }
+  const normalizedProviders = new Set(
+    [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
+  );
+  return refs.filter((ref) => normalizedProviders.has(normalizeProviderId(ref.provider)));
+}
+
 function findUnmatchedExplicitLiveModelRefs(params: {
   refs: readonly { provider: string; id: string }[];
   models: readonly Pick<Model, "provider" | "id">[];
@@ -160,6 +200,7 @@ function findUnmatchedExplicitLiveModelRefs(params: {
 function resolveLiveProviderDiscoveryProviderIds(params: {
   providerFilter: Set<string> | null;
   explicitRefs: readonly { provider: string; id: string }[];
+  priorityRefs?: readonly { provider: string; id: string }[];
 }): string[] | undefined {
   const providers = new Set<string>();
   for (const provider of params.providerFilter ?? []) {
@@ -169,6 +210,9 @@ function resolveLiveProviderDiscoveryProviderIds(params: {
     }
   }
   for (const ref of params.explicitRefs) {
+    providers.add(ref.provider);
+  }
+  for (const ref of params.priorityRefs ?? []) {
     providers.add(ref.provider);
   }
   return providers.size > 0
@@ -206,12 +250,285 @@ function applyLiveProviderDiscoveryPluginCompat(params: {
   env?: NodeJS.ProcessEnv;
 }): OpenClawConfig {
   const pluginIds = resolveLiveProviderDiscoveryPluginIds(params);
-  return pluginIds.length > 0
-    ? (withBundledPluginEnablementCompat({
-        config: params.config,
-        pluginIds,
-      }) ?? params.config)
-    : params.config;
+  const pluginConfig =
+    pluginIds.length > 0 ? enableLiveProviderPlugins(params.config, pluginIds) : params.config;
+  return applyLiveOllamaProviderEnvCompat({
+    config: pluginConfig,
+    providers: params.providers,
+    env: params.env,
+  });
+}
+
+function enableLiveProviderPlugins(
+  config: OpenClawConfig,
+  pluginIds: readonly string[],
+): OpenClawConfig {
+  const compatConfig =
+    withBundledPluginEnablementCompat({
+      config,
+      pluginIds,
+    }) ?? config;
+  const entries = { ...compatConfig.plugins?.entries };
+  const allow = new Set(compatConfig.plugins?.allow ?? []);
+  for (const pluginId of pluginIds) {
+    allow.add(pluginId);
+    entries[pluginId] ??= { enabled: true };
+  }
+  return {
+    ...compatConfig,
+    plugins: {
+      ...compatConfig.plugins,
+      enabled: true,
+      allow: [...allow].toSorted((left, right) => left.localeCompare(right)),
+      bundledDiscovery: compatConfig.plugins?.bundledDiscovery ?? "compat",
+      entries,
+    },
+  };
+}
+
+function applyLiveOllamaProviderEnvCompat(params: {
+  config: OpenClawConfig;
+  providers: readonly string[] | undefined;
+  env?: NodeJS.ProcessEnv;
+}): OpenClawConfig {
+  if (!params.providers?.some((provider) => normalizeProviderId(provider) === "ollama")) {
+    return params.config;
+  }
+  const existingProvider = params.config.models?.providers?.ollama;
+  const configuredBaseUrl = readConfiguredOllamaBaseUrl(existingProvider);
+  const liveBaseUrl = params.env?.OPENCLAW_LIVE_OLLAMA_BASE_URL?.trim();
+  const baseUrl = liveBaseUrl || configuredBaseUrl || OLLAMA_DEFAULT_BASE_URL;
+  const shouldPreserveConfiguredApiKey =
+    !liveBaseUrl ||
+    Boolean(
+      configuredBaseUrl &&
+      canonicalOllamaCredentialBaseUrl(configuredBaseUrl) ===
+        canonicalOllamaCredentialBaseUrl(baseUrl),
+    );
+  const apiKey = resolveLiveOllamaProviderApiKey({
+    baseUrl,
+    existingApiKey: existingProvider?.apiKey,
+    shouldPreserveConfiguredApiKey,
+  });
+  return {
+    ...params.config,
+    models: {
+      ...params.config.models,
+      providers: {
+        ...params.config.models?.providers,
+        ollama: {
+          ...existingProvider,
+          api: "ollama",
+          baseUrl,
+          apiKey,
+          models: existingProvider?.models ?? [],
+        },
+      },
+    },
+  };
+}
+
+async function ensureLiveProviderApisRegistered(params: {
+  config: OpenClawConfig;
+  providers: readonly string[] | undefined;
+}): Promise<void> {
+  if (!params.providers?.some((provider) => normalizeProviderId(provider) === "ollama")) {
+    return;
+  }
+  // Live Vitest setup installs a stub plugin registry for channel tests; direct
+  // model probes still need the public Ollama runtime registered in-process.
+  const runtimeApiUrl = new URL("../../extensions/ollama/runtime-api.ts", import.meta.url).href;
+  const { createConfiguredOllamaStreamFn } = (await import(
+    /* @vite-ignore */ runtimeApiUrl
+  )) as OllamaRuntimeApi;
+  const providerConfig = params.config.models?.providers?.ollama;
+  const providerBaseUrl = readConfiguredOllamaBaseUrl(providerConfig) || OLLAMA_DEFAULT_BASE_URL;
+  ensureCustomApiRegistered(
+    "ollama",
+    createLiveOllamaRuntimeStreamFn({
+      createConfiguredOllamaStreamFn,
+      providerBaseUrl,
+    }),
+  );
+}
+
+function createLiveOllamaRuntimeStreamFn(params: {
+  createConfiguredOllamaStreamFn: OllamaRuntimeApi["createConfiguredOllamaStreamFn"];
+  providerBaseUrl: string;
+}): StreamFn {
+  return (model, context, options) => {
+    const modelBaseUrl = readStringProperty(model, "baseUrl");
+    const streamFn = params.createConfiguredOllamaStreamFn({
+      model,
+      providerBaseUrl: modelBaseUrl ? undefined : params.providerBaseUrl,
+    });
+    return streamFn(model, context, options);
+  };
+}
+
+function readConfiguredOllamaBaseUrl(provider: unknown): string {
+  return readStringProperty(provider, "baseUrl") || readStringProperty(provider, "baseURL");
+}
+
+function resolveLiveOllamaProviderApiKey(params: {
+  baseUrl: string;
+  existingApiKey: SecretInput | undefined;
+  shouldPreserveConfiguredApiKey: boolean;
+}): SecretInput {
+  if (isLocalOllamaBaseUrl(params.baseUrl)) {
+    return params.shouldPreserveConfiguredApiKey &&
+      params.existingApiKey !== undefined &&
+      !isOllamaRemoteApiKeyReference(params.existingApiKey)
+      ? params.existingApiKey
+      : OLLAMA_LOCAL_API_KEY_MARKER;
+  }
+  return params.shouldPreserveConfiguredApiKey
+    ? (params.existingApiKey ?? OLLAMA_REMOTE_API_KEY_ENV)
+    : OLLAMA_REMOTE_API_KEY_ENV;
+}
+
+function isOllamaRemoteApiKeyReference(value: SecretInput | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    if (value.trim() === OLLAMA_REMOTE_API_KEY_ENV) {
+      return true;
+    }
+  }
+  const ref = coerceSecretRef(value);
+  return ref?.source === "env" && ref.id.trim() === OLLAMA_REMOTE_API_KEY_ENV;
+}
+
+function readStringProperty(value: unknown, key: string): string {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return "";
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function isLocalOllamaBaseUrl(baseUrl: string): boolean {
+  try {
+    let host = new URL(baseUrl).hostname.toLowerCase();
+    if (host.startsWith("[") && host.endsWith("]")) {
+      host = host.slice(1, -1);
+    }
+    return (
+      LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+      host.endsWith(".local") ||
+      isIpv4PrivateRange(host) ||
+      isIpv6LocalRange(host) ||
+      (!host.includes(".") && !host.includes(":"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveLiveOllamaBaseUrl(model: Pick<Model, "baseUrl">, config?: OpenClawConfig): string {
+  return (
+    readStringProperty(model, "baseUrl") ||
+    readConfiguredOllamaBaseUrl(config?.models?.providers?.ollama) ||
+    OLLAMA_DEFAULT_BASE_URL
+  );
+}
+
+function isLiveLocalOllamaModel(
+  model: Pick<Model, "provider" | "baseUrl">,
+  config?: OpenClawConfig,
+): boolean {
+  return (
+    normalizeProviderId(model.provider) === "ollama" &&
+    isLocalOllamaBaseUrl(resolveLiveOllamaBaseUrl(model, config))
+  );
+}
+
+function canReuseConfiguredLocalOllamaApiKey(
+  model: Pick<Model, "baseUrl">,
+  config?: OpenClawConfig,
+): boolean {
+  const providerConfig = config?.models?.providers?.ollama;
+  if (isOllamaRemoteApiKeyReference(providerConfig?.apiKey)) {
+    return false;
+  }
+  const modelBaseUrl = readStringProperty(model, "baseUrl");
+  if (!modelBaseUrl) {
+    return true;
+  }
+  const providerBaseUrl = readConfiguredOllamaBaseUrl(providerConfig) || OLLAMA_DEFAULT_BASE_URL;
+  return (
+    canonicalOllamaCredentialBaseUrl(providerBaseUrl) ===
+    canonicalOllamaCredentialBaseUrl(modelBaseUrl)
+  );
+}
+
+function canonicalOllamaCredentialBaseUrl(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    let pathname = parsed.pathname.replace(/\/+$/, "");
+    if (pathname === "/v1") {
+      pathname = "";
+    }
+    parsed.pathname = pathname || "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return baseUrl.trim().replace(/\/+$/, "");
+  }
+}
+
+async function resolveLiveModelApiKeyInfo(params: {
+  model: Model;
+  cfg: OpenClawConfig;
+  requireProfileKeys: boolean;
+}): Promise<Awaited<ReturnType<typeof getApiKeyForModel>>> {
+  if (isLiveLocalOllamaModel(params.model, params.cfg)) {
+    const configuredKey = canReuseConfiguredLocalOllamaApiKey(params.model, params.cfg)
+      ? resolveUsableCustomProviderApiKey({
+          cfg: params.cfg,
+          provider: "ollama",
+        })
+      : null;
+    if (configuredKey && configuredKey.apiKey !== OLLAMA_LOCAL_API_KEY_MARKER) {
+      return {
+        apiKey: configuredKey.apiKey,
+        source: configuredKey.source,
+        mode: "api-key",
+      };
+    }
+    return {
+      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      source: "live Ollama local marker",
+      mode: "api-key",
+    };
+  }
+  return await getApiKeyForModel({
+    model: params.model,
+    cfg: params.cfg,
+    credentialPrecedence: resolveLiveCredentialPrecedence(
+      params.model.provider,
+      params.requireProfileKeys,
+    ),
+  });
+}
+
+function isIpv4PrivateRange(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
+  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+function isIpv6LocalRange(host: string): boolean {
+  const lower = host.toLowerCase();
+  return /^fe[89ab][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower);
 }
 
 function logProgress(message: string): void {
@@ -503,6 +820,25 @@ describe("explicit live model discovery scope", () => {
     ).toEqual(["deepseek", "together", "zai"]);
   });
 
+  it("includes curated small-model providers in discovery scope", () => {
+    expect(
+      resolveLiveProviderDiscoveryProviderIds({
+        providerFilter: null,
+        explicitRefs: [],
+        priorityRefs: listPrioritizedSmallLiveModelRefs(),
+      }),
+    ).toContain("ollama");
+  });
+
+  it("respects provider filters for curated small-model refs", () => {
+    expect(
+      filterLiveModelRefsByProvider(
+        listPrioritizedSmallLiveModelRefs(),
+        parseProviderFilter("openrouter"),
+      ).map((ref) => ref.provider),
+    ).toEqual(["openrouter", "openrouter", "openrouter"]);
+  });
+
   it("activates bundled provider plugins for explicit live discovery", () => {
     const cfg = {
       plugins: {
@@ -514,13 +850,486 @@ describe("explicit live model discovery scope", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(
-      applyLiveProviderDiscoveryPluginCompat({
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["deepseek"],
+      env: {},
+    });
+
+    expect(result.plugins?.enabled).toBe(true);
+    expect(result.plugins?.allow).toContain("deepseek");
+    expect(result.plugins?.bundledDiscovery).toBe("compat");
+    expect(result.plugins?.entries?.deepseek).toEqual({ enabled: true });
+  });
+
+  it("hydrates Ollama Cloud provider settings from live env when Ollama is in scope", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {
+        OPENCLAW_LIVE_OLLAMA_BASE_URL: "https://ollama.com",
+      },
+    });
+
+    expect(result.plugins?.entries?.ollama).toEqual({ enabled: true });
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseUrl: "https://ollama.com",
+      apiKey: OLLAMA_REMOTE_API_KEY_ENV,
+      models: [],
+    });
+  });
+
+  it("defaults Ollama live provider settings to the local endpoint", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {},
+    });
+
+    expect(result.plugins?.entries?.ollama).toEqual({ enabled: true });
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
+      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      models: [],
+    });
+  });
+
+  it("preserves configured Ollama provider endpoints when live env is absent", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://192.168.1.10:11434",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {},
+    });
+
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseUrl: "http://192.168.1.10:11434",
+      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      models: [],
+    });
+  });
+
+  it("honors the documented Ollama baseURL alias when live env is absent", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseURL: "http://ollama.local:11434",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {},
+    });
+
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseURL: "http://ollama.local:11434",
+      baseUrl: "http://ollama.local:11434",
+      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      models: [],
+    });
+  });
+
+  it("uses the local Ollama auth marker for self-hosted live env URLs", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+    } satisfies OpenClawConfig;
+
+    for (const baseUrl of [
+      "http://127.0.0.1:11434",
+      "http://192.168.1.10:11434",
+      "http://ollama.local:11434",
+      "http://ollama-host:11434",
+    ]) {
+      const result = applyLiveProviderDiscoveryPluginCompat({
         config: cfg,
-        providers: ["deepseek"],
+        providers: ["ollama"],
+        env: {
+          OPENCLAW_LIVE_OLLAMA_BASE_URL: baseUrl,
+        },
+      });
+
+      expect(result.models?.providers?.ollama).toEqual({
+        api: "ollama",
+        baseUrl,
+        apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+        models: [],
+      });
+    }
+  });
+
+  it("does not preserve the cloud env marker for local Ollama endpoints", () => {
+    const remoteApiKeyRefs: SecretInput[] = [
+      OLLAMA_REMOTE_API_KEY_ENV,
+      "$OLLAMA_API_KEY",
+      "${OLLAMA_API_KEY}",
+      { source: "env", provider: "default", id: OLLAMA_REMOTE_API_KEY_ENV },
+    ];
+
+    for (const apiKey of remoteApiKeyRefs) {
+      const cfg = {
+        plugins: {
+          bundledDiscovery: "compat",
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              apiKey,
+              models: [],
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const result = applyLiveProviderDiscoveryPluginCompat({
+        config: cfg,
+        providers: ["ollama"],
+        env: {
+          OLLAMA_API_KEY: "real-cloud-key",
+        },
+      });
+
+      expect(result.models?.providers?.ollama).toEqual({
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+        models: [],
+      });
+    }
+  });
+
+  it("replaces configured Ollama auth when live env redirects to a different local endpoint", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "https://ollama.com",
+            apiKey: OLLAMA_REMOTE_API_KEY_ENV,
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {
+        OPENCLAW_LIVE_OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      },
+    });
+
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      models: [],
+    });
+  });
+
+  it("preserves configured Ollama auth for equivalent live env base URLs", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {
+        OPENCLAW_LIVE_OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      },
+    });
+
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
+      models: [],
+    });
+  });
+
+  it("keeps local Ollama live auth on the non-secret marker", async () => {
+    const cfg = applyLiveProviderDiscoveryPluginCompat({
+      config: {
+        plugins: {
+          bundledDiscovery: "compat",
+        },
+      },
+      providers: ["ollama"],
+      env: {
+        OPENCLAW_LIVE_OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+        OLLAMA_API_KEY: "real-cloud-key",
+      },
+    });
+
+    await expect(
+      resolveLiveModelApiKeyInfo({
+        model: {
+          provider: "ollama",
+          id: "gemma3:4b",
+          api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
+        } as Model,
+        cfg,
+        requireProfileKeys: false,
+      }),
+    ).resolves.toEqual({
+      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      source: "live Ollama local marker",
+      mode: "api-key",
+    });
+  });
+
+  it("does not reuse cloud Ollama auth for model-level local endpoint overrides", async () => {
+    const oldEnv = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "real-cloud-key";
+    try {
+      const cfg = applyLiveProviderDiscoveryPluginCompat({
+        config: {
+          plugins: {
+            bundledDiscovery: "compat",
+          },
+        },
+        providers: ["ollama"],
+        env: {
+          OPENCLAW_LIVE_OLLAMA_BASE_URL: "https://ollama.com",
+        },
+      });
+
+      await expect(
+        resolveLiveModelApiKeyInfo({
+          model: {
+            provider: "ollama",
+            id: "gemma3:4b",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+          } as Model,
+          cfg,
+          requireProfileKeys: false,
+        }),
+      ).resolves.toEqual({
+        apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+        source: "live Ollama local marker",
+        mode: "api-key",
+      });
+    } finally {
+      if (oldEnv === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = oldEnv;
+      }
+    }
+  });
+
+  it("honors configured local Ollama credentials before the live local marker", async () => {
+    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
+    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
+    try {
+      const cfg = applyLiveProviderDiscoveryPluginCompat({
+        config: {
+          plugins: {
+            bundledDiscovery: "compat",
+          },
+          models: {
+            providers: {
+              ollama: {
+                api: "ollama",
+                baseUrl: "http://127.0.0.1:11434",
+                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        providers: ["ollama"],
         env: {},
-      }).plugins?.entries?.deepseek,
-    ).toEqual({ enabled: true });
+      });
+
+      await expect(
+        resolveLiveModelApiKeyInfo({
+          model: {
+            provider: "ollama",
+            id: "gemma3:4b",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+          } as Model,
+          cfg,
+          requireProfileKeys: false,
+        }),
+      ).resolves.toEqual({
+        apiKey: "secured-local-key",
+        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
+        mode: "api-key",
+      });
+    } finally {
+      if (oldEnv === undefined) {
+        delete process.env.LOCAL_OLLAMA_API_KEY;
+      } else {
+        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
+      }
+    }
+  });
+
+  it("reuses configured local Ollama credentials across canonical base URL forms", async () => {
+    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
+    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
+    try {
+      const cfg = applyLiveProviderDiscoveryPluginCompat({
+        config: {
+          plugins: {
+            bundledDiscovery: "compat",
+          },
+          models: {
+            providers: {
+              ollama: {
+                api: "ollama",
+                baseUrl: "http://127.0.0.1:11434/v1",
+                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        providers: ["ollama"],
+        env: {},
+      });
+
+      await expect(
+        resolveLiveModelApiKeyInfo({
+          model: {
+            provider: "ollama",
+            id: "gemma3:4b",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+          } as Model,
+          cfg,
+          requireProfileKeys: false,
+        }),
+      ).resolves.toEqual({
+        apiKey: "secured-local-key",
+        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
+        mode: "api-key",
+      });
+    } finally {
+      if (oldEnv === undefined) {
+        delete process.env.LOCAL_OLLAMA_API_KEY;
+      } else {
+        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
+      }
+    }
+  });
+
+  it("preserves model-level Ollama endpoint overrides when registering runtime streams", () => {
+    const returnedStream = {} as ReturnType<StreamFn>;
+    const runtimeCalls: Array<{ model: Model; context: Parameters<StreamFn>[1] }> = [];
+    const createConfiguredOllamaStreamFn = vi.fn<
+      OllamaRuntimeApi["createConfiguredOllamaStreamFn"]
+    >(
+      () =>
+        ((model, context) => {
+          runtimeCalls.push({ model, context });
+          return returnedStream;
+        }) as StreamFn,
+    );
+    const streamFn = createLiveOllamaRuntimeStreamFn({
+      createConfiguredOllamaStreamFn,
+      providerBaseUrl: OLLAMA_DEFAULT_BASE_URL,
+    });
+    const model = {
+      provider: "ollama",
+      id: "gemma3:4b",
+      api: "ollama",
+      baseUrl: "http://192.168.1.10:11434",
+    } as Model;
+    const context = { systemPrompt: "system", messages: [] } as Parameters<StreamFn>[1];
+
+    expect(streamFn(model, context)).toBe(returnedStream);
+    expect(createConfiguredOllamaStreamFn).toHaveBeenCalledWith({
+      model,
+      providerBaseUrl: undefined,
+    });
+    expect(runtimeCalls).toEqual([{ model, context }]);
+  });
+
+  it("falls back to the configured Ollama provider endpoint for models without overrides", () => {
+    const createConfiguredOllamaStreamFn = vi.fn<
+      OllamaRuntimeApi["createConfiguredOllamaStreamFn"]
+    >(() => (() => ({}) as ReturnType<StreamFn>) as StreamFn);
+    const streamFn = createLiveOllamaRuntimeStreamFn({
+      createConfiguredOllamaStreamFn,
+      providerBaseUrl: "https://ollama.com",
+    });
+    const model = {
+      provider: "ollama",
+      id: "gemma3:4b",
+      api: "ollama",
+    } as Model;
+
+    void streamFn(model, { systemPrompt: "system", messages: [] } as Parameters<StreamFn>[1]);
+
+    expect(createConfiguredOllamaStreamFn).toHaveBeenCalledWith({
+      model,
+      providerBaseUrl: "https://ollama.com",
+    });
   });
 
   it("reports explicit refs that never become runnable candidates", () => {
@@ -581,7 +1390,7 @@ describe("resolveLiveSystemPrompt", () => {
   it("keeps other providers unchanged", () => {
     expect(
       resolveLiveSystemPrompt({
-        provider: "openai",
+        provider: "ollama",
       } as Model),
     ).toBeUndefined();
   });
@@ -914,14 +1723,22 @@ describeLive("live models (profile keys)", () => {
       const filter = useExplicit ? parseModelFilter(rawModels) : null;
       const explicitRefs = useExplicit ? parseExplicitLiveModelRefs(filter) : [];
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
+      const priorityRefs = useSmall
+        ? filterLiveModelRefsByProvider(listPrioritizedSmallLiveModelRefs(), providers)
+        : [];
       const providerList = resolveLiveProviderDiscoveryProviderIds({
         providerFilter: providers,
         explicitRefs,
+        priorityRefs,
       });
       const cfg = applyLiveProviderDiscoveryPluginCompat({
         config: loadedCfg,
         providers: providerList,
         env: process.env,
+      });
+      await ensureLiveProviderApisRegistered({
+        config: cfg,
+        providers: providerList,
       });
       activeLiveCompletionConfig = cfg;
       logProgress("[live-models] preparing models.json");
@@ -992,7 +1809,7 @@ describeLive("live models (profile keys)", () => {
           ...(explicitRefs.length > 0
             ? { refs: explicitRefs }
             : useSmall
-              ? { refs: listPrioritizedSmallLiveModelRefs() }
+              ? { refs: priorityRefs }
               : {}),
         });
         if (augmented.added.length > 0) {
@@ -1066,13 +1883,10 @@ describeLive("live models (profile keys)", () => {
           }
         }
         try {
-          const apiKeyInfo = await getApiKeyForModel({
+          const apiKeyInfo = await resolveLiveModelApiKeyInfo({
             model,
             cfg,
-            credentialPrecedence: resolveLiveCredentialPrecedence(
-              model.provider,
-              REQUIRE_PROFILE_KEYS,
-            ),
+            requireProfileKeys: REQUIRE_PROFILE_KEYS,
           });
           if (
             requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&

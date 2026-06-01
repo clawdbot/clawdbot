@@ -412,15 +412,15 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
-    const claim = inflight.get(scopedKey);
+    const claimValue = inflight.get(scopedKey);
     try {
       const recorded = persistent
         ? await persistent.checkAndRecord(trimmed, dedupeOptions)
         : !memory.check(scopedKey, dedupeOptions?.now);
-      claim?.resolve(recorded);
+      claimValue?.resolve(recorded);
       return recorded;
     } catch (error) {
-      claim?.reject(error);
+      claimValue?.reject(error);
       throw error;
     } finally {
       inflight.delete(scopedKey);
@@ -440,11 +440,11 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
-    const claim = inflight.get(scopedKey);
-    if (!claim) {
+    const claimLocal = inflight.get(scopedKey);
+    if (!claimLocal) {
       return;
     }
-    claim.reject(dedupeOptions?.error ?? createReleasedClaimError(scopedKey));
+    claimLocal.reject(dedupeOptions?.error ?? createReleasedClaimError(scopedKey));
     inflight.delete(scopedKey);
   }
 

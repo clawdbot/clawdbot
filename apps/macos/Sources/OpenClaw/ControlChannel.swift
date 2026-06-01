@@ -39,6 +39,48 @@ enum ControlChannelError: Error, LocalizedError {
     }
 }
 
+struct ControlChannelStateDebouncer {
+    private let interval: TimeInterval
+    private var lastAppliedAt: Date
+
+    init(interval: TimeInterval = 0.5, lastAppliedAt: Date = .distantPast) {
+        self.interval = interval
+        self.lastAppliedAt = lastAppliedAt
+    }
+
+    mutating func delayBeforeApplying(
+        currentState: ControlChannel.ConnectionState,
+        newState: ControlChannel.ConnectionState,
+        now: Date) -> TimeInterval?
+    {
+        if Self.isTerminal(currentState) || Self.isTerminal(newState) {
+            self.lastAppliedAt = now
+            return nil
+        }
+
+        let elapsed = now.timeIntervalSince(self.lastAppliedAt)
+        guard elapsed < self.interval else {
+            self.lastAppliedAt = now
+            return nil
+        }
+
+        return self.interval - max(0, elapsed)
+    }
+
+    mutating func recordDeferredApply(at date: Date) {
+        self.lastAppliedAt = date
+    }
+
+    private static func isTerminal(_ state: ControlChannel.ConnectionState) -> Bool {
+        switch state {
+        case .connected, .disconnected:
+            true
+        case .connecting, .degraded:
+            false
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class ControlChannel {
@@ -85,6 +127,46 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
 
+    // Coalesce rapid connecting/degraded oscillations so SwiftUI does not churn
+    // MenuBarExtra status items while the gateway connection is unstable.
+    private var pendingStateTask: Task<Void, Never>?
+    private var stateDebouncer = ControlChannelStateDebouncer()
+
+    private func setStateThrottled(_ newState: ConnectionState) {
+        let now = Date()
+        if let delay = self.stateDebouncer.delayBeforeApplying(
+            currentState: self.state,
+            newState: newState,
+            now: now)
+        {
+            self.pendingStateTask?.cancel()
+            self.pendingStateTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
+                guard let self, !Task.isCancelled else { return }
+                self.pendingStateTask = nil
+                self.stateDebouncer.recordDeferredApply(at: Date())
+                self.applyState(newState)
+            }
+            return
+        }
+
+        self.cancelPendingStateTask()
+        self.applyState(newState)
+    }
+
+    private func cancelPendingStateTask() {
+        self.pendingStateTask?.cancel()
+        self.pendingStateTask = nil
+    }
+
+    private func applyState(_ newState: ConnectionState) {
+        self.state = newState
+    }
+
+    private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
+        UInt64(max(0, interval) * 1_000_000_000)
+    }
+
     private init() {
         self.startEventStream()
     }
@@ -105,11 +187,11 @@ final class ControlChannel {
                 self.logger.info(
                     "control channel configure mode=remote " +
                         "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
-                self.state = .connecting
+                self.setStateThrottled(.connecting)
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 await self.refreshEndpoint(reason: "configure")
             } catch {
-                self.state = .degraded(error.localizedDescription)
+                self.setStateThrottled(.degraded(error.localizedDescription))
                 throw error
             }
         }
@@ -117,20 +199,20 @@ final class ControlChannel {
 
     func refreshEndpoint(reason: String) async {
         self.logger.info("control channel refresh endpoint reason=\(reason, privacy: .public)")
-        self.state = .connecting
+        self.setStateThrottled(.connecting)
         do {
             try await self.establishGatewayConnection()
-            self.state = .connected
+            self.setStateThrottled(.connected)
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
             let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            self.setStateThrottled(.degraded(message))
         }
     }
 
     func disconnect() async {
         await GatewayConnection.shared.shutdown()
-        self.state = .disconnected
+        self.setStateThrottled(.disconnected)
         self.lastPingMs = nil
         self.authSourceLabel = nil
     }
@@ -146,11 +228,11 @@ final class ControlChannel {
             let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
             let ms = Date().timeIntervalSince(start) * 1000
             self.lastPingMs = ms
-            self.state = .connected
+            self.setStateThrottled(.connected)
             return payload
         } catch {
             let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
         }
     }
@@ -173,11 +255,11 @@ final class ControlChannel {
                 method: method,
                 params: rawParams,
                 timeoutMs: timeoutMs)
-            self.state = .connected
+            self.setStateThrottled(.connected)
             return data
         } catch {
             let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
         }
     }
@@ -386,9 +468,9 @@ final class ControlChannel {
                 NotificationCenter.default.post(name: .controlHeartbeat, object: data)
             }
         case let .event(evt) where evt.event == "shutdown":
-            self.state = .degraded("gateway shutdown")
+            self.setStateThrottled(.degraded("gateway shutdown"))
         case .snapshot:
-            self.state = .connected
+            self.setStateThrottled(.connected)
         default:
             break
         }

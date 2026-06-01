@@ -170,6 +170,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      sendPolicyDenied: true,
+      noVisibleReplyFallbackEligible: true,
     });
   });
 

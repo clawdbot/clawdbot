@@ -1391,7 +1391,6 @@ export async function updateNpmInstalledPlugins(params: {
         activeClawHubInstallSpec = clawhubSpecs.fallbackSpec;
         if (officialNpmFallbackSpecs?.fallbackSpec) {
           officialNpmFallbackInstallSpec = officialNpmFallbackSpecs.fallbackSpec;
-          officialNpmFallbackRecordSpec = officialNpmFallbackSpecs.fallbackSpec;
         }
       }
       if (

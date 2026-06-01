@@ -87,6 +87,7 @@ type CliCompactionRuntimeContextParams = {
   sessionKey: string;
   messageChannel?: string;
   agentAccountId?: string;
+  authProfileId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -174,8 +175,8 @@ function isNativeHarnessCompactionSession(
   const providerId = provider.trim().toLowerCase();
   return (
     harnessId === providerId ||
-    (harnessId === "codex" &&
-      (providerId === "codex" || providerId === "openai" || providerId === "openai"))
+    (harnessId === "copilot" && providerId === "github-copilot") ||
+    (harnessId === "codex" && (providerId === "codex" || providerId === "openai"))
   );
 }
 
@@ -211,7 +212,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       messageChannel: params.messageChannel,
       messageProvider: params.messageChannel,
       agentAccountId: params.agentAccountId,
-      authProfileId: undefined,
+      authProfileId: params.authProfileId,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -246,6 +247,7 @@ async function compactCliTranscript(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
+  authProfileId?: string;
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
@@ -255,6 +257,7 @@ async function compactCliTranscript(params: {
     sessionKey: params.sessionKey,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
+    authProfileId: params.authProfileId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     agentDir: params.agentDir,
@@ -360,6 +363,7 @@ async function compactNativeHarnessCliTranscript(params: {
   try {
     const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
+    const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
       modelId: params.model,
@@ -382,6 +386,7 @@ async function compactNativeHarnessCliTranscript(params: {
           skillsSnapshot: params.skillsSnapshot,
           provider: params.provider,
           model: params.model,
+          authProfileId,
           contextTokenBudget: params.contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           trigger: "budget",
@@ -399,6 +404,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
+                  authProfileId,
                   workspaceDir: params.workspaceDir,
                   cwd: params.cwd,
                   agentDir: params.agentDir,
@@ -526,6 +532,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   let nativeFallbackNeedsBindingClear = false;
   let resolvedContextEngine: ContextEngine | undefined;
   let autoCompactionGuardApplied = false;
+  const authProfileId = params.sessionEntry?.authProfileOverride?.trim() || undefined;
   const applyAutoCompactionGuard = async (contextEngine: ContextEngine): Promise<void> => {
     if (autoCompactionGuardApplied) {
       return;
@@ -606,6 +613,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       skillsSnapshot: params.skillsSnapshot,
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
+      authProfileId,
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,

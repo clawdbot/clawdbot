@@ -11,19 +11,18 @@ const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
 function runPtyProbe(
   logPath: string,
   env: Record<string, string> = {},
+  command: string[] = [
+    "/bin/bash",
+    "-lc",
+    'printf "prompt\\n"; IFS= read -r value; printf "got:%s\\n" "$value"',
+  ],
+  input = "abc\n",
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        scriptPath,
-        logPath,
-        "/bin/bash",
-        "-lc",
-        'printf "prompt\\n"; IFS= read -r value; printf "got:%s\\n" "$value"',
-      ],
-      { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const child = spawn(process.execPath, [scriptPath, logPath, ...command], {
+      env: { ...process.env, ...env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     const timeout = setTimeout(() => {
@@ -47,7 +46,7 @@ function runPtyProbe(
       clearTimeout(timeout);
       resolve({ code, stdout, stderr });
     });
-    child.stdin.end("abc\n");
+    child.stdin.end(input);
   });
 }
 
@@ -77,6 +76,29 @@ describe("run-with-pty", () => {
       expect(result.stdout).toContain("got:abc");
       expect(log).toContain("prompt");
       expect(log).toContain("got:abc");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("caps noisy PTY output in stdout and transcript logs", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
+    const logPath = path.join(tempRoot, "pty.log");
+    try {
+      const result = await runPtyProbe(
+        logPath,
+        { OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES: "64" },
+        [process.execPath, "-e", "process.stdout.write('x'.repeat(2048))"],
+        "",
+      );
+      const log = await readFile(logPath, "utf8");
+      const marker = "[run-with-pty output truncated after 64 bytes]";
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(result.stdout).toContain(marker);
+      expect(log).toContain(marker);
+      expect(result.stdout.length).toBeLessThan(512);
+      expect(log.length).toBeLessThan(512);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

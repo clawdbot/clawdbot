@@ -33,12 +33,12 @@ export async function sendSmsTextChunks(params: {
   const chunks = chunkTextForOutbound(text, params.account.textChunkLimit).filter(Boolean);
   const sendChunks = chunks.length ? chunks : [text];
   const results: SmsSendResult[] = [];
-  for (const text of sendChunks) {
+  for (const textLocal of sendChunks) {
     results.push(
       await sendSmsViaTwilio({
         account: params.account,
         to: params.to,
-        text,
+        text: textLocal,
       }),
     );
   }

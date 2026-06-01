@@ -593,8 +593,8 @@ describe("registerTelegramNativeCommands", () => {
     const presentation = {
       blocks: [
         {
-          kind: "actions",
-          buttons: [{ label: "Approve", action: { type: "command", value: "/approve yes" } }],
+          type: "buttons",
+          buttons: [{ label: "Approve", action: { type: "callback", value: "/approve yes" } }],
         },
       ],
     };

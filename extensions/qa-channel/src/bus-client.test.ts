@@ -73,7 +73,7 @@ describe("qa-bus client", () => {
     const server = await startJsonServer(() => ({
       body: '{"cursor":1,"events":[',
     }));
-    stops.push(server.stop);
+    stops.push(server["stop"]);
 
     await expect(
       pollQaBus({
@@ -140,7 +140,7 @@ describe("qa-bus client", () => {
             })
           : JSON.stringify({ error: `unexpected path: ${req.url}` }),
     }));
-    stops.push(server.stop);
+    stops.push(server["stop"]);
 
     await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toEqual({
       cursor: 1,

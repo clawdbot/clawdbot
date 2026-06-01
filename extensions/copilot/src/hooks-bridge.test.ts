@@ -5,6 +5,7 @@ describe("createHooksBridge", () => {
   const hookBase = {
     sessionId: "runtime-session",
     timestamp: new Date(0),
+    cwd: "/",
     workingDirectory: "/",
   };
 
@@ -40,6 +41,7 @@ describe("createHooksBridge", () => {
     const hooks = createHooksBridge({ onPreToolUse })!;
     const input = {
       ...hookBase,
+      cwd: "/tmp",
       workingDirectory: "/tmp",
       toolName: "bash",
       toolArgs: { cmd: "ls" },
@@ -68,7 +70,7 @@ describe("createHooksBridge", () => {
       hookName: "onPostToolUse",
       error: expect.any(Error),
     });
-    expect((onHookError.mock.calls[0]?.[0]?.error as Error).message).toBe("post boom");
+    expect((onHookError.mock.calls[0][0]!.error as Error).message).toBe("post boom");
   });
 
   it("isolates async rejections: returns undefined and notifies onHookError", async () => {

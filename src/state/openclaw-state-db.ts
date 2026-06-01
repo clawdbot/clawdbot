@@ -213,6 +213,8 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "delivery_thread_id TEXT");
   ensureColumn(db, "cron_jobs", "delivery_account_id TEXT");
   ensureColumn(db, "cron_jobs", "delivery_best_effort INTEGER");
+  ensureColumn(db, "cron_jobs", "delivery_completion_mode TEXT");
+  ensureColumn(db, "cron_jobs", "delivery_completion_to TEXT");
   ensureColumn(db, "cron_jobs", "failure_delivery_mode TEXT");
   ensureColumn(db, "cron_jobs", "failure_delivery_channel TEXT");
   ensureColumn(db, "cron_jobs", "failure_delivery_to TEXT");

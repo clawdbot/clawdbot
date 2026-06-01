@@ -13,7 +13,7 @@ export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | nu
   if (!trimmed) {
     return null;
   }
-  let host: string | null = null;
+  let host: string | null;
   try {
     host = new URL(trimmed).hostname || null;
   } catch {

@@ -1563,6 +1563,25 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("replay_invalid");
   });
 
+  it("classifies expired Anthropic thinking signatures as replay invalid", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.440: Invalid `signature` in `thinking` block"}}',
+      ),
+    ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: invalid signature on thinking block",
+      ),
+    ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: signature present in thinking block",
+      ),
+    ).not.toBe("replay_invalid");
+    expect(classifyProviderRuntimeFailureKind("Invalid signature")).not.toBe("replay_invalid");
+  });
+
   it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
     expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
     expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(

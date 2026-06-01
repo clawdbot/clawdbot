@@ -103,7 +103,9 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     gate.resolve();
 
     for (let i = 0; i < 20; i++) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
 
     expect(

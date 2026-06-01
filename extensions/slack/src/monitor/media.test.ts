@@ -758,7 +758,7 @@ describe("resolveSlackMedia", () => {
   });
 
   it("preserves original MIME for non-voice Slack files", async () => {
-    const saveMediaBufferMock = vi
+    const saveMediaBufferMockResult = vi
       .spyOn(mediaRuntime, "saveMediaBuffer")
       .mockResolvedValue(createSavedMedia("/tmp/video.mp4", "video/mp4"));
 
@@ -782,7 +782,7 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(1);
-    expectSaveMediaBufferCall(saveMediaBufferMock, "video/mp4", 16 * 1024 * 1024);
+    expectSaveMediaBufferCall(saveMediaBufferMockResult, "video/mp4", 16 * 1024 * 1024);
     expect(media[0]?.contentType).toBe("video/mp4");
   });
 
@@ -863,7 +863,7 @@ describe("resolveSlackMedia", () => {
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
-    const saveMediaBufferMock = vi
+    const saveMediaBufferMockValue = vi
       .spyOn(mediaRuntime, "saveMediaBuffer")
       .mockResolvedValue(createSavedMedia("/tmp/x.jpg", "image/jpeg"));
 
@@ -888,7 +888,7 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(8);
-    expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
+    expect(saveMediaBufferMockValue).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
   });
 
@@ -1047,7 +1047,7 @@ describe("resolveSlackAttachmentContent", () => {
   });
 
   it("skips forwarded image URLs on non-Slack hosts", async () => {
-    const saveMediaBufferMock = vi.spyOn(mediaRuntime, "saveMediaBuffer");
+    const saveMediaBufferMockLocal = vi.spyOn(mediaRuntime, "saveMediaBuffer");
 
     const result = await resolveSlackAttachmentContent({
       attachments: [{ is_share: true, image_url: "https://example.com/forwarded.jpg" }],
@@ -1056,7 +1056,7 @@ describe("resolveSlackAttachmentContent", () => {
     });
 
     expect(result).toBeNull();
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(saveMediaBufferMockLocal).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

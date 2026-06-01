@@ -484,7 +484,7 @@ export class WhatsAppConnectionController {
       return "aborted";
     }
     const listenerClose =
-      connection.listener.onClose?.catch((err) => ({
+      connection.listener.onClose?.catch((err: unknown) => ({
         status: 500,
         isLoggedOut: false,
         error: err,

@@ -11,10 +11,12 @@ import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
 
 function loadMessageActionTtsRuntime() {
+  // Keep the TTS runtime lazy so ordinary message sends do not pay the provider import cost.
   ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
   return ttsRuntimePromise;
 }
 
+/** Reads the session-level TTS auto mode for a message-action send. */
 export function resolveMessageActionSessionTtsAuto(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -29,10 +31,12 @@ export function resolveMessageActionSessionTtsAuto(params: {
     const store = loadSessionStore(storePath);
     return resolveSessionStoreEntry({ store, sessionKey }).existing?.ttsAuto;
   } catch {
+    // Missing or unreadable session stores should not block message delivery.
     return undefined;
   }
 }
 
+/** Applies automatic TTS to a message-action send payload when config/session policy allows it. */
 export async function maybeApplyTtsToMessageActionSendPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;

@@ -628,7 +628,7 @@ export async function runBtwSideQuestion(
       answerText = collectTextContent(finalMessage.content);
     }
     if (!reasoningText) {
-      reasoningText = collectThinkingContent(finalMessage.content);
+      collectThinkingContent(finalMessage.content);
     }
   }
 

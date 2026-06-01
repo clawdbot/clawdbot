@@ -388,7 +388,6 @@ describe("canvas host", () => {
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
-    let createdLink = false;
 
     try {
       await fs.stat(bundlePath);
@@ -398,7 +397,6 @@ describe("canvas host", () => {
     }
 
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
 
     try {
       const res = await captureA2uiResponse(`${A2UI_PATH}/`);
@@ -421,9 +419,7 @@ describe("canvas host", () => {
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
-      if (createdLink) {
-        await fs.rm(linkPath, { force: true });
-      }
+      await fs.rm(linkPath, { force: true });
       if (createdBundle) {
         await fs.rm(bundlePath, { force: true });
       }

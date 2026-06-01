@@ -197,7 +197,7 @@ describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
   let realBundledSourceTreeProbe: {
     hasAccountInspect: boolean;
-    pluginIds: string[];
+    pluginIds: readonly string[];
   };
 
   beforeAll(async () => {

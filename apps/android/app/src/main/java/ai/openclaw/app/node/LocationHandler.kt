@@ -10,6 +10,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
+/**
+ * Injectable location facade for command tests and Android runtime access.
+ */
 internal interface LocationDataSource {
   fun hasFinePermission(context: Context): Boolean
 
@@ -69,11 +72,14 @@ class LocationHandler private constructor(
     locationPreciseEnabled = locationPreciseEnabled,
   )
 
+  /** Reports whether precise GPS-backed location can be requested from Android. */
   fun hasFineLocationPermission(): Boolean = dataSource.hasFinePermission(appContext)
 
+  /** Reports whether network/coarse location can be requested from Android. */
   fun hasCoarseLocationPermission(): Boolean = dataSource.hasCoarsePermission(appContext)
 
   companion object {
+    /** Creates a handler with injected location state for permission and payload tests. */
     internal fun forTesting(
       appContext: Context,
       dataSource: LocationDataSource,
@@ -90,8 +96,10 @@ class LocationHandler private constructor(
       )
   }
 
+  /** Handles location.get with foreground, permission, and user precision gates applied. */
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
     if (!isForeground()) {
+      // Android foreground restrictions and user expectation keep live location tied to the visible app.
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_BACKGROUND_UNAVAILABLE",
         message = "LOCATION_BACKGROUND_UNAVAILABLE: location requires OpenClaw to stay open",
@@ -105,6 +113,8 @@ class LocationHandler private constructor(
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
     val preciseEnabled = locationPreciseEnabled()
+    // Gateway requests are advisory; Android permission and user settings decide
+    // whether precise capture is actually allowed for this invocation.
     val accuracy =
       when (desiredAccuracy) {
         "precise" -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
@@ -113,6 +123,7 @@ class LocationHandler private constructor(
       }
     val providers =
       when (accuracy) {
+        // Provider order is part of the accuracy policy: GPS first for precise, network first otherwise.
         "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
         "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
         else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
@@ -151,6 +162,7 @@ class LocationHandler private constructor(
     val timeoutMs =
       (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)
         ?: 10_000L
+    // desiredAccuracy is advisory; invalid values fall through to the default policy.
     val desiredAccuracy =
       (root?.get("desiredAccuracy") as? JsonPrimitive)?.content?.trim()?.lowercase()
     return Triple(maxAgeMs, timeoutMs, desiredAccuracy)

@@ -441,7 +441,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
-      const handleAction = vi.fn(async () =>
+      const handleActionEntry = vi.fn(async () =>
         jsonResult({
           ok: true,
           local: true,
@@ -453,7 +453,7 @@ describe("runMessageAction plugin dispatch", () => {
         blurb: "Gateway Chat reaction test plugin.",
         actions: ["react"],
         capabilities: { chatTypes: ["direct"], reactions: true },
-        handleAction,
+        handleAction: handleActionEntry,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -529,7 +529,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway tool context",
       );
-      expect(handleAction).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
         {
@@ -613,7 +613,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
-      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
@@ -624,7 +624,7 @@ describe("runMessageAction plugin dispatch", () => {
             looksLikeId: () => true,
           },
         },
-        handleAction,
+        handleAction: handleActionResult,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -685,7 +685,7 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway message params",
       );
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
-      expect(handleAction).not.toHaveBeenCalled();
+      expect(handleActionResult).not.toHaveBeenCalled();
       expectRecordFields(
         result,
         {
@@ -784,7 +784,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("applies TTS before local plugin send fallback dispatch", async () => {
-      const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      const handleActionValue = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
         jsonResult({ ok: true, params }),
       );
       const localPlugin = createGatewayActionPlugin({
@@ -798,7 +798,7 @@ describe("runMessageAction plugin dispatch", () => {
             looksLikeId: () => true,
           },
         },
-        handleAction,
+        handleAction: handleActionValue,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -837,7 +837,7 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const call = readFirstPluginCall(handleAction);
+      const call = readFirstPluginCall(handleActionValue);
       expectRecordFields(
         readRecordField(call, "params", "local plugin params"),
         {
@@ -1366,7 +1366,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes gateway-executed plugin polls through gateway RPC instead of local dispatch", async () => {
-      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const handleActionLocal = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const pollGatewayPlugin = createGatewayActionPlugin({
         pluginId: "pollchat",
         label: "Poll Chat",
@@ -1377,7 +1377,7 @@ describe("runMessageAction plugin dispatch", () => {
             looksLikeId: () => true,
           },
         },
-        handleAction,
+        handleAction: handleActionLocal,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -1440,7 +1440,7 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway poll params",
       );
       expect(mocks.executePollAction).not.toHaveBeenCalled();
-      expect(handleAction).not.toHaveBeenCalled();
+      expect(handleActionLocal).not.toHaveBeenCalled();
       expectRecordFields(
         result,
         {

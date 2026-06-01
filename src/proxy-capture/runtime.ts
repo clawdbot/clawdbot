@@ -404,7 +404,7 @@ export function captureHttpExchange(
         ...responsePayload,
       });
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       store.recordEvent({
         ...createHttpCaptureEventBase({
           settings,

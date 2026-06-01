@@ -837,7 +837,7 @@ export async function cleanupGlobalRenameDirs(params: {
     return { removed };
   }
   const prefix = `${GLOBAL_RENAME_PREFIX}${name}-`;
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = await fs.readdir(root);
   } catch {

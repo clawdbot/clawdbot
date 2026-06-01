@@ -8,16 +8,19 @@ import {
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
+/** True when qmd memory config opts into startup boot sync work. */
 function shouldRunQmdStartupBootSync(qmd: ResolvedQmdConfig): boolean {
   return qmd.update.onBoot && qmd.update.startup !== "off";
 }
 
+/** Check whether an agent overrides memory search instead of inheriting defaults. */
 function hasExplicitAgentMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   return listAgentEntries(cfg).some(
     (entry) => normalizeAgentId(entry.id) === agentId && entry.memorySearch != null,
   );
 }
 
+/** Decide whether an agent's qmd memory manager should start during Gateway boot. */
 function shouldEagerlyStartAgentMemory(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -35,6 +38,7 @@ function shouldEagerlyStartAgentMemory(params: {
   return hasExplicitAgentMemorySearchConfig(params.cfg, params.agentId);
 }
 
+/** Start qmd memory boot sync for eligible agents without eagerly loading every agent. */
 export async function startGatewayMemoryBackend(params: {
   cfg: OpenClawConfig;
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
@@ -63,6 +67,8 @@ export async function startGatewayMemoryBackend(params: {
         agentCount: agentIds.length,
       })
     ) {
+      // Multi-agent configs keep unconfigured non-default agents lazy so
+      // Gateway startup does not initialize every possible qmd store.
       deferredAgentIds.push(agentId);
       continue;
     }
@@ -84,7 +90,7 @@ export async function startGatewayMemoryBackend(params: {
       params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
       continue;
     } finally {
-      await manager.close?.().catch((err) => {
+      await manager.close?.().catch((err: unknown) => {
         params.log.warn(
           `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
         );

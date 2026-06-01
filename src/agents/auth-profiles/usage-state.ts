@@ -1,10 +1,17 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
-import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === "openrouter" || normalized === "kilocode";
+}
+
+// Per-attempt transient failures (#87462): block only the failing model so
+// fallback models on the same auth profile can still try. Other reasons (auth,
+// billing, format, server_error) remain profile-wide.
+export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
+  return reason === "rate_limit" || reason === "timeout";
 }
 
 export function resolveProfileUnusableUntil(
@@ -25,15 +32,19 @@ export function isActiveUnusableWindow(until: number | undefined, now: number): 
 }
 
 function shouldBypassModelScopedCooldown(
-  stats: Pick<ProfileUsageStats, "cooldownReason" | "cooldownModel" | "disabledUntil">,
+  stats: Pick<
+    ProfileUsageStats,
+    "blockedUntil" | "cooldownReason" | "cooldownModel" | "disabledUntil"
+  >,
   now: number,
   forModel?: string,
 ): boolean {
   return Boolean(
     forModel &&
-    stats.cooldownReason === "rate_limit" &&
+    isModelScopedCooldownReason(stats.cooldownReason) &&
     stats.cooldownModel &&
     stats.cooldownModel !== forModel &&
+    !isActiveUnusableWindow(stats.blockedUntil, now) &&
     !isActiveUnusableWindow(stats.disabledUntil, now),
   );
 }
@@ -55,10 +66,10 @@ export function isProfileInCooldown(
     return false;
   }
   const ts = now ?? Date.now();
-  // Model-aware bypass: if the cooldown was caused by a rate_limit on a
+  // Model-aware bypass: if the cooldown was caused by a model-scoped reason on a
   // specific model and the caller is requesting a *different* model, allow it.
-  // We still honour any active billing/auth disable (`disabledUntil`) — those
-  // are profile-wide and must not be short-circuited by model scoping.
+  // We still honour profile-wide blocked/disabled windows; they must not be
+  // short-circuited by model scoping.
   if (shouldBypassModelScopedCooldown(stats, ts, forModel)) {
     return false;
   }
@@ -95,6 +106,7 @@ export function getSoonestCooldownExpiry(
       options?.forModel &&
       stats.cooldownReason === "rate_limit" &&
       stats.cooldownModel === options.forModel &&
+      !isActiveUnusableWindow(stats.blockedUntil, ts) &&
       !isActiveUnusableWindow(stats.disabledUntil, ts);
     if (matchingModelScopedCooldown) {
       latestMatchingModelCooldown =

@@ -130,7 +130,9 @@ describe("qa-bus state", () => {
 
     const beforeMatch = await Promise.race([
       pending.then(() => "resolved"),
-      new Promise((resolve) => setTimeout(() => resolve("still-waiting"), 20)),
+      new Promise((resolve) => {
+        setTimeout(() => resolve("still-waiting"), 20);
+      }),
     ]);
     expect(beforeMatch).toBe("still-waiting");
 

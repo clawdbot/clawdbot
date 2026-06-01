@@ -94,6 +94,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
+/**
+ * Detail routes reachable from the Android settings home surface.
+ */
 internal enum class SettingsRoute {
   Home,
   Profile,
@@ -115,6 +118,9 @@ internal enum class SettingsRoute {
   About,
 }
 
+/**
+ * Dispatches a selected settings route to its detail screen without changing navigation ownership.
+ */
 @Composable
 internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
@@ -487,6 +493,8 @@ private fun playVoiceSetupTone() {
   Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 300L)
 }
 
+private const val NOTIFICATION_PICKER_RESULT_LIMIT = 40
+
 @Composable
 private fun NotificationSettingsScreen(
   viewModel: MainViewModel,
@@ -501,6 +509,19 @@ private fun NotificationSettingsScreen(
   val quietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
   val maxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val modeLabel = if (mode == NotificationPackageFilterMode.Blocklist) "Blocklist" else "Allowlist"
+  val installedApps = remember(context, packages) { queryInstalledApps(context, packages) }
+  var notificationPickerExpanded by remember { mutableStateOf(false) }
+  var notificationAppSearch by remember { mutableStateOf("") }
+  var notificationShowSystemApps by remember { mutableStateOf(false) }
+  val filteredApps =
+    remember(installedApps, packages, notificationAppSearch, notificationShowSystemApps) {
+      filterNotificationAppsForPicker(
+        apps = installedApps,
+        selectedPackages = packages,
+        query = notificationAppSearch,
+        showSystemApps = notificationShowSystemApps,
+      )
+    }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -561,6 +582,124 @@ private fun NotificationSettingsScreen(
         )
       }
     }
+    NotificationPackagePickerPanel(
+      mode = mode,
+      selectedPackages = packages,
+      apps = filteredApps,
+      search = notificationAppSearch,
+      showSystemApps = notificationShowSystemApps,
+      expanded = notificationPickerExpanded,
+      onSearchChange = { notificationAppSearch = it },
+      onShowSystemAppsChange = { notificationShowSystemApps = it },
+      onExpandedChange = { notificationPickerExpanded = it },
+      onPackageSelectionChange = { packageName, selected ->
+        val next = packages.toMutableSet()
+        if (selected) {
+          next.add(packageName)
+        } else {
+          next.remove(packageName)
+        }
+        viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+      },
+    )
+  }
+}
+
+@Composable
+private fun NotificationPackagePickerPanel(
+  mode: NotificationPackageFilterMode,
+  selectedPackages: Set<String>,
+  apps: List<InstalledApp>,
+  search: String,
+  showSystemApps: Boolean,
+  expanded: Boolean,
+  onSearchChange: (String) -> Unit,
+  onShowSystemAppsChange: (Boolean) -> Unit,
+  onExpandedChange: (Boolean) -> Unit,
+  onPackageSelectionChange: (String, Boolean) -> Unit,
+) {
+  val visibleApps = apps.take(NOTIFICATION_PICKER_RESULT_LIMIT)
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = "App Filter", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = notificationPackageSelectionSummary(mode = mode, selectedCount = selectedPackages.size),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      ClawSecondaryButton(
+        text = if (expanded) "Close App Picker" else "Open App Picker",
+        onClick = { onExpandedChange(!expanded) },
+        modifier = Modifier.fillMaxWidth(),
+      )
+      if (expanded) {
+        ClawTextField(value = search, onValueChange = onSearchChange, placeholder = "Search apps")
+        SettingsToggleListRow(
+          SettingsToggleRow(
+            title = "Show System Apps",
+            subtitle = "Include Android and background packages.",
+            icon = Icons.Default.Storage,
+            checked = showSystemApps,
+            onCheckedChange = onShowSystemAppsChange,
+          ),
+        )
+        if (visibleApps.isEmpty()) {
+          Text(text = "No matching apps.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        } else {
+          ClawSeparatedColumn(items = visibleApps) { app ->
+            NotificationPackageAppRow(
+              app = app,
+              selected = selectedPackages.contains(app.packageName),
+              onSelectedChange = { selected -> onPackageSelectionChange(app.packageName, selected) },
+            )
+          }
+          if (apps.size > visibleApps.size) {
+            Text(
+              text = "Showing ${visibleApps.size} of ${apps.size}. Refine search for more.",
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun NotificationPackageAppRow(
+  app: InstalledApp,
+  selected: Boolean,
+  onSelectedChange: (Boolean) -> Unit,
+) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 58.dp)
+        .clickable { onSelectedChange(!selected) }
+        .padding(vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    ClawTextBadge(text = notificationAppBadge(app.label))
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(
+        text = app.label,
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.text,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Text(
+        text = app.packageName,
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    Switch(checked = selected, onCheckedChange = onSelectedChange)
   }
 }
 
@@ -784,6 +923,7 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
   }
 }
 
+/** Converts raw gateway connection text into stable settings metric labels. */
 private fun gatewayStatusLabel(
   statusText: String,
   isConnected: Boolean,
@@ -861,6 +1001,7 @@ private fun AboutStatusRow(
   }
 }
 
+/** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
     "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
@@ -868,6 +1009,9 @@ private fun aboutUpdateText(latestVersion: String?): String =
     "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
   }
 
+/**
+ * Shared settings detail shell with back navigation, title, subtitle, and section content.
+ */
 @Composable
 internal fun SettingsDetailFrame(
   title: String,
@@ -900,6 +1044,9 @@ internal fun SettingsDetailFrame(
   }
 }
 
+/**
+ * Toggle row model reused by settings sections that render simple on/off controls.
+ */
 private data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
@@ -908,6 +1055,9 @@ private data class SettingsToggleRow(
   val onCheckedChange: (Boolean) -> Unit,
 )
 
+/**
+ * Compact metric row model for connected gateway summaries.
+ */
 internal data class SettingsMetric(
   val title: String,
   val value: String,
@@ -989,6 +1139,9 @@ private fun AgentListRow(
   )
 }
 
+/**
+ * Chooses a display name for the configured default agent, falling back to any available agent.
+ */
 private fun defaultAgentName(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -998,6 +1151,9 @@ private fun defaultAgentName(
   return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: "None"
 }
 
+/**
+ * Builds a short stable badge from agent emoji/name/id for dense lists.
+ */
 private fun agentBadge(agent: GatewayAgentSummary): String {
   agent.emoji
     ?.trim()
@@ -1013,6 +1169,9 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
     .ifBlank { "A" }
 }
 
+/**
+ * Normalizes tool-call names into readable approval action labels.
+ */
 private fun approvalActionName(name: String): String {
   val cleaned =
     name
@@ -1027,6 +1186,7 @@ private fun approvalActionName(name: String): String {
     .ifBlank { "Action Request" }
 }
 
+/** Builds approval row age/error copy without exposing raw tool arguments. */
 private fun approvalSubtitle(
   toolCall: ChatPendingToolCall,
   hasIssue: Boolean,
@@ -1037,8 +1197,10 @@ private fun approvalSubtitle(
   return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
 }
 
+/** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String = "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
 
+/** Summarizes a provider plan and most-used quota window for usage rows. */
 private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
   provider.error?.let { return it }
   val window = provider.windows.maxByOrNull { it.usedPercent }
@@ -1046,6 +1208,9 @@ private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String
   return listOfNotNull(provider.plan, quota).joinToString(" · ").ifBlank { "No limits reported" }
 }
 
+/**
+ * Converts usage timestamps into short relative labels for metric panels.
+ */
 private fun formatUsageUpdated(updatedAtMs: Long?): String {
   val updated = updatedAtMs ?: return "Never"
   val deltaMs = (System.currentTimeMillis() - updated).coerceAtLeast(0L)
@@ -1059,6 +1224,7 @@ private fun formatUsageUpdated(updatedAtMs: Long?): String {
   }
 }
 
+/** Converts gateway cron status text into the short row badge label. */
 private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   if (!job.enabled) return "Off"
   return when (job.lastRunStatus?.lowercase()) {
@@ -1069,6 +1235,7 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   }
 }
 
+/** Maps gateway cron status text to app status colors. */
 private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   if (!job.enabled) return ClawStatus.Neutral
   return when (job.lastRunStatus?.lowercase()) {
@@ -1078,6 +1245,58 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   }
 }
 
+internal fun filterNotificationAppsForPicker(
+  apps: List<InstalledApp>,
+  selectedPackages: Set<String>,
+  query: String,
+  showSystemApps: Boolean,
+): List<InstalledApp> {
+  val normalizedQuery = query.trim().lowercase()
+  return apps.filter { app ->
+    val selected = app.packageName in selectedPackages
+    val visibleByType = showSystemApps || !app.isSystemApp || selected
+    val visibleBySearch =
+      normalizedQuery.isEmpty() ||
+        app.label.lowercase().contains(normalizedQuery) ||
+        app.packageName.lowercase().contains(normalizedQuery)
+    visibleByType && visibleBySearch
+  }
+}
+
+private fun notificationPackageSelectionSummary(
+  mode: NotificationPackageFilterMode,
+  selectedCount: Int,
+): String =
+  when (mode) {
+    NotificationPackageFilterMode.Allowlist ->
+      if (selectedCount == 0) {
+        "No apps selected. Nothing forwards until you add apps."
+      } else {
+        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} allowed to forward."
+      }
+    NotificationPackageFilterMode.Blocklist ->
+      if (selectedCount == 0) {
+        "No apps blocked. Apps can forward unless you add blocks."
+      } else {
+        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} blocked from forwarding."
+      }
+  }
+
+private fun notificationAppBadge(label: String): String {
+  val initials =
+    label
+      .split(' ', '-', '_', '.')
+      .asSequence()
+      .filter { it.isNotBlank() }
+      .take(2)
+      .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+      .joinToString("")
+  return initials.ifBlank { "A" }
+}
+
+/**
+ * Converts cron wake times into short relative labels for scheduled-work rows.
+ */
 private fun formatCronWake(timeMs: Long?): String {
   val target = timeMs ?: return "None"
   val deltaMs = target - System.currentTimeMillis()
@@ -1123,6 +1342,9 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
   }
 }
 
+/**
+ * Reusable metric panel for settings screens with compact title/value rows.
+ */
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
@@ -1159,11 +1381,15 @@ private fun SettingsIconMark(icon: ImageVector) {
   }
 }
 
+/**
+ * Checks an exact Android runtime permission for settings enablement.
+ */
 private fun hasPermission(
   context: Context,
   permission: String,
 ): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+/** Returns true when either fine or coarse location is available to settings callers. */
 private fun hasLocationPermission(context: Context): Boolean =
   hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
     hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)

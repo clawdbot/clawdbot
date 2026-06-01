@@ -1,15 +1,15 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -85,12 +85,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-
-function requireArray(value: unknown, label: string): Array<unknown> {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as Array<unknown>;
-}
-
 function callArg(
   mock: { mock: { calls: Array<Array<unknown>> } },
   callIndex: number,
@@ -309,7 +303,7 @@ describe("createCodexDynamicToolBridge", () => {
         tools: [
           createTool({ name: "message" }),
           createTool({
-            name: "dofbot_move_angles",
+            name: "fuzzplugin_move_angles",
             parameters: { type: "array", items: { type: "number" } },
             execute: badExecute,
           }),
@@ -330,25 +324,23 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
     expect(bridge.telemetry.quarantinedTools).toEqual([
       {
-        tool: "dofbot_move_angles",
-        violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
+        tool: "fuzzplugin_move_angles",
+        violations: ['fuzzplugin_move_angles.inputSchema.type must be "object"'],
       },
     ]);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("dofbot_move_angles"),
+      expect.stringContaining("fuzzplugin_move_angles"),
       expect.objectContaining({
         tools: [
           {
-            tool: "dofbot_move_angles",
-            violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
+            tool: "fuzzplugin_move_angles",
+            violations: ['fuzzplugin_move_angles.inputSchema.type must be "object"'],
           },
         ],
       }),
     );
     const blockedEvents = diagnosticEvents.filter(
-      (
-        event,
-      ): event is Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }> =>
+      (event): event is Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }> =>
         event.type === "tool.execution.blocked",
     );
     expect(blockedEvents).toContainEqual(
@@ -357,9 +349,9 @@ describe("createCodexDynamicToolBridge", () => {
         runId: "run-1",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        toolName: "dofbot_move_angles",
+        toolName: "fuzzplugin_move_angles",
         deniedReason: "unsupported_tool_schema",
-        reason: 'dofbot_move_angles.inputSchema.type must be "object"',
+        reason: 'fuzzplugin_move_angles.inputSchema.type must be "object"',
       }),
     );
 
@@ -368,13 +360,13 @@ describe("createCodexDynamicToolBridge", () => {
       turnId: "turn-1",
       callId: "call-1",
       namespace: null,
-      tool: "dofbot_move_angles",
+      tool: "fuzzplugin_move_angles",
       arguments: {},
     });
 
     expect(result).toEqual({
       success: false,
-      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: dofbot_move_angles" }],
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: fuzzplugin_move_angles" }],
     });
     expect(badExecute).not.toHaveBeenCalled();
   });
@@ -889,7 +881,7 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("passes raw tool failure state into agent tool result middleware", async () => {
     const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (eventValue: { isError?: boolean }) => undefined);
+    const handler = vi.fn(async (_eventValue: { isError?: boolean }) => undefined);
     registry.agentToolResultMiddlewares.push({
       pluginId: "tokenjuice",
       pluginName: "Tokenjuice",

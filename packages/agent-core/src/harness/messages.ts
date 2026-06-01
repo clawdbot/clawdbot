@@ -15,6 +15,7 @@ export type {
   CustomMessage,
 } from "../types.js";
 
+/** Harness-only transcript entries that can be normalized into LLM messages. */
 export type HarnessMessage =
   | AgentMessage
   | BashExecutionMessage
@@ -52,6 +53,7 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
 
+/** Render a shell execution record as user-visible context text for the model. */
 export function bashExecutionToText(msg: BashExecutionMessage): string {
   let text = `Ran \`${msg.command}\`\n`;
   if (msg.output) {
@@ -70,6 +72,7 @@ export function bashExecutionToText(msg: BashExecutionMessage): string {
   return text;
 }
 
+/** Build a persisted branch summary message from the repository timestamp string. */
 export function createBranchSummaryMessage(
   summary: string,
   fromId: string,
@@ -83,6 +86,7 @@ export function createBranchSummaryMessage(
   };
 }
 
+/** Build a persisted compaction summary message from the repository timestamp string. */
 export function createCompactionSummaryMessage(
   summary: string,
   tokensBefore: number,
@@ -96,6 +100,7 @@ export function createCompactionSummaryMessage(
   };
 }
 
+/** Build a custom transcript message that can be shown and replayed into context. */
 export function createCustomMessage(
   customType: string,
   content: string | (TextContent | ImageContent)[],
@@ -113,6 +118,7 @@ export function createCustomMessage(
   };
 }
 
+/** Convert harness transcript messages into the LLM-facing message sequence. */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages
     .map((m): Message | undefined => {

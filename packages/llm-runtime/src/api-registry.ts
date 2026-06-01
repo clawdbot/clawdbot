@@ -8,21 +8,21 @@ import type {
   StreamOptions,
 } from "../../llm-core/src/index.js";
 
-// Type-only source import keeps plugin SDK declarations self-contained; package
-// runtime emits no llm-core import from this module.
-
+/** Runtime stream adapter signature stored in the API provider registry. */
 export type ApiStreamFunction = (
   model: Model,
   context: Context,
   options?: StreamOptions,
 ) => AssistantMessageEventStreamContract;
 
+/** Runtime simple-stream adapter signature stored in the API provider registry. */
 export type ApiStreamSimpleFunction = (
   model: Model,
   context: Context,
   options?: SimpleStreamOptions,
 ) => AssistantMessageEventStreamContract;
 
+/** Provider implementation registered by core or plugins for a specific model API. */
 export interface ApiProvider<
   TApi extends Api = Api,
   TOptions extends StreamOptions = StreamOptions,
@@ -69,6 +69,7 @@ function wrapStreamSimple<TApi extends Api>(
   };
 }
 
+/** Registers or replaces the provider implementation for an API id. */
 export function registerApiProvider<TApi extends Api, TOptions extends StreamOptions>(
   provider: ApiProvider<TApi, TOptions>,
   sourceId?: string,
@@ -83,14 +84,17 @@ export function registerApiProvider<TApi extends Api, TOptions extends StreamOpt
   });
 }
 
+/** Looks up a registered API provider by API id. */
 export function getApiProvider(api: Api): ApiProviderInternal | undefined {
   return apiProviderRegistry.get(api)?.provider;
 }
 
+/** Lists all currently registered API providers. */
 export function getApiProviders(): ApiProviderInternal[] {
   return Array.from(apiProviderRegistry.values(), (entry) => entry.provider);
 }
 
+/** Removes all providers registered by a plugin/source id. */
 export function unregisterApiProviders(sourceId: string): void {
   for (const [api, entry] of apiProviderRegistry.entries()) {
     if (entry.sourceId === sourceId) {
@@ -99,6 +103,7 @@ export function unregisterApiProviders(sourceId: string): void {
   }
 }
 
+/** Clears the registry for test teardown and runtime reset flows. */
 export function clearApiProviders(): void {
   apiProviderRegistry.clear();
 }

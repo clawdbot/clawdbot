@@ -42,7 +42,9 @@ export async function waitForCompactionCount(params: {
     if ((await readCompactionCount(params.storePath, params.sessionKey)) === params.expected) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`timed out waiting for compactionCount=${params.expected}`);
 }

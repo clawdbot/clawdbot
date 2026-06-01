@@ -37,8 +37,8 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     throw new Error("ACPX runtime service is not started");
   }
   state.startPromise ??= (async () => {
-    const { createAcpxRuntimeService } = await loadServiceModule();
-    const service = createAcpxRuntimeService(state.params);
+    const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
+    const service = createAcpxRuntimeServiceLocal(state.params);
     state.realService = service;
     await service.start(state.ctx as OpenClawPluginServiceContext);
     const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);

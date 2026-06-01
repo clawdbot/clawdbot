@@ -52,6 +52,7 @@ describe("runAgentStep", () => {
           message?: string;
           sessionKey?: string;
           deliver?: boolean;
+          sourceReplyDeliveryMode?: string;
           lane?: string;
           inputProvenance?: { kind?: string; sourceTool?: string };
         }
@@ -59,6 +60,7 @@ describe("runAgentStep", () => {
     expect(params?.message).toContain("[Inter-session message");
     expect(params?.sessionKey).toBe("agent:main:subagent:child");
     expect(params?.deliver).toBe(false);
+    expect(params?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(params?.lane).toBe("nested:agent:main:subagent:child");
     expect(params?.inputProvenance?.kind).toBe("inter_session");
     expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
@@ -119,10 +121,11 @@ describe("runAgentStep", () => {
     expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
     const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; transcriptMessage?: string }]
+      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
     >;
     const ingress = ingressCalls[0]?.[0];
     expect(ingress?.message).toContain("internal announce step");
+    expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
   });
 });

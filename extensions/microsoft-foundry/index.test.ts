@@ -9,6 +9,7 @@ import {
   buildFoundryAuthResult,
   normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
+  supportsFoundryReasoningEffort,
   supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
@@ -104,7 +105,9 @@ function buildFoundryModel(
     name: string;
     api: "openai-responses" | "openai-completions";
     baseUrl: string;
+    reasoning: boolean;
     input: Array<"text" | "image">;
+    compat: Record<string, unknown>;
   }> = {},
 ) {
   return {
@@ -591,6 +594,23 @@ describe("microsoft-foundry plugin", () => {
     ]);
   });
 
+  it("marks newly selected Foundry reasoning deployments as reasoning-capable", async () => {
+    const provider = registerProvider();
+    const config = buildFoundryConfig({ models: [] });
+
+    await provider.onModelSelected?.({
+      config,
+      model: "microsoft-foundry/gpt-5.4",
+      prompter: {} as never,
+      agentDir: "/tmp/test-agent",
+    });
+
+    const model = config.models?.providers?.["microsoft-foundry"]?.models[0];
+    expect(model?.id).toBe("gpt-5.4");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.compat?.supportsReasoningEffort).toBe(true);
+  });
+
   it("accepts tenant domains as valid tenant identifiers", () => {
     expect(isValidTenantIdentifier("contoso.onmicrosoft.com")).toBe(true);
     expect(isValidTenantIdentifier("00000000-0000-0000-0000-000000000000")).toBe(true);
@@ -605,8 +625,14 @@ describe("microsoft-foundry plugin", () => {
     expect(usesFoundryResponsesByDefault("DeepSeek-V4-Flash")).toBe(true);
     expect(usesFoundryResponsesByDefault("MAI-DS-R1")).toBe(false);
     expect(requiresFoundryMaxCompletionTokens("gpt-5.4")).toBe(true);
+    expect(requiresFoundryMaxCompletionTokens("gpt-5-chat")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("gpt-4o")).toBe(false);
+    expect(supportsFoundryReasoningEffort("gpt-5.4")).toBe(true);
+    expect(supportsFoundryReasoningEffort("gpt-5-chat")).toBe(false);
+    expect(supportsFoundryReasoningEffort("gpt-5.1-chat")).toBe(true);
+    expect(supportsFoundryReasoningEffort("o3")).toBe(true);
+    expect(supportsFoundryReasoningEffort("o1-mini")).toBe(false);
     expect(supportsFoundryImageInput("gpt-5.4")).toBe(true);
     expect(supportsFoundryImageInput("gpt-4o")).toBe(true);
     expect(supportsFoundryImageInput("MAI-DS-R1")).toBe(false);
@@ -639,14 +665,17 @@ describe("microsoft-foundry plugin", () => {
         id: "deployment-gpt5",
         name: "gpt-5.4",
         input: ["text"],
+        compat: { supportsStrictMode: false },
       }),
     });
 
     expect(normalized?.name).toBe("gpt-5.4");
     expect(normalized?.api).toBe("openai-responses");
+    expect(normalized?.reasoning).toBe(true);
     expect(normalized?.input).toEqual(["text", "image"]);
     expect(normalized?.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(normalized?.compat?.supportsStore).toBe(false);
+    expect(normalized?.compat?.supportsStrictMode).toBe(false);
     expect(normalized?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 
@@ -665,6 +694,45 @@ describe("microsoft-foundry plugin", () => {
 
     expect(normalized?.name).toBe("internal alias");
     expect(normalized?.input).toEqual(["text", "image"]);
+  });
+
+  it("preserves explicit reasoning capability for non-heuristic Foundry aliases", () => {
+    const provider = registerProvider();
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "microsoft-foundry",
+      modelId: "prod-primary",
+      model: buildFoundryModel({
+        id: "prod-primary",
+        name: "production alias",
+        api: "openai-completions",
+        reasoning: true,
+      }),
+    });
+
+    expect(normalized?.name).toBe("production alias");
+    expect(normalized?.reasoning).toBe(true);
+    expect(normalized?.compat?.supportsReasoningEffort).toBe(true);
+    expect(normalized?.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("preserves explicit reasoning_effort opt-outs for Foundry aliases", () => {
+    const provider = registerProvider();
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "microsoft-foundry",
+      modelId: "prod-primary",
+      model: buildFoundryModel({
+        id: "prod-primary",
+        name: "production alias",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      }),
+    });
+
+    expect(normalized?.reasoning).toBe(true);
+    expect(normalized?.compat?.supportsReasoningEffort).toBe(false);
   });
 
   it("writes Azure API key header overrides for API-key auth configs", () => {
@@ -709,6 +777,128 @@ describe("microsoft-foundry plugin", () => {
 
     const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
     expect(provider?.models[0]?.compat?.supportsStore).toBe(false);
+    expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("marks Foundry chat models as not supporting reasoning_effort", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-4o-mini",
+      modelNameHint: "gpt-4o-mini",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.reasoning).toBe(false);
+    expect(provider?.models[0]?.compat?.supportsReasoningEffort).toBe(false);
+    expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_tokens");
+  });
+
+  it("keeps Foundry chat reasoning_effort enabled for GPT-5 reasoning deployments", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.1-chat",
+      modelNameHint: "gpt-5.1-chat",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.reasoning).toBe(true);
+    expect(provider?.models[0]?.thinkingLevelMap?.minimal).toBe(null);
+    expect(provider?.models[0]?.thinkingLevelMap?.off).toBe("none");
+    expect(provider?.models[0]?.compat?.supportsReasoningEffort).toBe(true);
+    expect(provider?.models[0]?.compat?.supportedReasoningEfforts).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("records model-name reasoning effort limits for Foundry deployment aliases", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "deployment-codex-mini",
+      modelNameHint: "gpt-5.1-codex-mini",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.reasoning).toBe(true);
+    expect(provider?.models[0]?.compat?.supportsReasoningEffort).toBe(true);
+    expect(provider?.models[0]?.compat?.supportedReasoningEfforts).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("omits minimal from newer Foundry GPT-5.x reasoning effort metadata", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.2",
+      modelNameHint: "gpt-5.2",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.thinkingLevelMap?.minimal).toBe(null);
+    expect(provider?.models[0]?.compat?.supportedReasoningEfforts).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("omits minimal from Foundry GPT-5 Codex reasoning effort metadata", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5-codex",
+      modelNameHint: "gpt-5-codex",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.thinkingLevelMap?.minimal).toBe(null);
+    expect(provider?.models[0]?.compat?.supportedReasoningEfforts).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("keeps Foundry gpt-5-chat deployments non-reasoning while using max_completion_tokens", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5-chat",
+      modelNameHint: "gpt-5-chat",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.reasoning).toBe(false);
+    expect(provider?.models[0]?.compat?.supportsReasoningEffort).toBe(false);
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 

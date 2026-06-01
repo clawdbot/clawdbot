@@ -8,6 +8,7 @@ import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
 
 const {
   createLineBotMock,
@@ -17,7 +18,7 @@ const {
 } = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
-    handleWebhook: vi.fn(),
+    handleWebhook: vi.fn<LineHandleWebhook>(),
   })),
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
     vi.fn<LineNodeWebhookHandler>(async () => {}),
@@ -163,7 +164,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineBotMock.mockReset();
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
-      handleWebhook: vi.fn(),
+      handleWebhook: vi.fn<LineHandleWebhook>(),
     }));
     innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
     createLineNodeWebhookHandlerMock
@@ -362,11 +363,11 @@ describe("monitorLineProvider lifecycle", () => {
 
     let releaseWebhook: (() => void) | undefined;
     const bot = createLineBotMock.mock.results[0]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
+      handleWebhook: ReturnType<typeof vi.fn<LineHandleWebhook>>;
     };
     bot.handleWebhook.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
+      () =>
+        new Promise<void>((resolve) => {
           releaseWebhook = resolve;
         }),
     );
@@ -474,7 +475,9 @@ describe("monitorLineProvider lifecycle", () => {
     const firstRequests = Array.from({ length: limit }, () =>
       route.handler(createHeldPostRequest(), createRouteResponse()),
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     const overflowResponse = createRouteResponse();
     await route.handler(createSignedPostRequest(), overflowResponse);

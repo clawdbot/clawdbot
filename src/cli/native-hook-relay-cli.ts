@@ -16,6 +16,7 @@ export type NativeHookRelayCliOptions = {
   relayId?: string;
   generation?: string;
   event?: string;
+  preToolUseUnavailable?: string;
   timeout?: string;
 };
 
@@ -76,6 +77,7 @@ export async function runNativeHookRelayCli(
       const response = renderNativeHookRelayUnavailableResponse({
         provider,
         event,
+        preToolUseUnavailable: opts.preToolUseUnavailable,
         message: "Native hook relay unavailable",
       });
       writeText(stdout, response.stdout);
@@ -101,6 +103,7 @@ export async function runNativeHookRelayCli(
     const response = renderNativeHookRelayUnavailableResponse({
       provider,
       event,
+      preToolUseUnavailable: opts.preToolUseUnavailable,
       message: "Native hook relay unavailable",
     });
     writeText(stdout, response.stdout);

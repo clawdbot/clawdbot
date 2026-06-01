@@ -33,8 +33,6 @@ const {
   touchBindingMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
-
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
@@ -104,9 +102,7 @@ async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
-    onRegister: (registered) => {
-      handlers = registered;
-    },
+    onRegister: () => {},
     runtime: lastRuntime,
     cfg: lifecycleConfig,
     account: lifecycleAccount,
@@ -143,7 +139,6 @@ describe("Feishu card-action lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    handlers = {};
     lastRuntime = createRuntimeEnv();
     resetProcessedFeishuCardActionTokensForTests();
     setFeishuLifecycleStateDir("openclaw-feishu-card-action");

@@ -241,7 +241,7 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
 }
 
 async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = await fs.readdir(memoryDir);
   } catch (err) {
@@ -347,6 +347,7 @@ function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string):
 
 function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
+  // Status only counts short-term source shapes; promoted diary/report files stay out.
   if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
     return true;
   }
@@ -462,6 +463,7 @@ function trimDreamingEntries(
 ): DoctorMemoryDreamingEntryPayload[] {
   const selected: DoctorMemoryDreamingEntryPayload[] = [];
   for (const entry of entries) {
+    // Keep the public status payload bounded while preserving the comparator's best entries.
     let insertAt = selected.length;
     for (let index = 0; index < selected.length; index += 1) {
       if (compare(entry, selected[index]) < 0) {
@@ -580,6 +582,7 @@ async function loadDreamingStoreStats(
       const phaseStore = asRecord(parsedPhase);
       const phaseEntries = asRecord(phaseStore?.entries) ?? {};
       for (const [key, value] of Object.entries(phaseEntries)) {
+        // Phase signals are joined only to active short-term entries, not archived promotions.
         if (!activeKeys.has(key)) {
           continue;
         }
@@ -769,6 +772,7 @@ function isManagedDreamingJob(
   if (description?.includes(params.tag)) {
     return true;
   }
+  // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
   const name = normalizeTrimmedString(job.name);
   const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
   const payloadText = normalizeTrimmedString(job.payload?.text);
@@ -854,6 +858,7 @@ async function readDreamDiary(
       };
     }
     if (stat.isSymbolicLink() || !stat.isFile()) {
+      // Ignore redirected diaries; doctor actions only operate on real workspace files.
       continue;
     }
     try {
@@ -1209,7 +1214,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
           candidates: preview.deep.candidates.map((candidate) => {
             const promoted =
               typeof candidate.promotedAt === "string" && candidate.promotedAt.length > 0;
-            const payload: DoctorMemoryRemHarnessCandidatePayload = {
+            const payloadLocal: DoctorMemoryRemHarnessCandidatePayload = {
               key: candidate.key,
               path: candidate.path,
               startLine: candidate.startLine,
@@ -1225,9 +1230,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
               promoted,
             };
             if (promoted) {
-              payload.promotedAt = candidate.promotedAt;
+              payloadLocal.promotedAt = candidate.promotedAt;
             }
-            return payload;
+            return payloadLocal;
           }),
         },
       };

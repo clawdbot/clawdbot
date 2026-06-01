@@ -1,5 +1,6 @@
 import type { ChatAttachment } from "../chat-attachments.js";
 
+/** RPC attachment payload shape accepted by chat-like gateway methods. */
 export type RpcAttachmentInput = {
   type?: unknown;
   mimeType?: unknown;
@@ -9,6 +10,8 @@ export type RpcAttachmentInput = {
 };
 
 function normalizeAttachmentContent(content: unknown): string | undefined {
+  // RPC callers may send browser ArrayBuffers, typed-array slices, or base64
+  // strings. Normalize all accepted forms to the chat attachment wire shape.
   if (typeof content === "string") {
     return content;
   }
@@ -21,9 +24,12 @@ function normalizeAttachmentContent(content: unknown): string | undefined {
   return undefined;
 }
 
+/** Convert permissive RPC attachment payloads into the bounded chat attachment shape. */
 export function normalizeRpcAttachmentsToChatAttachments(
   attachments: RpcAttachmentInput[] | undefined,
 ): ChatAttachment[] {
+  // Accept both the OpenClaw attachment fields and Anthropic-style
+  // source:{type:"base64",media_type,data} payloads used by some clients.
   return (
     attachments
       ?.map((a) => {

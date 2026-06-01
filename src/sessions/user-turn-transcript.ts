@@ -1,7 +1,7 @@
 import path from "node:path";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-import { mimeTypeFromFilePath } from "../media/mime.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
@@ -193,12 +193,12 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
       type: string;
     }
   | undefined {
-  const path = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!path) {
+  const pathLocal = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
+  if (!pathLocal) {
     return undefined;
   }
   return {
-    path,
+    path: pathLocal,
     type: mediaTypeForTranscript(media),
   };
 }

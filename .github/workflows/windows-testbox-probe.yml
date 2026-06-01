@@ -61,12 +61,14 @@ jobs:
           submodules: false
 
       - name: Probe native Windows
+        env:
+          TARGET_REF: ${{ inputs.target_ref || github.ref }}
         run: |
           $ErrorActionPreference = "Stop"
           Write-Host "runner=$env:RUNNER_NAME"
           Write-Host "machine=$env:COMPUTERNAME"
           Write-Host "workspace=$env:GITHUB_WORKSPACE"
-          Write-Host "target_ref=${{ inputs.target_ref || github.ref }}"
+          Write-Host "target_ref=$env:TARGET_REF"
           Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
           Write-Host ("arch=" + [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
           Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())

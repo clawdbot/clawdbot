@@ -1218,8 +1218,8 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
 });
 
 vi.mock("./doctor-config-preflight.js", async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
   const {
     collectRelevantDoctorPluginIds,
     listPluginDoctorLegacyConfigRules,
@@ -1231,8 +1231,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   function resolveConfigPath() {
     const stateDir =
       process.env.OPENCLAW_STATE_DIR ||
-      (process.env.HOME ? path.join(process.env.HOME, ".openclaw") : "");
-    return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
+      (process.env.HOME ? pathLocal.join(process.env.HOME, ".openclaw") : "");
+    return process.env.OPENCLAW_CONFIG_PATH || pathLocal.join(stateDir, "openclaw.json");
   }
 
   function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
@@ -1282,7 +1282,10 @@ vi.mock("./doctor-config-preflight.js", async () => {
       let exists = injected?.exists ?? false;
       if (!injected) {
         try {
-          parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+          parsed = JSON.parse(await fsLocal.readFile(configPath, "utf-8")) as Record<
+            string,
+            unknown
+          >;
           exists = true;
         } catch {
           parsed = {};
@@ -1415,7 +1418,9 @@ vi.mock("./doctor-config-analysis.js", () => {
 });
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
   autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
+  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
 }));
 
 function resetTerminalNoteMock() {

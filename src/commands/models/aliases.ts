@@ -56,9 +56,9 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
   const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-  await updateConfig((cfg) => {
+  await updateConfig((cfgLocal) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
-    const nextModels = { ...cfg.agents?.defaults?.models };
+    const nextModels = { ...cfgLocal.agents?.defaults?.models };
     for (const [key, entry] of Object.entries(nextModels)) {
       const existing = entry?.alias?.trim();
       if (existing && existing === alias && key !== modelKey) {
@@ -68,11 +68,11 @@ export async function modelsAliasesAddCommand(
     const existing = nextModels[modelKey] ?? {};
     nextModels[modelKey] = { ...existing, alias };
     return {
-      ...cfg,
+      ...cfgLocal,
       agents: {
-        ...cfg.agents,
+        ...cfgLocal.agents,
         defaults: {
-          ...cfg.agents?.defaults,
+          ...cfgLocal.agents?.defaults,
           models: nextModels,
         },
       },

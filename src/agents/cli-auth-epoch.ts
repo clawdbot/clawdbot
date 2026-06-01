@@ -27,7 +27,7 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
-export const CLI_AUTH_EPOCH_VERSION = 4;
+export const CLI_AUTH_EPOCH_VERSION = 5;
 
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
@@ -69,10 +69,19 @@ function encodeOAuthIdentity(credential: {
 }
 
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
-  if (credential.type === "oauth") {
-    return encodeOAuthIdentity(credential);
-  }
-  return JSON.stringify(["token", credential.provider, credential.token]);
+  // Identity-only hashing for both OAuth and token Claude CLI credentials.
+  // The Claude CLI keychain rewrite is not atomic: a token rotation can
+  // briefly produce a partial read where `refreshToken` is missing, and the
+  // parser falls back to a token-shaped credential. With the previous
+  // token-inclusive hash, that transient race flipped the auth-epoch and
+  // forced a session reset on every rotation. Routing both branches through
+  // `encodeOAuthIdentity` collapses partial reads and rotations onto the
+  // same provider-keyed identity hash, while a real account switch would
+  // still surface as different identity fields. Fixes #74312.
+  return encodeOAuthIdentity({
+    type: "oauth",
+    provider: credential.provider,
+  });
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
@@ -103,6 +112,19 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         encodeUnknown(credential.metadata),
       ]);
     case "token":
+      if (credential.tokenRef !== undefined) {
+        // When a token profile has a stable account/ref identity, token
+        // material is a refreshable secret rather than the session owner.
+        // Plain token-only profiles still hash the token below so manual token
+        // replacement keeps invalidating reusable sessions.
+        return JSON.stringify([
+          "token-identity",
+          credential.provider,
+          encodeUnknown(credential.tokenRef),
+          credential.email ?? null,
+          credential.displayName ?? null,
+        ]);
+      }
       return JSON.stringify([
         "token",
         credential.provider,
@@ -143,6 +165,9 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
         ttlMs: 5000,
         allowKeychainPrompt: false,
       });
+      // Keep true credential absence absent so logout/removal invalidates
+      // reusable sessions. The 5s credential cache still masks transient
+      // null reads immediately after a successful read.
       return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
     }
     case "codex-cli": {

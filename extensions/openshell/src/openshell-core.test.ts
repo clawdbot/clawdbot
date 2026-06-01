@@ -405,7 +405,7 @@ describe("openshell fs bridges", () => {
     });
 
     expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe("hello");
-    expect(backend.syncLocalPathToRemote).toHaveBeenCalledWith(
+    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledWith(
       path.join(workspaceDir, "nested", "file.txt"),
       "/sandbox/nested/file.txt",
     );
@@ -437,7 +437,7 @@ describe("openshell fs bridges", () => {
     ).rejects.toThrow("Sandbox path escapes allowed mounts");
     await expectPathMissing(path.join(outsideDir, "escape.txt"));
     await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
-    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
   });
 
   it("rejects writes whose final target is a symlink inside the local mount root", async () => {
@@ -467,7 +467,7 @@ describe("openshell fs bridges", () => {
     ).rejects.toThrow("Sandbox boundary checks failed");
     await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
     await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
-    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
   });
 
   it("rejects a parent symlink that lands outside the sandbox root", async () => {

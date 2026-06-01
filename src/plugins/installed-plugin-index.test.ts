@@ -1073,6 +1073,38 @@ describe("installed plugin index", () => {
     ]);
   });
 
+  it("treats legacy config-path startup metadata as migration invalidation", () => {
+    const fixture = createRichPluginFixture();
+    writePluginManifest(fixture.rootDir, {
+      id: "demo",
+      name: "Demo",
+      configSchema: { type: "object" },
+      providers: ["demo"],
+      activation: {
+        onConfigPaths: ["browser"],
+      },
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      env: hermeticEnv(),
+    });
+    const previous = {
+      ...current,
+      plugins: current.plugins.map((plugin) => ({
+        ...plugin,
+        startup: {
+          sidecar: plugin.startup.sidecar,
+          memory: plugin.startup.memory,
+          deferConfiguredChannelFullLoadUntilAfterListen:
+            plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
+          agentHarnesses: plugin.startup.agentHarnesses,
+        },
+      })),
+    };
+
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual(["migration"]);
+  });
+
   it("does not mark enabled-only migration snapshots stale for omitted disabled plugins", () => {
     const enabledFixture = createRichPluginFixture();
     const disabledFixture = createRichPluginFixture();

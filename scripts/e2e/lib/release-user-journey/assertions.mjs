@@ -7,6 +7,7 @@ import {
 } from "../agent-turn-output.mjs";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 function clickClackHttpTimeoutMs() {
   return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
@@ -98,9 +99,7 @@ function writeConfig(cfg) {
 }
 
 function installRecords() {
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  return records.installRecords ?? records.records ?? {};
+  return readPluginInstallRecords({ configPath: configPath() });
 }
 
 function assertOnboard() {
@@ -289,7 +288,9 @@ async function waitClickClackSocket() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);
 }
@@ -315,7 +316,9 @@ async function waitClickClackReply() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   const state = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf8") : "<missing>";
   throw new Error(`Timed out waiting for ClickClack reply marker ${marker}. State: ${state}`);

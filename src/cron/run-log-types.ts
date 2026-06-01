@@ -8,6 +8,7 @@ import type {
   CronRunTelemetry,
 } from "./types.js";
 
+/** Append-only run-log record for a completed cron job execution. */
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;

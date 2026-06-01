@@ -289,7 +289,7 @@ export async function monitorTwitchProvider(
         core,
         statusSink,
       });
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       runtime.error?.(`Message processing failed: ${String(err)}`);
     });
   });

@@ -1,4 +1,3 @@
-// Shared inbound parsing helpers for channel plugins.
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -41,7 +40,13 @@ export {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
   normalizeMentionText,
+  type BuildMentionRegexesOptions,
 } from "../auto-reply/reply/mentions.js";
+export {
+  resolveMentionPatternPolicy,
+  type ResolveMentionPatternPolicyParams,
+  type ResolvedMentionPatternPolicy,
+} from "../channels/mention-pattern-policy.js";
 export {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
@@ -95,7 +100,11 @@ export type {
   FinalizeChannelInboundContextParams,
   FinalizeChannelInboundContextResult,
 };
-/** @deprecated Use `BuildChannelInboundEventContextParams`. */
+/**
+ * Deprecated turn-context input alias that still accepts the old `inboundTurnKind` name.
+ *
+ * @deprecated Use `BuildChannelInboundEventContextParams`.
+ */
 export type BuildChannelTurnContextParams = Omit<
   BuildChannelInboundEventContextParams,
   "message"
@@ -104,12 +113,20 @@ export type BuildChannelTurnContextParams = Omit<
     inboundTurnKind?: InboundEventKind;
   };
 };
-/** @deprecated Use `BuiltChannelInboundEventContext`. */
+/**
+ * Deprecated turn-context result alias with the historical `InboundTurnKind` field.
+ *
+ * @deprecated Use `BuiltChannelInboundEventContext`.
+ */
 export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
   InboundTurnKind: InboundEventKind;
 };
 
-/** @deprecated Use `buildChannelInboundEventContext`. */
+/**
+ * Builds inbound-event context for callers still passing `inboundTurnKind`.
+ *
+ * @deprecated Use `buildChannelInboundEventContext`.
+ */
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): BuiltChannelTurnContext {
@@ -127,7 +144,11 @@ export function buildChannelTurnContext(
   };
 }
 
-/** @deprecated Use `filterChannelInboundSupplementalContext`. */
+/**
+ * Deprecated supplemental-context filter alias retained for channel SDK compatibility.
+ *
+ * @deprecated Use `filterChannelInboundSupplementalContext`.
+ */
 export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
 export {
   runChannelInboundEvent,
@@ -178,4 +199,4 @@ export {
   isTextSlashCommandTurn,
 } from "../auto-reply/command-turn-context.js";
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
-export { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
+export { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";

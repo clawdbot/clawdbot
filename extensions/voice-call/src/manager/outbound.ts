@@ -383,12 +383,14 @@ export async function speakInitialMessage(
       const delaySec = ctx.config.outbound.notifyHangupDelaySec;
       const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
       console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-      setTimeout(async () => {
-        const currentCall = ctx.activeCalls.get(call.callId);
-        if (currentCall && !TerminalStates.has(currentCall.state)) {
-          console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-          await endCall(ctx, call.callId);
-        }
+      setTimeout(() => {
+        void (async () => {
+          const currentCall = ctx.activeCalls.get(call.callId);
+          if (currentCall && !TerminalStates.has(currentCall.state)) {
+            console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
+            await endCall(ctx, call.callId);
+          }
+        })();
       }, delayMs);
     } else if (
       mode === "conversation" &&

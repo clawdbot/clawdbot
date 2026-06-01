@@ -2,13 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
   applySubagentWaitOutcome,
+  buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
+type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
+type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSessionEntry;
 type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
+type ResolveAgentIdFromSessionKey =
+  typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey;
+type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveStorePath;
 
 function installOutputDeps(params: {
   messages: Array<unknown>;
@@ -52,6 +58,33 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
     },
   ];
 }
+
+describe("buildCompactAnnounceStatsLine", () => {
+  afterEach(() => {
+    testing.setDepsForTest();
+  });
+
+  it("rolls one-decimal thousand token stats over to the million unit", async () => {
+    testing.setDepsForTest({
+      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
+      readSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
+        inputTokens: 999_999,
+        outputTokens: 0,
+        totalTokens: 999_999,
+      })) as ReadSessionEntry,
+      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
+      resolveStorePath: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+    });
+
+    await expect(
+      buildCompactAnnounceStatsLine({
+        sessionKey: "agent:main:subagent:child",
+      }),
+    ).resolves.toBe("Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)");
+  });
+});
 
 describe("readSubagentOutput", () => {
   afterEach(() => {

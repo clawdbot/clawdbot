@@ -28,7 +28,9 @@ describe("E2E WebSocket open guard", () => {
     } finally {
       clearTimeout(keepAlive);
     }
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(ws.terminated).toBe(true);
     expect(ws.listenerCount("open")).toBe(0);

@@ -24,6 +24,28 @@ describe("buildMSTeamsPresentationCard", () => {
     });
   });
 
+  it("submits command actions as command text", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Plugins",
+                  action: { type: "command", command: "/codex plugins menu" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      actions: [{ type: "Action.Submit", title: "Plugins", data: "/codex plugins menu" }],
+    });
+  });
+
   it("renders web app button links as open-url actions", () => {
     expect(
       buildMSTeamsPresentationCard({

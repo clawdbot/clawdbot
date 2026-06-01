@@ -383,6 +383,43 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
+  it("reports no visible content when final close update fails before any accepted text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_800);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
+    const log = vi.fn();
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_final_update_non_ok",
+        appSecret: "secret",
+      },
+      log,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_7",
+        messageId: "om_7",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await expect(session.close("final answer")).resolves.toBe(false);
+
+    expect(updateBodies).toHaveLength(1);
+    expect(replaceBodies).toHaveLength(0);
+    expect(log).toHaveBeenCalledWith(
+      "Final update failed: Error: Update card content failed with HTTP 500",
+    );
+  });
+
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));

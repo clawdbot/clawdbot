@@ -137,7 +137,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     await store.cleanup();
   });
 
-  it("keeps legacy every jobs due while minute cron jobs recompute schedules", async () => {
+  it("keeps every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -147,8 +147,8 @@ describe("CronService interval/cron jobs fire on time", () => {
       storePath: store.storePath,
       jobs: [
         {
-          id: "legacy-every",
-          name: "legacy every",
+          id: "loaded-every",
+          name: "loaded every",
           enabled: true,
           createdAtMs: nowMs,
           updatedAtMs: nowMs,
@@ -183,7 +183,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     await cron.start();
-    // Perf: a few recomputation cycles are enough to catch legacy "every" drift.
+    // Perf: a few recomputation cycles are enough to catch "every" drift.
     for (let minute = 1; minute <= 3; minute++) {
       vi.setSystemTime(new Date(nowMs + minute * 60_000));
       const minuteRun = await cron.run("minute-cron", "force");
@@ -192,7 +192,7 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
     vi.setSystemTime(new Date(nowMs + 6 * 60_000));
-    const sfRun = await cron.run("legacy-every", "due");
+    const sfRun = await cron.run("loaded-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 
     const sfRuns = countMainSystemEvents(enqueueSystemEvent, "sf-tick");
@@ -201,7 +201,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     expect(sfRuns).toBeGreaterThan(0);
 
     const jobs = await cron.list({ includeDisabled: true });
-    const sfJob = jobs.find((job) => job.id === "legacy-every");
+    const sfJob = jobs.find((job) => job.id === "loaded-every");
     expect(sfJob?.state.lastStatus).toBe("ok");
     expect(sfJob?.schedule.kind).toBe("every");
     expect(sfJob?.state.nextRunAtMs).toBe(nowMs + 8 * 60_000);

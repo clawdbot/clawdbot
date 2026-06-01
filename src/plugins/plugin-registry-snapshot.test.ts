@@ -45,7 +45,7 @@ function writeManifestlessClaudeBundle(rootDir: string) {
   fs.writeFileSync(path.join(rootDir, "skills", "SKILL.md"), "# Workspace skill\n", "utf8");
 }
 
-function writePackagePlugin(rootDir: string) {
+function writePackagePlugin(rootDir: string, options: { configPaths?: readonly string[] } = {}) {
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
   fs.writeFileSync(
@@ -55,6 +55,7 @@ function writePackagePlugin(rootDir: string) {
       name: "Demo",
       description: "one",
       configSchema: { type: "object" },
+      ...(options.configPaths ? { activation: { onConfigPaths: options.configPaths } } : {}),
     }),
     "utf8",
   );
@@ -148,6 +149,21 @@ function requirePluginRecord(
     throw new Error(`expected plugin ${pluginId}`);
   }
   return plugin;
+}
+
+function dropStartupConfigPaths(
+  plugin: InstalledPluginIndex["plugins"][number],
+): InstalledPluginIndex["plugins"][number] {
+  return {
+    ...plugin,
+    startup: {
+      sidecar: plugin.startup.sidecar,
+      memory: plugin.startup.memory,
+      deferConfiguredChannelFullLoadUntilAfterListen:
+        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
+      agentHarnesses: plugin.startup.agentHarnesses,
+    },
+  };
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
@@ -487,6 +503,35 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
+  });
+
+  it("rebuilds legacy config-path persisted registries before startup scoping", () => {
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: [rootDir] },
+      },
+    };
+    writePackagePlugin(rootDir, { configPaths: ["browser"] });
+    const index = loadInstalledPluginIndex({ config, env });
+    const legacyIndex: InstalledPluginIndex = {
+      ...index,
+      plugins: index.plugins.map(dropStartupConfigPaths),
+    };
+    writePersistedInstalledPluginIndexSync(legacyIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins[0]?.startup.configPaths).toEqual(["browser"]);
   });
 
   it("keeps persisted package plugins with dot-prefixed package metadata paths", () => {

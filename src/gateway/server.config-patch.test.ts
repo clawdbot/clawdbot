@@ -74,8 +74,8 @@ async function sendConfigApply(params: { raw: unknown; baseHash?: string }, time
   return await rpcReq(requireWs(), "config.apply", params, timeoutMs);
 }
 
-async function expectSchemaLookupInvalid(path: unknown) {
-  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { path });
+async function expectSchemaLookupInvalid(pathValue: unknown) {
+  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { pathValue });
   expect(res.ok).toBe(false);
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
@@ -400,21 +400,21 @@ describe("gateway config methods", () => {
   });
 
   it.each([
-    { name: "rejects config.schema.lookup when the path is only whitespace", path: "   " },
+    { name: "rejects config.schema.lookup when the path is only whitespace", pathLocal: "   " },
     {
       name: "rejects config.schema.lookup when the path exceeds the protocol limit",
-      path: `gateway.${"a".repeat(1020)}`,
+      pathLocal: `gateway.${"a".repeat(1020)}`,
     },
     {
       name: "rejects config.schema.lookup when the path contains invalid characters",
-      path: "gateway.auth\nspoof",
+      pathLocal: "gateway.auth\nspoof",
     },
     {
       name: "rejects config.schema.lookup when the path is not a string",
-      path: 42,
+      pathLocal: 42,
     },
-  ])("$name", async ({ path }) => {
-    await expectSchemaLookupInvalid(path);
+  ])("$name", async ({ pathLocal }) => {
+    await expectSchemaLookupInvalid(pathLocal);
   });
 
   it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {

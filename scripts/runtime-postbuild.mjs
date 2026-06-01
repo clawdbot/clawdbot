@@ -148,7 +148,7 @@ export function listOfficialChannelCatalogOutputs() {
 function collectStableRootRuntimeAliasCandidates(params) {
   const distDir = params.distDir;
   const fsImpl = params.fs;
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
@@ -298,7 +298,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
@@ -371,7 +371,7 @@ function resolveRootRuntimeCandidateByMarkers(params) {
   }
   const aliasBaseFileName = params.aliasFileName.replace(/\.js$/u, "");
   const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
-  let entries = [];
+  let entries;
   try {
     entries = params.fsImpl.readdirSync(params.distDir, { withFileTypes: true });
   } catch {

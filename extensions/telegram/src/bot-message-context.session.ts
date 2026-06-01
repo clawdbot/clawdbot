@@ -245,7 +245,7 @@ export async function buildTelegramInboundContextPayload(params: {
     channel: "telegram",
     accountId: route.accountId,
   });
-  const shouldIncludeGroupSupplementalContext = (params: {
+  const shouldIncludeGroupSupplementalContext = (paramsLocal: {
     kind: "quote" | "forwarded";
     senderId?: string;
     senderUsername?: string;
@@ -256,13 +256,13 @@ export async function buildTelegramInboundContextPayload(params: {
     const senderAllowed = effectiveGroupAllow?.hasEntries
       ? isSenderAllowed({
           allow: effectiveGroupAllow,
-          senderId: params.senderId,
-          senderUsername: params.senderUsername,
+          senderId: paramsLocal.senderId,
+          senderUsername: paramsLocal.senderUsername,
         })
       : true;
     return evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
-      kind: params.kind,
+      kind: paramsLocal.kind,
       senderAllowed,
     }).include;
   };

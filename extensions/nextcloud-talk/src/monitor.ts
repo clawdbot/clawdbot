@@ -257,101 +257,103 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     pruneIntervalMs: authRateLimitWindowMs,
   });
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.url === HEALTH_PATH) {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("ok");
-      return;
-    }
-
-    if (req.url !== path || req.method !== "POST") {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
-
-    const clientIp = req.socket.remoteAddress ?? "unknown";
-    if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
-      res.writeHead(429);
-      res.end("Too Many Requests");
-      return;
-    }
-
-    try {
-      const headers = validateWebhookHeaders({
-        req,
-        res,
-        isBackendAllowed,
-      });
-      if (!headers) {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      if (req.url === HEALTH_PATH) {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
         return;
       }
 
-      const body = await readBody(req, maxBodyBytes);
-
-      const hasValidSignature = verifyWebhookSignature({
-        headers,
-        body,
-        secret,
-        res,
-        clientIp,
-        authRateLimiter: webhookAuthRateLimiter,
-      });
-      if (!hasValidSignature) {
+      if (req.url !== path || req.method !== "POST") {
+        res.writeHead(404);
+        res.end();
         return;
       }
 
-      const decoded = decodeWebhookCreateMessage({
-        body,
-        res,
-      });
-      if (decoded.kind === "invalid") {
-        return;
-      }
-      if (decoded.kind === "ignore") {
-        writeJsonResponse(res, 200);
+      const clientIp = req.socket.remoteAddress ?? "unknown";
+      if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
+        res.writeHead(429);
+        res.end("Too Many Requests");
         return;
       }
 
-      const message = decoded.message;
-      if (processMessage) {
-        writeJsonResponse(res, 200);
-        try {
-          await processMessage(message);
-        } catch (err) {
-          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+      try {
+        const headers = validateWebhookHeaders({
+          req,
+          res,
+          isBackendAllowed,
+        });
+        if (!headers) {
+          return;
         }
-        return;
-      }
 
-      if (shouldProcessMessage) {
-        const shouldProcess = await shouldProcessMessage(message);
-        if (!shouldProcess) {
+        const body = await readBody(req, maxBodyBytes);
+
+        const hasValidSignature = verifyWebhookSignature({
+          headers,
+          body,
+          secret,
+          res,
+          clientIp,
+          authRateLimiter: webhookAuthRateLimiter,
+        });
+        if (!hasValidSignature) {
+          return;
+        }
+
+        const decoded = decodeWebhookCreateMessage({
+          body,
+          res,
+        });
+        if (decoded.kind === "invalid") {
+          return;
+        }
+        if (decoded.kind === "ignore") {
           writeJsonResponse(res, 200);
           return;
         }
-      }
 
-      writeJsonResponse(res, 200);
+        const message = decoded.message;
+        if (processMessage) {
+          writeJsonResponse(res, 200);
+          try {
+            await processMessage(message);
+          } catch (err) {
+            onError?.(err instanceof Error ? err : new Error(formatError(err)));
+          }
+          return;
+        }
 
-      try {
-        await onMessage(message);
+        if (shouldProcessMessage) {
+          const shouldProcess = await shouldProcessMessage(message);
+          if (!shouldProcess) {
+            writeJsonResponse(res, 200);
+            return;
+          }
+        }
+
+        writeJsonResponse(res, 200);
+
+        try {
+          await onMessage(message);
+        } catch (err) {
+          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        }
       } catch (err) {
-        onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+          writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
+          return;
+        }
+        if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+          writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+          return;
+        }
+        const error = err instanceof Error ? err : new Error(formatError(err));
+        onError?.(error);
+        writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
       }
-    } catch (err) {
-      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-        writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
-        return;
-      }
-      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
-        return;
-      }
-      const error = err instanceof Error ? err : new Error(formatError(err));
-      onError?.(error);
-      writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
-    }
+    })();
   });
 
   const start = (): Promise<void> => {

@@ -1,6 +1,10 @@
-import fs from "node:fs";
 import type { Bot } from "grammy";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -11,9 +15,11 @@ import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-deliv
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
-  resolveTelegramMessageCachePath,
+  resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -170,6 +176,24 @@ vi.mock("./sticker-cache.js", () => ({
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
 let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramReplyFenceForTests;
 
+function installTelegramStateRuntimeForTest(): void {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: ((options) =>
+        createPluginStateKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: ((options) =>
+        createPluginStateSyncKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
+}
+
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
@@ -210,6 +234,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   beforeEach(() => {
+    resetPluginStateStoreForTests({ closeDatabase: false });
+    installTelegramStateRuntimeForTest();
     resetTelegramReplyFenceForTests();
     createTelegramDraftStream.mockReset();
     createNativeTelegramToolProgressDraft.mockReset();
@@ -305,6 +331,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       provider: "openai",
       model: "gpt-test",
     });
+  });
+
+  afterEach(() => {
+    clearTelegramRuntime();
+    resetPluginStateStoreForTests();
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -899,13 +930,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       textSnapshot: "first page",
       retain: true,
     });
-    expect(bot.api.deleteMessage).not.toHaveBeenCalled();
+    expect(bot.api["deleteMessage"]).not.toHaveBeenCalled();
 
     streamParams.onSupersededPreview?.({
       messageId: 18,
       textSnapshot: "stale page",
     });
-    await vi.waitFor(() => expect(bot.api.deleteMessage).toHaveBeenCalledWith(123, 18));
+    await vi.waitFor(() => expect(bot.api["deleteMessage"]).toHaveBeenCalledWith(123, 18));
   });
 
   it("queues final Telegram replies through outbound delivery when available", async () => {
@@ -1312,59 +1343,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("records streamed final replies into the prompt context cache", async () => {
     const storePath = `/tmp/openclaw-telegram-stream-context-${process.pid}-${Date.now()}.json`;
-    const persistedPath = resolveTelegramMessageCachePath(storePath);
-    try {
-      setupDraftStreams({ answerMessageId: 1497 });
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver(
-          { text: "Done already: timeoutSeconds is now 7200s." },
-          { kind: "final" },
-        );
-        return { queuedFinal: true };
-      });
-
-      await dispatchWithContext({
-        context: createContext(),
-        cfg: { session: { store: storePath } },
-        telegramDeps: {
-          ...telegramDepsForTest,
-          recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
-        },
-      });
-
-      const cache = createTelegramMessageCache({ persistedPath });
-      await cache.record({
-        accountId: "default",
-        chatId: "123",
-        threadId: 777,
-        msg: {
-          chat: { id: 123, type: "private", first_name: "Keshav" },
-          message_thread_id: 777,
-          message_id: 1521,
-          date: 1_779_425_460,
-          text: "Did all Amazon crons run fine",
-          from: { id: 5185575566, is_bot: false, first_name: "Keshav" },
-        },
-      });
-
-      const context = await buildTelegramConversationContext({
-        cache,
-        accountId: "default",
-        chatId: "123",
-        threadId: 777,
-        messageId: "1521",
-        replyChainNodes: [],
-        recentLimit: 10,
-        replyTargetWindowSize: 2,
-      });
-
-      expect(context.map((entry) => entry.node.messageId)).toContain("1497");
-      expect(context.map((entry) => entry.node.body)).toContain(
-        "Done already: timeoutSeconds is now 7200s.",
+    setupDraftStreams({ answerMessageId: 1497 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Done already: timeoutSeconds is now 7200s." },
+        { kind: "final" },
       );
-    } finally {
-      fs.rmSync(persistedPath, { force: true });
-    }
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: { session: { store: storePath } },
+      telegramDeps: {
+        ...telegramDepsForTest,
+        recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
+      },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: "123",
+      threadId: 777,
+      msg: {
+        chat: { id: 123, type: "private", first_name: "Keshav" },
+        message_thread_id: 777,
+        message_id: 1521,
+        date: 1_779_425_460,
+        text: "Did all Amazon crons run fine",
+        from: { id: 5185575566, is_bot: false, first_name: "Keshav" },
+      },
+    });
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: "123",
+      threadId: 777,
+      messageId: "1521",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toContain("1497");
+    expect(context.map((entry) => entry.node.body)).toContain(
+      "Done already: timeoutSeconds is now 7200s.",
+    );
   });
 
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
@@ -3838,7 +3866,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(generateTopicLabel).not.toHaveBeenCalled();
-    expect(bot.api.editForumTopic).not.toHaveBeenCalled();
+    expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
   });
 
   it("does not emit a silent-reply fallback when the dispatcher reports a queued final reply", async () => {

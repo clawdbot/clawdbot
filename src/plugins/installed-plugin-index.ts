@@ -39,6 +39,10 @@ export type {
 } from "./installed-plugin-index-types.js";
 export { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 export { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
+export {
+  CONFIG_PATH_ACTIVATION_COMPAT_CODE,
+  hasMissingConfigPathActivationMetadata,
+} from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
 function buildInstalledPluginIndex(

@@ -5,18 +5,14 @@ import {
 } from "./oauth-refresh-failure.js";
 
 describe("oauth refresh failure hints", () => {
-  it("canonicalizes retired OpenAI provider ids in refresh-failure login hints", () => {
-    const legacyProvider = ["openai", "codex"].join("-");
-
+  it("builds OpenAI refresh-failure login hints", () => {
     expect(
-      classifyOAuthRefreshFailure(
-        `OAuth token refresh failed for ${legacyProvider}: invalid_grant`,
-      ),
+      classifyOAuthRefreshFailure("OAuth token refresh failed for openai: invalid_grant"),
     ).toEqual({
       provider: "openai",
       reason: "invalid_grant",
     });
-    expect(buildOAuthRefreshFailureLoginCommand(legacyProvider)).toBe(
+    expect(buildOAuthRefreshFailureLoginCommand("openai")).toBe(
       "openclaw models auth login --provider openai",
     );
   });

@@ -305,7 +305,9 @@ async function findDispatchedWorkflowRunId(params: {
     if (runId) {
       return runId;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5_000);
+    });
   }
   throw new Error(`could not find dispatched run for ${params.workflow}`);
 }
@@ -355,7 +357,11 @@ export async function pollRun(
   const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
   const sleep =
-    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const readRun =
     options.readRun ??
     ((currentRepo: string, currentRunId: string) =>

@@ -1144,7 +1144,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       messagesToSummarize = summaryTargetMessages;
-      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
         .slice(-10)
@@ -1182,7 +1182,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let summaryWithoutPreservedTurns = "";
         let summaryWithPreservedTurns = "";
-        let splitTurnSection = "";
+        let splitTurnSectionLocal = "";
         let historySummary = "";
         try {
           historySummary =
@@ -1220,14 +1220,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               summarizationInstructions,
               previousSummary: undefined,
             });
-            splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+            splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
-              ? `${historySummary}\n\n---\n\n${splitTurnSection}`
-              : splitTurnSection;
+              ? `${historySummary}\n\n---\n\n${splitTurnSectionLocal}`
+              : splitTurnSectionLocal;
           }
           summaryWithPreservedTurns = appendSummarySection(
             summaryWithoutPreservedTurns,
-            preservedTurnsSection,
+            preservedTurnsSectionLocal,
           );
         } catch (attemptError) {
           if (lastSuccessfulSummary && attempt > 0) {
@@ -1242,7 +1242,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
         lastHistorySummary = historySummary;
-        lastSplitTurnSection = splitTurnSection;
+        lastSplitTurnSection = splitTurnSectionLocal;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1283,7 +1283,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       const suffix = assembleSuffix({
         splitTurnSection: lastSplitTurnSection,
-        preservedTurnsSection,
+        preservedTurnsSection: preservedTurnsSectionLocal,
         toolFailureSection,
         fileOpsSummary,
         workspaceContext,

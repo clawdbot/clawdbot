@@ -308,12 +308,12 @@ function extractFieldValue(section, field) {
     const valueLines = [match?.[1] ?? ""];
     fenceMarker = nextFenceMarker(valueLines[0], "");
     for (let next = index + 1; next < lines.length; next += 1) {
-      const line = lines[next];
-      if (!fenceMarker && (isMarkdownHeadingLine(line) || isAnyProofFieldLine(line))) {
+      const lineLocal = lines[next];
+      if (!fenceMarker && (isMarkdownHeadingLine(lineLocal) || isAnyProofFieldLine(lineLocal))) {
         break;
       }
-      valueLines.push(line);
-      fenceMarker = nextFenceMarker(line, fenceMarker);
+      valueLines.push(lineLocal);
+      fenceMarker = nextFenceMarker(lineLocal, fenceMarker);
     }
     return valueLines.join("\n").trim();
   }

@@ -5,6 +5,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
 import type { EmbeddingProviderAdapter } from "../plugins/embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import { getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -47,7 +48,7 @@ let createGenericEmbeddingProviderMock: ReturnType<
     }>
   >
 >;
-let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
@@ -122,7 +123,12 @@ beforeAll(async () => {
   registerEmbeddingProvider(openAiCompatibleAdapter);
   ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
-  enabledServer = await startServer(enabledPort, { openAiChatCompletionsEnabled: true });
+  enabledServer = await startOpenAiCompatGatewayServer({
+    startGatewayServer,
+    port: enabledPort,
+    auth: { mode: "token", token: "secret" },
+    openAiChatCompletionsEnabled: true,
+  });
 });
 
 afterAll(async () => {
@@ -131,15 +137,6 @@ afterAll(async () => {
   clearEmbeddingProviders();
   vi.resetModules();
 });
-
-async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
-  });
-}
 
 async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
   return await fetch(`http://127.0.0.1:${enabledPort}/v1/embeddings`, {
@@ -152,6 +149,60 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
     },
     body: JSON.stringify(body),
   });
+}
+
+async function expectDefaultEmbeddingResponse(res: Response) {
+  expect(res.status).toBe(200);
+  const json = (await res.json()) as {
+    object?: string;
+    data?: Array<{ object?: string; embedding?: number[] }>;
+  };
+  expect(json.object).toBe("list");
+  expect(json.data?.[0]?.object).toBe("embedding");
+  expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+}
+
+async function expectEmbeddingData(
+  res: Response,
+  expected: Array<{ object: "embedding"; index: number; embedding: number[] }>,
+) {
+  expect(res.status).toBe(200);
+  const json = (await res.json()) as {
+    data?: Array<{ embedding?: number[]; index?: number }>;
+  };
+  expect(json.data).toEqual(expected);
+}
+
+async function expectInvalidEmbeddingRequest(res: Response, message?: string) {
+  expect(res.status).toBe(400);
+  const json = (await res.json()) as { error?: { type?: string; message?: string } };
+  if (message === undefined) {
+    expect(json.error?.type).toBe("invalid_request_error");
+    return;
+  }
+  expect(json.error).toEqual({
+    type: "invalid_request_error",
+    message,
+  });
+}
+
+async function expectGenericProviderEmbeddingRequest(expectedProviderCall: {
+  provider: string;
+  model: string;
+  dimensions: number;
+  inputType: string;
+  queryInputType: string;
+  documentInputType: string;
+}) {
+  const res = await postEmbeddings({
+    model: "openclaw/default",
+    input: ["a", "b"],
+  });
+  await expectEmbeddingData(res, [
+    { object: "embedding", index: 0, embedding: [9.1, 9.2] },
+    { object: "embedding", index: 1, embedding: [10.1, 9.2] },
+  ]);
+  expect(latestCreateGenericEmbeddingProviderOptions()).toMatchObject(expectedProviderCall);
 }
 
 function latestCreateEmbeddingProviderOptions(): {
@@ -189,24 +240,13 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       model: "openclaw/default",
       input: "hello",
     });
-    expect(single.status).toBe(200);
-    const singleJson = (await single.json()) as {
-      object?: string;
-      data?: Array<{ object?: string; embedding?: number[]; index?: number }>;
-    };
-    expect(singleJson.object).toBe("list");
-    expect(singleJson.data?.[0]?.object).toBe("embedding");
-    expect(singleJson.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+    await expectDefaultEmbeddingResponse(single);
 
     const batch = await postEmbeddings({
       model: "openclaw/default",
       input: ["a", "b"],
     });
-    expect(batch.status).toBe(200);
-    const batchJson = (await batch.json()) as {
-      data?: Array<{ embedding?: number[]; index?: number }>;
-    };
-    expect(batchJson.data).toEqual([
+    await expectEmbeddingData(batch, [
       { object: "embedding", index: 0, embedding: [0.1, 0.2] },
       { object: "embedding", index: 1, embedding: [1.1, 1.2] },
     ]);
@@ -249,9 +289,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       model: "openclaw/default",
       input: [{ nope: true }],
     });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { error?: { type?: string } };
-    expect(json.error?.type).toBe("invalid_request_error");
+    await expectInvalidEmbeddingRequest(res);
   });
 
   it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
@@ -262,14 +300,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       },
       { "x-openclaw-scopes": "operator.read" },
     );
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      object?: string;
-      data?: Array<{ object?: string; embedding?: number[] }>;
-    };
-    expect(json.object).toBe("list");
-    expect(json.data?.[0]?.object).toBe("embedding");
-    expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+    await expectDefaultEmbeddingResponse(res);
   });
 
   it("allows requests with an empty declared scopes header", async () => {
@@ -280,14 +311,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       },
       { "x-openclaw-scopes": "" },
     );
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      object?: string;
-      data?: Array<{ object?: string; embedding?: number[] }>;
-    };
-    expect(json.object).toBe("list");
-    expect(json.data?.[0]?.object).toBe("embedding");
-    expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+    await expectDefaultEmbeddingResponse(res);
   });
 
   it("allows requests when the operator scopes header is missing", async () => {
@@ -302,14 +326,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         input: "hello",
       }),
     });
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      object?: string;
-      data?: Array<{ object?: string; embedding?: number[] }>;
-    };
-    expect(json.object).toBe("list");
-    expect(json.data?.[0]?.object).toBe("embedding");
-    expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+    await expectDefaultEmbeddingResponse(res);
   });
 
   it("routes explicit OpenAI-compatible embeddings through generic providers", async () => {
@@ -329,20 +346,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     };
     resetConfigRuntimeState();
 
-    const res = await postEmbeddings({
-      model: "openclaw/default",
-      input: ["a", "b"],
-    });
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      data?: Array<{ embedding?: number[]; index?: number }>;
-    };
-    expect(json.data).toEqual([
-      { object: "embedding", index: 0, embedding: [9.1, 9.2] },
-      { object: "embedding", index: 1, embedding: [10.1, 9.2] },
-    ]);
-    const lastCall = latestCreateGenericEmbeddingProviderOptions();
-    expect(lastCall).toMatchObject({
+    await expectGenericProviderEmbeddingRequest({
       provider: "openai-compatible",
       model: "nomic-embed-text",
       dimensions: 768,
@@ -386,20 +390,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     };
     resetConfigRuntimeState();
 
-    const res = await postEmbeddings({
-      model: "openclaw/default",
-      input: ["a", "b"],
-    });
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      data?: Array<{ embedding?: number[]; index?: number }>;
-    };
-    expect(json.data).toEqual([
-      { object: "embedding", index: 0, embedding: [9.1, 9.2] },
-      { object: "embedding", index: 1, embedding: [10.1, 9.2] },
-    ]);
-    const lastCall = latestCreateGenericEmbeddingProviderOptions();
-    expect(lastCall).toMatchObject({
+    await expectGenericProviderEmbeddingRequest({
       provider: "tenant-embeddings",
       model: "nomic-embed-text",
       dimensions: 768,
@@ -414,12 +405,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       model: "ollama/nomic-embed-text",
       input: "hello",
     });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { error?: { type?: string; message?: string } };
-    expect(json.error).toEqual({
-      type: "invalid_request_error",
-      message: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
-    });
+    await expectInvalidEmbeddingRequest(
+      res,
+      "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+    );
   });
 
   it("rejects disallowed x-openclaw-model provider overrides", async () => {
@@ -430,12 +419,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       },
       { "x-openclaw-model": "ollama/nomic-embed-text" },
     );
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { error?: { type?: string; message?: string } };
-    expect(json.error).toEqual({
-      type: "invalid_request_error",
-      message: "This agent does not allow that embedding provider on `/v1/embeddings`.",
-    });
+    await expectInvalidEmbeddingRequest(
+      res,
+      "This agent does not allow that embedding provider on `/v1/embeddings`.",
+    );
   });
 
   it("rejects oversized batches", async () => {
@@ -443,12 +430,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       model: "openclaw/default",
       input: Array.from({ length: 129 }, () => "x"),
     });
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { error?: { type?: string; message?: string } };
-    expect(json.error).toEqual({
-      type: "invalid_request_error",
-      message: "Too many inputs (max 128).",
-    });
+    await expectInvalidEmbeddingRequest(res, "Too many inputs (max 128).");
   });
 
   it("sanitizes provider failures", async () => {

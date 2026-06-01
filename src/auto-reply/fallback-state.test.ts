@@ -155,6 +155,7 @@ describe("fallback-state", () => {
         fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
         fallbackNoticeReason: "selected model unavailable",
       },
+      cfg: {},
     });
 
     expect(resolved.fallbackActive).toBe(false);
@@ -162,6 +163,47 @@ describe("fallback-state", () => {
     expect(resolved.stateChanged).toBe(true);
     expect(resolved.nextState.selectedModel).toBeUndefined();
     expect(resolved.nextState.activeModel).toBeUndefined();
+  });
+
+  it("does not repeat runtime alias comparison when persisted fallback refs match", () => {
+    let setupBackendLookups = 0;
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) => {
+        setupBackendLookups += 1;
+        return backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined;
+      },
+      resolvePluginSetupRegistry: () => {
+        throw new Error("full setup registry should not load for a single runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "anthropic",
+      selectedModel: "claude-opus-4-7",
+      activeProvider: "claude-cli",
+      activeModel: "claude-opus-4-7",
+      attempts: [],
+      state: {
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+      },
+      cfg: {},
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(setupBackendLookups).toBe(2);
   });
 
   it("does not build a fallback notice for equivalent CLI runtime aliases", () => {

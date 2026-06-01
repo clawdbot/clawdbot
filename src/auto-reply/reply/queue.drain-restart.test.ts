@@ -23,7 +23,9 @@ describe("followup queue drain restart after idle window", () => {
     });
 
     enqueueFollowupRun(key, createRun({ prompt: "after-empty-schedule" }), settings);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(staleCalls).toHaveLength(0);
 
     scheduleFollowupDrain(key, async (run) => {
@@ -59,7 +61,9 @@ describe("followup queue drain restart after idle window", () => {
     enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await firstProcessed.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     enqueueFollowupRun(
       key,
@@ -98,7 +102,9 @@ describe("followup queue drain restart after idle window", () => {
     enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
     scheduleFollowupDrain(key, staleFollowup);
     await firstProcessed.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     enqueueFollowupRun(
       key,
@@ -137,7 +143,9 @@ describe("followup queue drain restart after idle window", () => {
       false,
     );
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(freshCalls).toHaveLength(0);
 
     scheduleFollowupDrain(key, staleFollowup);
@@ -178,7 +186,9 @@ describe("followup queue drain restart after idle window", () => {
       drainA.scheduleFollowupDrain(key, runFollowup);
       await firstProcessed.promise;
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       enqueueB.enqueueFollowupRun(
         key,
@@ -346,13 +356,17 @@ describe("followup queue drain restart after idle window", () => {
     enqueueFollowupRun(key, createRun({ prompt: "before-clear" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await firstProcessed.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const { clearSessionQueues } = await import("./queue.js");
     clearSessionQueues([key]);
 
     enqueueFollowupRun(key, createRun({ prompt: "after-clear" }), settings);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-clear");
@@ -372,10 +386,14 @@ describe("followup queue drain restart after idle window", () => {
     enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await firstProcessed.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-idle");

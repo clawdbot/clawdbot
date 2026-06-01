@@ -552,6 +552,75 @@ export function pluginStateRegisterIfAbsent(params: {
   }
 }
 
+export function pluginStateUpdate(params: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  maxEntries: number;
+  updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  try {
+    return runWriteTransaction(
+      "register",
+      (store) => {
+        const now = Date.now();
+        deleteExpiredPluginStateNamespaceEntries(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          now,
+        });
+        const existing = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now,
+        });
+        const next = params.updateValueJson(
+          existing ? parseStoredJson(existing.value_json, "lookup") : undefined,
+        );
+        if (!next) {
+          return false;
+        }
+        const expiresAt = resolvePluginStateExpiresAtMs({
+          ttlMs: next.ttlMs,
+          now,
+          operation: "register",
+          path: store.path,
+        });
+        upsertPluginStateEntry(
+          store.db,
+          bindPluginStateEntry({
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            key: params.key,
+            valueJson: next.valueJson,
+            createdAt: now,
+            expiresAt,
+          }),
+        );
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          maxEntries: params.maxEntries,
+          now,
+          protectedKey: params.key,
+        });
+        return true;
+      },
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "register",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to update plugin state entry.",
+    );
+  }
+}
+
 export function pluginStateLookup(params: {
   pluginId: string;
   namespace: string;

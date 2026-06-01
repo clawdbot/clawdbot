@@ -224,8 +224,8 @@ export async function resolveSessionAuthProfileOverride(params: {
     if (storePath) {
       await (
         await loadSessionStoreRuntime()
-      ).updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
+      ).updateSessionStore(storePath, (storeLocal) => {
+        storeLocal[sessionKey] = sessionEntry;
       });
     }
   }

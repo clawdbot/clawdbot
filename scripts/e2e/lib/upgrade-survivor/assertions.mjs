@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 
 const command = process.argv[2];
 const SCENARIOS = new Set([
@@ -406,9 +407,9 @@ function assertStateSurvived() {
 
 function readInstalledPluginIndex() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  const file = path.join(stateDir, "plugins", "installs.json");
-  assert(fs.existsSync(file), `installed plugin index missing: ${file}`);
-  return readJson(file);
+  const index = readPluginInstallIndex({ stateDir });
+  assert(index.installRecords, "installed plugin index missing");
+  return index;
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {

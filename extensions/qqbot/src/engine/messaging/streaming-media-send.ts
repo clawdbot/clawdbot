@@ -303,12 +303,12 @@ export async function executeSendQueue(
         try {
           const result = await Promise.race([
             sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
-            new Promise<{ channel: string; error: string }>((resolve) =>
+            new Promise<{ channel: string; error: string }>((resolve) => {
               setTimeout(
                 () => resolve({ channel: "qqbot", error: "语音发送超时，已跳过" }),
                 voiceTimeout,
-              ),
-            ),
+              );
+            }),
           ]);
           if (result.error) {
             log?.error(`${prefix} sendVoice error: ${result.error}`);

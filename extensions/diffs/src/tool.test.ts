@@ -63,7 +63,7 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain(
       "https://example.com/openclaw/plugins/diffs/view/",
     );
-    expect(String((result?.details as Record<string, unknown>).viewerUrl)).toContain(
+    expect(String((result.details as Record<string, unknown>).viewerUrl)).toContain(
       "https://example.com/openclaw/plugins/diffs/view/",
     );
   });
@@ -89,7 +89,7 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain(
       "https://preview.example.com/review/plugins/diffs/view/",
     );
-    expect(String((result?.details as Record<string, unknown>).viewerUrl)).toContain(
+    expect(String((result.details as Record<string, unknown>).viewerUrl)).toContain(
       "https://preview.example.com/review/plugins/diffs/view/",
     );
   });
@@ -127,7 +127,7 @@ describe("diffs tool", () => {
       mode: "image",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
     expect(readTextContent(result, 0)).toContain("Diff PNG generated at:");
     expect(readTextContent(result, 0)).toContain("Use the `message` tool");
     expect(result?.content).toHaveLength(1);
@@ -166,10 +166,10 @@ describe("diffs tool", () => {
       fileFormat: "pdf",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
     expect(readTextContent(result, 0)).toContain("Diff PDF generated at:");
-    expect((result?.details as Record<string, unknown>).format).toBe("pdf");
-    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
+    expect((result.details as Record<string, unknown>).format).toBe("pdf");
+    expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
   });
 
   it("accepts mode=file as an alias for file artifact rendering", async () => {
@@ -258,7 +258,7 @@ describe("diffs tool", () => {
         after: "two\n",
         mode: "file",
       });
-      const filePath = (result?.details as Record<string, unknown>).filePath as string;
+      const filePath = (result.details as Record<string, unknown>).filePath as string;
       const stat = await fs.stat(filePath);
       expect(stat.isFile()).toBe(true);
 
@@ -290,9 +290,9 @@ describe("diffs tool", () => {
       imageMaxWidth: "1100",
     });
 
-    expect((result?.details as Record<string, unknown>).fileQuality).toBe("hq");
-    expect((result?.details as Record<string, unknown>).fileScale).toBe(2.4);
-    expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(1100);
+    expect((result.details as Record<string, unknown>).fileQuality).toBe("hq");
+    expect((result.details as Record<string, unknown>).fileScale).toBe(2.4);
+    expect((result.details as Record<string, unknown>).fileMaxWidth).toBe(1100);
   });
 
   it("accepts deprecated format alias for fileFormat", async () => {
@@ -312,8 +312,8 @@ describe("diffs tool", () => {
       format: "pdf",
     });
 
-    expect((result?.details as Record<string, unknown>).fileFormat).toBe("pdf");
-    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
+    expect((result.details as Record<string, unknown>).fileFormat).toBe("pdf");
+    expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
   });
 
   it("honors defaults.mode=file when mode is omitted", async () => {
@@ -351,8 +351,8 @@ describe("diffs tool", () => {
 
     expect(result?.content).toHaveLength(1);
     expect(readTextContent(result, 0)).toContain("File rendering failed");
-    expect((result?.details as Record<string, unknown>).fileError).toBe("browser missing");
-    expect((result?.details as Record<string, unknown>).imageError).toBe("browser missing");
+    expect((result.details as Record<string, unknown>).fileError).toBe("browser missing");
+    expect((result.details as Record<string, unknown>).imageError).toBe("browser missing");
   });
 
   it("rejects invalid base URLs as tool input errors", async () => {
@@ -433,15 +433,15 @@ describe("diffs tool", () => {
     });
 
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
-    expect((result?.details as Record<string, unknown>).mode).toBe("view");
-    expect((result?.details as Record<string, unknown>).context).toEqual({
+    expect((result.details as Record<string, unknown>).mode).toBe("view");
+    expect((result.details as Record<string, unknown>).context).toEqual({
       agentId: "main",
       sessionId: "session-123",
       messageChannel: "discord",
       agentAccountId: "default",
     });
 
-    const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
+    const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
     const id = extractViewerArtifactId(viewerPath);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="light"');
@@ -482,13 +482,13 @@ describe("diffs tool", () => {
       fileMaxWidth: 1320,
     });
 
-    expect((result?.details as Record<string, unknown>).mode).toBe("both");
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).format).toBe("png");
-    expect((result?.details as Record<string, unknown>).fileQuality).toBe("print");
-    expect((result?.details as Record<string, unknown>).fileScale).toBe(2.75);
-    expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(1320);
-    const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
+    expect((result.details as Record<string, unknown>).mode).toBe("both");
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+    expect((result.details as Record<string, unknown>).format).toBe("png");
+    expect((result.details as Record<string, unknown>).fileQuality).toBe("print");
+    expect((result.details as Record<string, unknown>).fileScale).toBe(2.75);
+    expect((result.details as Record<string, unknown>).fileMaxWidth).toBe(1320);
+    const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
     const id = extractViewerArtifactId(viewerPath);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="dark"');
@@ -509,7 +509,7 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expect((result?.details as Record<string, unknown>).context).toEqual({
+    expect((result.details as Record<string, unknown>).context).toEqual({
       agentId: "reviewer",
       sessionId: "session-456",
       messageChannel: "telegram",
@@ -559,9 +559,9 @@ function expectArtifactOnlyFileResult(
   screenshotter: DiffScreenshotter,
   result: { details?: unknown } | null | undefined,
 ) {
-  expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-  expect((result?.details as Record<string, unknown>).mode).toBe("file");
-  expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+  expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+  expect((result!.details as Record<string, unknown>).mode).toBe("file");
+  expect((result!.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(

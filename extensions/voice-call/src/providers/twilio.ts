@@ -237,23 +237,21 @@ export class TwilioProvider implements VoiceCallProvider {
     twiml: string,
     operation: string,
   ): Promise<void> {
-    let retryIndex = 0;
-    while (true) {
+    for (const retryDelayMs of TWILIO_CALL_UPDATE_RETRY_DELAYS_MS) {
       try {
         await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
         return;
       } catch (err) {
-        const retryDelayMs = TWILIO_CALL_UPDATE_RETRY_DELAYS_MS[retryIndex];
-        if (retryDelayMs === undefined || !isTwilioCallNotInProgressError(err)) {
+        if (!isTwilioCallNotInProgressError(err)) {
           throw err;
         }
-        retryIndex += 1;
         console.warn(
           `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${retryDelayMs}ms`,
         );
         await sleep(retryDelayMs);
       }
     }
+    await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
   }
 
   /**
@@ -449,7 +447,6 @@ export class TwilioProvider implements VoiceCallProvider {
         const streamUrl = view.callSid ? this.getStreamUrlForCall(view.callSid) : null;
         return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
       }
-      case "empty":
       default:
         return TwilioProvider.EMPTY_TWIML;
     }
@@ -770,7 +767,9 @@ export class TwilioProvider implements VoiceCallProvider {
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
         if (waitMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.ceil(waitMs)));
+          await new Promise((resolve) => {
+            setTimeout(resolve, Math.ceil(waitMs));
+          });
         }
         nextChunkDueAt += CHUNK_DELAY_MS;
         if (signal.aborted) {

@@ -615,7 +615,9 @@ export function createGatewayCloseHandler(params: {
       params.clients.clear();
       await measureCloseStep("websocket-server", async () => {
         const wsClients = params.wss.clients ?? new Set();
-        const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
+        const closePromise = new Promise<void>((resolve) => {
+          params.wss.close(() => resolve());
+        });
         const websocketGraceTimeout = createTimeoutRace(
           WEBSOCKET_CLOSE_GRACE_MS,
           () => false as const,
@@ -660,15 +662,15 @@ export function createGatewayCloseHandler(params: {
           if (typeof httpServer.closeIdleConnections === "function") {
             httpServer.closeIdleConnections();
           }
-          const closePromise = new Promise<void>((resolve, reject) =>
+          const closePromise = new Promise<void>((resolve, reject) => {
             httpServer.close((err) => {
               if (!err || isServerNotRunningError(err)) {
                 resolve();
                 return;
               }
               reject(err);
-            }),
-          );
+            });
+          });
           void closePromise.catch(() => undefined);
           const httpGraceTimeout = createTimeoutRace(HTTP_CLOSE_GRACE_MS, () => false as const);
           const closedWithinGrace = await Promise.race([

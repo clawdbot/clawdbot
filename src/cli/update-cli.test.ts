@@ -437,14 +437,6 @@ describe("update-cli", () => {
     expect(call?.channel).toBe(channel);
     return call;
   };
-
-  const commandCall = (index = 0) => {
-    const calls = vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<
-      [string[], Record<string, unknown>]
-    >;
-    return calls[index];
-  };
-
   const commandCalls = () =>
     vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<
       [string[], Record<string, unknown>]
@@ -473,7 +465,7 @@ describe("update-cli", () => {
       !repo.startsWith("@") &&
       repo.split("/").length === 2 &&
       repo.split("/").every((part) => /^[^\s/:@]+$/u.test(part));
-    let isHttpGitUrl = false;
+    let isHttpGitUrl;
     try {
       const url = new URL(target);
       const pathname = url.pathname.replace(/\/+$/u, "");
@@ -1747,49 +1739,51 @@ describe("update-cli", () => {
         once: EventEmitter["once"];
       };
       const env = (options as { env?: NodeJS.ProcessEnv }).env;
-      queueMicrotask(async () => {
-        const resultPath = env?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
-        if (resultPath) {
-          await fs.writeFile(
-            resultPath,
-            JSON.stringify({
-              status: "warning",
-              changed: false,
-              warnings: [
-                {
-                  pluginId: "demo",
-                  reason: "Failed to update demo: registry timeout",
-                  message:
-                    'Plugin "demo" could not be processed after the core update: Failed to update demo: registry timeout Run openclaw doctor --fix to attempt automatic repair. Run openclaw plugins inspect demo --runtime --json for details.',
-                  guidance: [
-                    "Run openclaw doctor --fix to attempt automatic repair.",
-                    "Run openclaw plugins inspect demo --runtime --json for details.",
-                  ],
-                },
-              ],
-              sync: {
+      queueMicrotask(() => {
+        void (async () => {
+          const resultPath = env?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+          if (resultPath) {
+            await fs.writeFile(
+              resultPath,
+              JSON.stringify({
+                status: "warning",
                 changed: false,
-                switchedToBundled: [],
-                switchedToNpm: [],
-                warnings: [],
-                errors: [],
-              },
-              npm: {
-                changed: false,
-                outcomes: [
+                warnings: [
                   {
                     pluginId: "demo",
-                    status: "error",
-                    message: "Failed to update demo: registry timeout",
+                    reason: "Failed to update demo: registry timeout",
+                    message:
+                      'Plugin "demo" could not be processed after the core update: Failed to update demo: registry timeout Run openclaw doctor --fix to attempt automatic repair. Run openclaw plugins inspect demo --runtime --json for details.',
+                    guidance: [
+                      "Run openclaw doctor --fix to attempt automatic repair.",
+                      "Run openclaw plugins inspect demo --runtime --json for details.",
+                    ],
                   },
                 ],
-              },
-              integrityDrifts: [],
-            }),
-            "utf-8",
-          );
-        }
-        child.emit("exit", 0, null);
+                sync: {
+                  changed: false,
+                  switchedToBundled: [],
+                  switchedToNpm: [],
+                  warnings: [],
+                  errors: [],
+                },
+                npm: {
+                  changed: false,
+                  outcomes: [
+                    {
+                      pluginId: "demo",
+                      status: "error",
+                      message: "Failed to update demo: registry timeout",
+                    },
+                  ],
+                },
+                integrityDrifts: [],
+              }),
+              "utf-8",
+            );
+          }
+          child.emit("exit", 0, null);
+        })();
       });
       return child;
     });
@@ -2769,7 +2763,7 @@ describe("update-cli", () => {
       };
     });
 
-    let writes = "";
+    let writes;
     try {
       await updateCommand({ yes: true, json: true });
       writes = stdoutWrite.mock.calls.map((call) => String(call[0])).join("\n");

@@ -6,6 +6,7 @@ export type NodesState = {
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
+  chatError?: string | null;
 };
 
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
@@ -18,6 +19,7 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   state.nodesLoading = true;
   if (!opts?.quiet) {
     state.lastError = null;
+    state.chatError = null;
   }
   try {
     const res = await state.client.request<{ nodes?: Record<string, unknown> }>("node.list", {});

@@ -64,10 +64,7 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
   return violations;
 }
 
-export function listTrackedFilesWithConflictMarkerCandidates(
-  cwd = process.cwd(),
-  run = spawnSync,
-) {
+export function listTrackedFilesWithConflictMarkerCandidates(cwd = process.cwd(), run = spawnSync) {
   const result = run(
     "git",
     ["grep", "-l", "-z", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
@@ -110,8 +107,10 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }

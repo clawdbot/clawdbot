@@ -99,4 +99,24 @@ describe("OpenAI embedding provider", () => {
       dimensions: 512,
     });
   });
+
+  it("forwards custom provider ids to the remote embedding client", async () => {
+    await createOpenAiEmbeddingProvider(createOptions({ provider: "bailian-embedding" }));
+
+    expect(mocks.resolveRemoteEmbeddingClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "bailian-embedding",
+      }),
+    );
+  });
+
+  it("defaults the remote embedding client lookup to openai", async () => {
+    await createOpenAiEmbeddingProvider(createOptions({ provider: undefined }));
+
+    expect(mocks.resolveRemoteEmbeddingClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+      }),
+    );
+  });
 });

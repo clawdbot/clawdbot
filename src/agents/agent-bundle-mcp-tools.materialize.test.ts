@@ -90,7 +90,15 @@ describe("createBundleMcpToolRuntime", () => {
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
     expect(runtime.tools[0].executionMode).toBe("sequential");
-    expect(getPluginToolMeta(runtime.tools[0])?.pluginId).toBe("bundle-mcp");
+    expect(getPluginToolMeta(runtime.tools[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "bundleProbe",
+        safeServerName: "bundleProbe",
+        toolName: "bundle_probe",
+        operation: "tool",
+      },
+    });
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
     expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
@@ -159,9 +167,9 @@ describe("createBundleMcpToolRuntime", () => {
   it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
     const diagnostics = [
       {
-        serverName: "dofbot",
-        safeServerName: "dofbot",
-        launchSummary: "node dofbot-mcp.mjs",
+        serverName: "fuzzplugin",
+        safeServerName: "fuzzplugin",
+        launchSummary: "node fuzzplugin-mcp.mjs",
         message: 'tools[0].inputSchema.type expected "object"',
       },
     ];

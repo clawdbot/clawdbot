@@ -61,6 +61,7 @@ private enum class ConnectInputMode {
   Manual,
 }
 
+/** Gateway connection screen for setup-code and manual endpoint pairing. */
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
@@ -291,6 +292,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 
           validationText = null
           if (inputMode == ConnectInputMode.SetupCode) {
+            // Setup-code auth should replace old bootstrap/shared credentials;
+            // manual reconnects keep existing typed credentials.
             viewModel.resetGatewaySetupAuth()
           }
           viewModel.setManualEnabled(true)

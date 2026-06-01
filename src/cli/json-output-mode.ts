@@ -1,5 +1,6 @@
 import { loggingState } from "../logging/state.js";
 
+/** Detects CLI JSON mode before Commander parses options, stopping at the argv sentinel. */
 export function hasJsonOutputFlag(argv: readonly string[]): boolean {
   for (const arg of argv) {
     if (arg === "--") {
@@ -12,6 +13,7 @@ export function hasJsonOutputFlag(argv: readonly string[]): boolean {
   return false;
 }
 
+/** Keeps structured JSON stdout clean by routing incidental console logs to stderr. */
 export async function withConsoleLogsRoutedToStderrForJson<T>(
   argv: readonly string[],
   run: () => Promise<T>,
@@ -24,6 +26,7 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
   try {
     return await run();
   } finally {
+    // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.
     loggingState.forceConsoleToStderr = previousForceStderr;
   }
 }

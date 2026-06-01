@@ -6,6 +6,18 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const log = createSubsystemLogger("agents/tools");
 
+function readDiagnosticPluginId(params: {
+  tools: readonly AnyAgentTool[];
+  diagnostic: RuntimeToolSchemaDiagnostic;
+}): string | undefined {
+  try {
+    const tool = params.tools[params.diagnostic.toolIndex];
+    return tool ? getPluginToolMeta(tool)?.pluginId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function logRuntimeToolSchemaQuarantine(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly AnyAgentTool[];
@@ -18,8 +30,7 @@ export function logRuntimeToolSchemaQuarantine(params: {
   }
   const summary = params.diagnostics
     .map((diagnostic) => {
-      const tool = params.tools[diagnostic.toolIndex];
-      const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
+      const pluginId = readDiagnosticPluginId({ tools: params.tools, diagnostic });
       const owner = pluginId ? ` plugin=${pluginId}` : "";
       emitTrustedDiagnosticEvent({
         type: "tool.execution.blocked",

@@ -326,17 +326,20 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
 
 public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
     public let sessionKey: String?
+    public let agentId: String?
     public let message: OpenClawChatMessage?
     public let messageId: String?
     public let messageSeq: Int?
 
     public init(
         sessionKey: String?,
+        agentId: String? = nil,
         message: OpenClawChatMessage?,
         messageId: String?,
         messageSeq: Int?)
     {
         self.sessionKey = sessionKey
+        self.agentId = agentId
         self.message = message
         self.messageId = messageId
         self.messageSeq = messageSeq

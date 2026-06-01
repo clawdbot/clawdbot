@@ -44,34 +44,34 @@ const { connectSpy, tunnelSpy, fakeRequest, fakeSession, fakeTlsSocket } = vi.ho
     }
   }
 
-  const fakeRequest = Object.assign(new FakeEmitter(), {
+  const fakeRequestLocal = Object.assign(new FakeEmitter(), {
     setEncoding: vi.fn(),
     end: vi.fn(() => {
       queueMicrotask(() => {
-        fakeRequest.emit("response", { ":status": 403 });
-        fakeRequest.emit("data", '{"reason":"InvalidProviderToken"}');
-        fakeRequest.emit("end");
+        fakeRequestLocal.emit("response", { ":status": 403 });
+        fakeRequestLocal.emit("data", '{"reason":"InvalidProviderToken"}');
+        fakeRequestLocal.emit("end");
       });
     }),
   });
-  const fakeSession = Object.assign(new FakeEmitter(), {
+  const fakeSessionLocal = Object.assign(new FakeEmitter(), {
     closed: false,
     destroyed: false,
     close: vi.fn(() => {
-      fakeSession.closed = true;
+      fakeSessionLocal.closed = true;
     }),
     destroy: vi.fn(() => {
-      fakeSession.destroyed = true;
+      fakeSessionLocal.destroyed = true;
     }),
-    request: vi.fn(() => fakeRequest),
+    request: vi.fn(() => fakeRequestLocal),
   });
-  const fakeTlsSocket = { encrypted: true };
+  const fakeTlsSocketLocal = { encrypted: true };
   return {
-    fakeRequest,
-    fakeSession,
-    fakeTlsSocket,
-    connectSpy: vi.fn(() => fakeSession),
-    tunnelSpy: vi.fn(async (_params: HttpConnectTunnelParams) => fakeTlsSocket),
+    fakeRequest: fakeRequestLocal,
+    fakeSession: fakeSessionLocal,
+    fakeTlsSocket: fakeTlsSocketLocal,
+    connectSpy: vi.fn(() => fakeSessionLocal),
+    tunnelSpy: vi.fn(async (_params: HttpConnectTunnelParams) => fakeTlsSocketLocal),
   };
 });
 

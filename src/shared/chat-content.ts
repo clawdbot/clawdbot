@@ -1,3 +1,4 @@
+/** Coerces arbitrary provider content values into displayable text without throwing. */
 export function coerceChatContentText(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -23,6 +24,7 @@ export function coerceChatContentText(value: unknown): string {
   return "";
 }
 
+/** Extracts normalized plain text from string content or OpenAI-style text blocks. */
 export function extractTextFromChatContent(
   content: unknown,
   opts?: {
@@ -56,6 +58,7 @@ export function extractTextFromChatContent(
     if (!block || typeof block !== "object") {
       continue;
     }
+    // Non-text blocks can contain media or tool payloads; callers here need visible text only.
     if ((block as { type?: unknown }).type !== "text") {
       continue;
     }

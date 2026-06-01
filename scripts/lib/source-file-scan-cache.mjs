@@ -10,7 +10,7 @@ function normalizeRepoPath(repoRoot, filePath) {
 
 async function walkFiles(params, rootDir) {
   const out = [];
-  let entries = [];
+  let entries;
   try {
     entries = await fs.readdir(rootDir, { withFileTypes: true });
   } catch (error) {
@@ -90,18 +90,14 @@ export async function collectSourceFileContents(params) {
         normalizeRepoPath(params.repoRoot, left).localeCompare(
           normalizeRepoPath(params.repoRoot, right),
         ),
-    );
+      );
 
     const readFile = params.readFile ?? fs.readFile;
-    return await mapWithConcurrency(
-      files,
-      params.maxConcurrentReads,
-      async (filePath) => ({
-        filePath,
-        relativeFile: normalizeRepoPath(params.repoRoot, filePath),
-        content: await readFile(filePath, "utf8"),
-      }),
-    );
+    return await mapWithConcurrency(files, params.maxConcurrentReads, async (filePath) => ({
+      filePath,
+      relativeFile: normalizeRepoPath(params.repoRoot, filePath),
+      content: await readFile(filePath, "utf8"),
+    }));
   })();
 
   if (useCache) {

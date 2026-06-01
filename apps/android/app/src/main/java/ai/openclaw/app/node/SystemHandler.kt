@@ -17,6 +17,7 @@ import kotlinx.serialization.json.contentOrNull
 
 private const val NOTIFICATION_CHANNEL_BASE_ID = "openclaw.system.notify"
 
+/** Parsed payload for system.notify invocations. */
 internal data class SystemNotifyRequest(
   val title: String,
   val body: String,
@@ -24,6 +25,7 @@ internal data class SystemNotifyRequest(
   val priority: String?,
 )
 
+/** Notification posting seam used by production Android and unit tests. */
 internal interface SystemNotificationPoster {
   fun isAuthorized(): Boolean
 
@@ -33,6 +35,7 @@ internal interface SystemNotificationPoster {
 private class AndroidSystemNotificationPoster(
   private val appContext: Context,
 ) : SystemNotificationPoster {
+  /** Checks both Android 13 runtime permission and app-level notification enablement. */
   override fun isAuthorized(): Boolean {
     if (Build.VERSION.SDK_INT >= 33) {
       val granted =
@@ -43,6 +46,7 @@ private class AndroidSystemNotificationPoster(
     return NotificationManagerCompat.from(appContext).areNotificationsEnabled()
   }
 
+  /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
     val channelId = ensureChannel(request.priority)
     val silent = isSilentSound(request.sound)
@@ -69,6 +73,8 @@ private class AndroidSystemNotificationPoster(
 
   private fun ensureChannel(priority: String?): String {
     val normalizedPriority = priority.orEmpty().trim().lowercase()
+    // Android channel importance is immutable after creation, so priority maps
+    // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
         "passive" -> Triple("passive", NotificationManager.IMPORTANCE_LOW, "OpenClaw Passive")
@@ -97,11 +103,13 @@ private class AndroidSystemNotificationPoster(
   }
 }
 
+/** Handles system-level node.invoke commands implemented by Android services. */
 class SystemHandler private constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
 
+  /** Posts an Android notification from the gateway system.notify command. */
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
@@ -139,6 +147,8 @@ class SystemHandler private constructor(
 
   private fun parseNotifyRequest(paramsJson: String?): SystemNotifyRequest? {
     val params = parseParamsObject(paramsJson) ?: return null
+    // title/body are required by the gateway contract; optional fields only
+    // influence Android channel/silence behavior.
     val rawTitle =
       (params["title"] as? JsonPrimitive)
         ?.contentOrNull
@@ -167,6 +177,7 @@ class SystemHandler private constructor(
   }
 
   companion object {
+    /** Creates a handler with a fake poster for parser and authorization tests. */
     internal fun forTesting(poster: SystemNotificationPoster): SystemHandler = SystemHandler(poster)
   }
 }

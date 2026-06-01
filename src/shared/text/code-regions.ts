@@ -3,6 +3,7 @@ export interface CodeRegion {
   end: number;
 }
 
+/** Finds fenced and inline Markdown code regions so text sanitizers can avoid examples. */
 export function findCodeRegions(text: string): CodeRegion[] {
   const regions: CodeRegion[] = [];
 
@@ -26,6 +27,7 @@ export function findCodeRegions(text: string): CodeRegion[] {
   return regions;
 }
 
+/** Returns true when a character offset falls inside one of the discovered code regions. */
 export function isInsideCode(pos: number, regions: CodeRegion[]): boolean {
   return regions.some((r) => pos >= r.start && pos < r.end);
 }

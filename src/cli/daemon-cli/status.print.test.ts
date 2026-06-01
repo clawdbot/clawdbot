@@ -192,6 +192,10 @@ describe("printDaemonStatus", () => {
               label: "ai.openclaw.update.2026.5.12",
               lastExitStatus: 127,
             },
+            {
+              label: "ai.openclaw.manual-update.1717168800",
+              lastExitStatus: 0,
+            },
           ],
         },
         gateway: {
@@ -208,6 +212,7 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
     expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
+    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
     expectMockLineContains(runtime.error, "launchctl remove <label>");
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });

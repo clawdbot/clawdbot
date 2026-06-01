@@ -25,7 +25,10 @@ function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): st
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
+/** Converts a known node entry into the public environment summary shape. */
 function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
+  // Expose both declared capabilities and command names so older node
+  // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
   return {
     id: `node:${node.nodeId}`,
@@ -40,6 +43,7 @@ function listEnvironmentSummaries(nodes: readonly NodeListNode[]): EnvironmentSu
   return [GATEWAY_ENVIRONMENT, ...nodes.map(summarizeNodeEnvironment)];
 }
 
+/** Lists the local Gateway plus paired/connected node environments. */
 async function listEnvironments(context: GatewayRequestContext) {
   const [devicePairing, nodePairing] = await Promise.all([listDevicePairing(), listNodePairing()]);
   const catalog = createKnownNodeCatalog({
@@ -50,6 +54,7 @@ async function listEnvironments(context: GatewayRequestContext) {
   return listEnvironmentSummaries(listKnownNodes(catalog));
 }
 
+/** Gateway handlers for querying local and node execution environments. */
 export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.list": async ({ params, respond, context }) => {
     if (!validateEnvironmentsListParams(params)) {

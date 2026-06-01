@@ -210,12 +210,12 @@ export function createTelegramBotCore(
     if (!begin.accepted) {
       return;
     }
-    let completed = false;
     try {
       await next();
-      completed = true;
-    } finally {
-      updateTracker.finishUpdate(begin.update, { completed });
+      updateTracker.finishUpdate(begin.update, { completed: true });
+    } catch (error) {
+      updateTracker.finishUpdate(begin.update, { completed: false });
+      throw error;
     }
   });
 

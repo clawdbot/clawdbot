@@ -2314,6 +2314,35 @@ describe("provider-runtime", () => {
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["ollama-spark", "ollama"]);
   });
 
+  it("does not treat core transport apis as custom provider plugin owners", () => {
+    const openaiPlugin: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      hookAliases: ["openai-responses"],
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    resolvePluginProvidersMock.mockReturnValue([openaiPlugin]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "tui-pty-mock",
+      config: {
+        models: {
+          providers: {
+            "tui-pty-mock": {
+              api: "openai-responses",
+              baseUrl: "http://127.0.0.1:64087/v1",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toBeUndefined();
+    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
+  });
+
   it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
     const qwenPlugin: ProviderPlugin = {
       id: "qwen",
@@ -2330,7 +2359,7 @@ describe("provider-runtime", () => {
         models: {
           providers: {
             modelstudio: {
-              api: "openai-completions",
+              api: "dashscope",
               baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
               models: [],
             },
@@ -2342,7 +2371,7 @@ describe("provider-runtime", () => {
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
       "modelstudio",
-      "openai-completions",
+      "dashscope",
     ]);
   });
 

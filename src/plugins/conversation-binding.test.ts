@@ -307,7 +307,9 @@ async function requestResolvedBinding(input: PluginBindingRequestInput) {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {

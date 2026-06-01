@@ -77,6 +77,9 @@ export function resolveCopilotForwardCompatModel(
       cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(staticOverride.thinkingLevelMap
+        ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
+        : {}),
       ...(compat ? { compat } : {}),
     } as ProviderRuntimeModel);
   }
@@ -145,6 +148,41 @@ function resolveCopilotApiForVendor(
   return resolveCopilotTransportApi(modelId);
 }
 
+function mergeCopilotCompat(
+  base: ModelDefinitionConfig["compat"] | undefined,
+  reasoningEfforts: string[] | null | undefined,
+): ModelDefinitionConfig["compat"] | undefined {
+  const supportedReasoningEfforts = Array.isArray(reasoningEfforts)
+    ? [
+        ...new Set(
+          reasoningEfforts
+            .map((effort) => normalizeOptionalLowercaseString(effort))
+            .filter((effort): effort is string => Boolean(effort)),
+        ),
+      ]
+    : [];
+  if (supportedReasoningEfforts.length === 0) {
+    return base;
+  }
+  return {
+    ...base,
+    supportedReasoningEfforts,
+  };
+}
+
+function resolveCopilotThinkingLevelMap(
+  api: ModelDefinitionConfig["api"],
+  compat: ModelDefinitionConfig["compat"] | undefined,
+): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
+  if (
+    api === "anthropic-messages" &&
+    compat?.supportedReasoningEfforts?.some((effort) => effort === "xhigh")
+  ) {
+    return { xhigh: "xhigh" };
+  }
+  return undefined;
+}
+
 function mapCopilotApiModelToDefinition(
   entry: CopilotApiModelEntry,
 ): ModelDefinitionConfig | undefined {
@@ -174,17 +212,20 @@ function mapCopilotApiModelToDefinition(
   const contextWindow =
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const compat = resolveCopilotModelCompat(id);
+  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
+  const api = resolveCopilotApiForVendor(entry.vendor, id);
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, compat);
 
   const definition: ModelDefinitionConfig = {
     id,
     name: entry.name?.trim() || id,
-    api: resolveCopilotApiForVendor(entry.vendor, id),
+    api,
     reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),
   };
   return definition;

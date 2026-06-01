@@ -281,7 +281,7 @@ describe("skill upload store", () => {
 
   it("limits active uploads", async () => {
     await expectUploadError(
-      Promise.reject(activeUploadLimitError),
+      Promise.reject(toLintErrorObject(activeUploadLimitError, "Non-Error rejection")),
       "too many active skill uploads",
     );
   });
@@ -420,7 +420,9 @@ describe("skill upload store", () => {
       slug: "sweep-trigger",
       sizeBytes: 1,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
@@ -467,7 +469,9 @@ describe("skill upload store", () => {
       sizeBytes: archive.length,
       idempotencyKey: "same-upload",
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
@@ -477,3 +481,17 @@ describe("skill upload store", () => {
     await expectMissingPath(path.join(rootDir, committed.uploadId));
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

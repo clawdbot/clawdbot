@@ -420,7 +420,7 @@ export function convertOpenClawToolToSdkTool(
       );
     }
 
-    let preparedArgs = args;
+    let preparedArgs;
     try {
       preparedArgs = sourceTool.prepareArguments ? sourceTool.prepareArguments(args) : args;
     } catch (error: unknown) {

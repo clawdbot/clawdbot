@@ -400,7 +400,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
-      rejectPromise(error);
+      rejectPromise(toLintErrorObject(error, "Step timed out"));
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
@@ -419,11 +419,14 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       settled = true;
       if (error.name === "AbortError" && abortController?.signal.aborted) {
         rejectPromise(
-          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
-            kind: "canceled",
-            elapsedMs: Date.now() - startedAt,
-            note: "canceled after sibling failure",
-          }),
+          toLintErrorObject(
+            attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
+              kind: "canceled",
+              elapsedMs: Date.now() - startedAt,
+              note: "canceled after sibling failure",
+            }),
+            "Step canceled after sibling failure",
+          ),
         );
         return;
       }
@@ -450,7 +453,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       );
       onFailure?.(failure);
       abortSiblingSteps(abortController);
-      rejectPromise(failure);
+      rejectPromise(toLintErrorObject(failure, "Step spawn failed"));
     });
     child.on("close", (code) => {
       if (settled) {
@@ -487,7 +490,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
-      rejectPromise(error);
+      rejectPromise(toLintErrorObject(error, "Step failed"));
     });
   });
 }
@@ -519,7 +522,7 @@ export async function runNodeStepsWithConcurrency(steps, concurrency) {
   });
   await Promise.allSettled(workers);
   if (firstFailure) {
-    throw firstFailure;
+    throw toLintErrorObject(firstFailure, "Non-Error thrown");
   }
 }
 
@@ -851,4 +854,18 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (import.meta.main) {
   await main();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

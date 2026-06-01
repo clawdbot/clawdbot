@@ -67,71 +67,73 @@ async function startMockServer(records: RequestRecord[]): Promise<{
   baseUrl: string;
   close: () => Promise<void>;
 }> {
-  const server = http.createServer(async (req, res) => {
-    try {
-      const body = await readBody(req);
-      records.push({
-        method: req.method,
-        url: req.url,
-        authorization: req.headers.authorization,
-        accept: req.headers.accept,
-        contentType: req.headers["content-type"],
-        body,
-      });
-
-      if (req.method === "POST" && req.url === "/v1/images/generations") {
-        assert(
-          req.headers.authorization === `Bearer ${DIRECT_TOKEN}`,
-          `direct image route used wrong auth: ${req.headers.authorization}`,
-        );
-        const parsed = JSON.parse(body) as { model?: string; prompt?: string; size?: string };
-        assert(parsed.model === "gpt-image-2", `direct route model mismatch: ${body}`);
-        assert(
-          parsed.prompt === "docker direct image auth",
-          `direct route prompt mismatch: ${body}`,
-        );
-        assert(parsed.size === "1024x1024", `direct route size mismatch: ${body}`);
-        writeJson(res, 200, {
-          data: [
-            {
-              b64_json: DIRECT_IMAGE_BYTES.toString("base64"),
-              revised_prompt: "docker direct revised prompt",
-            },
-          ],
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      try {
+        const body = await readBody(req);
+        records.push({
+          method: req.method,
+          url: req.url,
+          authorization: req.headers.authorization,
+          accept: req.headers.accept,
+          contentType: req.headers["content-type"],
+          body,
         });
-        return;
-      }
 
-      if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
-        assert(
-          req.headers.authorization === `Bearer ${CODEX_TOKEN}`,
-          `codex image route used wrong auth: ${req.headers.authorization}`,
-        );
-        const parsed = JSON.parse(body) as {
-          tools?: Array<{ type?: string; model?: string; size?: string }>;
-          input?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-        };
-        assert(
-          parsed.tools?.[0]?.type === "image_generation" &&
-            parsed.tools[0].model === "gpt-image-2" &&
-            parsed.tools[0].size === "1024x1024",
-          `codex image tool mismatch: ${body}`,
-        );
-        assert(
-          parsed.input?.[0]?.content?.some(
-            (entry) =>
-              entry.type === "input_text" && entry.text === "docker codex oauth image auth",
-          ),
-          `codex prompt missing: ${body}`,
-        );
-        writeCodexSse(res);
-        return;
-      }
+        if (req.method === "POST" && req.url === "/v1/images/generations") {
+          assert(
+            req.headers.authorization === `Bearer ${DIRECT_TOKEN}`,
+            `direct image route used wrong auth: ${req.headers.authorization}`,
+          );
+          const parsed = JSON.parse(body) as { model?: string; prompt?: string; size?: string };
+          assert(parsed.model === "gpt-image-2", `direct route model mismatch: ${body}`);
+          assert(
+            parsed.prompt === "docker direct image auth",
+            `direct route prompt mismatch: ${body}`,
+          );
+          assert(parsed.size === "1024x1024", `direct route size mismatch: ${body}`);
+          writeJson(res, 200, {
+            data: [
+              {
+                b64_json: DIRECT_IMAGE_BYTES.toString("base64"),
+                revised_prompt: "docker direct revised prompt",
+              },
+            ],
+          });
+          return;
+        }
 
-      writeJson(res, 404, { error: `unexpected ${req.method} ${req.url}` });
-    } catch (error) {
-      writeJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
-    }
+        if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
+          assert(
+            req.headers.authorization === `Bearer ${CODEX_TOKEN}`,
+            `codex image route used wrong auth: ${req.headers.authorization}`,
+          );
+          const parsed = JSON.parse(body) as {
+            tools?: Array<{ type?: string; model?: string; size?: string }>;
+            input?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+          };
+          assert(
+            parsed.tools?.[0]?.type === "image_generation" &&
+              parsed.tools[0].model === "gpt-image-2" &&
+              parsed.tools[0].size === "1024x1024",
+            `codex image tool mismatch: ${body}`,
+          );
+          assert(
+            parsed.input?.[0]?.content?.some(
+              (entry) =>
+                entry.type === "input_text" && entry.text === "docker codex oauth image auth",
+            ),
+            `codex prompt missing: ${body}`,
+          );
+          writeCodexSse(res);
+          return;
+        }
+
+        writeJson(res, 404, { error: `unexpected ${req.method} ${req.url}` });
+      } catch (error) {
+        writeJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
+      }
+    })();
   });
 
   await new Promise<void>((resolve) => {

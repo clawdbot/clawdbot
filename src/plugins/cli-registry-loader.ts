@@ -181,6 +181,7 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
         ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
         activate: false,
         cache: false,
+        forceFullRuntimeForChannelPlugins: true,
         runtimeOptions: {
           nodes: createPluginCliGatewayNodesRuntime(),
         },

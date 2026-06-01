@@ -1196,7 +1196,7 @@ export class AcpxRuntime implements AcpRuntime {
     const record = await this.sessionStore.load(
       input.handle.acpxRecordId ?? input.handle.sessionKey,
     );
-    let closeSucceeded = false;
+    let closeSucceeded;
     try {
       await this.resolveDelegateForLoadedRecord(input.handle, record).close({
         handle: input.handle,

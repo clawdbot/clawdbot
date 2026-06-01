@@ -15,6 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/**
+ * Standard inset panel for grouped Android app content.
+ */
 @Composable
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
@@ -34,6 +37,9 @@ internal fun ClawPanel(
   }
 }
 
+/**
+ * Bottom-sheet container with the app surface treatment and top-only rounding.
+ */
 @Composable
 internal fun ClawSheetSurface(
   modifier: Modifier = Modifier,
@@ -53,6 +59,9 @@ internal fun ClawSheetSurface(
   }
 }
 
+/**
+ * Shared empty state used when a screen has no records but can still offer an action.
+ */
 @Composable
 internal fun ClawEmptyState(
   title: String,
@@ -73,6 +82,9 @@ internal fun ClawEmptyState(
   }
 }
 
+/**
+ * Shared loading placeholder that keeps async screen states visually consistent.
+ */
 @Composable
 internal fun ClawLoadingState(
   title: String,
@@ -90,6 +102,9 @@ internal fun ClawLoadingState(
   }
 }
 
+/**
+ * Shared recoverable error block with the app's attention styling.
+ */
 @Composable
 internal fun ClawErrorState(
   title: String,

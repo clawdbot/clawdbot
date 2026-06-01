@@ -190,9 +190,11 @@ export class TokenManager {
       this.logger?.info?.(`[qqbot:token:${appId}] Background refresh stopped`);
     };
 
-    loop().catch((err) => {
+    loop().catch((err: unknown) => {
       this.refreshControllers.delete(appId);
-      this.logger?.error?.(`[qqbot:token:${appId}] Background refresh crashed: ${err}`);
+      this.logger?.error?.(
+        `[qqbot:token:${appId}] Background refresh crashed: ${formatErrorMessage(err)}`,
+      );
     });
   }
 

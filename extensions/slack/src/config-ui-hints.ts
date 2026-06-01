@@ -17,6 +17,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Config Writes",
     help: "Allow Slack to write config in response to channel events/commands (default: true).",
   },
+  mentionPatterns: {
+    label: "Slack Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Slack channel IDs. Native Slack @mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Slack Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Slack Mention Pattern Allowlist",
+    help: "Slack channel IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Slack Mention Pattern Denylist",
+    help: "Slack channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
+  },
   "commands.native": {
     label: "Slack Native Commands",
     help: 'Override native commands for Slack (bool or "auto").',

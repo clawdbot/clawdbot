@@ -20,6 +20,9 @@ import {
 
 type PluginHandlerLog = Parameters<typeof createGatewayPluginRequestHandler>[0]["log"];
 
+const IMESSAGE_WEBHOOK_PATH = "/imessage-webhook";
+const CANVAS_WS_PATH = "/__openclaw__/canvas/ws";
+
 function createPluginLog(): PluginHandlerLog {
   return { warn: vi.fn() } as unknown as PluginHandlerLog;
 }
@@ -147,6 +150,48 @@ async function invokeRouteAndCollectRuntimeScopes(params: {
     gatewayRequestOperatorScopes: params.gatewayRequestOperatorScopes,
   });
   return { handled, observedScopes, ...response };
+}
+
+async function invokeImessageWebhook(params: {
+  registry: ReturnType<typeof createTestRegistry>;
+  getRouteRegistry?: () => ReturnType<typeof createTestRegistry>;
+}) {
+  const handler = createGatewayPluginRequestHandler({
+    registry: params.registry,
+    ...(params.getRouteRegistry ? { getRouteRegistry: params.getRouteRegistry } : {}),
+    log: createPluginLog(),
+  });
+  const { res } = makeMockHttpResponse();
+  const handled = await handler({ url: IMESSAGE_WEBHOOK_PATH } as IncomingMessage, res);
+  return { handled, res };
+}
+
+async function invokeCanvasGatewayUpgrade(params: { gatewayAuthSatisfied: boolean }) {
+  const routeUpgradeHandler = vi.fn(async () => true);
+  const handler = createGatewayPluginUpgradeHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: CANVAS_WS_PATH,
+          auth: "gateway",
+          handleUpgrade: routeUpgradeHandler,
+        }),
+      ],
+    }),
+    log: createPluginLog(),
+  });
+  const socket = createMockUpgradeSocket();
+  const handled = await handler(
+    { url: CANVAS_WS_PATH } as IncomingMessage,
+    socket,
+    Buffer.alloc(0),
+    undefined,
+    {
+      gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+      ...(params.gatewayAuthSatisfied ? { gatewayRequestOperatorScopes: ["operator.read"] } : {}),
+    },
+  );
+  return { handled, routeUpgradeHandler, socket };
 }
 
 describe("createGatewayPluginRequestHandler", () => {
@@ -332,19 +377,13 @@ describe("createGatewayPluginRequestHandler", () => {
     setActivePluginRegistry(laterActiveRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/imessage-webhook",
+      path: IMESSAGE_WEBHOOK_PATH,
       auth: "plugin",
       handler: routeHandler,
     });
 
     try {
-      const handler = createGatewayPluginRequestHandler({
-        registry: startupRegistry,
-        log: createPluginLog(),
-      });
-
-      const { res } = makeMockHttpResponse();
-      const handled = await handler({ url: "/imessage-webhook" } as IncomingMessage, res);
+      const { handled } = await invokeImessageWebhook({ registry: startupRegistry });
       expect(handled).toBe(true);
       expect(routeHandler).toHaveBeenCalledTimes(1);
       expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
@@ -367,20 +406,16 @@ describe("createGatewayPluginRequestHandler", () => {
     pinActivePluginHttpRouteRegistry(startupRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/imessage-webhook",
+      path: IMESSAGE_WEBHOOK_PATH,
       auth: "plugin",
       handler: routeHandler,
     });
 
     try {
-      const handler = createGatewayPluginRequestHandler({
+      const { handled } = await invokeImessageWebhook({
         registry: staleExplicitRegistry,
         getRouteRegistry: () => startupRegistry,
-        log: createPluginLog(),
       });
-
-      const { res } = makeMockHttpResponse();
-      const handled = await handler({ url: "/imessage-webhook" } as IncomingMessage, res);
       expect(handled).toBe(true);
       expect(routeHandler).toHaveBeenCalledTimes(1);
       expect(staleExplicitRegistry.httpRoutes).toHaveLength(1);
@@ -423,28 +458,9 @@ describe("createGatewayPluginUpgradeHandler", () => {
   });
 
   it("claims and rejects matched gateway upgrades when auth was not satisfied", async () => {
-    const routeUpgradeHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginUpgradeHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/__openclaw__/canvas/ws",
-            auth: "gateway",
-            handleUpgrade: routeUpgradeHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const { handled, routeUpgradeHandler, socket } = await invokeCanvasGatewayUpgrade({
+      gatewayAuthSatisfied: false,
     });
-    const socket = createMockUpgradeSocket();
-
-    const handled = await handler(
-      { url: "/__openclaw__/canvas/ws" } as IncomingMessage,
-      socket,
-      Buffer.alloc(0),
-      undefined,
-      { gatewayAuthSatisfied: false },
-    );
 
     expect(handled).toBe(true);
     expect(routeUpgradeHandler).not.toHaveBeenCalled();
@@ -453,28 +469,9 @@ describe("createGatewayPluginUpgradeHandler", () => {
   });
 
   it("dispatches gateway upgrades after gateway auth succeeds", async () => {
-    const routeUpgradeHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginUpgradeHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/__openclaw__/canvas/ws",
-            auth: "gateway",
-            handleUpgrade: routeUpgradeHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const { handled, routeUpgradeHandler, socket } = await invokeCanvasGatewayUpgrade({
+      gatewayAuthSatisfied: true,
     });
-    const socket = createMockUpgradeSocket();
-
-    const handled = await handler(
-      { url: "/__openclaw__/canvas/ws" } as IncomingMessage,
-      socket,
-      Buffer.alloc(0),
-      undefined,
-      { gatewayAuthSatisfied: true, gatewayRequestOperatorScopes: ["operator.read"] },
-    );
 
     expect(handled).toBe(true);
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);

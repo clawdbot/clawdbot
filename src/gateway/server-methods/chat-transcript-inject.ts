@@ -6,12 +6,14 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
+/** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 export type GatewayInjectedAbortMeta = {
   aborted: true;
   origin: "rpc" | "stop-command";
   runId: string;
 };
 
+/** Result shape returned after appending an assistant row to a session transcript. */
 export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -19,6 +21,7 @@ export type GatewayInjectedTranscriptAppendResult = {
   error?: string;
 };
 
+/** Hash marker used to dedupe companion TTS text/audio supplements. */
 export type GatewayInjectedTtsSupplementMarker = {
   textSha256: string;
 };
@@ -29,6 +32,8 @@ function resolveInjectedAssistantContent(params: {
   content?: Array<Record<string, unknown>>;
 }): Array<Record<string, unknown>> {
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  // Preserve rich content arrays when callers already prepared media blocks;
+  // only the first text block is rewritten so block ordering stays intact.
   if (params.content && params.content.length > 0) {
     if (!labelPrefix) {
       return params.content;
@@ -47,6 +52,7 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
+/** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   sessionKey?: string;

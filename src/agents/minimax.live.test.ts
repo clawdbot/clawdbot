@@ -8,7 +8,7 @@ import {
 
 const MINIMAX_KEY = process.env.MINIMAX_API_KEY ?? "";
 const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/anthropic";
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.7";
+const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M3";
 const LIVE = isLiveTestEnabled(["MINIMAX_LIVE_TEST"]);
 
 const describeLive = LIVE && MINIMAX_KEY ? describe : describe.skip;
@@ -36,10 +36,10 @@ describeLive("minimax live", () => {
       provider: "minimax",
       baseUrl: MINIMAX_BASE_URL,
       reasoning: false,
-      input: ["text"],
+      input: ["text", "image"],
       // Pricing: placeholder values (per 1M tokens, multiplied by 1000 for display)
       cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
-      contextWindow: 200000,
+      contextWindow: 1_000_000,
       maxTokens: 8192,
     };
     const probeResult = await runMinimaxTextProbe(model, 128);

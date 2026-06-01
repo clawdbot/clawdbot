@@ -46,8 +46,10 @@ type RelayApnsRegistration = {
   tokenDebugSuffix?: string;
 };
 
+/** Stored APNs registration for either direct device tokens or official relay handles. */
 export type ApnsRegistration = DirectApnsRegistration | RelayApnsRegistration;
 
+/** Direct APNs provider authentication used to mint ES256 bearer tokens. */
 export type ApnsAuthConfig = {
   teamId: string;
   keyId: string;
@@ -56,6 +58,7 @@ export type ApnsAuthConfig = {
 
 type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
+/** Normalized APNs push result returned to gateway push/nodes methods. */
 export type ApnsPushResult = {
   ok: boolean;
   status: number;
@@ -231,6 +234,8 @@ function getApnsBearerToken(auth: ApnsAuthConfig, nowMs: number = Date.now()): s
     return cachedJwt.token;
   }
 
+  // APNs provider tokens are valid for one hour. Cache for slightly less so
+  // bursty wake/approval pushes avoid repeated ECDSA signing.
   const iat = Math.floor(nowMs / 1000);
   const header = toBase64UrlJson({ alg: "ES256", kid: auth.keyId, typ: "JWT" });
   const payload = toBase64UrlJson({ iss: auth.teamId, iat });
@@ -407,6 +412,7 @@ async function persistRegistrationsState(
   });
 }
 
+/** Normalizes the APNs environment string accepted by registration inputs. */
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
   if (typeof value !== "string") {
     return null;
@@ -418,6 +424,7 @@ export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null
   return null;
 }
 
+/** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
 ): Promise<ApnsRegistration> {
@@ -493,6 +500,7 @@ export async function registerApnsRegistration(
   });
 }
 
+/** Backward-compatible helper for storing a direct APNs token registration. */
 export async function registerApnsToken(params: {
   nodeId: string;
   token: string;
@@ -506,6 +514,7 @@ export async function registerApnsToken(params: {
   })) as DirectApnsRegistration;
 }
 
+/** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
   baseDir?: string,
@@ -518,6 +527,7 @@ export async function loadApnsRegistration(
   return state.registrationsByNodeId[normalizedNodeId] ?? null;
 }
 
+/** Loads normalized APNs registrations for the requested node ids, preserving request order. */
 export async function loadApnsRegistrations(
   nodeIds: readonly string[],
   baseDir?: string,
@@ -537,6 +547,7 @@ export async function loadApnsRegistrations(
   return registrations;
 }
 
+/** Removes a stored APNs registration by node id. */
 export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
   const normalizedNodeId = normalizeNodeId(nodeId);
   if (!normalizedNodeId) {
@@ -578,6 +589,7 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
   return false;
 }
 
+/** Clears a registration only if storage still contains the caller's observed value. */
 export async function clearApnsRegistrationIfCurrent(params: {
   nodeId: string;
   registration: ApnsRegistration;
@@ -599,6 +611,7 @@ export async function clearApnsRegistrationIfCurrent(params: {
   });
 }
 
+/** Returns true for APNs responses that mean the direct device token is no longer usable. */
 export function shouldInvalidateApnsRegistration(result: {
   status: number;
   reason?: string;
@@ -609,6 +622,7 @@ export function shouldInvalidateApnsRegistration(result: {
   return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
 }
 
+/** Decides whether a failed direct push should clear the persisted registration. */
 export function shouldClearStoredApnsRegistration(params: {
   registration: ApnsRegistration;
   result: { status: number; reason?: string };
@@ -626,6 +640,7 @@ export function shouldClearStoredApnsRegistration(params: {
   return shouldInvalidateApnsRegistration(params.result);
 }
 
+/** Resolves direct APNs provider auth from env, accepting inline or file-backed keys. */
 export async function resolveApnsAuthConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ApnsAuthConfigResolution> {
@@ -710,7 +725,7 @@ async function sendApnsRequest(params: {
       }
       settled = true;
       client.destroy();
-      reject(err);
+      reject(toLintErrorObject(err, "Non-Error rejection"));
     };
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
@@ -1064,6 +1079,7 @@ type RelayApnsExecApprovalResolvedParams = ApnsExecApprovalResolvedCommonParams 
   requestSender?: never;
 };
 
+/** Sends a visible APNs alert via direct APNs token or relay registration. */
 export async function sendApnsAlert(
   params: DirectApnsAlertParams | RelayApnsAlertParams,
 ): Promise<ApnsPushAlertResult> {
@@ -1097,6 +1113,7 @@ export async function sendApnsAlert(
   });
 }
 
+/** Sends a silent background wake via direct APNs token or relay registration. */
 export async function sendApnsBackgroundWake(
   params: DirectApnsBackgroundWakeParams | RelayApnsBackgroundWakeParams,
 ): Promise<ApnsPushWakeResult> {
@@ -1129,6 +1146,7 @@ export async function sendApnsBackgroundWake(
   });
 }
 
+/** Sends an exec-approval alert notification via direct APNs or relay. */
 export async function sendApnsExecApprovalAlert(
   params: DirectApnsExecApprovalAlertParams | RelayApnsExecApprovalAlertParams,
 ): Promise<ApnsPushAlertResult> {
@@ -1161,6 +1179,7 @@ export async function sendApnsExecApprovalAlert(
   });
 }
 
+/** Sends a silent wake telling the app an exec approval changed state. */
 export async function sendApnsExecApprovalResolvedWake(
   params: DirectApnsExecApprovalResolvedParams | RelayApnsExecApprovalResolvedParams,
 ): Promise<ApnsPushWakeResult> {
@@ -1194,3 +1213,17 @@ export async function sendApnsExecApprovalResolvedWake(
 }
 
 export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

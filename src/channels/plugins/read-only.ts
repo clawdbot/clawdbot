@@ -299,7 +299,7 @@ function rebindChannelConfig(
     ...cfg,
     channels: {
       ...cfg.channels,
-      [sourceChannelId]: (cfg.channels as Record<string, unknown>)[targetChannelId],
+      [sourceChannelId]: cfg.channels[targetChannelId],
     },
   };
 }

@@ -143,18 +143,15 @@ function mockTarExtractionFlow(params: {
 }
 
 let workspaceDir = "";
-let stateDir = "";
-
 beforeAll(async () => {
   workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-  stateDir = setTempStateDir(workspaceDir);
+  setTempStateDir(workspaceDir);
 });
 
 afterAll(async () => {
   if (workspaceDir) {
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
     workspaceDir = "";
-    stateDir = "";
   }
 });
 

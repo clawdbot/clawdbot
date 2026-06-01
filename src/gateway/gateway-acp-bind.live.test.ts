@@ -199,18 +199,43 @@ function resolveModelObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
-async function prepareCodexHomeForLiveBindTest(): Promise<void> {
+async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> {
   const home = process.env.HOME?.trim();
-  if (!home) {
-    return;
-  }
+  const sourceCodexHome = process.env.CODEX_HOME?.trim() || (home ? path.join(home, ".codex") : "");
   const model = process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() || DEFAULT_LIVE_CODEX_MODEL;
-  const codexHome = path.join(home, ".codex");
+  const codexHome = path.join(tempRoot, "codex-home");
   await fs.mkdir(codexHome, { recursive: true });
+  const targetAuthPath = path.join(codexHome, "auth.json");
+  let hasAuthFile = false;
+  if (sourceCodexHome) {
+    await fs.copyFile(path.join(sourceCodexHome, "auth.json"), targetAuthPath).then(
+      () => {
+        hasAuthFile = true;
+      },
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw error;
+        }
+      },
+    );
+  }
+  const apiKey = process.env.CODEX_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
+  if (apiKey && !hasAuthFile) {
+    await fs.writeFile(
+      targetAuthPath,
+      `${JSON.stringify({
+        OPENAI_API_KEY: apiKey,
+        tokens: null,
+        last_refresh: null,
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
   const configPath = path.join(codexHome, "config.toml");
+  const sourceConfigPath = sourceCodexHome ? path.join(sourceCodexHome, "config.toml") : "";
   let rawConfig = "";
   try {
-    rawConfig = await fs.readFile(configPath, "utf8");
+    rawConfig = sourceConfigPath ? await fs.readFile(sourceConfigPath, "utf8") : "";
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -370,7 +395,7 @@ async function bindConversationAndWait(params: {
         logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);
       } else {
         if (runtime?.doctor && (attempt === 1 || attempt % 6 === 0)) {
-          const report = await runtime.doctor().catch((error) => ({
+          const report = await runtime.doctor().catch((error: unknown) => ({
             message: error instanceof Error ? error.message : String(error),
             details: [],
           }));
@@ -609,7 +634,7 @@ describeLive("gateway live (ACP bind)", () => {
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
       if (liveAgent === "codex" && !agentCommandOverride) {
-        await prepareCodexHomeForLiveBindTest();
+        await prepareCodexHomeForLiveBindTest(tempRoot);
       }
 
       const cfg = getRuntimeConfig();

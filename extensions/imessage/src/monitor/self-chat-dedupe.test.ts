@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import { resolveIMessageInboundDecision } from "./inbound-processing.js";
+import { resetPersistedIMessageEchoCacheForTest } from "./persisted-echo-cache.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 /**
@@ -23,6 +25,11 @@ import { createSelfChatCache } from "./self-chat-cache.js";
 type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
 
 const cfg = {} as OpenClawConfig;
+
+beforeEach(() => {
+  installIMessageStateRuntimeForTest();
+  resetPersistedIMessageEchoCacheForTest();
+});
 
 function createParams(
   overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
@@ -606,6 +613,102 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     );
     // Reflection correctly dropped
     expect(second).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
+  it("drops is_from_me=false self-chat reflection with sub-second created_at skew", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T05:34:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+
+    const first = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85160,
+          guid: "p:0/from-me-guid",
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "+15555550123",
+          text: "Aha, neat!",
+          created_at: "2026-05-10T05:34:00.000Z",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Aha, neat!",
+        bodyText: "Aha, neat!",
+        selfChatCache,
+      }),
+    );
+    expect(first.kind).toBe("dispatch");
+
+    const reflection = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85161,
+          guid: "p:0/reflected-guid",
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: null,
+          text: "Aha, neat!",
+          created_at: "2026-05-10T05:34:00.239Z",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "Aha, neat!",
+        bodyText: "Aha, neat!",
+        selfChatCache,
+      }),
+    );
+
+    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
+  it("does not apply sub-second skew matching to ambiguous normal DM rows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T05:34:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+
+    const ambiguousOutbound = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85170,
+          guid: "p:0/ambiguous-from-me-guid",
+          sender: "+15555550124",
+          chat_identifier: "+15555550124",
+          destination_caller_id: null,
+          text: "Same text",
+          created_at: "2026-05-10T05:34:00.000Z",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Same text",
+        bodyText: "Same text",
+        selfChatCache,
+      }),
+    );
+    expect(ambiguousOutbound).toEqual({ kind: "drop", reason: "from me" });
+
+    const inboundReply = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85171,
+          guid: "p:0/real-inbound-guid",
+          sender: "+15555550124",
+          chat_identifier: "+15555550124",
+          destination_caller_id: null,
+          text: "Same text",
+          created_at: "2026-05-10T05:34:00.239Z",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "Same text",
+        bodyText: "Same text",
+        selfChatCache,
+      }),
+    );
+
+    expect(inboundReply.kind).toBe("dispatch");
   });
 
   it("drops outbound DM when sender matches chat_identifier but destination_caller_id is absent (#63980)", async () => {

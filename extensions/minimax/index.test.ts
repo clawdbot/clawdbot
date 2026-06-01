@@ -6,7 +6,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
@@ -25,6 +25,10 @@ const minimaxProviderPlugin = {
     api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 };
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("minimax provider hooks", () => {
   it("declares CN provider auth aliases in the manifest", () => {
@@ -91,7 +95,7 @@ describe("minimax provider hooks", () => {
         hint: "Global endpoint - api.minimax.io",
         choiceId: "minimax-global-api",
         groupId: "minimax",
-        groupHint: "M2.7 (recommended)",
+        groupHint: "M3 (recommended)",
       },
       {
         id: "api-cn",
@@ -99,7 +103,7 @@ describe("minimax provider hooks", () => {
         hint: "CN endpoint - api.minimaxi.com",
         choiceId: "minimax-cn-api",
         groupId: "minimax",
-        groupHint: "M2.7 (recommended)",
+        groupHint: "M3 (recommended)",
       },
     ]);
 
@@ -119,7 +123,7 @@ describe("minimax provider hooks", () => {
         hint: "Global endpoint - api.minimax.io",
         choiceId: "minimax-global-oauth",
         groupId: "minimax",
-        groupHint: "M2.7 (recommended)",
+        groupHint: "M3 (recommended)",
       },
       {
         id: "oauth-cn",
@@ -127,7 +131,7 @@ describe("minimax provider hooks", () => {
         hint: "CN endpoint - api.minimaxi.com",
         choiceId: "minimax-cn-oauth",
         groupId: "minimax",
-        groupHint: "M2.7 (recommended)",
+        groupHint: "M3 (recommended)",
       },
     ]);
   });
@@ -173,7 +177,7 @@ describe("minimax provider hooks", () => {
     });
   });
 
-  it("keeps M2.7 on the Anthropic Messages route used by the empty-history guard", async () => {
+  it("lists M3 on the Anthropic Messages route used by the empty-history guard", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,
       id: "minimax",
@@ -193,11 +197,53 @@ describe("minimax provider hooks", () => {
     expect(provider?.api).toBe("anthropic-messages");
     expect(provider?.authHeader).toBe(true);
     expect(provider?.baseUrl).toBe("https://api.minimax.io/anthropic");
-    const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M2.7");
-    expect(model?.id).toBe("MiniMax-M2.7");
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.name).toBe("MiniMax M2.7");
+    const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M3");
+    expect(model?.id).toBe("MiniMax-M3");
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.name).toBe("MiniMax M3");
     expect(model?.reasoning).toBe(true);
+  });
+
+  it("resolves M3 through the dynamic model hook before agent discovery", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+
+    const model = apiProvider.resolveDynamicModel?.({
+      provider: "minimax",
+      modelId: "MiniMax-M3",
+      providerConfig: {},
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "minimax",
+      id: "MiniMax-M3",
+      api: "anthropic-messages",
+      baseUrl: "https://api.minimax.io/anthropic",
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+    });
+  });
+
+  it("keeps MINIMAX_API_HOST endpoint overrides on dynamic M3 resolution", async () => {
+    vi.stubEnv("MINIMAX_API_HOST", "https://api.minimaxi.com");
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+
+    const model = apiProvider.resolveDynamicModel?.({
+      provider: "minimax",
+      modelId: "MiniMax-M3",
+      providerConfig: {},
+    } as never);
+
+    expect(model?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
   });
 
   it("owns fast-mode stream wrapping for MiniMax transports", async () => {

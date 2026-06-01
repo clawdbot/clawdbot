@@ -138,7 +138,9 @@ final class NodeAppModel {
     var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
+    private var pendingGatewaySetupLink: GatewayConnectDeepLink?
     private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
@@ -4134,9 +4136,21 @@ extension NodeAppModel {
         switch route {
         case let .agent(link):
             await self.handleAgentDeepLink(link, originalURL: url)
-        case .gateway, .dashboard:
+        case let .gateway(link):
+            self.stageGatewaySetupLink(link)
+        case .dashboard:
             break
         }
+    }
+
+    func stageGatewaySetupLink(_ link: GatewayConnectDeepLink) {
+        self.pendingGatewaySetupLink = link
+        self.gatewaySetupRequestID &+= 1
+    }
+
+    func consumePendingGatewaySetupLink() -> GatewayConnectDeepLink? {
+        defer { self.pendingGatewaySetupLink = nil }
+        return self.pendingGatewaySetupLink
     }
 
     private func handleAgentDeepLink(_ link: AgentDeepLink, originalURL: URL) async {

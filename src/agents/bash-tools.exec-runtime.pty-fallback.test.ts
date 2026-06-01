@@ -115,7 +115,9 @@ test("exec cleans session state when PTY fallback spawn also fails", async () =>
 });
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 test("exec emits bounded process diagnostics without command text", async () => {

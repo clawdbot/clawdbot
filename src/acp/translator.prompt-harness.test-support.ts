@@ -1,8 +1,8 @@
 import type { PromptRequest } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -56,7 +56,7 @@ export function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>
   const settleSpy = vi.fn();
   void promise.then(
     (value) => settleSpy({ kind: "resolve", value }),
-    (error) => settleSpy({ kind: "reject", error }),
+    (error: unknown) => settleSpy({ kind: "reject", error }),
   );
   return settleSpy;
 }

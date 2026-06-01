@@ -83,11 +83,8 @@ export type PublishablePluginPackageCandidate<
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
-function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
-  path: string,
-): TPackageJson {
-  return JSON.parse(readFileSync(path, "utf8")) as TPackageJson;
+function readPluginPackageJson(path: string): unknown {
+  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 export function collectExtensionPackageJsonCandidates<
@@ -107,7 +104,7 @@ export function collectExtensionPackageJsonCandidates<
       candidates.push({
         extensionId: dir.name,
         packageDir,
-        packageJson: readPluginPackageJson<TPackageJson>(packageJsonPath),
+        packageJson: readPluginPackageJson(packageJsonPath) as TPackageJson,
       });
     } catch {
       continue;

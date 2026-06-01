@@ -259,9 +259,9 @@ export function createMatrixHandlerTestHarness(
               run: () => Promise<T>;
               onSettled?: () => void | Promise<void>;
             }) => {
-              const { dispatcher, run, onSettled } = params;
+              const { dispatcher, run: runLocal, onSettled } = params;
               try {
-                return await run();
+                return await runLocal();
               } finally {
                 dispatcher.markComplete?.();
                 try {

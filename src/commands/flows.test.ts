@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
+import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
@@ -24,12 +26,39 @@ function jsonRoundTrip<T>(value: T): T {
   return JSON.parse(serialized) as T;
 }
 
-function createRuntime(): RuntimeEnv {
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
+
+type TestRuntime = RuntimeEnv & {
+  writeStdout: ReturnType<typeof vi.fn>;
+  writeJson: ReturnType<typeof vi.fn>;
+};
+
+function createRuntime(): TestRuntime {
   return {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv;
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
@@ -93,7 +122,8 @@ describe("flows commands", () => {
       const runtime = createRuntime();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+      expect(runtime.log).not.toHaveBeenCalled();
+      const payload = jsonRoundTrip(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]);
 
       expect(payload).toStrictEqual({
         count: 1,
@@ -125,6 +155,34 @@ describe("flows commands", () => {
             },
           },
         ],
+      });
+    });
+  });
+
+  it("shows one TaskFlow as JSON through the runtime JSON writer", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect a single flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        ...jsonRoundTrip(flow),
+        tasks: [],
+        taskSummary: {
+          total: 0,
+          active: 0,
+          terminal: 0,
+          failures: 0,
+        },
       });
     });
   });

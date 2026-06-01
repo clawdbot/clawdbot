@@ -539,9 +539,29 @@ export function createChannelProgressDraftGate(params: {
     if (disposed || started) {
       return startPromise ?? Promise.resolve();
     }
-    started = true;
+    if (startPromise) {
+      return startPromise;
+    }
     clearTimer();
-    startPromise = Promise.resolve().then(params.onStart);
+    started = true;
+    const nextStart = Promise.resolve()
+      .then(params.onStart)
+      .then(() => {
+        if (disposed) {
+          started = false;
+        }
+        if (startPromise === nextStart) {
+          startPromise = undefined;
+        }
+      })
+      .catch((error: unknown) => {
+        if (startPromise === nextStart) {
+          startPromise = undefined;
+        }
+        started = false;
+        throw error;
+      });
+    startPromise = nextStart;
     return startPromise;
   };
 
@@ -567,12 +587,16 @@ export function createChannelProgressDraftGate(params: {
         return false;
       }
       workEvents += 1;
+      if (startPromise) {
+        await startPromise;
+        return started;
+      }
       if (started) {
         return true;
       }
       if (workEvents > 1) {
         await start();
-        return true;
+        return started;
       }
       schedule();
       return false;
@@ -582,6 +606,7 @@ export function createChannelProgressDraftGate(params: {
     },
     cancel(): void {
       disposed = true;
+      started = false;
       clearTimer();
     },
   };

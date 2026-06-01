@@ -13,6 +13,7 @@ import {
 } from "../../skills/workshop/service.js";
 import type {
   SkillProposalManifestEntry,
+  SkillProposalOrigin,
   SkillProposalReadResult,
   SkillProposalRecord,
   SkillProposalStatus,
@@ -122,6 +123,7 @@ export type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
+  origin?: SkillProposalOrigin;
 };
 
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
@@ -212,6 +214,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: proposalContent,
           supportFiles,
           createdBy: "skill-workshop",
+          ...(options.origin ? { origin: options.origin } : {}),
           goal,
           evidence,
         });
@@ -229,6 +232,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: proposalContent,
           supportFiles,
           createdBy: "skill-workshop",
+          ...(options.origin ? { origin: options.origin } : {}),
           goal,
           evidence,
         });
@@ -382,6 +386,9 @@ function listProposalEntries(params: {
         proposal.skillName,
         proposal.skillKey,
       ].some((value) => {
+        if (typeof value !== "string") {
+          return false;
+        }
         const lower = value.toLowerCase();
         return (
           lower.includes(query) ||

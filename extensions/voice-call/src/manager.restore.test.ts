@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
@@ -8,6 +13,23 @@ import {
   writeCallsToStore,
 } from "./manager.test-harness.js";
 import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
+import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+
+function installStateRuntime(): void {
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call restore tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
+      }) as never,
+    },
+  });
+}
 
 function requireSingleActiveCall(manager: CallManager) {
   const activeCalls = manager.getActiveCalls();
@@ -32,9 +54,16 @@ function requireSingleHangupCall(provider: FakeProvider) {
 }
 
 describe("CallManager verification on restore", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installStateRuntime();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    clearVoiceCallStateRuntime();
+    resetPluginStateStoreForTests();
   });
 
   async function initializeManager(params?: {

@@ -422,8 +422,8 @@ describe("before_tool_call channelId forwarding", () => {
       {
         pluginId: "test",
         hookName: "before_tool_call",
-        handler: async (eventValue: unknown, ctx: unknown) => {
-          receivedCtx = ctx;
+        handler: async (eventValue: unknown, ctxLocal: unknown) => {
+          receivedCtx = ctxLocal;
           return undefined;
         },
         source: "test",

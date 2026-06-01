@@ -1,6 +1,7 @@
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { CronServiceState } from "./state.js";
 
+/** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
 export function wake(
   state: CronServiceState,
   opts: { mode: "now" | "next-heartbeat"; text: string; sessionKey?: string },

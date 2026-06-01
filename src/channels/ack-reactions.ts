@@ -99,13 +99,13 @@ export function createAckReactionHandle(params: {
   try {
     sendPromise = params.send();
   } catch (err) {
-    sendPromise = Promise.reject(err);
+    sendPromise = Promise.reject(toLintErrorObject(err, "Non-Error rejection"));
   }
 
   return {
     ackReactionPromise: sendPromise.then(
       () => true,
-      (err) => {
+      (err: unknown) => {
         params.onSendError?.(err);
         return false;
       },
@@ -135,7 +135,7 @@ export function removeAckReactionAfterReply(params: {
     if (!didAck) {
       return;
     }
-    params.remove().catch((err) => params.onError?.(err));
+    params.remove().catch((err: unknown) => params.onError?.(err));
   });
 }
 
@@ -151,4 +151,18 @@ export function removeAckReactionHandleAfterReply(params: {
     remove: params.ackReaction?.remove ?? (async () => {}),
     onError: params.onError,
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

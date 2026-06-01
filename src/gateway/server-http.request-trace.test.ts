@@ -29,9 +29,9 @@ async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promi
 }
 
 async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): Promise<void> {
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
 }
 
 afterEach(() => {

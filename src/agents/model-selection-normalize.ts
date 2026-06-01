@@ -4,6 +4,7 @@ import {
   normalizeProviderId as normalizeProviderIdCore,
   normalizeProviderIdForAuth as normalizeProviderIdForAuthCore,
 } from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
@@ -63,7 +64,8 @@ function normalizeProviderModelId(
     allowPluginNormalization?: boolean;
   },
 ): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model, {
+  const providerModel = stripSelfProviderModelPrefix(provider, model);
+  const staticModelId = normalizeStaticProviderModelId(provider, providerModel, {
     allowManifestNormalization: options?.allowManifestNormalization,
     manifestPlugins: options?.manifestPlugins,
   });

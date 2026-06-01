@@ -43,8 +43,7 @@ export {
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\0/g, "");
+  return s.split("\0").join("");
 }
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
@@ -97,6 +96,24 @@ export type AutoFallbackPrimaryProbe = {
   fallbackAuthProfileId?: string;
   fallbackAuthProfileIdSource?: "auto" | "user";
 };
+
+export function hasLegacyAutoFallbackWithoutOrigin(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | null
+    | undefined,
+): boolean {
+  return (
+    entry?.modelOverrideSource === "auto" &&
+    (!normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ||
+      !normalizeOptionalString(entry.modelOverrideFallbackOriginModel))
+  );
+}
 
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:

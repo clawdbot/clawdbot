@@ -447,6 +447,11 @@ export class CodexAppServerEventProjector {
     if (!delta) {
       return;
     }
+    this.rememberAssistantPhase(readItem(params.item));
+    const phase = readString(params, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(itemId, phase);
+    }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
       await this.params.onAssistantMessageStart?.();
@@ -456,10 +461,13 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
+    } else if (this.shouldStreamAssistantPartial(itemId)) {
+      await this.params.onPartialReply?.({ text, delta });
     }
     // Codex app-server can emit multiple agentMessage items per turn, including
     // intermediate coordination/progress prose. Keep those deltas internal until
-    // turn completion chooses the last assistant item as the user-visible reply.
+    // their phase identifies terminal answer text or turn completion chooses the
+    // last assistant item as the user-visible reply.
   }
 
   private async handleReasoningDelta(
@@ -968,6 +976,10 @@ export class CodexAppServerEventProjector {
 
   private isCommentaryAssistantItem(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
+  }
+
+  private shouldStreamAssistantPartial(itemId: string): boolean {
+    return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {

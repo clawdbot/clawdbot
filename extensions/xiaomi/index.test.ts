@@ -580,7 +580,7 @@ describe("xiaomi provider plugin", () => {
     await wrapThinkingNone(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+    expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );
   });

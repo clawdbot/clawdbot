@@ -118,8 +118,8 @@ function evaluateExpression(
   context: ToolAvailabilityContext,
 ): readonly ToolAvailabilityDiagnostic[] {
   if ("kind" in expression) {
-    const diagnostic = evaluateSignal(expression, context);
-    return diagnostic ? [diagnostic] : [];
+    const diagnosticLocal = evaluateSignal(expression, context);
+    return diagnosticLocal ? [diagnosticLocal] : [];
   }
   if ("allOf" in expression) {
     if (expression.allOf.length === 0) {

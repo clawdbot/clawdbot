@@ -202,17 +202,29 @@ extension SettingsProTab {
         await self.connectManual()
     }
 
+    func applyPendingGatewaySetupLinkIfNeeded() {
+        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
+        self.setupCode = ""
+        self.setupStatusText = nil
+        self.stagedGatewaySetupLink = link
+        let security = link.tls ? "TLS" : "plain"
+        self.setupStatusText = "Setup link loaded for \(link.host):\(link.port) (\(security)). Tap Connect to apply."
+    }
+
     @discardableResult
     func applySetupCode() -> Bool {
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else {
+        let stagedLink = self.stagedGatewaySetupLink
+        guard !raw.isEmpty || stagedLink != nil else {
             self.setupStatusText = "Paste a setup code to continue."
             return false
         }
-        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+
+        guard let link = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return false
         }
+        self.stagedGatewaySetupLink = nil
         self.applyGatewayLink(link)
         return true
     }
@@ -299,7 +311,7 @@ extension SettingsProTab {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
-            self.setupStatusText = "Tailscale is off on this iPhone. Turn it on, then try again."
+            self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
         self.setupStatusText = "Checking gateway reachability..."
@@ -510,10 +522,15 @@ extension SettingsProTab {
         return gatewayStatus
     }
 
+    var canApplyGatewaySetup: Bool {
+        !self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || self.stagedGatewaySetupLink != nil
+    }
+
     var tailnetWarningText: String? {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, Self.isTailnetHostOrIP(host), !Self.hasTailnetIPv4() else { return nil }
-        return "This gateway is on your tailnet. Turn on Tailscale on this iPhone, then tap Connect."
+        return "This gateway is on your tailnet. Turn on Tailscale on this device, then tap Connect."
     }
 
     func friendlyGatewayMessage(from raw: String) -> String? {

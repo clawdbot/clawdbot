@@ -32,7 +32,7 @@ function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): st
 
 export async function maybeExplainGatewayServiceStop() {
   const service = resolveGatewayService();
-  let loaded: boolean | null = null;
+  let loaded: boolean | null;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {

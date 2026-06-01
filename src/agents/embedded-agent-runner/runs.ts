@@ -638,7 +638,9 @@ export async function waitForActiveEmbeddedRuns(
       );
       return { drained: false };
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, pollMs);
+    });
   }
 }
 

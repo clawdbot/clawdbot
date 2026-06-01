@@ -23,6 +23,12 @@ let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
+let getManagerImpl:
+  | ((params: { cfg?: unknown; agentId?: string }) => Promise<{
+      manager?: unknown;
+      error?: string;
+    }>)
+  | undefined;
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
   path: params.relPath,
@@ -52,9 +58,9 @@ const stubManager = {
   close: vi.fn(),
 };
 
-const getMemorySearchManagerMock = vi.fn(async (_params: { cfg?: unknown; agentId?: string }) => ({
-  manager: stubManager,
-}));
+const getMemorySearchManagerMock = vi.fn(async (params: { cfg?: unknown; agentId?: string }) =>
+  getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
+);
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
@@ -84,6 +90,15 @@ export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
 
+export function setMemorySearchManagerImpl(
+  next: (params: { cfg?: unknown; agentId?: string }) => Promise<{
+    manager?: unknown;
+    error?: string;
+  }>,
+): void {
+  getManagerImpl = next;
+}
+
 export function setMemoryReadFileImpl(
   next: (params: MemoryReadParams) => Promise<MemoryReadResult>,
 ): void {
@@ -98,6 +113,7 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   workspaceDir = "/workspace";
   customStatus = undefined;
+  getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =
     overrides?.readFileImpl ??

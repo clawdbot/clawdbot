@@ -62,7 +62,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await new Promise(() => {});
 }
 
 export async function runDebugProxyRunCommand(opts: {

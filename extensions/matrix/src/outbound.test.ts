@@ -230,7 +230,7 @@ describe("matrixOutbound cfg threading", () => {
 
     expect(rendered?.text).toBe("---");
     expect(
-      (rendered?.channelData?.matrix as { extraContent?: Record<string, unknown> }).extraContent?.[
+      (rendered!.channelData!.matrix as { extraContent?: Record<string, unknown> }).extraContent?.[
         "com.openclaw.presentation"
       ],
     ).toEqual({

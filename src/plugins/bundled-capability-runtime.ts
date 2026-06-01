@@ -300,7 +300,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
 
-    let mod: OpenClawPluginModule | null = null;
+    let mod: OpenClawPluginModule | null;
     try {
       mod = getModuleLoader(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (error) {

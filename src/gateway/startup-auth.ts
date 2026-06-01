@@ -18,6 +18,7 @@ import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
 export { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
+/** Merge sparse runtime auth overrides into persisted Gateway auth config. */
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
   override?: GatewayAuthConfig,
@@ -47,6 +48,7 @@ export function mergeGatewayAuthConfig(
   return merged;
 }
 
+/** Merge sparse runtime Tailscale overrides into persisted Gateway Tailscale config. */
 export function mergeGatewayTailscaleConfig(
   base?: GatewayTailscaleConfig,
   override?: GatewayTailscaleConfig,
@@ -60,6 +62,9 @@ export function mergeGatewayTailscaleConfig(
   }
   if (override.resetOnExit !== undefined) {
     merged.resetOnExit = override.resetOnExit;
+  }
+  if (override.serviceName !== undefined) {
+    merged.serviceName = override.serviceName;
   }
   if (override.preserveFunnel !== undefined) {
     merged.preserveFunnel = override.preserveFunnel;
@@ -85,6 +90,7 @@ function resolveGatewayAuthFromConfig(params: {
   });
 }
 
+/** Check every source that can satisfy token auth before startup generates one. */
 function hasGatewayTokenCandidate(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -122,6 +128,7 @@ function hasGatewayPasswordOverrideCandidate(params: {
   );
 }
 
+/** Ensure startup has effective Gateway auth, generating only an ephemeral token if needed. */
 export async function ensureGatewayStartupAuth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -142,6 +149,8 @@ export async function ensureGatewayStartupAuth(params: {
   assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
   const env = params.env ?? process.env;
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
+  // Resolve only refs that can satisfy the effective mode; inactive refs stay
+  // as refs so startup does not require unrelated secret providers.
   const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
     resolveGatewayTokenSecretRefValue({
       cfg: params.cfg,
@@ -221,6 +230,7 @@ export async function ensureGatewayStartupAuth(params: {
   };
 }
 
+/** Prevent hook ingress and Gateway auth from sharing the same bearer token. */
 export function assertHooksTokenSeparateFromGatewayAuth(params: {
   cfg: OpenClawConfig;
   auth: ResolvedGatewayAuth;

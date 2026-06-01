@@ -93,7 +93,7 @@ export function createLineWebhookMiddleware(
         logVerbose(`line: received ${body.events.length} webhook events`);
         void Promise.resolve()
           .then(() => onEvents(body))
-          .catch((err) => logLineWebhookDispatchError(runtime, err));
+          .catch((err: unknown) => logLineWebhookDispatchError(runtime, err));
       }
     } catch (err) {
       await receiveContext?.nack(err);

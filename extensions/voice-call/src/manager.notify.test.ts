@@ -99,7 +99,9 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function initiateCallWithMessage(

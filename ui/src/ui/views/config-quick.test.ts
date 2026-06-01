@@ -133,6 +133,21 @@ describe("renderQuickSettings", () => {
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
+  it("shows the current bootstrap default when config omits the explicit limit", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ configObject: {} })), container);
+
+    const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-profile-stat")).find(
+      (candidate) =>
+        candidate.querySelector(".qs-profile-stat__label")?.textContent?.trim() ===
+        "Bootstrap Per File",
+    );
+    expect(stat?.querySelector(".qs-profile-stat__value")?.textContent?.trim()).toBe(
+      "20,000 chars",
+    );
+  });
+
   it("lets operators change browser and tool profile from Security quick settings", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();
@@ -256,7 +271,7 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "apple-touch-icon.png",
+      "/apple-touch-icon.png",
     );
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "IDENTITY.md",

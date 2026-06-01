@@ -271,7 +271,9 @@ describe("gateway server models + voicewake", () => {
     await withTempHome(async () => {
       const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
       trackConnectChallengeNonce(nodeWs);
-      await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        nodeWs.once("open", resolve);
+      });
       const firstEventP = onceMessage(
         nodeWs,
         (o) => o.type === "event" && o.event === "voicewake.changed",
@@ -424,7 +426,9 @@ describe("gateway server models + voicewake", () => {
     await withTempHome(async () => {
       const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
       trackConnectChallengeNonce(nodeWs);
-      await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        nodeWs.once("open", resolve);
+      });
       const firstEventP = onceMessage<{
         type: "event";
         event: string;
@@ -814,8 +818,8 @@ describe("gateway server misc", () => {
       probe.listen(releasePort, "127.0.0.1", () => resolve());
     });
     expect(probe.listening).toBe(true);
-    await new Promise<void>((resolve, reject) =>
-      probe.close((err) => (err ? reject(err) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      probe.close((err) => (err ? reject(err) : resolve()));
+    });
   });
 });

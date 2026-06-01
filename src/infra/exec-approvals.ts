@@ -737,7 +737,7 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
     };
   }
   const raw = fs.readFileSync(filePath, "utf8");
-  let parsed: ExecApprovalsFile | null = null;
+  let parsed: ExecApprovalsFile | null;
   try {
     parsed = JSON.parse(raw) as ExecApprovalsFile;
   } catch {

@@ -1,20 +1,10 @@
 import { expect, vi } from "vitest";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
-import type { TranscriptPolicy } from "./transcript-policy.js";
 
 type SessionEntry = { type: string; customType: string; data: unknown };
-export type SanitizeSessionHistoryFn = (params: {
-  messages: AgentMessage[];
-  modelApi: string;
-  provider: string;
-  allowedToolNames?: Iterable<string>;
-  sessionManager: SessionManager;
-  sessionId: string;
-  modelId?: string;
-  policy?: TranscriptPolicy;
-  preserveLatestAssistantThinking?: boolean;
-}) => Promise<AgentMessage[]>;
+export type SanitizeSessionHistoryFn =
+  typeof import("./embedded-agent-runner/replay-history.js").sanitizeSessionHistory;
 type SanitizeSessionHistoryMockedHelpers = typeof import("./embedded-agent-helpers.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;

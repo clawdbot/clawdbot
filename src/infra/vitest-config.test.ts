@@ -219,6 +219,29 @@ describe("base vitest config", () => {
       /(?:^|\/)test\/non-isolated-runner\.ts$/u,
     );
   });
+
+  it("classifies Crabbox shared dependencies as external dependencies", () => {
+    expect(baseConfig.test?.deps?.moduleDirectories).toEqual([
+      "/node_modules/",
+      "/openclaw-pnpm-node-modules/",
+    ]);
+
+    const externalPatterns = baseConfig.test?.server?.deps?.external ?? [];
+    expect(
+      externalPatterns.some(
+        (pattern) =>
+          pattern instanceof RegExp &&
+          pattern.test("/tmp/openclaw-pnpm-node-modules/some-dep/dist/index.mjs"),
+      ),
+    ).toBe(true);
+    expect(
+      externalPatterns.some(
+        (pattern) =>
+          pattern instanceof RegExp &&
+          pattern.test("/tmp/openclaw-pnpm-node-modules/vite/dist/client/env.mjs"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("test scripts", () => {

@@ -168,14 +168,14 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
   });
 
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
-    const BOT_OPEN_ID = "ou_bot_123";
+    const BOT_OPEN_IDLocal = "ou_bot_123";
     const event = makePostEvent({
       content: [
-        [{ tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" }],
+        [{ tag: "at", user_id: BOT_OPEN_IDLocal, user_name: "claw" }],
         [{ tag: "text", text: "What does this document say" }],
       ],
     });
-    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_IDLocal);
     expect(ctx.mentionedBot).toBe(true);
   });
 

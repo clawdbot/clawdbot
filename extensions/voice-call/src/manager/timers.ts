@@ -43,17 +43,19 @@ export function startMaxDurationTimer(params: {
     `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,
   );
 
-  const timer = setTimeout(async () => {
-    params.ctx.maxDurationTimers.delete(params.callId);
-    const call = params.ctx.activeCalls.get(params.callId);
-    if (call && !TerminalStates.has(call.state)) {
-      console.log(
-        `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
-      );
-      call.endReason = "timeout";
-      persistCallRecord(params.ctx.storePath, call);
-      await params.onTimeout(params.callId);
-    }
+  const timer = setTimeout(() => {
+    void (async () => {
+      params.ctx.maxDurationTimers.delete(params.callId);
+      const call = params.ctx.activeCalls.get(params.callId);
+      if (call && !TerminalStates.has(call.state)) {
+        console.log(
+          `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
+        );
+        call.endReason = "timeout";
+        persistCallRecord(params.ctx.storePath, call);
+        await params.onTimeout(params.callId);
+      }
+    })();
   }, maxDurationMs);
 
   params.ctx.maxDurationTimers.set(params.callId, timer);

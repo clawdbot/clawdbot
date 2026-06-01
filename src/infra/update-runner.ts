@@ -230,7 +230,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
       dirs.push(packageRoot);
     }
   }
-  let proc: string | null = null;
+  let proc: string | null;
   try {
     proc = normalizeDir(process.cwd());
   } catch {
@@ -907,8 +907,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       if (fetchFailure) {
         return fetchFailure;
       }
-      let preflightBaseSha: string | null = null;
-      let candidates: string[] = [];
+      let preflightBaseSha: string | null;
+      let candidatesLocal: string[];
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
@@ -964,7 +964,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
         preflightBaseSha = targetSha;
-        candidates = [targetSha];
+        candidatesLocal = [targetSha];
       } else {
         const upstreamStep = await runStep(
           step(
@@ -1035,8 +1035,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
 
-        candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
-        if (candidates.length === 0) {
+        candidatesLocal = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
+        if (candidatesLocal.length === 0) {
           return {
             status: "error",
             mode: "git",
@@ -1104,7 +1104,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
       let selectedSha: string | null = null;
       try {
-        for (const sha of candidates) {
+        for (const sha of candidatesLocal) {
           const shortSha = sha.slice(0, 8);
           const checkoutStep = await runStep(
             step(

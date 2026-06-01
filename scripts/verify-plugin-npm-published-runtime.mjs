@@ -7,6 +7,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as tar from "tar";
 
+const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
 function readPackageStringList(packageLabel, fieldName, value) {
   if (!Array.isArray(value)) {
     return { entries: [], errors: [] };
@@ -199,15 +202,49 @@ export function resolveNpmPackFilename(output) {
   return filename;
 }
 
+export function readPositiveIntEnv(name, fallback, env = process.env) {
+  const text = String(env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+export function readPluginNpmCommandOptions(env = process.env) {
+  return {
+    encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: readPositiveIntEnv(
+      "OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES",
+      DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES,
+      env,
+    ),
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: readPositiveIntEnv(
+      "OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS",
+      DEFAULT_NPM_COMMAND_TIMEOUT_MS,
+      env,
+    ),
+  };
+}
+
+export function runPluginNpmCommand(args, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("npm", args, readPluginNpmCommandOptions(params.env));
+}
+
 function npmPack(spec, destinationDir) {
-  const output = execFileSync(
-    "npm",
-    ["pack", spec, "--ignore-scripts", "--pack-destination", destinationDir],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const output = runPluginNpmCommand([
+    "pack",
+    spec,
+    "--ignore-scripts",
+    "--pack-destination",
+    destinationDir,
+  ]);
   const filename = resolveNpmPackFilename(output);
   return path.isAbsolute(filename) ? filename : path.join(destinationDir, filename);
 }
@@ -223,26 +260,13 @@ export function parseNpmReadmeMetadata(raw) {
 }
 
 function npmViewReadme(spec) {
-  return execFileSync("npm", ["view", spec, "readme", "--json", "--prefer-online"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  return runPluginNpmCommand(["view", spec, "readme", "--json", "--prefer-online"]);
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export function readPositiveIntEnv(name, fallback, env = process.env) {
-  const text = String(env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function packPublishedPackage(spec, destinationDir) {
@@ -375,10 +399,12 @@ async function main(argv) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main(process.argv.slice(2)).catch((error) => {
-    console.error(
-      `plugin-npm-published-runtime-check: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exitCode = 1;
-  });
+  main(process.argv.slice(2)).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(
+        `plugin-npm-published-runtime-check: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exitCode = 1;
+    },
+  );
 }

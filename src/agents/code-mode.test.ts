@@ -60,6 +60,47 @@ function pluginToolWithExecute(
   return tool;
 }
 
+function mcpTool(params: {
+  name: string;
+  serverName: string;
+  safeServerName?: string;
+  toolName: string;
+  description?: string;
+  parameters?: AnyAgentTool["parameters"];
+  operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  execute?: AnyAgentTool["execute"];
+}): AnyAgentTool {
+  const tool: AnyAgentTool = {
+    name: params.name,
+    label: params.toolName,
+    description: params.description ?? `MCP ${params.toolName}`,
+    parameters: params.parameters ?? {
+      type: "object",
+      properties: {},
+    },
+    execute:
+      params.execute ??
+      vi.fn(async (_toolCallId, input) =>
+        jsonResult({
+          serverName: params.serverName,
+          toolName: params.toolName,
+          input,
+        }),
+      ),
+  };
+  setPluginToolMeta(tool, {
+    pluginId: "bundle-mcp",
+    optional: false,
+    mcp: {
+      serverName: params.serverName,
+      safeServerName: params.safeServerName ?? params.serverName,
+      toolName: params.toolName,
+      operation: params.operation ?? "tool",
+    },
+  });
+  return tool;
+}
+
 function registerTestNamespace(
   registration: CodeModeNamespaceRegistration & { pluginId?: string },
 ): void {
@@ -733,6 +774,288 @@ describe("Code Mode", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("exposes MCP tools only through the MCP namespace", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const githubCreate = mcpTool({
+      name: "github__create_issue",
+      serverName: "github",
+      toolName: "create_issue",
+      parameters: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string", description: "Repository name" },
+          title: { type: "string", description: "Issue title\nShown in tracker" },
+          body: { type: "string", default: "" },
+        },
+        required: ["owner", "repo", "title"],
+      },
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, githubCreate],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools[0]?.description).toContain("MCP: MCP server tools grouped by server.");
+    expect(compacted.tools[0]?.description).toContain("visible servers: github");
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const rootApi = await MCP.$api();
+        const api = await MCP.github.$api("createIssue", { schema: true });
+        const apiFiles = await API.list("mcp");
+        const rootFile = await API.read("mcp/index.d.ts");
+        const serverFile = await API.read("mcp/github.d.ts");
+        const created = await MCP.github.createIssue({
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "Ship it",
+        });
+        const createdPayload = JSON.parse(created.content[0].text);
+        const searchHits = await tools.search("github create issue", { limit: 5 });
+        const allHasMcp = ALL_TOOLS.some((tool) => tool.source === "mcp");
+        let directCall;
+        let directDescribe;
+        try {
+          await tools.describe("github__create_issue");
+          directDescribe = "unexpected";
+        } catch (error) {
+          directDescribe = error.message;
+        }
+        try {
+          await tools.call("github__create_issue", { owner: "x", repo: "y", title: "blocked" });
+          directCall = "unexpected";
+        } catch (error) {
+          directCall = error.message;
+        }
+        return {
+          apiHeader: api.header,
+          apiFilePaths: apiFiles.files.map((file) => file.path),
+          rootFileHasReference: rootFile.content.includes('./github.d.ts'),
+          serverFileHasCreateIssue: serverFile.content.includes('function createIssue('),
+          serverFileHasTitleDoc: serverFile.content.includes('@param title Issue title Shown in tracker'),
+          apiSchemaTitle: api.schemas.createIssue.type,
+          rootServers: rootApi.servers,
+          createdPayload,
+          createdDetails: created.details,
+          searchHits,
+          allHasMcp,
+          directDescribe,
+          directCall,
+          hasMcp: "MCP" in namespaces,
+        };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      createdPayload: {
+        serverName: "github",
+        toolName: "create_issue",
+        input: {
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "Ship it",
+          body: "",
+        },
+      },
+      createdDetails: {
+        serverName: "github",
+        toolName: "create_issue",
+        input: {
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "Ship it",
+          body: "",
+        },
+      },
+      searchHits: [],
+      allHasMcp: false,
+      directDescribe: "Unknown tool id: github__create_issue",
+      directCall: "Unknown tool id: github__create_issue",
+      hasMcp: true,
+      apiSchemaTitle: "object",
+      apiHeader: expect.stringContaining("function createIssue("),
+      apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      rootFileHasReference: true,
+      serverFileHasCreateIssue: true,
+      serverFileHasTitleDoc: true,
+      rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
+    });
+    const value = details.value as { apiHeader: string };
+    expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
+    expect(value.apiHeader).not.toContain("@param title Issue title\n");
+    expect(value.apiHeader).toContain("title: string;");
+    expect(githubCreate.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets agents inspect MCP declaration files before calling MCP tools", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const githubCreate = mcpTool({
+      name: "github__create_issue",
+      serverName: "github",
+      toolName: "create_issue",
+      parameters: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          title: { type: "string", description: "Issue title" },
+        },
+        required: ["owner", "repo", "title"],
+      },
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, githubCreate],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const files = await API.list("mcp");
+        const api = await API.read("mcp/github.d.ts");
+        const created = await MCP.github.createIssue({
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "From file docs",
+        });
+        return {
+          fileCount: files.files.length,
+          headerHasSignature: api.content.includes("function createIssue("),
+          usedApiCall: api.content.includes("function $api("),
+          created: JSON.parse(created.content[0].text),
+        };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      fileCount: 2,
+      headerHasSignature: true,
+      usedApiCall: true,
+      created: {
+        serverName: "github",
+        toolName: "create_issue",
+        input: {
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "From file docs",
+        },
+      },
+    });
+    expect(githubCreate.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("groups MCP resources and prompts under server namespaces", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const resourceRead = mcpTool({
+      name: "docs__resources_read",
+      serverName: "docs",
+      toolName: "resources_read",
+      operation: "resources_read",
+      parameters: {
+        type: "object",
+        properties: { uri: { type: "string" } },
+        required: ["uri"],
+      },
+    });
+    const promptGet = mcpTool({
+      name: "docs__prompts_get",
+      serverName: "docs",
+      toolName: "prompts_get",
+      operation: "prompts_get",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          arguments: { type: "object" },
+        },
+        required: ["name"],
+      },
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, resourceRead, promptGet],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const api = await MCP.docs.$api();
+        const resource = await MCP.docs.resources.read({ uri: "memo://one" });
+        const prompt = await MCP.docs.prompts.get({ name: "brief", arguments: { topic: "mcp" } });
+        return { header: api.header, resource: resource.details, prompt: prompt.details };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      resource: {
+        serverName: "docs",
+        toolName: "resources_read",
+        input: { uri: "memo://one" },
+      },
+      prompt: {
+        serverName: "docs",
+        toolName: "prompts_get",
+        input: { name: "brief", arguments: { topic: "mcp" } },
+      },
+      header: expect.stringContaining("namespace resources"),
+    });
+  });
+
+  it("renames MCP namespace identifiers that would be unsafe path segments", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const dangerous = mcpTool({
+      name: "constructor__prototype",
+      serverName: "constructor",
+      toolName: "prototype",
+      parameters: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+      },
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, dangerous],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: 'return (await MCP.constructor2.prototype2({ value: "safe" })).details;',
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      serverName: "constructor",
+      toolName: "prototype",
+      input: { value: "safe" },
+    });
+  });
+
   it("exposes registered namespace globals through the QuickJS bridge", async () => {
     registerTestNamespace({
       id: "tickets",
@@ -1080,7 +1403,7 @@ describe("Code Mode", () => {
         pluginToolWithExecute(
           "fake_slow",
           "Slow helper",
-          async () => await new Promise<never>(() => undefined),
+          async () => await new Promise<never>(() => {}),
         ),
       ],
       config,
@@ -1135,7 +1458,7 @@ describe("Code Mode", () => {
         pluginToolWithExecute(
           "fake_slow",
           "Slow helper",
-          async () => await new Promise<never>(() => undefined),
+          async () => await new Promise<never>(() => {}),
         ),
       ],
       config,
@@ -1429,6 +1752,58 @@ describe("Code Mode", () => {
     expect(String(details.error)).toContain("output limit exceeded");
     expect(details.code).toBe("output_limit_exceeded");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
+  it("enforces output limits before auto-draining namespace calls", async () => {
+    registerTestNamespace({
+      id: "tickets",
+      pluginId: "fake-code-mode",
+      globalName: "Tickets",
+      requiredToolNames: ["fake_list_issues"],
+      createScope: () => ({
+        list: createCodeModeNamespaceTool("fake_list_issues", ([input]) => input),
+      }),
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          maxOutputBytes: 1024,
+        },
+      },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const tools = createCodeModeTools(ctx);
+    const listIssues = pluginToolWithExecute("fake_list_issues", "List issues", async () =>
+      jsonResult({ ok: true }),
+    );
+    applyCodeModeCatalog({
+      tools: [...tools, listIssues],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await tools[0].execute("code-call-large-namespace", {
+        code: 'text("x".repeat(2048)); await Tickets.list({ state: "open" }); return 1;',
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
+    expect(listIssues.execute).not.toHaveBeenCalled();
   });
 
   it("preserves guest output when a run fails", async () => {

@@ -4,7 +4,8 @@ import type {
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech";
+} from "openclaw/plugin-sdk/speech-core";
+import { parseSpeechDirectiveNumberOverride } from "openclaw/plugin-sdk/speech-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -216,6 +217,13 @@ function renderOpenAITtsPersonaInstructions(req: {
   return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
+function isCustomOpenAITtsBaseUrl(baseUrl: string | undefined): boolean {
+  if (baseUrl !== undefined) {
+    return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
+  }
+  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL) !== DEFAULT_OPENAI_BASE_URL;
+}
+
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   handled: boolean;
   overrides?: SpeechProviderOverrides;
@@ -243,6 +251,20 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         return { handled: false };
       }
       return { handled: true, overrides: { model: ctx.value } };
+    case "speed":
+    case "openai_speed":
+    case "openaispeed": {
+      const customBaseUrl = isCustomOpenAITtsBaseUrl(baseUrl);
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "speed",
+        range: customBaseUrl ? {} : { min: 0.25, max: 4 },
+        warning: (value) =>
+          customBaseUrl
+            ? `invalid OpenAI-compatible speed "${value}"`
+            : `invalid OpenAI speed "${value}" (0.25-4.0)`,
+      });
+    }
     default:
       return { handled: false };
   }

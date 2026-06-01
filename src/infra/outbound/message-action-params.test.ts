@@ -41,6 +41,7 @@ describe("message action media helpers", () => {
           target: "#C12345678",
           message: "hi",
           media: "https://example.com/photo.png",
+          media_urls: ["https://example.com/extra.png"],
         },
       }),
     ).toStrictEqual([]);
@@ -232,6 +233,7 @@ describe("message action media helpers", () => {
           media: " /workspace/uploads/photo.png ",
           filePath: "",
           image: "file:///workspace/assets/event-cover.png",
+          media_urls: [" /workspace/extra/diagram.png ", ""],
           avatarPath: "/workspace/avatars/profile.png",
           avatar_url: "mxc://matrix.org/abc123def456",
           ignored: "/workspace/not-included.png",
@@ -243,6 +245,7 @@ describe("message action media helpers", () => {
       "file:///workspace/assets/event-cover.png",
       "/workspace/avatars/profile.png",
       "mxc://matrix.org/abc123def456",
+      "/workspace/extra/diagram.png",
     ]);
   });
 

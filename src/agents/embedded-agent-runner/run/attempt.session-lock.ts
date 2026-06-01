@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
-import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
@@ -377,7 +377,9 @@ function waitForSessionFileOwnerRelease(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
-    return Promise.reject(abortOwnerWaitReason(params.signal));
+    return Promise.reject(
+      toLintErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
+    );
   }
   return new Promise<void>((resolve, reject) => {
     const waiter: SessionFileOwnerWaiter = {
@@ -400,7 +402,7 @@ function waitForSessionFileOwnerRelease(params: {
     };
     waiter.reject = (error) => {
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
     if (params.timeoutMs !== undefined && Number.isFinite(params.timeoutMs)) {
       waiter.timer = setTimeout(
@@ -651,7 +653,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return { lock: await acquireLock(), owned: true };
     } catch (err) {
-      if (isSessionWriteLockTimeoutError(err)) {
+      if (isSessionWriteLockAcquireError(err)) {
         takeoverDetected = true;
       }
       throw err;
@@ -865,7 +867,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return await acquireLock();
     } catch (err) {
-      if (isSessionWriteLockTimeoutError(err)) {
+      if (isSessionWriteLockAcquireError(err)) {
         takeoverDetected = true;
         return undefined;
       }
@@ -1043,4 +1045,18 @@ export function installPromptSubmissionLockRelease(params: {
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

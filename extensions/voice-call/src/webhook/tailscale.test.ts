@@ -35,12 +35,17 @@ function createProc(params?: { code?: number; stdout?: string }) {
   };
   proc.stdout = new EventEmitter();
   proc.kill = vi.fn();
-  setTimeout(() => {
-    if (params?.stdout) {
-      proc.stdout.emit("data", Buffer.from(params.stdout));
+  const originalOn = proc.on.bind(proc);
+  proc.on = ((eventName: string | symbol, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(eventName, listener);
+    if (eventName === "close") {
+      if (params?.stdout) {
+        proc.stdout.emit("data", Buffer.from(params.stdout));
+      }
+      listener(params?.code ?? 0);
     }
-    proc.emit("close", params?.code ?? 0);
-  }, 0);
+    return result;
+  }) as typeof proc.on;
   return proc;
 }
 
@@ -51,14 +56,20 @@ function createErrorProc() {
   };
   proc.stdout = new EventEmitter();
   proc.kill = vi.fn();
-  setTimeout(() => {
-    proc.emit("error", Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" }));
-  }, 0);
+  const originalOn = proc.on.bind(proc);
+  proc.on = ((eventName: string | symbol, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(eventName, listener);
+    if (eventName === "error") {
+      listener(Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" }));
+    }
+    return result;
+  }) as typeof proc.on;
   return proc;
 }
 
 describe("voice-call tailscale helpers", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 

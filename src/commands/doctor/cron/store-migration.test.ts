@@ -142,6 +142,22 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyPayloadKind).toBeUndefined();
   });
 
+  it("rewrites legacy systemEvent message payloads to text", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "legacy-system-event-message",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "systemEvent", message: "tick" },
+      }),
+    ];
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.jobs[0]?.payload).toEqual({ kind: "systemEvent", text: "tick" });
+    expect(result.removedJobs).toEqual([]);
+  });
+
   it("removes unrepairable persisted schedule and payload shapes", () => {
     const jobs = [
       makeLegacyJob({

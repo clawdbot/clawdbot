@@ -13,6 +13,7 @@ export { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-l
 export { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 
+/** Resolves a cron delivery target through channel plugins with bootstrap allowed. */
 export async function resolveChannelTargetForDelivery(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -40,6 +41,7 @@ export async function resolveChannelTargetForDelivery(params: {
   }
 }
 
+/** Resolves the outbound session route used for cron delivery threading and mirrors. */
 export async function resolveOutboundSessionRouteForDelivery(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -58,6 +60,7 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
   return await resolveOutboundSessionRoute(params);
 }
 
+/** Returns whether a channel can canonicalize outbound cron delivery sessions. */
 export function channelCanResolveOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

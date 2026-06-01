@@ -118,3 +118,50 @@ export function visibleWidth(input: string): number {
     0,
   );
 }
+
+/**
+ * Truncate to at most `maxWidth` visible columns, dropping whole grapheme
+ * clusters that would overflow while preserving ANSI sequences verbatim
+ * (they have zero visible width). A single wide grapheme that cannot fit the
+ * remaining budget is dropped rather than emitted partially, so the result is
+ * always `visibleWidth(result) <= maxWidth`. Callers that need a fixed width
+ * pad the (possibly short) remainder themselves.
+ */
+export function truncateToVisibleWidth(input: string, maxWidth: number): string {
+  if (maxWidth <= 0) {
+    return "";
+  }
+  if (visibleWidth(input) <= maxWidth) {
+    return input;
+  }
+  const ansi = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
+  let out = "";
+  let used = 0;
+  let pos = 0;
+  // Once the visible budget is spent we stop emitting graphemes but keep
+  // copying ANSI sequences, so trailing resets/link-closes still land and the
+  // truncated cell does not bleed styling into the padding or border.
+  let budgetSpent = false;
+  const appendVisible = (segment: string): void => {
+    if (budgetSpent) {
+      return;
+    }
+    for (const grapheme of splitGraphemes(segment)) {
+      const width = graphemeWidth(grapheme);
+      if (used + width > maxWidth) {
+        budgetSpent = true;
+        return;
+      }
+      out += grapheme;
+      used += width;
+    }
+  };
+  let match: RegExpExecArray | null;
+  while ((match = ansi.exec(input)) !== null) {
+    appendVisible(input.slice(pos, match.index));
+    out += match[0];
+    pos = match.index + match[0].length;
+  }
+  appendVisible(input.slice(pos));
+  return out;
+}

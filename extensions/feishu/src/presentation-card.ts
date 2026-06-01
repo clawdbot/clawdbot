@@ -40,6 +40,16 @@ function resolveFeishuButtonUrl(button: MessagePresentationButton): string | und
   return button.url ?? button.webApp?.url ?? button.web_app?.url;
 }
 
+function resolveFeishuCommandButtonValue(button: MessagePresentationButton): string | undefined {
+  if (button.action?.type === "callback") {
+    return undefined;
+  }
+  if (button.action?.type === "command") {
+    return button.action.command;
+  }
+  return button.value;
+}
+
 function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   if (style === "primary" || style === "success") {
     return "primary";
@@ -69,13 +79,14 @@ function buildFeishuPayloadButton(
       behaviors.push({ type: "open_url", default_url: safeUrl });
     }
   }
-  if (button.value) {
+  const value = resolveFeishuCommandButtonValue(button);
+  if (value) {
     behaviors.push({
       type: "callback",
       value: createFeishuCardInteractionEnvelope({
         k: "quick",
         a: "feishu.payload.button",
-        q: button.value,
+        q: value,
       }),
     });
   }

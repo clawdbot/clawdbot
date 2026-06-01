@@ -15,6 +15,9 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
+/**
+ * Reactive settings facade for Android node preferences and encrypted gateway credentials.
+ */
 class SecurePrefs(
   context: Context,
   private val securePrefsOverride: SharedPreferences? = null,
@@ -42,9 +45,11 @@ class SecurePrefs(
 
   private val appContext = context.applicationContext
   private val json = Json { ignoreUnknownKeys = true }
+  // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
 
+  // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
   private val masterKey by lazy {
     MasterKey
       .Builder(appContext)
@@ -253,6 +258,7 @@ class SecurePrefs(
 
     val configuredPackages = loadNotificationForwardingPackages()
     val normalizedAppPackage = appPackageName.trim()
+    // Always block OpenClaw's own notifications in blocklist mode to prevent forwarding loops.
     val defaultBlockedPackages =
       if (normalizedAppPackage.isNotEmpty()) setOf(normalizedAppPackage) else emptySet()
 
@@ -311,6 +317,7 @@ class SecurePrefs(
         .toSet()
         .toList()
         .sorted()
+    // Persist deterministic JSON so settings diffs and state restoration are stable.
     val encoded = JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
     plainPrefs.edit { putString(notificationsForwardingPackagesKey, encoded) }
     _notificationForwardingPackages.value = sanitized.toSet()
@@ -355,6 +362,7 @@ class SecurePrefs(
     _notificationForwardingSessionKey.value = normalized
   }
 
+  /** Loads manual or instance-scoped gateway token material from encrypted preferences. */
   fun loadGatewayToken(): String? {
     val manual =
       _gatewayToken.value.trim().ifEmpty {
@@ -363,16 +371,19 @@ class SecurePrefs(
         stored
       }
     if (manual.isNotEmpty()) return manual
+    // Per-instance tokens keep reused Android installs from sharing stale gateway auth.
     val key = "gateway.token.${_instanceId.value}"
     val stored = securePrefs.getString(key, null)?.trim()
     return stored?.takeIf { it.isNotEmpty() }
   }
 
+  /** Saves the paired gateway token under the current Android instance id. */
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
     securePrefs.edit { putString(key, token.trim()) }
   }
 
+  /** Loads the bootstrap token used during gateway setup and device-token handoff. */
   fun loadGatewayBootstrapToken(): String? {
     val key = "gateway.bootstrapToken.${_instanceId.value}"
     val stored =
@@ -404,9 +415,11 @@ class SecurePrefs(
     securePrefs.edit { putString(key, password.trim()) }
   }
 
+  /** Clears manual/setup credentials without removing persisted role-specific device tokens. */
   fun clearGatewaySetupAuth() {
     val instanceId = _instanceId.value
     securePrefs.edit {
+      // Clear both current manual credentials and instance-scoped setup credentials after pairing/reset.
       remove("gateway.manual.token")
       remove("gateway.token.$instanceId")
       remove("gateway.bootstrapToken.$instanceId")
@@ -416,11 +429,13 @@ class SecurePrefs(
     _gatewayBootstrapToken.value = ""
   }
 
+  /** Loads the pinned gateway TLS fingerprint for a discovered/manual stable endpoint id. */
   fun loadGatewayTlsFingerprint(stableId: String): String? {
     val key = "gateway.tls.$stableId"
     return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
+  /** Persists the gateway TLS fingerprint captured through TOFU or explicit trust. */
   fun saveGatewayTlsFingerprint(
     stableId: String,
     fingerprint: String,
@@ -457,6 +472,7 @@ class SecurePrefs(
   private fun loadOrCreateInstanceId(): String {
     val existing = plainPrefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing
+    // Instance id is not secret; it scopes local credentials and survives display-name changes.
     val fresh = UUID.randomUUID().toString()
     plainPrefs.edit { putString("node.instanceId", fresh) }
     return fresh
@@ -466,6 +482,7 @@ class SecurePrefs(
     val existing = plainPrefs.getString(displayNameKey, null)?.trim().orEmpty()
     if (existing.isNotEmpty() && existing != "Android Node") return existing
 
+    // Replace the historical generic name with a device-specific default once.
     val candidate = DeviceNames.bestDefaultNodeName(context).trim()
     val resolved = candidate.ifEmpty { "Android Node" }
 
@@ -473,6 +490,7 @@ class SecurePrefs(
     return resolved
   }
 
+  /** Persists sanitized voice wake triggers and updates the reactive settings flow. */
   fun setWakeWords(words: List<String>) {
     val sanitized = WakeWords.sanitize(words, defaultWakeWords)
     val encoded =
@@ -521,7 +539,7 @@ class SecurePrefs(
     val raw = plainPrefs.getString(voiceWakeModeKey, null)
     val resolved = VoiceWakeMode.fromRawValue(raw)
 
-    // Default ON (foreground) when unset.
+    // Default ON (foreground) when unset, but keep "always" opt-in through explicit settings.
     if (raw.isNullOrBlank()) {
       plainPrefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
     }
@@ -533,6 +551,7 @@ class SecurePrefs(
     val raw = plainPrefs.getString(locationModeKey, "off")
     val resolved = LocationMode.fromRawValue(raw)
     if (raw?.trim()?.lowercase() == "always") {
+      // Migrate old "always" configs to the current while-using contract.
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved

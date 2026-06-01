@@ -1,3 +1,4 @@
+import { redactToolPayloadText } from "../logging/redact.js";
 import {
   binaryName,
   firstPositional,
@@ -426,14 +427,17 @@ function isGenericSummary(summary: string): boolean {
 }
 
 function compactRawCommand(raw: string, maxLength = 120): string {
-  const oneLine = raw
-    .replace(/\s*\n\s*/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  const oneLine = redactToolPayloadText(
+    raw
+      .replace(/\s*\n\s*/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim(),
+  );
   if (oneLine.length <= maxLength) {
     return oneLine;
   }
-  return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
+  const half = Math.floor((maxLength - 1) / 2);
+  return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
 }
 
 export type ToolDetailMode = "explain" | "raw";

@@ -15,7 +15,7 @@ type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
 >;
 
-type FlowRecord = ReturnType<BoundTaskFlow["createManaged"]>;
+type FlowRecord = NonNullable<ReturnType<BoundTaskFlow["tryCreateManaged"]>>;
 type MutationResult = ReturnType<BoundTaskFlow["setWaiting"]>;
 
 type LobsterApprovalWaitState = {
@@ -163,12 +163,21 @@ function buildEnvelopeError(envelope: Extract<LobsterEnvelope, { ok: false }>) {
 export async function runManagedLobsterFlow(
   params: RunManagedLobsterFlowParams,
 ): Promise<ManagedLobsterFlowResult> {
-  const flow = params.taskFlow.createManaged({
+  const createFlowParams = {
     controllerId: params.controllerId,
     goal: params.goal,
     currentStep: params.currentStep ?? "run_lobster",
     ...(params.stateJson !== undefined ? { stateJson: params.stateJson } : {}),
-  });
+  };
+  const flow = params.taskFlow.tryCreateManaged
+    ? params.taskFlow.tryCreateManaged(createFlowParams)
+    : params.taskFlow.createManaged(createFlowParams);
+  if (!flow) {
+    return {
+      ok: false,
+      error: new Error("TaskFlow persistence failed."),
+    };
+  }
 
   try {
     const envelope = await params.runner.run(params.runnerParams);

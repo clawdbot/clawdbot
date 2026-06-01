@@ -123,11 +123,16 @@ describe("ci workflow guards", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
+      workflow.indexOf("shrinkwrap)"),
+    );
+    const shrinkwrapGuards = workflow.slice(
+      workflow.indexOf("shrinkwrap)"),
       workflow.indexOf("prod-types)"),
     );
 
     expect(workflow).toContain("check-guards");
-    expect(preflightGuards).toContain("pnpm deps:shrinkwrap:check");
+    expect(workflow).toContain("check-shrinkwrap");
+    expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 

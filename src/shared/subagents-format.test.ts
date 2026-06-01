@@ -25,6 +25,11 @@ describe("shared/subagents-format", () => {
     expect(formatTokenShort(1_500)).toBe("1.5k");
     expect(formatTokenShort(10_000)).toBe("10k");
     expect(formatTokenShort(15_400)).toBe("15k");
+    // Rollover boundary: rounding to thousands must not emit an out-of-scheme
+    // "1000k" — it has to advance to the million branch.
+    expect(formatTokenShort(999_499)).toBe("999k");
+    expect(formatTokenShort(999_500)).toBe("1m");
+    expect(formatTokenShort(999_999)).toBe("1m");
     expect(formatTokenShort(1_000_000)).toBe("1m");
     expect(formatTokenShort(1_250_000)).toBe("1.3m");
   });

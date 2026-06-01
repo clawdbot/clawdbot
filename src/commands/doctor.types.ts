@@ -7,4 +7,6 @@ export type DoctorOptions = {
   force?: boolean;
   generateGatewayToken?: boolean;
   allowExec?: boolean;
+  postUpgrade?: boolean;
+  json?: boolean;
 };

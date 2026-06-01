@@ -725,7 +725,7 @@ export const listCredentialSets = internalQuery({
       );
     }
 
-    let rows: CredentialSetRecord[] = [];
+    let rows: CredentialSetRecord[];
     const kind = args.kind?.trim();
     if (kind) {
       if (normalizedStatus === "all") {

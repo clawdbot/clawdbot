@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { resolve, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COPILOT_DEFAULT_AGENT_ID,
   COPILOT_TOKEN_PROFILE_ERROR,

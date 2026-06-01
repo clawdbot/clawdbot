@@ -24,6 +24,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.Locale
 
+/**
+ * Gateway device command adapter for Android status, info, permission, and health snapshots.
+ */
 class DeviceHandler(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
@@ -31,6 +34,9 @@ class DeviceHandler(
   private val photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
 ) {
   companion object {
+    /**
+     * SMS is available only when the feature flag, telephony hardware, and at least one SMS permission align.
+     */
     internal fun hasAnySmsCapability(
       smsEnabled: Boolean,
       telephonyAvailable: Boolean,
@@ -38,6 +44,9 @@ class DeviceHandler(
       smsReadGranted: Boolean,
     ): Boolean = smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
 
+    /**
+     * Prompt only when Android can grant a missing SMS permission that this build can use.
+     */
     internal fun isSmsPromptable(
       smsEnabled: Boolean,
       telephonyAvailable: Boolean,
@@ -53,12 +62,16 @@ class DeviceHandler(
     val temperatureC: Double?,
   )
 
+  /** Returns battery, storage, network, and uptime state for device.status. */
   fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
 
+  /** Returns stable Android hardware, OS, app, and locale metadata for device.info. */
   fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
 
+  /** Returns permission and promptability state for Android capabilities exposed to the gateway. */
   fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
 
+  /** Returns coarse device health for memory, power, thermal, battery, and security patch state. */
   fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
   private fun statusPayloadJson(): String {
@@ -71,6 +84,7 @@ class DeviceHandler(
     val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
     val activeNetwork = connectivity?.activeNetwork
     val caps = activeNetwork?.let { connectivity.getNetworkCapabilities(it) }
+    // elapsedRealtime is monotonic device uptime, not wall-clock time.
     val uptimeSeconds = SystemClock.elapsedRealtime() / 1_000.0
 
     return buildJsonObject {
@@ -154,6 +168,7 @@ class DeviceHandler(
       if (!photosEnabled) {
         false
       } else if (Build.VERSION.SDK_INT >= 33) {
+        // Android 13 split media permissions; earlier versions use external storage.
         hasPermission(Manifest.permission.READ_MEDIA_IMAGES)
       } else {
         hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -161,6 +176,7 @@ class DeviceHandler(
     val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
     val notificationsGranted =
       if (Build.VERSION.SDK_INT >= 33) {
+        // POST_NOTIFICATIONS exists only on Android 13+.
         hasPermission(Manifest.permission.POST_NOTIFICATIONS)
       } else {
         true
@@ -295,6 +311,7 @@ class DeviceHandler(
       if (currentNowUa == null || currentNowUa == Long.MIN_VALUE) {
         null
       } else {
+        // BatteryManager reports microamps; expose milliamps in the gateway payload.
         currentNowUa.toDouble() / 1_000.0
       }
 
@@ -349,6 +366,7 @@ class DeviceHandler(
   }
 
   private fun readBatterySnapshot(): BatterySnapshot {
+    // ACTION_BATTERY_CHANGED is sticky; registerReceiver(null, ...) reads the last system snapshot.
     val intent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     val status =
       intent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
@@ -410,6 +428,7 @@ class DeviceHandler(
     if (caps == null) return "unsatisfied"
     return when {
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
+      // Internet without validation mirrors iOS "requiresConnection" for captive or unproven networks.
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
       else -> "unsatisfied"
     }
@@ -436,6 +455,7 @@ class DeviceHandler(
     if (totalBytes <= 0L) return if (lowMemory) "critical" else "unknown"
     if (lowMemory) return "critical"
     val freeRatio = availableBytes.toDouble() / totalBytes.toDouble()
+    // Thresholds intentionally mirror coarse OS health labels instead of exact memory pressure.
     return when {
       freeRatio <= 0.05 -> "critical"
       freeRatio <= 0.15 -> "high"

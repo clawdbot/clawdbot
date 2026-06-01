@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Session browser for recent and currently-live chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -81,6 +82,8 @@ internal fun SessionsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Sessions are cheap to refresh on entry; subsequent sorting/filtering is
+      // local to avoid re-querying while the user explores the list.
       viewModel.refreshChatSessions(limit = 200)
     }
   }
@@ -309,18 +312,21 @@ private enum class SessionFilter {
   Live,
 }
 
+/** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "No sessions yet"
     SessionFilter.Live -> "No live session"
   }
 
+/** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "Start a new conversation and it will show up here."
     SessionFilter.Live -> "Open Chat to start or resume the current session."
   }
 
+/** Formats session timestamps for compact mobile metadata. */
 private fun relativeSessionTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
@@ -331,4 +337,5 @@ private fun relativeSessionTime(updatedAtMs: Long): String {
   return "${hours / 24}d"
 }
 
+/** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"

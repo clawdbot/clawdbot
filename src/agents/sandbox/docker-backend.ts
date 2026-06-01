@@ -22,8 +22,6 @@ function resolveConfiguredDockerRuntimeImage(params: {
   switch (params.configLabelKind) {
     case "BrowserImage":
       return sandboxCfg.browser.image;
-    case "Image":
-    case undefined:
     default:
       return sandboxCfg.docker.image;
   }

@@ -197,7 +197,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const { ok, warn, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
-          const nodes = parseNodeList(result);
+          const nodesLocal = parseNodeList(result);
           const lastConnectedById =
             sinceMs !== undefined
               ? new Map(
@@ -206,7 +206,7 @@ export function registerNodesStatusCommands(nodes: Command) {
                   ),
                 )
               : null;
-          const filtered = nodes.filter((n) => {
+          const filtered = nodesLocal.filter((n) => {
             if (connectedOnly && !n.connected) {
               return false;
             }
@@ -236,7 +236,8 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           const pairedCount = filtered.filter((n) => Boolean(n.paired)).length;
           const connectedCount = filtered.filter((n) => Boolean(n.connected)).length;
-          const filteredLabel = filtered.length !== nodes.length ? ` (of ${nodes.length})` : "";
+          const filteredLabel =
+            filtered.length !== nodesLocal.length ? ` (of ${nodesLocal.length})` : "";
           defaultRuntime.log(
             `Known: ${filtered.length}${filteredLabel} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );

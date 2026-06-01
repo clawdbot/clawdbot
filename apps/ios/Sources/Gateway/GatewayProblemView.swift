@@ -111,7 +111,7 @@ struct GatewayProblemBanner: View {
         case .gateway:
             "Fix on gateway"
         case .iphone:
-            "Fix on iPhone"
+            "Fix on this device"
         case .both:
             "Check both"
         case .network:
@@ -227,9 +227,9 @@ struct GatewayProblemDetailsSheet: View {
         case .gateway:
             "Primary fix: gateway"
         case .iphone:
-            "Primary fix: this iPhone"
+            "Primary fix: this device"
         case .both:
-            "Primary fix: check both this iPhone and the gateway"
+            "Primary fix: check both this device and the gateway"
         case .network:
             "Primary fix: network or remote access"
         case .unknown:

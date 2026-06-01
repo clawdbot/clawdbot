@@ -332,23 +332,23 @@ export function resolveWebSearchDefinition(
         search: toolConfig as WebSearchConfig | undefined,
         sandboxed,
       }),
-    resolveAutoProviderId: ({ config, toolConfig, providers }) =>
+    resolveAutoProviderId: ({ config: configResult, toolConfig, providers: providersValue }) =>
       resolveWebSearchProviderId({
-        config,
+        config: configResult,
         agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
-        providers,
+        providers: providersValue,
       }),
-    resolveFallbackProviderId: ({ config, toolConfig, providers }) =>
+    resolveFallbackProviderId: ({ config: configValue, toolConfig, providers: providersLocal }) =>
       resolveWebSearchProviderId({
-        config,
+        config: configValue,
         agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
-        providers,
-      }) || providers[0]?.id,
-    createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
+        providers: providersLocal,
+      }) || providersLocal[0]?.id,
+    createTool: ({ provider, config: configLocal, toolConfig, runtimeMetadata }) =>
       provider.createTool({
-        config,
+        config: configLocal,
         agentDir: options?.agentDir,
         searchConfig: toolConfig,
         runtimeMetadata,

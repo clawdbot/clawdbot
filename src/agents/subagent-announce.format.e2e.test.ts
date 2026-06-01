@@ -181,8 +181,10 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
-  async (eventValue?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
-    undefined,
+  async (
+    _eventValue?: unknown,
+    _ctx?: unknown,
+  ): Promise<SubagentDeliveryTargetResult | undefined> => undefined,
 );
 let hasSubagentDeliveryTargetHook = false;
 const hookHasHooksMock = vi.fn<HookRunner["hasHooks"]>(

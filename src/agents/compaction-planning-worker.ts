@@ -55,7 +55,12 @@ function runCompactionPlanningWorker(params: {
   workerUrl?: URL;
 }): Promise<CompactionPlanningWorkerValue> {
   if (params.signal?.aborted) {
-    return Promise.reject(params.signal.reason ?? new Error("compaction planning aborted"));
+    return Promise.reject(
+      toLintErrorObject(
+        params.signal.reason ?? new Error("compaction planning aborted"),
+        "Non-Error rejection",
+      ),
+    );
   }
 
   const workerUrl = params.workerUrl ?? resolveCompactionPlanningWorkerUrl();
@@ -93,7 +98,16 @@ function runCompactionPlanningWorker(params: {
     );
 
     const abort = () => {
-      settle(() => reject(params.signal?.reason ?? new Error("compaction planning aborted")), true);
+      settle(
+        () =>
+          reject(
+            toLintErrorObject(
+              params.signal?.reason ?? new Error("compaction planning aborted"),
+              "Non-Error rejection",
+            ),
+          ),
+        true,
+      );
     };
 
     const settle = (finish: () => void, terminate: boolean) => {
@@ -198,9 +212,9 @@ export async function buildSummaryChunksWithWorker(params: {
       chunks: buildSummaryChunks(params),
     }),
     isExpected: (
-      value,
-    ): value is Extract<CompactionPlanningWorkerValue, { kind: "summaryChunks" }> =>
-      value.kind === "summaryChunks",
+      valueCandidate,
+    ): valueCandidate is Extract<CompactionPlanningWorkerValue, { kind: "summaryChunks" }> =>
+      valueCandidate.kind === "summaryChunks",
   });
   return value.chunks;
 }
@@ -226,9 +240,9 @@ export async function buildOversizedFallbackPlanWithWorker(params: {
       ...buildOversizedFallbackPlan(params),
     }),
     isExpected: (
-      value,
-    ): value is Extract<CompactionPlanningWorkerValue, { kind: "oversizedFallback" }> =>
-      value.kind === "oversizedFallback",
+      valueEntry,
+    ): valueEntry is Extract<CompactionPlanningWorkerValue, { kind: "oversizedFallback" }> =>
+      valueEntry.kind === "oversizedFallback",
   });
   return {
     smallMessages: value.smallMessages,
@@ -260,8 +274,10 @@ export async function buildStageSplitPlanWithWorker(params: {
       kind: "stageSplit" as const,
       ...buildStageSplitPlan(params),
     }),
-    isExpected: (value): value is Extract<CompactionPlanningWorkerValue, { kind: "stageSplit" }> =>
-      value.kind === "stageSplit",
+    isExpected: (
+      valueResult,
+    ): valueResult is Extract<CompactionPlanningWorkerValue, { kind: "stageSplit" }> =>
+      valueResult.kind === "stageSplit",
   });
   return value.mode === "split" ? { mode: "split", chunks: value.chunks } : { mode: "single" };
 }
@@ -296,9 +312,9 @@ export async function buildHistoryPrunePlanWithWorker(params: {
       ...buildHistoryPrunePlan(params),
     }),
     isExpected: (
-      value,
-    ): value is Extract<CompactionPlanningWorkerValue, { kind: "historyPrune" }> =>
-      value.kind === "historyPrune",
+      valueValue,
+    ): valueValue is Extract<CompactionPlanningWorkerValue, { kind: "historyPrune" }> =>
+      valueValue.kind === "historyPrune",
   });
   return {
     summarizableTokens: value.summarizableTokens,
@@ -329,9 +345,9 @@ export async function computeAdaptiveChunkRatioWithWorker(params: {
       ratio: computeAdaptiveChunkRatio(params.messages, params.contextWindow),
     }),
     isExpected: (
-      value,
-    ): value is Extract<CompactionPlanningWorkerValue, { kind: "adaptiveChunkRatio" }> =>
-      value.kind === "adaptiveChunkRatio",
+      valueLocal,
+    ): valueLocal is Extract<CompactionPlanningWorkerValue, { kind: "adaptiveChunkRatio" }> =>
+      valueLocal.kind === "adaptiveChunkRatio",
   });
   return value.ratio;
 }
@@ -341,3 +357,17 @@ export const compactionPlanningWorkerTesting = {
   runCompactionPlanningWorker,
   CompactionPlanningWorkerError,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

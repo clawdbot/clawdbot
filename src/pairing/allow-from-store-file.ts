@@ -233,7 +233,7 @@ export async function readAllowFromFileWithExists(params: {
     return { entries: [], exists: false };
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = await fs.promises.readFile(params.filePath, "utf8");
   } catch (err) {
@@ -244,7 +244,7 @@ export async function readAllowFromFileWithExists(params: {
     throw err;
   }
 
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = params.normalizeStore(JSON.parse(raw) as AllowFromStore);
   } catch {
@@ -290,7 +290,7 @@ export function readAllowFromFileSyncWithExists(params: {
     return { entries: [], exists: false };
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = fs.readFileSync(params.filePath, "utf8");
   } catch (err) {

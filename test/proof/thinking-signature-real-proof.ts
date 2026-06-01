@@ -251,7 +251,7 @@ async function runProof(): Promise<{ passed: number; failed: number }> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY!,
+      "x-api-key": ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
@@ -288,7 +288,7 @@ async function runProof(): Promise<{ passed: number; failed: number }> {
 
   const signatureDeltas: string[] = [];
   let thinkingText = "";
-  let allEvents: string[] = [];
+  const allEvents: string[] = [];
 
   // Simulate transport stream behavior (BEFORE fix = overwrite, AFTER fix = append)
   let simulatedOverwrite = "";
@@ -296,16 +296,22 @@ async function runProof(): Promise<{ passed: number; failed: number }> {
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      break;
+    }
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() || "";
 
     for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
+      if (!line.startsWith("data: ")) {
+        continue;
+      }
       const data = line.slice(6).trim();
-      if (data === "[DONE]") continue;
+      if (data === "[DONE]") {
+        continue;
+      }
 
       try {
         const event = JSON.parse(data);
@@ -414,7 +420,7 @@ async function runProof(): Promise<{ passed: number; failed: number }> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY!,
+      "x-api-key": ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
@@ -475,7 +481,7 @@ async function runProof(): Promise<{ passed: number; failed: number }> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY!,
+        "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -558,7 +564,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("Proof script error:", err);
   process.exit(1);
 });

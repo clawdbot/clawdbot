@@ -4,11 +4,11 @@ profile: openclaw-check
 provider: azure
 class: standard
 capacity:
-  market: spot
+  market: on-demand
   strategy: most-available
-  # Fail closed instead of silently falling back to on-demand while the
-  # Azure-backed billing account is the default runner path.
-  fallback: spot-only
+  # The Azure-backed billing account carries the OpenClaw runner credits; use
+  # explicit on-demand capacity instead of low-priority spot, whose regional
+  # quota is too small for broad maintainer proof or parallel Crabbox lanes.
   hints: true
 actions:
   workflow: .github/workflows/crabbox-hydrate.yml
@@ -28,11 +28,30 @@ blacksmith:
   workflow: .github/workflows/ci-check-testbox.yml
   job: check
   ref: main
+cache:
+  pnpm: true
+  npm: true
+  git: true
+  volumes:
+    - name: pnpm
+      key: openclaw-linux-node24-pnpm
+      path: /var/cache/crabbox/pnpm
+      sizeGB: 80
+      required: false
+    - name: npm
+      key: openclaw-linux-node24-npm
+      path: /var/cache/crabbox/npm
+      sizeGB: 40
+      required: false
 aws:
   # AWS-specific overrides still pin direct `--provider aws` runs without
   # leaking AWS region names into the Azure default capacity fallback list.
   region: eu-west-1
   rootGB: 400
+azure:
+  # The OpenClaw Azure subscription is reliable in eastus2; eastus rejects the
+  # same SKUs and can stall provisioning.
+  location: eastus2
 sync:
   delete: true
   checksum: false
@@ -52,4 +71,64 @@ env:
     - OPENCLAW_*
 ssh:
   user: crabbox
-  port: "2222"
+  # Azure coordinator leases expose SSH on 22. The run wrapper can fall back
+  # from 2222, but `crabbox job run` hydrates via the configured port directly.
+  port: "22"
+jobs:
+  prewarm:
+    provider: azure
+    target: linux
+    class: standard
+    type: Standard_D4ads_v6
+    market: on-demand
+    idleTimeout: 90m
+    hydrate:
+      actions: true
+      waitTimeout: 20m
+    actions:
+      workflow: .github/workflows/crabbox-hydrate.yml
+      job: hydrate
+      ref: main
+    noSync: true
+    shell: true
+    command: "true"
+    stop: never
+  changed:
+    provider: azure
+    target: linux
+    class: standard
+    type: Standard_D4ads_v6
+    market: on-demand
+    idleTimeout: 90m
+    hydrate:
+      actions: true
+      waitTimeout: 20m
+    actions:
+      workflow: .github/workflows/crabbox-hydrate.yml
+      job: hydrate
+      ref: main
+    shell: true
+    command: |
+      set -euo pipefail
+      if ! git status --short >/dev/null 2>&1; then
+        rm -rf .git
+        git init -q
+        git add -A
+        if ! git diff --cached --quiet; then
+          git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-check-tree
+        fi
+      fi
+      env CI=1 corepack pnpm check --timed
+    stop: always
+  testbox-changed:
+    provider: blacksmith-testbox
+    target: linux
+    idleTimeout: 90m
+    hydrate:
+      actions: false
+    actions:
+      workflow: .github/workflows/ci-check-testbox.yml
+      job: check
+      ref: main
+    command: env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed
+    stop: always

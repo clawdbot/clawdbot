@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -136,6 +137,55 @@ describe("runDoctorLintCli", () => {
           },
         ],
       });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("reports disabled Codex plugin routes through doctor lint", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/codex-session-routes"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 1,
+        findings: [
+          {
+            checkId: "core/doctor/codex-session-routes",
+            severity: "warning",
+            path: "agents.defaults.model.primary",
+            target: "openai/gpt-5.5",
+          },
+        ],
+      });
+      expect(payload.findings[0].message).toContain("Codex plugin is disabled by config");
+      expect(payload.findings[0].fixHint).toContain("openclaw doctor --fix");
     } finally {
       stdout.mockRestore();
     }

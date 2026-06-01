@@ -106,7 +106,7 @@ describe("OpenAI plugin manifest", () => {
   });
 
   it("routes setup through the OpenAI setup runtime", () => {
-    expect(manifest.legacyPluginIds).toEqual(["openai-codex"]);
+    expect(manifest.legacyPluginIds).toBeUndefined();
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
     expect(manifest.providerAuthAliases).toBeUndefined();
   });

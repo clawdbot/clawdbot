@@ -264,7 +264,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
     isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),
     listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url, opts) => getDefaultContext().openTab(url, opts),
+    openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
     labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
     focusTab: (targetId) => getDefaultContext().focusTab(targetId),
     closeTab: (targetId) => getDefaultContext().closeTab(targetId),

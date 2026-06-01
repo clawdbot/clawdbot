@@ -1,3 +1,4 @@
+/** Splits items into fixed-size chunks, preserving order and returning one row for non-positive sizes. */
 export function chunkItems<T>(items: readonly T[], size: number): T[][] {
   if (size <= 0) {
     return [Array.from(items)];

@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** Renders chat history newest-first while preserving stable scroll behavior during streaming. */
 @Composable
 fun ChatMessageListCard(
   messages: List<ChatMessage>,

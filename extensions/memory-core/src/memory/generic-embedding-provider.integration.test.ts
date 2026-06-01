@@ -43,33 +43,35 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 
 async function startEmbeddingServer(): Promise<TestServer> {
   const requests: CapturedRequest[] = [];
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    try {
-      const body = await readJsonBody(req);
-      requests.push({
-        method: req.method,
-        url: req.url,
-        headers: req.headers,
-        body,
-      });
-      const input = body.input;
-      const texts = Array.isArray(input) ? input : [input];
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          object: "list",
-          data: texts.map((text, index) => ({
-            object: "embedding",
-            embedding: [String(text).length, index + 0.5, 3],
-            index,
-          })),
-          model: body.model,
-        }),
-      );
-    } catch (error) {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
-    }
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      try {
+        const body = await readJsonBody(req);
+        requests.push({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body,
+        });
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            object: "list",
+            data: texts.map((text, index) => ({
+              object: "embedding",
+              embedding: [String(text).length, index + 0.5, 3],
+              index,
+            })),
+            model: body.model,
+          }),
+        );
+      } catch (error) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      }
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {

@@ -147,7 +147,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   if (!timer) {
     timer = setTimer(() => {
       timer = null;
-      void drainCommitmentExtractionQueue().catch((err) => {
+      void drainCommitmentExtractionQueue().catch((err: unknown) => {
         log.warn("commitment extraction failed", { error: String(err) });
       });
     }, resolved.extraction.debounceMs);

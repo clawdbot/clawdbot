@@ -7,6 +7,7 @@ export const PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
+/** Return whether any supported proxy environment variable is non-blank. */
 export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   for (const key of PROXY_ENV_KEYS) {
     const value = env[key];
@@ -25,8 +26,11 @@ function normalizeProxyEnvValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/** Explicit proxy option shape accepted by undici EnvHttpProxyAgent. */
 export type EnvHttpProxyAgentProxyOptions = {
+  /** Proxy URL used for HTTP requests. */
   httpProxy?: string;
+  /** Proxy URL used for HTTPS requests. */
   httpsProxy?: string;
 };
 
@@ -52,6 +56,7 @@ export function resolveEnvHttpProxyUrl(
   return httpProxy ?? undefined;
 }
 
+/** Return whether EnvHttpProxyAgent-style HTTP/S proxy resolution finds a proxy URL. */
 export function hasEnvHttpProxyConfigured(
   protocol: "http" | "https" = "https",
   env: NodeJS.ProcessEnv = process.env,
@@ -86,10 +91,12 @@ export function resolveEnvHttpProxyAgentOptions(
   return options.httpProxy || options.httpsProxy ? options : undefined;
 }
 
+/** Return whether explicit EnvHttpProxyAgent options can be built from the environment. */
 export function hasEnvHttpProxyAgentConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveEnvHttpProxyAgentOptions(env) !== undefined;
 }
 
+/** Return whether a target URL should use configured HTTP/S env proxy variables. */
 export function shouldUseEnvHttpProxyForUrl(
   targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,

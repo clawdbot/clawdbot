@@ -553,3 +553,23 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     "agent:local:main",
   ]);
 });
+
+test("sessions.list hides phantom agent store placeholder rows", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      sessions: {},
+      main: {
+        sessionId: "sess-main",
+        updatedAt: 20,
+      },
+    },
+  });
+
+  const listed = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { includeGlobal: false, includeUnknown: false },
+  );
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
+});

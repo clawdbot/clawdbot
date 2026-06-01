@@ -123,6 +123,7 @@ jobs:
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             mkdir -p "$PNPM_CONFIG_MODULES_DIR"
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+            export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
           fi
           pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
@@ -357,8 +358,8 @@ jobs:
           $env:COREPACK_HOME = Join-Path $env:XDG_CACHE_HOME "corepack"
           $env:PNPM_HOME = Join-Path $cacheRoot "pnpm-home"
           $env:PNPM_CONFIG_STORE_DIR = Join-Path $cacheRoot "openclaw-pnpm-store"
-          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"
-          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $workspace "node_modules\.pnpm"
+          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $cacheRoot "openclaw-pnpm-node-modules"
+          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $env:PNPM_CONFIG_MODULES_DIR ".pnpm"
           $env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"
           $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"
           $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
@@ -430,6 +431,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+          $workspaceNodeModules = Join-Path $workspace "node_modules"
+          if (Test-Path $workspaceNodeModules) {
+            $workspaceNodeModulesItem = Get-Item $workspaceNodeModules -Force
+            if (($workspaceNodeModulesItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+              $nodeModulesChildren = @(Get-ChildItem -LiteralPath $workspaceNodeModules -Force)
+              $hasOnlyPnpmWorkspaceState = $nodeModulesChildren.Count -eq 1 -and $nodeModulesChildren[0].Name -eq ".pnpm-workspace-state-v1.json"
+              if ($nodeModulesChildren.Count -ne 0 -and -not $hasOnlyPnpmWorkspaceState) {
+                throw "workspace node_modules exists and is not a link: $workspaceNodeModules"
+              }
+              foreach ($nodeModulesChild in $nodeModulesChildren) {
+                Remove-Item -LiteralPath $nodeModulesChild.FullName -Force
+              }
+              Remove-Item -LiteralPath $workspaceNodeModules -Force
+              New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+            }
+          } else {
+            New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+          }
+
           $corepackShimDir = Join-Path $nodeBin "node_modules\corepack\shims"
           if (Test-Path $corepackShimDir) {
             $env:PNPM_HOME = $corepackShimDir

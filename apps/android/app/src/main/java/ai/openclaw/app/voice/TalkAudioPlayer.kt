@@ -13,11 +13,14 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 internal interface TalkAudioPlaying {
+  /** Plays one assistant reply, replacing any active playback. */
   suspend fun play(audio: TalkSpeakAudio)
 
+  /** Cancels any active assistant reply playback. */
   fun stop()
 }
 
+/** Android playback adapter for remote talk.speak audio payloads. */
 internal class TalkAudioPlayer(
   private val context: Context,
 ) : TalkAudioPlaying {
@@ -38,6 +41,7 @@ internal class TalkAudioPlayer(
     }
   }
 
+  /** Resolves playback mode from the metadata carried with a talk.speak response. */
   internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode =
     resolvePlaybackMode(
       outputFormat = audio.outputFormat,
@@ -46,6 +50,7 @@ internal class TalkAudioPlayer(
     )
 
   companion object {
+    /** Chooses PCM streaming or MediaPlayer-backed playback from provider metadata. */
     internal fun resolvePlaybackMode(
       outputFormat: String?,
       mimeType: String?,
@@ -173,6 +178,8 @@ internal class TalkAudioPlayer(
     bytes: ByteArray,
     fileExtension: String,
   ) {
+    // MediaPlayer needs a seekable data source for several compressed formats,
+    // so cache the response bytes briefly instead of streaming from memory.
     val tempFile =
       withContext(Dispatchers.IO) {
         File.createTempFile("talk-audio-", fileExtension, context.cacheDir).apply {
@@ -246,10 +253,12 @@ internal class TalkAudioPlayer(
 }
 
 internal sealed interface TalkPlaybackMode {
+  /** Raw signed 16-bit mono PCM returned by providers that support low-latency output. */
   data class Pcm(
     val sampleRate: Int,
   ) : TalkPlaybackMode
 
+  /** Compressed audio that Android decodes through MediaPlayer. */
   data class Compressed(
     val fileExtension: String,
   ) : TalkPlaybackMode

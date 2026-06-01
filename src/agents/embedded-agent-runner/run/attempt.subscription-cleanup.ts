@@ -26,7 +26,7 @@ async function waitForEmbeddedAbortSettle(params: {
   const outcome = await Promise.race([
     params.promise
       .then(() => "settled" as const)
-      .catch((err) => {
+      .catch((err: unknown) => {
         log.warn(
           `embedded abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
@@ -123,6 +123,20 @@ export async function cleanupEmbeddedAttemptResources(params: {
   }
 
   if (sessionLockReleaseError) {
-    throw sessionLockReleaseError;
+    throw toLintErrorObject(sessionLockReleaseError, "Non-Error thrown");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -99,12 +99,9 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
             <label class="field chat-controls__session chat-controls__session-picker">
               <select data-chat-session-select="true" aria-label="Chat session"><option>Daily planning</option></select>
             </label>
-            <label class="field chat-controls__session chat-controls__model">
-              <select data-chat-model-select="true" aria-label="Chat model"><option>Default (gpt-5)</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__thinking-select">
-              <select class="chat-controls__thinking-select-full" data-chat-thinking-select="true" aria-label="Chat thinking level"><option>Default (high)</option></select>
-            </label>
+            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
+            </details>
           </div>
           <div class="chat-controls__thinking">
             <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
@@ -130,12 +127,9 @@ function chatHeaderControlsHtml(hidden = false) {
             <label class="field chat-controls__session chat-controls__session-picker">
               <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
             </label>
-            <label class="field chat-controls__session chat-controls__model">
-              <select data-chat-model-select="true" aria-label="Chat model"><option>gpt-5.5</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__thinking-select">
-              <select class="chat-controls__thinking-select-full" data-chat-thinking-select="true" aria-label="Chat thinking level"><option>Default (high)</option></select>
-            </label>
+            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
+            </details>
           </div>
         </div>
         <div class="page-meta">
@@ -144,7 +138,6 @@ function chatHeaderControlsHtml(hidden = false) {
             <span class="chat-controls__separator">|</span>
             <button class="btn btn--sm btn--icon active" aria-label="Toggle assistant thinking">${iconSvg()}</button>
             <button class="btn btn--sm btn--icon active" aria-label="Toggle tool calls">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon" aria-label="Toggle focus mode">${iconSvg()}</button>
             <button class="btn btn--sm btn--icon active" aria-label="Show cron sessions">${iconSvg()}</button>
           </div>
         </div>
@@ -320,7 +313,6 @@ describeBrowserLayout("chat responsive browser layout", () => {
           session: rectFor('[data-chat-session-select="true"]'),
           agent: rectFor('[data-chat-agent-filter="true"]'),
           model: rectFor('[data-chat-model-select="true"]'),
-          thinking: rectFor('[data-chat-thinking-select="true"]'),
           action: rectFor(".page-meta .btn--icon"),
         };
       });
@@ -328,10 +320,9 @@ describeBrowserLayout("chat responsive browser layout", () => {
         controls.session?.y,
         controls.agent?.y,
         controls.model?.y,
-        controls.thinking?.y,
         controls.action?.y,
       ].filter((value): value is number => typeof value === "number");
-      expect(rowY.length).toBe(5);
+      expect(rowY.length).toBe(4);
       expect(Math.max(...rowY) - Math.min(...rowY)).toBeLessThanOrEqual(4);
       const agent = expectControlRect(controls.agent, "agent");
       const session = expectControlRect(controls.session, "session");
@@ -460,7 +451,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         await expectNoHorizontalOverflow(page);
         const mobileControls = await page.evaluate(() => {
           const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLSelectElement | null;
+            const node = document.querySelector(selector) as HTMLElement | null;
             if (!node) {
               return null;
             }
@@ -470,26 +461,27 @@ describeBrowserLayout("chat responsive browser layout", () => {
               y: rect.y,
               width: rect.width,
               height: rect.height,
-              text: node.options[node.selectedIndex]?.textContent?.trim() ?? "",
+              text: node.textContent?.trim() ?? "",
               display: getComputedStyle(node).display,
             };
           };
           return {
             agent: rectFor('[data-chat-agent-filter="true"]'),
             session: rectFor('[data-chat-session-select="true"]'),
-            thinkingFull: rectFor('[data-chat-thinking-select="true"]'),
+            model: rectFor('[data-chat-model-select="true"]'),
             compactCount: document.querySelectorAll('[data-chat-thinking-select-compact="true"]')
               .length,
           };
         });
         const agent = expectControlRect(mobileControls.agent, "agent");
         const session = expectControlRect(mobileControls.session, "session");
+        const model = expectControlRect(mobileControls.model, "model");
         expect(session.y).toBe(agent.y);
         expect(agent.x).toBeLessThan(session.x);
         expect(session.width / agent.width).toBeGreaterThan(1.25);
         expect(session.width / agent.width).toBeLessThan(1.55);
-        expect(mobileControls.thinkingFull?.display).not.toBe("none");
-        expect(mobileControls.thinkingFull?.text).toBe("Default (high)");
+        expect(model.display).not.toBe("none");
+        expect(model.text).toBe("gpt-5 · High");
         expect(mobileControls.compactCount).toBe(0);
 
         const sizes = await page
@@ -539,10 +531,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(await page.locator('[data-chat-agent-filter="true"]').count()).toBe(0);
       const session = await getBoundingBox(page, '[data-chat-session-select="true"]');
       const model = await getBoundingBox(page, '[data-chat-model-select="true"]');
-      const thinking = await getBoundingBox(page, '[data-chat-thinking-select="true"]');
-      expect(thinking.x).toBeGreaterThan(session.x);
       expect(model.y).toBeGreaterThan(session.y);
-      expect(model.width).toBeGreaterThan(session.width);
+      expect(model.width).toBe(session.width);
     } finally {
       await page.close();
     }

@@ -1,5 +1,5 @@
-import { canonicalizeBase64 } from "./base64.js";
-import { detectMime } from "./mime.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { detectMime } from "@openclaw/media-core/mime";
 
 export async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
   const trimmed = base64.trim();

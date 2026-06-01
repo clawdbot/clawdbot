@@ -1,3 +1,4 @@
+/** Markdown fenced-code block span with the opener data needed to reopen it. */
 export type FenceSpan = {
   start: number;
   end: number;
@@ -6,6 +7,7 @@ export type FenceSpan = {
   indent: string;
 };
 
+/** Streaming fence scanner state carried across partial markdown chunks. */
 export type FenceScanState = {
   atLineStart?: boolean;
   open?: {
@@ -17,6 +19,7 @@ export type FenceScanState = {
   };
 };
 
+/** Scans fenced-code spans incrementally so chunking can carry an open fence forward. */
 export function scanFenceSpans(
   buffer: string,
   state?: FenceScanState,
@@ -56,6 +59,8 @@ export function scanFenceSpans(
           indent,
         };
       } else if (open.markerChar === markerChar && markerLen >= open.markerLen) {
+        // CommonMark allows a closing fence to be longer than the opener, but
+        // it must use the same marker character to avoid crossing fence kinds.
         const end = lineEnd;
         spans.push({
           start: open.start,
@@ -102,10 +107,12 @@ export function scanFenceSpans(
   return { spans, state: nextState };
 }
 
+/** Parses all fenced-code spans in a complete markdown buffer. */
 export function parseFenceSpans(buffer: string): FenceSpan[] {
   return scanFenceSpans(buffer).spans;
 }
 
+/** Looks up the fence containing an offset; spans must be sorted by start offset. */
 export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | undefined {
   let low = 0;
   let high = spans.length - 1;
@@ -130,6 +137,7 @@ export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | 
   return undefined;
 }
 
+/** True when a chunk boundary would not split a fenced-code block. */
 export function isSafeFenceBreak(spans: FenceSpan[], index: number): boolean {
   return !findFenceSpanAt(spans, index);
 }

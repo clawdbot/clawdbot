@@ -143,9 +143,43 @@ describe("doctor session transcript repair", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const [message, title] = requireFirstMockCall(note, "doctor note") as [string, string];
     expect(title).toBe("Session transcripts");
-    expect(message).toContain("duplicated prompt-rewrite branches");
+    expect(message).toContain("legacy state");
     expect(message).toContain('Run "openclaw doctor --fix"');
     expect(countNonEmptyLines(await fs.readFile(filePath, "utf-8"))).toBe(3);
+  });
+
+  it("rewrites legacy OpenAI Codex transcript metadata only during doctor repair", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "legacy-assistant",
+        parentId: null,
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
+    ]);
+
+    const preview = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
+
+    expect(preview.broken).toBe(true);
+    expect(preview.repaired).toBe(false);
+    expect(preview.legacyOpenAICodexEntries).toBe(1);
+    expect(await fs.readFile(filePath, "utf-8")).toContain("openai-codex");
+
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+
+    expect(result.broken).toBe(true);
+    expect(result.repaired).toBe(true);
+    expect(result.legacyOpenAICodexEntries).toBe(1);
+    const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
+    const assistant = JSON.parse(lines[1]);
+    expect(assistant.message.provider).toBe("openai");
+    expect(assistant.message.api).toBe("openai-chatgpt-responses");
   });
 
   it("ignores ordinary branch history without internal runtime context", async () => {

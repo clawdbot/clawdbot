@@ -137,7 +137,7 @@ async function diagnoseCdpHealthCommand(
       if (settled) {
         return;
       }
-      let parsed: { id?: unknown; result?: unknown } | null = null;
+      let parsed: { id?: unknown; result?: unknown } | null;
       try {
         parsed = JSON.parse(rawDataToString(raw)) as { id?: unknown; result?: unknown };
       } catch {

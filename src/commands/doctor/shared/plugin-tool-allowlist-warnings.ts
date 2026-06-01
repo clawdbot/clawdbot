@@ -546,7 +546,10 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
         !sandboxPolicyAllowsAllMcpServers(policy, serverNames) &&
         !sandboxPolicyIntentionallyDeniesAllMcpServers(policy, serverNames),
     )
-    .filter(({ nonSandboxToolPolicyBlocksMcp }) => !nonSandboxToolPolicyBlocksMcp)
+    .filter(
+      ({ nonSandboxToolPolicyBlocksMcp: nonSandboxToolPolicyBlocksMcpLocal }) =>
+        !nonSandboxToolPolicyBlocksMcpLocal,
+    )
     .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {
     return [];

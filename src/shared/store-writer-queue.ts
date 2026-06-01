@@ -1,15 +1,18 @@
+/** Pending exclusive store write plus the promise hooks for its caller. */
 export type StoreWriterTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
 };
 
+/** Per-store-path FIFO queue that serializes file writes within one process. */
 export type StoreWriterQueue = {
   running: boolean;
   pending: StoreWriterTask[];
   drainPromise: Promise<void> | null;
 };
 
+/** Store writer queues keyed by the canonical store path. */
 export type StoreWriterQueues = Map<string, StoreWriterQueue>;
 
 function getOrCreateStoreWriterQueue(
@@ -63,6 +66,8 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
       if (queue.pending.length === 0) {
         queues.delete(storePath);
       } else {
+        // Late enqueues after the loop drained run in a fresh microtask so this
+        // drainPromise can settle before the next writer batch starts.
         queueMicrotask(() => {
           void drainStoreWriterQueue(queues, storePath);
         });
@@ -72,6 +77,7 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
   await queue.drainPromise;
 }
 
+/** Runs one store write after prior writes for the same store path have finished. */
 export async function runQueuedStoreWrite<T>(params: {
   queues: StoreWriterQueues;
   storePath: string;
@@ -97,6 +103,7 @@ export async function runQueuedStoreWrite<T>(params: {
   });
 }
 
+/** Rejects pending queued writes and clears queue state for test cleanup. */
 export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message: string): void {
   for (const queue of queues.values()) {
     for (const task of queue.pending) {
@@ -106,6 +113,7 @@ export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message
   queues.clear();
 }
 
+/** Waits for active drains to settle while rejecting still-pending test writes. */
 export async function drainStoreWriterQueuesForTest(
   queues: StoreWriterQueues,
   message: string,

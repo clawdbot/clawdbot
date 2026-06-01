@@ -25,8 +25,12 @@ export type MentionTargets = {
   self: WhatsAppIdentity;
 };
 
-export function buildMentionConfig(cfg: OpenClawConfig, agentId?: string): MentionConfig {
-  const mentionRegexes = buildMentionRegexes(cfg, agentId);
+export function buildMentionConfig(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  options?: Parameters<typeof buildMentionRegexes>[2],
+): MentionConfig {
+  const mentionRegexes = buildMentionRegexes(cfg, agentId, options);
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 

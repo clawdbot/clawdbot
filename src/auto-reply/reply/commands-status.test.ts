@@ -830,6 +830,54 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("shows DeepSeek balance summaries in /status output", async () => {
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          windows: [],
+          summary: "Balance ¥42.50",
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-deepseek-usage",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: deepseek/deepseek-v4-pro");
+    expect(normalized).toContain("Usage: Balance ¥42.50");
+    const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+      ([params]) => params?.providers?.includes("deepseek"),
+    );
+    if (!providerUsageCall) {
+      throw new Error("expected provider usage summary call for deepseek");
+    }
+    expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
+  });
+
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {

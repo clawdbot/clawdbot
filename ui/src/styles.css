@@ -10,6 +10,7 @@
 @import "./styles/usage.css";
 @import "./styles/dreams.css";
 @import "./styles/workboard.css";
+@import "./styles/skill-workshop.css";
 @import "@create-markdown/preview/themes/system.css";
 
 .cm-preview {

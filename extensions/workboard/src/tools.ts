@@ -977,7 +977,7 @@ export function createWorkboardTools(params: {
       name: "workboard_dispatch",
       label: "Workboard Dispatch",
       description:
-        "Nudge Workboard dependency promotion and reclaim expired claims or timed-out runs.",
+        "Run one Workboard dispatcher pass: promote unblocked cards, reclaim expired claims, and block timed-out runs.",
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => {
         const result = await store.dispatch();

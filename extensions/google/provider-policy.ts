@@ -82,12 +82,16 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
 }
 
 export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
+  provider?: string;
   api: TApi;
   baseUrl?: string;
-}): { api: TApi; baseUrl?: string } {
+}): { api: TApi | "google-generative-ai"; baseUrl?: string } {
+  const api =
+    params.api ??
+    (params.provider === "google" && params.baseUrl ? "google-generative-ai" : params.api);
   return {
-    api: params.api,
-    baseUrl: isGoogleGenerativeAiApi(params.api)
+    api,
+    baseUrl: isGoogleGenerativeAiApi(api)
       ? normalizeGoogleGenerativeAiBaseUrl(params.baseUrl)
       : params.baseUrl,
   };

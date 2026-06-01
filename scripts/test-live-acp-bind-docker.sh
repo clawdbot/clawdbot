@@ -249,7 +249,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-node scripts/test-live.mjs -- src/gateway/gateway-acp-bind.live.test.ts
+node scripts/test-live.mjs -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx
@@ -349,6 +349,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
 
   echo "==> Run ACP bind live test in Docker"
   echo "==> Agent: $ACP_AGENT"
+  echo "==> Test files: ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}"
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
@@ -365,6 +366,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e GOOGLE_API_KEY \
     -e FACTORY_API_KEY \
     -e OPENAI_API_KEY \
+    -e CODEX_API_KEY \
+    -e ACPX_AUTH_OPENAI_API_KEY \
+    -e ACPX_AUTH_CODEX_API_KEY \
     -e OPENCODE_API_KEY \
     -e OPENCODE_ZEN_API_KEY \
     -e OPENCODE_CONFIG_CONTENT \
@@ -381,8 +385,16 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
+    -e OPENCLAW_LIVE_ACP_BIND_TEST_FILES="${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-}" \
+    -e OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL="${OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}" \
     -e OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL="${OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL:-opencode/kimi-k2.6}" \
+    -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS:-}" \
+    -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_AGENT="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_AGENT:-}" \
+    -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_CONNECT_TIMEOUT_MS="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_CONNECT_TIMEOUT_MS:-}" \
+    -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_MODEL="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_MODEL:-}" \
+    -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_THINKING="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_THINKING:-}" \
+    -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_TIMEOUT_MS="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_TIMEOUT_MS:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND")
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT

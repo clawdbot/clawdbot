@@ -1,5 +1,6 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
+/** Returns inline string content or the first array text block without scanning later blocks. */
 export function extractFirstTextBlock(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -21,10 +22,12 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 
 export type AssistantPhase = "commentary" | "final_answer";
 
+/** Narrows unknown phase metadata to assistant text phases that affect visibility. */
 export function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
   return value === "commentary" || value === "final_answer" ? value : undefined;
 }
 
+/** Parses assistant text block signatures, preserving legacy raw ids when not JSON encoded. */
 export function parseAssistantTextSignature(
   value: unknown,
 ): { id?: string; phase?: AssistantPhase } | null {
@@ -50,6 +53,7 @@ export function parseAssistantTextSignature(
   }
 }
 
+/** Encodes versioned assistant text metadata stored alongside streamed text blocks. */
 export function encodeAssistantTextSignature(params: {
   id: string;
   phase?: AssistantPhase;
@@ -61,6 +65,7 @@ export function encodeAssistantTextSignature(params: {
   });
 }
 
+/** Resolves a message phase only when the top-level phase or all explicit blocks agree. */
 export function resolveAssistantMessagePhase(message: unknown): AssistantPhase | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -90,6 +95,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
   return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
 }
 
+/** Finds assistant phase metadata on event payloads that may wrap message-like records. */
 export function resolveAssistantEventPhase(data: unknown): AssistantPhase | undefined {
   if (!data || typeof data !== "object") {
     return undefined;
@@ -109,6 +115,7 @@ export function resolveAssistantEventPhase(data: unknown): AssistantPhase | unde
   );
 }
 
+/** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
   options?: {
@@ -166,8 +173,7 @@ export function extractAssistantTextForPhase(
     return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
   });
 
-  // Once explicit phased blocks exist, unphased extraction should not revive
-  // legacy text from the same message.
+  // Once explicit phased blocks exist, unphased extraction should not revive legacy text.
   if (!phase && hasExplicitPhasedTextBlocks) {
     return undefined;
   }
@@ -198,6 +204,7 @@ export function extractAssistantTextForPhase(
   return normalizeJoinedText(parts.join(joinWith));
 }
 
+/** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
 export function extractAssistantVisibleText(message: unknown): string | undefined {
   const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
   if (finalAnswerText) {

@@ -88,7 +88,7 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     const runtime = createRuntime();
 
-    await modelsAuthListCommand({ provider: "OpenAI-Codex", agent: "coder", json: true }, runtime);
+    await modelsAuthListCommand({ provider: "OpenAI", agent: "coder", json: true }, runtime);
 
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
@@ -116,20 +116,10 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
   });
 
-  it("treats the OpenAI filter as the friendly view over API-key and Codex subscription profiles", async () => {
-    const legacyOpenAIProvider = ["openai", "codex"].join("-");
-    const legacyProfileId = `${legacyOpenAIProvider}:legacy@example.com`;
+  it("treats the OpenAI filter as the friendly view over API-key and OAuth profiles", async () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        [legacyProfileId]: {
-          type: "oauth",
-          provider: legacyOpenAIProvider,
-          access: "legacy-access-secret",
-          refresh: "legacy-refresh-secret",
-          expires: 1_800_000_000_000,
-          email: "legacy@example.com",
-        },
         "openai:user@example.com": {
           type: "oauth",
           provider: "openai",
@@ -165,14 +155,6 @@ describe("modelsAuthListCommand", () => {
         agentId: "main",
         authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
         profiles: [
-          {
-            email: "legacy@example.com",
-            expiresAt: "2027-01-15T08:00:00.000Z",
-            id: legacyProfileId,
-            label: legacyProfileId,
-            provider: "openai",
-            type: "oauth",
-          },
           {
             id: "openai:api-key-backup",
             label: "openai:api-key-backup",

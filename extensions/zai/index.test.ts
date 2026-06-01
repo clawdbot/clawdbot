@@ -374,7 +374,7 @@ describe("zai provider plugin", () => {
     void wrapped?.(model, context, {});
 
     expect(capturedPayload?.thinking).toEqual({ type: "enabled", clear_thinking: false });
-    const assistantMessage = (capturedPayload?.messages as Array<Record<string, unknown>>)[1];
+    const assistantMessage = (capturedPayload!.messages as Array<Record<string, unknown>>)[1];
     expect(assistantMessage?.role).toBe("assistant");
     expect(assistantMessage?.content).toBe("visible reply");
     expect(assistantMessage?.reasoning_content).toBe("prior reasoning");

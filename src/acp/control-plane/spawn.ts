@@ -27,7 +27,7 @@ export async function cleanupFailedAcpSpawn(params: {
         handle: params.runtimeCloseHandle.handle,
         reason: "spawn-failed",
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         logVerbose(
           `acp-spawn: runtime cleanup close failed for ${params.sessionKey}: ${String(err)}`,
         );
@@ -43,7 +43,7 @@ export async function cleanupFailedAcpSpawn(params: {
       allowBackendUnavailable: true,
       requireAcpSession: false,
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       logVerbose(
         `acp-spawn: manager cleanup close failed for ${params.sessionKey}: ${String(err)}`,
       );
@@ -54,7 +54,7 @@ export async function cleanupFailedAcpSpawn(params: {
       targetSessionKey: params.sessionKey,
       reason: "spawn-failed",
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       logVerbose(
         `acp-spawn: binding cleanup unbind failed for ${params.sessionKey}: ${String(err)}`,
       );

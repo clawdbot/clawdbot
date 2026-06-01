@@ -254,7 +254,9 @@ export async function createBootstrapWorkspace(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
@@ -315,6 +317,7 @@ export async function connectTestGatewayClient(params: {
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
@@ -356,6 +359,7 @@ async function connectClientOnce(params: {
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
@@ -411,16 +415,23 @@ async function connectClientOnce(params: {
       params.timeoutMs,
     );
     connectTimeout.unref();
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: params.timeoutMs,
-      signal: abortStart.signal,
-    }).then(
+    const startPromise =
+      params.waitForEventLoopReady === false
+        ? Promise.resolve().then(() => {
+            client.start();
+            return { ready: true, aborted: false };
+          })
+        : startGatewayClientWhenEventLoopReady(client, {
+            timeoutMs: params.timeoutMs,
+            signal: abortStart.signal,
+          });
+    void startPromise.then(
       (readiness) => {
         if (!readiness.ready && !readiness.aborted) {
           finish({ error: new Error("gateway event loop readiness timeout") });
         }
       },
-      (error) => {
+      (error: unknown) => {
         finish({ error: error instanceof Error ? error : new Error(String(error)) });
       },
     );

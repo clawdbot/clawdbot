@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.security.MessageDigest
 
+/** Persistent Ed25519 identity used to register this Android node with gateways. */
 @Serializable
 data class DeviceIdentity(
   val deviceId: String,
@@ -15,6 +16,7 @@ data class DeviceIdentity(
   val createdAtMs: Long,
 )
 
+/** Owns device identity generation, persistence, and auth payload signatures. */
 class DeviceIdentityStore(
   context: Context,
 ) {
@@ -23,6 +25,7 @@ class DeviceIdentityStore(
 
   @Volatile private var cachedIdentity: DeviceIdentity? = null
 
+  /** Loads the persisted identity or creates one, repairing old device-id drift. */
   @Synchronized
   fun loadOrCreate(): DeviceIdentity {
     cachedIdentity?.let { return it }
@@ -44,12 +47,13 @@ class DeviceIdentityStore(
     return fresh
   }
 
+  /** Signs gateway connect payload text with the persisted Ed25519 private key. */
   fun signPayload(
     payload: String,
     identity: DeviceIdentity,
   ): String? =
     try {
-      // Use BC lightweight API directly — JCA provider registration is broken by R8
+      // Use BC lightweight API directly; R8 can break JCA provider registration.
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
       val pkInfo =
         org.bouncycastle.asn1.pkcs.PrivateKeyInfo
@@ -74,6 +78,7 @@ class DeviceIdentityStore(
       null
     }
 
+  /** Verifies a signature against the persisted public key for debug diagnostics. */
   fun verifySelfSignature(
     payload: String,
     signatureBase64Url: String,
@@ -97,12 +102,16 @@ class DeviceIdentityStore(
       false
     }
 
+  /** Decodes gateway URL-safe base64 signatures, accepting unpadded input. */
   private fun base64UrlDecode(input: String): ByteArray {
     val normalized = input.replace('-', '+').replace('_', '/')
+    // Android Base64 expects padded input; gateway signatures are URL-safe
+    // unpadded strings.
     val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
     return Base64.decode(padded, Base64.DEFAULT)
   }
 
+  /** Returns the public key in the gateway's unpadded URL-safe base64 format. */
   fun publicKeyBase64Url(identity: DeviceIdentity): String? =
     try {
       val raw = Base64.decode(identity.publicKeyRawBase64, Base64.DEFAULT)
@@ -142,7 +151,7 @@ class DeviceIdentityStore(
   }
 
   private fun generate(): DeviceIdentity {
-    // Use BC lightweight API directly to avoid JCA provider issues with R8
+    // Use BC lightweight API directly to avoid JCA provider issues with R8.
     val kpGen =
       org.bouncycastle.crypto.generators
         .Ed25519KeyPairGenerator()
@@ -155,7 +164,8 @@ class DeviceIdentityStore(
     val privKey = kp.private as org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
     val rawPublic = pubKey.encoded // 32 bytes
     val deviceId = sha256Hex(rawPublic)
-    // Encode private key as PKCS8 for storage
+    // Store private key as PKCS8 so signPayload can parse the same persisted
+    // shape after app restarts and upgrades.
     val privKeyInfo =
       org.bouncycastle.crypto.util.PrivateKeyInfoFactory
         .createPrivateKeyInfo(privKey)
@@ -168,6 +178,7 @@ class DeviceIdentityStore(
     )
   }
 
+  /** Re-derives the stable device id from the raw Ed25519 public key bytes. */
   private fun deriveDeviceId(publicKeyRawBase64: String): String? =
     try {
       val raw = Base64.decode(publicKeyRawBase64, Base64.DEFAULT)

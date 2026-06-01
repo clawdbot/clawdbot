@@ -77,7 +77,7 @@ describe("isPidDefinitelyDead", () => {
     });
 
     expect(isPidDefinitelyDead(42)).toBe(true);
-    expect(process.kill).toHaveBeenCalledWith(42, 0);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns false when process probing reports EPERM", () => {
@@ -87,7 +87,7 @@ describe("isPidDefinitelyDead", () => {
     });
 
     expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(process.kill).toHaveBeenCalledWith(42, 0);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns true for zombie processes on Linux", async () => {

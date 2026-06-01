@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <script>
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };
@@ -57,7 +57,7 @@
           document.documentElement.setAttribute("data-theme", resolved);
           document.documentElement.setAttribute(
             "data-theme-mode",
-            resolved.indexOf("light") !== -1 ? "light" : "dark",
+            resolved.includes("light") ? "light" : "dark",
           );
         } catch (e) {}
       })();
