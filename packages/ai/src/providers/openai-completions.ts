@@ -179,7 +179,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        maxRetries: options?.maxRetries ?? 0,
+        ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(

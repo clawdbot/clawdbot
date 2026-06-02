@@ -1201,19 +1201,18 @@ describe("openai transport stream", () => {
     });
 
     expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
-      maxRetries: 0,
       headers: { Accept: "text/event-stream" },
     });
     expect(
       testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
-    ).toEqual({ maxRetries: 0, headers: { Accept: "text/event-stream" } });
-    expect(testing.buildOpenAISdkRequestOptions(codexModel)).toEqual({ maxRetries: 0 });
+    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
     expect(
       testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),
-    ).toEqual({ maxRetries: 0 });
+    ).toBeUndefined();
     expect(
       testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
-    ).toEqual({ maxRetries: 0 });
+    ).toBeUndefined();
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {

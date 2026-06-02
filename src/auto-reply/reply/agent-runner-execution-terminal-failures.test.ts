@@ -354,6 +354,40 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBe(takeoverError);
   });
 
+  it("unwraps preserved prompt error from cleanup takeover and classifies normally", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const promptError = new Error("429 Too Many Requests");
+    const wrappedError = Object.assign(new Error("429 Too Many Requests"), {
+      name: "EmbeddedAttemptSessionTakeoverError",
+      promptError,
+      cleanupError: Object.assign(
+        new Error(
+          "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+        ),
+        {
+          name: "EmbeddedAttemptSessionTakeoverError",
+          sessionFile: "/tmp/session.jsonl",
+          phase: "cleanup" as const,
+        },
+      ),
+    });
+    state.runWithModelFallbackMock.mockRejectedValueOnce(wrappedError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).not.toContain("Please resend your message");
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
+  });
+
   it("stays silent (NO_REPLY) when the reply operation was aborted for restart", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);

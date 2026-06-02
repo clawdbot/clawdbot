@@ -79,7 +79,6 @@ describe("openai transport stream", () => {
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
     expect(testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
-      maxRetries: 0,
       signal,
       timeout: 900_000,
     });
@@ -88,7 +87,7 @@ describe("openai transport stream", () => {
         { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
         undefined,
       ),
-    ).toEqual({ maxRetries: 0 });
+    ).toBeUndefined();
   });
 
   it.each([

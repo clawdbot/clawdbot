@@ -144,7 +144,7 @@ export async function handleAgentExecutionError(params: {
   modelPatch: { fail: (error: unknown) => Promise<void> };
 }): Promise<ErrorAction> {
   const turn = params.turn;
-  const err = params.error;
+  let err = params.error;
   const takePendingLifecycleTerminal = () => {
     const terminal = params.state.pendingLifecycleTerminal?.backstop;
     params.state.pendingLifecycleTerminal = undefined;
@@ -210,6 +210,36 @@ export async function handleAgentExecutionError(params: {
         }),
       }),
     };
+  }
+  if (isEmbeddedAttemptSessionTakeoverError(err)) {
+    // Unwrap a preserved prompt error so a wrapped billing/rate-limit/overflow
+    // failure flows through normal classification below. Only a pure takeover
+    // (steering arrived while the prompt lock was released, no underlying
+    // provider error) returns resend guidance instead of a silent empty reply
+    // (#87180).
+    const preservedPromptError =
+      err && typeof err === "object" && "promptError" in err
+        ? (err as { promptError: unknown }).promptError
+        : undefined;
+    if (preservedPromptError) {
+      err = preservedPromptError;
+    } else {
+      turn.replyOperation?.fail("run_failed", err);
+      const text = turn.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
+      return {
+        kind: "final",
+        payload: markAgentRunFailureReplyPayload({
+          text: resolveExternalRunFailureTextForConversation({
+            text,
+            sessionCtx: turn.sessionCtx,
+            isGenericRunnerFailure: false,
+            cfg: turn.followupRun.run.config,
+          }),
+        }),
+      };
+    }
   }
   const message = formatErrorMessage(err);
   params.timing.logIfSlow({
