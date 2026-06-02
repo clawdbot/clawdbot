@@ -593,3 +593,24 @@ export function installPromptSubmissionLockRelease(params: {
   wrappedStreamFn.openclawSessionLockPromptReleaseInstalled = true;
   agent.streamFn = wrappedStreamFn;
 }
+
+// Default to disabling SDK-level retries inside the embedded prompt lock window:
+// model-fallback owns retries, and SDK retries here race with session takeover.
+// This is a default only — an explicit settings.retry.provider.maxRetries (surfaced
+// via options.maxRetries) still wins, so the caller-provided options spread last.
+export function installEmbeddedPromptRetryDefault(session: unknown): void {
+  const agent = (session as SessionWithAgentPrompt).agent;
+  if (typeof agent?.streamFn !== "function") {
+    return;
+  }
+  const innerStreamFn = agent.streamFn;
+  const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
+    const [model, context, options] = args as [
+      unknown,
+      unknown,
+      { maxRetries?: number } | undefined,
+    ];
+    return innerStreamFn(model, context, { maxRetries: 0, ...options });
+  };
+  agent.streamFn = wrappedStreamFn;
+}

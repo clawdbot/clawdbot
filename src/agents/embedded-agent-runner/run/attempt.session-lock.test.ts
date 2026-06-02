@@ -3,6 +3,7 @@ import { SessionWriteLockStaleError } from "../../session-write-lock-error.js";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
+  installEmbeddedPromptRetryDefault,
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 
@@ -967,5 +968,30 @@ describe("installPromptSubmissionLockRelease", () => {
     });
 
     await expect(session.agent.streamFn()).rejects.toBe(providerError);
+  });
+});
+
+describe("installEmbeddedPromptRetryDefault", () => {
+  it("defaults embedded prompt streamFn to maxRetries:0 when caller sets nothing", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context");
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 0 });
+  });
+
+  it("preserves an explicit maxRetries over the embedded prompt default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", {
+      maxRetries: 3,
+      temperature: 0.2,
+    });
   });
 });

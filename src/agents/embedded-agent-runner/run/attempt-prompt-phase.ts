@@ -16,6 +16,7 @@ import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
 import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
 import { applyPromptBuildToolsAllow } from "./attempt-prompt-tool-policy.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
+import { installEmbeddedPromptRetryDefault } from "./attempt.session-lock.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
@@ -261,6 +262,9 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
       }
+      // Default to disabling SDK-level retries inside the embedded prompt lock window;
+      // an explicit settings.retry.provider.maxRetries still wins (see helper comment).
+      installEmbeddedPromptRetryDefault(activeSession);
     }
 
     const { activeContextEngine, ...preflight } = input.preflight;
