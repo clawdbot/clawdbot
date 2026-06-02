@@ -112,6 +112,49 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(files).toHaveLength(128);
   });
 
+  it("emits a glob-match-limit diagnostic when match cap is hit", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-match-limit-diagnostic");
+    await Promise.all(
+      Array.from({ length: 140 }, async (_, index) => {
+        const packageDir = path.join(workspaceDir, "packages", `pkg-${index}`);
+        await fs.mkdir(packageDir, { recursive: true });
+        await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
+      }),
+    );
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "packages/*/AGENTS.md",
+    ]);
+
+    expect(files).toHaveLength(128);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        reason: "glob-match-limit",
+        path: "packages/*/AGENTS.md",
+      }),
+    );
+    expect(diagnostics[0]!.detail).toContain("truncated");
+  });
+
+  it("does not emit glob-match-limit diagnostic when under cap", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-no-truncation");
+    await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const packageDir = path.join(workspaceDir, "packages", `pkg-${index}`);
+        await fs.mkdir(packageDir, { recursive: true });
+        await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
+      }),
+    );
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "packages/*/AGENTS.md",
+    ]);
+
+    expect(files).toHaveLength(5);
+    const truncationDiags = diagnostics.filter((d) => d.reason === "glob-match-limit");
+    expect(truncationDiags).toHaveLength(0);
+  });
+
   it("loads literal bootstrap paths with square brackets", async () => {
     const workspaceDir = await createWorkspaceDir("literal-brackets");
     const packageDir = path.join(workspaceDir, "pkg[1]");
