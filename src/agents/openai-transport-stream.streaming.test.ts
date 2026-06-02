@@ -88,6 +88,23 @@ describe("openai transport stream", () => {
         undefined,
       ),
     ).toBeUndefined();
+    // Embedded prompt-lock release injects maxRetries: 0; the native transport must
+    // forward it so the SDK does not retry into the released lock window.
+    expect(testing.buildOpenAISdkRequestOptions(model, signal, undefined, 0)).toEqual({
+      signal,
+      timeout: 900_000,
+      maxRetries: 0,
+    });
+    expect(testing.buildOpenAISdkRequestOptions(model, signal)).not.toHaveProperty("maxRetries");
+    // maxRetries alone (no signal, no timeout) still yields an options object.
+    expect(
+      testing.buildOpenAISdkRequestOptions(
+        { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
+        undefined,
+        undefined,
+        0,
+      ),
+    ).toEqual({ maxRetries: 0 });
   });
 
   it.each([
@@ -452,6 +469,68 @@ describe("openai transport stream", () => {
       }
     },
   );
+  it("forwards maxRetries to the OpenAI SDK so released prompt locks do not retry", async () => {
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        requestCount += 1;
+        // 500 is retryable for the OpenAI SDK; with maxRetries: 0 it must not retry.
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "boom" } }));
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "mlx-community/Qwen3-30B-A3B-6bit",
+        name: "Qwen3 MLX",
+        api: "openai-completions",
+        provider: "mlx",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+        requestTimeoutMs: 900_000,
+      } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key", maxRetries: 0 } as never,
+      );
+
+      let sawError = false;
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        if (event.type === "error") {
+          sawError = true;
+        }
+      }
+
+      expect(sawError).toBe(true);
+      expect(requestCount).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = makeCompletionsModel({
