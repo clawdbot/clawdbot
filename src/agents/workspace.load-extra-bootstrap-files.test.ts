@@ -112,6 +112,45 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(files).toHaveLength(128);
   });
 
+  it("stops on the traversal limit when matches appear late in a huge tree", async () => {
+    // Regression: a sparse pattern can yield zero matches until very late, so a
+    // match-count cap alone never fires. The walker must bound on entries it
+    // visits (visitedEntries), not just yielded matches, or the event loop
+    // stalls scanning the whole tree. Fill the root with >20,000 non-matching
+    // entries so the visit limit fires while still iterating root, before the
+    // late-match subdir is ever popped off the traversal stack.
+    const workspaceDir = await createWorkspaceDir("glob-sparse-late-match");
+    const lateDir = path.join(workspaceDir, "late");
+    await fs.mkdir(lateDir, { recursive: true });
+    await fs.writeFile(path.join(lateDir, "AGENTS.md"), "late agents", "utf-8");
+
+    // Batched writes keep concurrent file descriptors well under the OS limit.
+    const noiseCount = 21_000;
+    const batchSize = 200;
+    for (let start = 0; start < noiseCount; start += batchSize) {
+      const end = Math.min(start + batchSize, noiseCount);
+      await Promise.all(
+        Array.from({ length: end - start }, (_, offset) =>
+          fs.writeFile(path.join(workspaceDir, `noise-${start + offset}.txt`), "x", "utf-8"),
+        ),
+      );
+    }
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "**/AGENTS.md",
+    ]);
+
+    // The late match lives behind the traversal limit, so it must be dropped and
+    // the truncation reported even though almost nothing matched.
+    expect(files).toHaveLength(0);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        reason: "glob-match-limit",
+        path: "**/AGENTS.md",
+      }),
+    );
+  });
+
   it("emits a glob-match-limit diagnostic when match cap is hit", async () => {
     const workspaceDir = await createWorkspaceDir("glob-match-limit-diagnostic");
     await Promise.all(
@@ -133,7 +172,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         path: "packages/*/AGENTS.md",
       }),
     );
-    expect(diagnostics[0]!.detail).toContain("truncated");
+    expect(diagnostics[0].detail).toContain("truncated");
   });
 
   it("does not emit glob-match-limit diagnostic when under cap", async () => {
