@@ -13,7 +13,7 @@ describe("vctraderai-build-prop-spec egress allowlist", () => {
       urls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
       return new Response(JSON.stringify({}), { status: 200 });
     }) as typeof globalThis.fetch;
-    await runBuildPropSpec({ prop_firm_id: "the5ers", account_size: 100000 }, { fetchImpl });
+    await runBuildPropSpec({ challenge_id: "the5ers-100k-stage1" }, { fetchImpl });
     expect(urls.length).toBeGreaterThan(0);
     for (const url of urls) {
       expect(new URL(url).pathname).toMatch(VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN);
@@ -82,7 +82,7 @@ describe("vctraderai-build-prop-spec egress allowlist", () => {
     controller.abort();
     await expect(
       runBuildPropSpec(
-        { prop_firm_id: "the5ers", account_size: 100000 },
+        { challenge_id: "the5ers-100k-stage1" },
         { fetchImpl },
         controller.signal,
       ),

@@ -17,10 +17,10 @@ describe("vctraderai-build-prop-spec", () => {
 
   it("returns the prop-spec envelope verbatim on the happy path", async () => {
     const envelope = {
-      prop_firm_id: "the5ers",
-      account_size: 100000,
+      challenge_id: "the5ers-100k-stage1",
       profit_target_pct: 8,
       max_drawdown_pct: 4,
+      stages: [{ name: "stage1", profit_target_pct: 8 }],
       sources: ["postgres://core.prop_firm_challenges"],
     };
     const fetchImpl = (async () =>
@@ -28,36 +28,24 @@ describe("vctraderai-build-prop-spec", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as typeof globalThis.fetch;
-    const result = await runBuildPropSpec(
-      { prop_firm_id: "the5ers", account_size: 100000 },
-      { fetchImpl },
-    );
+    const result = await runBuildPropSpec({ challenge_id: "the5ers-100k-stage1" }, { fetchImpl });
     expect(result).toEqual(envelope);
   });
 
-  it("calls the BFF prop-spec/build endpoint with POST and a JSON body", async () => {
+  it("calls the BFF catalogue/prop-spec endpoint with GET and a challenge_id query", async () => {
     let capturedUrl = "";
     let capturedMethod = "";
-    let capturedBody = "";
-    let capturedContentType: string | null = null;
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       capturedUrl =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       capturedMethod = init?.method ?? "GET";
-      capturedBody = typeof init?.body === "string" ? init.body : "";
-      const headers = init?.headers as Record<string, string> | undefined;
-      capturedContentType = headers?.["content-type"] ?? null;
       return new Response(JSON.stringify({}), { status: 200 });
     }) as typeof globalThis.fetch;
-    await runBuildPropSpec({ prop_firm_id: "the5ers", account_size: 200000 }, { fetchImpl });
+    await runBuildPropSpec({ challenge_id: "the5ers-100k-stage1" }, { fetchImpl });
     const parsed = new URL(capturedUrl);
-    expect(parsed.pathname).toBe("/api/v1/openclaw/prop-spec/build");
-    expect(capturedMethod).toBe("POST");
-    expect(capturedContentType).toBe("application/json");
-    expect(JSON.parse(capturedBody)).toEqual({
-      prop_firm_id: "the5ers",
-      account_size: 200000,
-    });
+    expect(parsed.pathname).toBe("/api/v1/openclaw/catalogue/prop-spec");
+    expect(parsed.searchParams.get("challenge_id")).toBe("the5ers-100k-stage1");
+    expect(capturedMethod).toBe("GET");
   });
 
   it("surfaces a structured error on bff 500", async () => {
@@ -67,7 +55,7 @@ describe("vctraderai-build-prop-spec", () => {
         statusText: "Internal Server Error",
       })) as typeof globalThis.fetch;
     await expect(
-      runBuildPropSpec({ prop_firm_id: "the5ers", account_size: 100000 }, { fetchImpl }),
+      runBuildPropSpec({ challenge_id: "the5ers-100k-stage1" }, { fetchImpl }),
     ).rejects.toMatchObject({
       name: "BffRequestError",
       detail: { code: "bff_500", status: 500 },
