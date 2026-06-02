@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -125,6 +126,7 @@ vi.mock("./sqlite-vec.js", () => ({
 }));
 
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
     provider: {
@@ -487,34 +489,40 @@ describe("memory watcher config", () => {
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
 
-  it("routes directories through chokidar on non-macOS/non-Windows platforms", async () => {
-    // On Linux (and other non-darwin/non-win32 platforms), Node's
-    // `fs.watch({ recursive: true })` falls back to walking the tree and
-    // attaching a watcher per entry, defeating the constant-watcher-profile
-    // goal of this fix. The PR explicitly gates the native path off those
-    // platforms.
+  it("routes Linux directories through directory-only native watchers", async () => {
+    // Node's Linux `fs.watch({ recursive: true })` watches every file via
+    // internal/fs/recursive_watch. OpenClaw watches directories only so
+    // large file-heavy memory trees do not allocate per-file watchers.
     const originalPlatformValue = process.platform;
     try {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      await fs.mkdir(path.join(workspaceDir, "memory", "nested"), { recursive: true });
       const cfg = createWatcherConfig();
 
       await expectWatcherManager(cfg);
 
-      // Native watcher must NOT have been called for any directory.
-      expect(nativeWatchMock).not.toHaveBeenCalled();
-      // Chokidar should receive the file path AND both directory paths
-      // (the bare `memory/` plus `extraDir`).
+      // Chokidar should only receive file paths. Linux directories use
+      // non-recursive native directory watches.
       expect(watchMock).toHaveBeenCalledTimes(1);
       const [chokidarPathsLinux] = watchMock.mock.calls[0] as unknown as [
         string[],
         Record<string, unknown>,
       ];
-      expect(chokidarPathsLinux).toStrictEqual(
+      expect(chokidarPathsLinux).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+
+      const nativeCalls = nativeWatchMock.mock.calls as unknown as [
+        string,
+        { recursive?: boolean },
+        unknown,
+      ][];
+      expect(nativeCalls.every((call) => call[1].recursive !== true)).toBe(true);
+      expect(nativeCalls.map((call) => call[0])).toStrictEqual(
         expect.arrayContaining([
-          path.join(workspaceDir, "MEMORY.md"),
           path.join(workspaceDir, "memory"),
+          path.join(workspaceDir, "memory", "nested"),
           extraDir,
+          workspaceDir,
         ]),
       );
     } finally {
@@ -522,6 +530,187 @@ describe("memory watcher config", () => {
         value: originalPlatformValue,
         configurable: true,
       });
+    }
+  });
+
+  it("attaches Linux native watchers for new subdirectories", async () => {
+    const originalPlatformValue = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+      vi.useFakeTimers();
+      const syncSpy = vi
+        .spyOn(
+          manager as unknown as {
+            sync: (params?: { reason?: string }) => Promise<void>;
+          },
+          "sync",
+        )
+        .mockResolvedValue(undefined);
+
+      const memoryDir = path.join(workspaceDir, "memory");
+      const newDir = path.join(memoryDir, "new-topic");
+      await fs.mkdir(newDir);
+      const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
+      memoryWatcher?.emit("rename", "new-topic");
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+      expect(
+        createdNativeWatchers.some((watcher) => watcher.dir === newDir && !watcher.recursive),
+      ).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+    }
+  });
+
+  it("reattaches Linux native watchers for recreated subdirectories", async () => {
+    const originalPlatformValue = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const memoryDir = path.join(workspaceDir, "memory");
+      const nestedDir = path.join(memoryDir, "topic");
+      const childDir = path.join(nestedDir, "child");
+      await fs.mkdir(childDir, { recursive: true });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      const originalNestedWatcher = createdNativeWatchers.find((w) => w.dir === nestedDir);
+      const originalChildWatcher = createdNativeWatchers.find((w) => w.dir === childDir);
+      expect(originalNestedWatcher).toBeDefined();
+      expect(originalChildWatcher).toBeDefined();
+      await fs.rm(nestedDir, { recursive: true, force: true });
+      await fs.mkdir(nestedDir);
+
+      const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
+      memoryWatcher?.emit("rename", "topic");
+
+      expect(originalNestedWatcher!.close).toHaveBeenCalled();
+      expect(originalChildWatcher!.close).toHaveBeenCalled();
+      expect(createdNativeWatchers.filter((w) => w.dir === nestedDir)).toHaveLength(2);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+    }
+  });
+
+  it("closes Linux native watchers for deleted subdirectories", async () => {
+    const originalPlatformValue = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const memoryDir = path.join(workspaceDir, "memory");
+      const nestedDir = path.join(memoryDir, "topic");
+      const childDir = path.join(nestedDir, "child");
+      await fs.mkdir(childDir, { recursive: true });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      const nestedWatcher = createdNativeWatchers.find((w) => w.dir === nestedDir);
+      const childWatcher = createdNativeWatchers.find((w) => w.dir === childDir);
+      expect(nestedWatcher).toBeDefined();
+      expect(childWatcher).toBeDefined();
+      await fs.rm(nestedDir, { recursive: true, force: true });
+
+      const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
+      memoryWatcher?.emit("rename", "topic");
+
+      expect(nestedWatcher!.close).toHaveBeenCalled();
+      expect(childWatcher!.close).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+    }
+  });
+
+  it("keeps startup chokidar fallback when Linux nested watcher setup fails", async () => {
+    const originalPlatformValue = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const nestedDir = path.join(workspaceDir, "memory", "topic");
+      await fs.mkdir(nestedDir);
+      nativeWatchMockFailingDir.current = nestedDir;
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      const [fallbackPaths] = watchMock.mock.calls[0] as unknown as [
+        string[],
+        Record<string, unknown>,
+      ];
+      expect(fallbackPaths).toStrictEqual([path.join(workspaceDir, "memory")]);
+      expect(createdChokidarWatchers[0]?.add).toHaveBeenCalledWith([
+        path.join(workspaceDir, "MEMORY.md"),
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+    }
+  });
+
+  it("falls back to chokidar when Linux subtree lstat races with deletion", async () => {
+    const originalPlatformValue = process.platform;
+    let lstatSpy: { mockRestore: () => void } | undefined;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const nestedDir = path.join(workspaceDir, "memory", "racy-topic");
+      await fs.mkdir(nestedDir);
+      const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+      const lstatMock = vi.spyOn(fsSync, "lstatSync");
+      lstatSpy = lstatMock;
+      lstatMock.mockImplementation(
+        (
+          target: Parameters<typeof fsSync.lstatSync>[0],
+          options?: Parameters<typeof fsSync.lstatSync>[1],
+        ): ReturnType<typeof fsSync.lstatSync> => {
+          if (path.resolve(String(target)) === nestedDir) {
+            throw Object.assign(new Error("ENOENT: no such file or directory, lstat"), {
+              code: "ENOENT",
+            });
+          }
+          return originalLstatSync(target, options);
+        },
+      );
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      const [fallbackPaths] = watchMock.mock.calls[0] as unknown as [
+        string[],
+        Record<string, unknown>,
+      ];
+      expect(fallbackPaths).toStrictEqual([path.join(workspaceDir, "memory")]);
+      expect(createdChokidarWatchers[0]?.add).toHaveBeenCalledWith([
+        path.join(workspaceDir, "MEMORY.md"),
+      ]);
+      expect(memoryLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("failed to attach Linux memory directory watcher subtree"),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+      lstatSpy?.mockRestore();
     }
   });
 

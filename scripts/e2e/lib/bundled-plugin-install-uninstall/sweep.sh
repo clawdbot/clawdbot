@@ -19,9 +19,28 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing
 probe="scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs"
 runtime_smoke="scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs"
 node "$probe" select > /tmp/bundled-plugin-sweep-ids
+sweep_command_timeout="${OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT:-300s}"
 
 now_ms() {
   node -e 'process.stdout.write(String(Date.now()))'
+}
+
+run_logged_sweep_command() {
+  local label="$1"
+  local log_file="$2"
+  shift 2
+  if openclaw_e2e_maybe_timeout "$sweep_command_timeout" "$@" >"$log_file" 2>&1; then
+    return 0
+  else
+    local status=$?
+    cat "$log_file"
+    if [ "$status" -eq 124 ]; then
+      echo "Bundled plugin sweep command timed out after $sweep_command_timeout: $label" >&2
+    else
+      echo "Bundled plugin sweep command failed with status $status: $label" >&2
+    fi
+    return "$status"
+  fi
 }
 
 lifecycle_trace_enabled() {
@@ -53,10 +72,8 @@ for plugin_entry in "${plugin_entries[@]}"; do
   uninstall_log="/tmp/openclaw-uninstall-${plugin_index}.log"
   plugin_started_at="$(now_ms)"
   echo "Installing bundled plugin: $plugin_id ($plugin_dir)"
-  node "$OPENCLAW_ENTRY" plugins install "$plugin_id" >"$install_log" 2>&1 || {
-    cat "$install_log"
-    exit 1
-  }
+  run_logged_sweep_command "install $plugin_id" "$install_log" \
+    node "$OPENCLAW_ENTRY" plugins install "$plugin_id"
   if lifecycle_trace_enabled; then
     cat "$install_log"
   fi
@@ -74,10 +91,8 @@ for plugin_entry in "${plugin_entries[@]}"; do
   runtime_finished_at="$(now_ms)"
 
   echo "Uninstalling bundled plugin: $plugin_id ($plugin_dir)"
-  node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force >"$uninstall_log" 2>&1 || {
-    cat "$uninstall_log"
-    exit 1
-  }
+  run_logged_sweep_command "uninstall $plugin_id" "$uninstall_log" \
+    node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force
   if lifecycle_trace_enabled; then
     cat "$uninstall_log"
   fi

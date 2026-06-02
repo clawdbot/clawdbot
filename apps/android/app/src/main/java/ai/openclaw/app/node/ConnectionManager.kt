@@ -28,6 +28,7 @@ class ConnectionManager(
   private val callLogAvailable: () -> Boolean,
   private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
+  private val installedAppsSharingEnabled: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
   companion object {
@@ -115,6 +116,7 @@ class ConnectionManager(
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
+      installedAppsSharingEnabled = installedAppsSharingEnabled(),
       debugBuild = BuildConfig.DEBUG,
     )
 

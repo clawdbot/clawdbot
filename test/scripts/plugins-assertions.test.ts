@@ -1,11 +1,23 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -47,6 +59,51 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
   );
 }
 
+function writeFixtureServerShims(binDir: string, pidPath: string): void {
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    path.join(binDir, "node"),
+    [
+      "#!/bin/bash",
+      'printf "%s\\n" "$$" >"$OPENCLAW_TEST_FIXTURE_SERVER_PID"',
+      "trap 'exit 0' TERM",
+      "while true; do /bin/sleep 1; done",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(path.join(binDir, "sleep"), "#!/bin/bash\nexit 0\n");
+  chmodSync(path.join(binDir, "node"), 0o755);
+  chmodSync(path.join(binDir, "sleep"), 0o755);
+  writeFileSync(pidPath, "");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function waitForDead(pid: number, timeoutMs = 2_000): void {
+  const startedAt = Date.now();
+  while (isProcessAlive(pid)) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`pid ${pid} is still alive`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+}
+
+function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
+  return spawnSync("/bin/bash", ["-c", script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
+
 describe("plugins Docker assertions", () => {
   it("rejects loose ClawHub preflight limits instead of parsing prefixes", () => {
     const timeoutResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
@@ -85,10 +142,158 @@ describe("plugins Docker assertions", () => {
 
     for (const scriptPath of scripts) {
       const script = readFileSync(scriptPath, "utf8");
+      const scriptWithoutDefaultScratch = script.replace('mktemp -d "/tmp/openclaw-plugins.XXXXXX"', "");
       expect(script).toContain("OPENCLAW_PLUGINS_TMP_DIR");
-      expect(script).not.toMatch(
+      expect(scriptWithoutDefaultScratch).not.toMatch(
         /\/tmp\/(?:plugins|marketplace|demo-plugin|is-number|openclaw-plugin|openclaw-clawhub)/,
       );
+    }
+  });
+
+  it("cleans the default plugin sweep scratch root", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-cleanup-"));
+    const marker = path.join(root, "scratch-path.txt");
+    try {
+      const result = runPluginsSweepShell(
+        `
+set -euo pipefail
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+source scripts/e2e/lib/plugins/sweep.sh
+printf '%s\\n' "$OPENCLAW_PLUGINS_TMP_DIR" > "$MARKER"
+test -d "$OPENCLAW_PLUGINS_TMP_DIR"
+cleanup_openclaw_plugins_sweep
+test ! -e "$OPENCLAW_PLUGINS_TMP_DIR"
+`,
+        { MARKER: marker },
+      );
+
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const scratchRoot = readFileSync(marker, "utf8").trim();
+      expect(scratchRoot).toContain("/tmp/openclaw-plugins.");
+      expect(existsSync(scratchRoot)).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves caller-provided plugin sweep scratch roots", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-caller-"));
+    const scratchRoot = path.join(root, "scratch");
+    try {
+      const result = runPluginsSweepShell(
+        `
+set -euo pipefail
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_TMP_DIR="$SCRATCH_ROOT"
+source scripts/e2e/lib/plugins/sweep.sh
+test -d "$OPENCLAW_PLUGINS_TMP_DIR"
+cleanup_openclaw_plugins_sweep
+test -d "$OPENCLAW_PLUGINS_TMP_DIR"
+`,
+        { SCRATCH_ROOT: scratchRoot },
+      );
+
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(existsSync(scratchRoot)).toBe(true);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("cleans npm fixture registry children when readiness times out", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-cleanup-"));
+    try {
+      const binDir = path.join(root, "bin");
+      const fixtureDir = path.join(root, "fixture");
+      const cleanupPath = path.join(root, "caller-cleanup");
+      const pidPath = path.join(root, "server.pid");
+      mkdirSync(fixtureDir);
+      writeFixtureServerShims(binDir, pidPath);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            "source scripts/e2e/lib/plugins/fixtures.sh",
+            "set +e",
+            `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
+            'status="$?"',
+            "set -e",
+            '[ "$status" != "0" ]',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      const pid = Number(readFileSync(pidPath, "utf8"));
+      expect(Number.isInteger(pid)).toBe(true);
+      waitForDead(pid);
+      expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("cleans ClawHub fixture children when readiness times out", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-cleanup-"));
+    try {
+      const binDir = path.join(root, "bin");
+      const cleanupPath = path.join(root, "caller-cleanup");
+      const tmpDir = path.join(root, "scratch");
+      const pidPath = path.join(root, "server.pid");
+      mkdirSync(tmpDir);
+      writeFixtureServerShims(binDir, pidPath);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            "source scripts/e2e/lib/plugins/fixtures.sh",
+            "source scripts/e2e/lib/plugins/clawhub.sh",
+            "set +e",
+            `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; run_plugins_clawhub_scenario )`,
+            'status="$?"',
+            "set -e",
+            '[ "$status" != "0" ]',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      const pid = Number(readFileSync(pidPath, "utf8"));
+      expect(Number.isInteger(pid)).toBe(true);
+      waitForDead(pid);
+      expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
     }
   });
 

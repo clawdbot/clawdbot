@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -67,30 +67,34 @@ describe("control-ui-i18n process runner", () => {
     "kills descendant processes after the process timeout",
     async () => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-control-ui-i18n-timeout-"));
-      const markerPath = path.join(tempDir, "grandchild.pid");
-      const grandchildScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        "const { writeFileSync } = require('node:fs');",
-        `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
-        `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+      try {
+        const markerPath = path.join(tempDir, "grandchild.pid");
+        const grandchildScript = [
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const { writeFileSync } = require('node:fs');",
+          `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
+          `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
 
-      await expect(
-        runProcess(process.execPath, ["-e", parentScript], {
-          cwd: tempDir,
-          killGraceMs: 25,
-          timeoutMs: 500,
-        }),
-      ).rejects.toThrow(`timed out after 500ms`);
+        await expect(
+          runProcess(process.execPath, ["-e", parentScript], {
+            cwd: tempDir,
+            killGraceMs: 25,
+            timeoutMs: 500,
+          }),
+        ).rejects.toThrow(`timed out after 500ms`);
 
-      const grandchildPid = Number(readFileSync(markerPath, "utf8"));
-      await waitForProcessExit(grandchildPid);
+        const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+        await waitForProcessExit(grandchildPid);
+      } finally {
+        rmSync(tempDir, { force: true, recursive: true });
+      }
     },
   );
 });

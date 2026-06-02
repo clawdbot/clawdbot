@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +60,69 @@ import {
 const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
   "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
 const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
+
+function matrixInboundDedupePluginStateKey(params: {
+  accountId: string;
+  eventId: string;
+  roomId: string;
+}): string {
+  const accountId = params.accountId.trim() || "sut";
+  const digest = createHash("sha256")
+    .update(accountId)
+    .update("\0")
+    .update(params.roomId.trim())
+    .update("\0")
+    .update(params.eventId.trim())
+    .digest("hex");
+  return `${accountId}:${digest}`;
+}
+
+async function writeMatrixInboundDedupePluginStateEntry(params: {
+  accountId: string;
+  eventId: string;
+  roomId: string;
+  stateRoot: string;
+}) {
+  const sqlite = await import("node:sqlite");
+  const databasePath = path.join(params.stateRoot, "state", "openclaw.sqlite");
+  await mkdir(path.dirname(databasePath), { recursive: true });
+  const db = new sqlite.DatabaseSync(databasePath);
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      );
+    `);
+    db.prepare(`
+      INSERT INTO plugin_state_entries (
+        plugin_id, namespace, entry_key, value_json, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(plugin_id, namespace, entry_key) DO UPDATE SET
+        value_json = excluded.value_json,
+        created_at = excluded.created_at,
+        expires_at = excluded.expires_at
+    `).run(
+      "matrix",
+      "inbound-dedupe",
+      matrixInboundDedupePluginStateKey(params),
+      JSON.stringify({
+        roomId: params.roomId,
+        eventId: params.eventId,
+        ts: Date.now(),
+      }),
+      Date.now(),
+      null,
+    );
+  } finally {
+    db.close();
+  }
+}
 
 function requireMatrixQaScenario(id: string): (typeof MATRIX_QA_SCENARIOS)[number] {
   const scenario = MATRIX_QA_SCENARIOS.find((entry) => entry.id === id);
@@ -1958,7 +2022,6 @@ describe("matrix live qa scenarios", () => {
       const accountDir = path.join(stateRoot, "matrix", "accounts", "sut", "server", "token");
       const staleSyncRoomId = "!stale-sync:matrix-qa.test";
       const syncStorePath = path.join(accountDir, "bot-storage.json");
-      const dedupeStorePath = path.join(accountDir, "inbound-dedupe.json");
       await mkdir(accountDir, { recursive: true });
       await writeTestJsonFile(path.join(accountDir, "storage-meta.json"), {
         accountId: "sut",
@@ -1983,14 +2046,11 @@ describe("matrix live qa scenarios", () => {
         const kind = token.includes("STALE_SYNC_DEDUPE_FRESH") ? "fresh" : "first";
         callOrder.push(`wait:${kind}`);
         if (kind === "first") {
-          await writeTestJsonFile(dedupeStorePath, {
-            version: 1,
-            entries: [
-              {
-                key: `${staleSyncRoomId}|$first-trigger`,
-                ts: Date.now(),
-              },
-            ],
+          await writeMatrixInboundDedupePluginStateEntry({
+            accountId: "runtime-default",
+            eventId: "$first-trigger",
+            roomId: staleSyncRoomId,
+            stateRoot,
           });
         }
         return {

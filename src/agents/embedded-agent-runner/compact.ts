@@ -85,8 +85,8 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  formatMissingAuthError,
   getApiKeyForModel,
+  MissingProviderAuthError,
   resolveModelAuthMode,
 } from "../model-auth.js";
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
@@ -613,7 +613,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
+        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
       }
     } else {
       const preparedAuth = await prepareProviderRuntimeAuth({

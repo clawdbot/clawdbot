@@ -166,6 +166,23 @@ export function createCodexAttemptTurnWatchController(params: {
     scheduleTerminalIdleWatch();
   }
 
+  function isCompletionIdleTimeoutDueBeforeAttempt(timeoutMs: number) {
+    if (
+      params.isCompleted() ||
+      params.isTerminalTurnNotificationQueued() ||
+      params.signal.aborted ||
+      !completionIdleWatchArmed ||
+      params.getActiveAppServerTurnRequests() > 0
+    ) {
+      return false;
+    }
+    const completionTimeoutMs = completionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
+    if (completionTimeoutMs > timeoutMs) {
+      return false;
+    }
+    return Math.max(0, Date.now() - completionLastActivityAt) >= completionTimeoutMs;
+  }
+
   function recordAttemptProgress(
     reason: string,
     options?: { details?: Record<string, unknown>; attemptTimeoutMs?: number },
@@ -234,6 +251,10 @@ export function createCodexAttemptTurnWatchController(params: {
     const timeoutMs = attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs;
     if (idleMs < timeoutMs) {
       scheduleAttemptIdleWatch();
+      return;
+    }
+    if (isCompletionIdleTimeoutDueBeforeAttempt(timeoutMs)) {
+      fireCompletionIdleTimeout();
       return;
     }
     const timeout = {

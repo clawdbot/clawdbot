@@ -8,7 +8,7 @@ const ensureOpenClawModelsJsonMock = vi.fn<
     options?: unknown,
   ) => Promise<{ agentDir: string; wrote: boolean }>
 >(async () => ({ agentDir: "/tmp/agent", wrote: false }));
-const resolveModelMock = vi.fn(() => ({}));
+const resolveModelMock = vi.fn<(...args: unknown[]) => Record<string, never>>(() => ({}));
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentDir: () => "/tmp/agent",

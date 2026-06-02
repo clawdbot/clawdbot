@@ -73,6 +73,8 @@ describe("slack startup user allowlist resolution", () => {
       channels: {
         slack: {
           enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
           allowFrom: ["U123OWNER"],
           execApprovals: {
             enabled: false,

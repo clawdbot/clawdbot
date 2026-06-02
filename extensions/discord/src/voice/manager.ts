@@ -1774,6 +1774,10 @@ export class DiscordVoiceManager {
       logVoiceVerbose(`receive stream ended: ${analysis.message}`);
       return;
     }
+    if (analysis.isDecodeCorruption && !analysis.countsAsDecryptFailure) {
+      logVoiceVerbose(`receive decode skipped: ${analysis.message}`);
+      return;
+    }
     logger.warn(`discord voice: receive error: ${analysis.message}`);
     if (analysis.shouldAttemptPassthrough) {
       this.enableDaveReceivePassthrough(

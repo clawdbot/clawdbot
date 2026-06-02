@@ -2,7 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { abortTrackedChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -187,19 +187,11 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      abortChatRunById(
-        {
-          chatAbortControllers: params.chatAbortControllers,
-          chatRunBuffers: params.chatRunBuffers,
-          chatAbortedRuns: params.chatRunState.abortedRuns,
-          clearChatRunState: params.chatRunState.clearRun,
-          removeChatRun: params.removeChatRun,
-          agentRunSeq: params.agentRunSeq,
-          broadcast: params.broadcast,
-          nodeSendToSession: params.nodeSendToSession,
-        },
-        { runId, sessionKey: entry.sessionKey, stopReason: "timeout" },
-      );
+      abortTrackedChatRunById(params, {
+        runId,
+        sessionKey: entry.sessionKey,
+        stopReason: "timeout",
+      });
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;

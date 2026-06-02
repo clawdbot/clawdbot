@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { maybeApplyTtsToPayload } from "../../packages/speech-core/src/tts.ts";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "../../src/gateway/server-methods/chat-webchat-media.ts";
 import { createPluginRecord } from "../../src/plugins/loader-records.ts";
@@ -22,8 +23,16 @@ const noopLogger = {
   debug() {},
 };
 
+export function cleanupProofArtifacts({ mediaPath, prefsPath }) {
+  if (mediaPath) {
+    fs.rmSync(path.dirname(mediaPath), { recursive: true, force: true });
+  }
+  fs.rmSync(prefsPath, { force: true });
+}
+
 async function main() {
   resetPluginRuntimeStateForTest();
+  let mediaPath;
   const pluginRegistry = createPluginRegistry({
     logger: noopLogger,
     runtime: {},
@@ -62,65 +71,65 @@ async function main() {
     },
   };
 
-  const accumulatedBlockText =
-    "WebChat streams block text; dispatch synthesizes one TTS tail with kind final.";
-  const blockResult = await maybeApplyTtsToPayload({
-    payload: { text: accumulatedBlockText },
-    cfg,
-    channel: "webchat",
-    kind: "block",
-  });
-  console.log("maybeApplyTtsToPayload(kind=block).mediaUrl =", blockResult.mediaUrl ?? "(none)");
-
-  const tailResult = await maybeApplyTtsToPayload({
-    payload: { text: accumulatedBlockText },
-    cfg,
-    channel: "webchat",
-    kind: "final",
-  });
-  console.log("maybeApplyTtsToPayload(kind=final).mediaUrl =", tailResult.mediaUrl ?? "(none)");
-  console.log(
-    "maybeApplyTtsToPayload(kind=final).trustedLocalMedia =",
-    tailResult.trustedLocalMedia ?? false,
-  );
-
-  const mediaPath = tailResult.mediaUrl;
-  if (!mediaPath || !fs.existsSync(mediaPath)) {
-    throw new Error("expected final-mode tail TTS to write a local media file");
-  }
-
-  // Same shape as dispatch-from-config accumulated block TTS-only final payload.
-  const ttsOnlyPayload = {
-    mediaUrl: tailResult.mediaUrl,
-    audioAsVoice: tailResult.audioAsVoice,
-    spokenText: accumulatedBlockText,
-    trustedLocalMedia: true,
-  };
-  console.log("dispatch ttsOnlyPayload.trustedLocalMedia =", ttsOnlyPayload.trustedLocalMedia);
-
-  const localRoots = [path.dirname(mediaPath)];
-  const trustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([ttsOnlyPayload], {
-    localRoots,
-  });
-  const untrustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
-    [{ mediaUrl: mediaPath }],
-    { localRoots },
-  );
-  console.log(
-    "buildWebchatAudioContentBlocksFromReplyPayloads(ttsOnlyPayload).length =",
-    trustedBlocks.length,
-  );
-  console.log(
-    "buildWebchatAudioContentBlocksFromReplyPayloads(untrusted).length =",
-    untrustedBlocks.length,
-  );
-
-  fs.rmSync(path.dirname(mediaPath), { recursive: true, force: true });
   try {
-    fs.unlinkSync(prefsPath);
-  } catch {
-    // optional prefs file
+    const accumulatedBlockText =
+      "WebChat streams block text; dispatch synthesizes one TTS tail with kind final.";
+    const blockResult = await maybeApplyTtsToPayload({
+      payload: { text: accumulatedBlockText },
+      cfg,
+      channel: "webchat",
+      kind: "block",
+    });
+    console.log("maybeApplyTtsToPayload(kind=block).mediaUrl =", blockResult.mediaUrl ?? "(none)");
+
+    const tailResult = await maybeApplyTtsToPayload({
+      payload: { text: accumulatedBlockText },
+      cfg,
+      channel: "webchat",
+      kind: "final",
+    });
+    console.log("maybeApplyTtsToPayload(kind=final).mediaUrl =", tailResult.mediaUrl ?? "(none)");
+    console.log(
+      "maybeApplyTtsToPayload(kind=final).trustedLocalMedia =",
+      tailResult.trustedLocalMedia ?? false,
+    );
+
+    mediaPath = tailResult.mediaUrl;
+    if (!mediaPath || !fs.existsSync(mediaPath)) {
+      throw new Error("expected final-mode tail TTS to write a local media file");
+    }
+
+    // Same shape as dispatch-from-config accumulated block TTS-only final payload.
+    const ttsOnlyPayload = {
+      mediaUrl: tailResult.mediaUrl,
+      audioAsVoice: tailResult.audioAsVoice,
+      spokenText: accumulatedBlockText,
+      trustedLocalMedia: true,
+    };
+    console.log("dispatch ttsOnlyPayload.trustedLocalMedia =", ttsOnlyPayload.trustedLocalMedia);
+
+    const localRoots = [path.dirname(mediaPath)];
+    const trustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([ttsOnlyPayload], {
+      localRoots,
+    });
+    const untrustedBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: mediaPath }],
+      { localRoots },
+    );
+    console.log(
+      "buildWebchatAudioContentBlocksFromReplyPayloads(ttsOnlyPayload).length =",
+      trustedBlocks.length,
+    );
+    console.log(
+      "buildWebchatAudioContentBlocksFromReplyPayloads(untrusted).length =",
+      untrustedBlocks.length,
+    );
+  } finally {
+    cleanupProofArtifacts({ mediaPath, prefsPath });
+    resetPluginRuntimeStateForTest();
   }
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

@@ -798,7 +798,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run parity lane
         env:
@@ -876,7 +876,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Generate parity report
         run: |
@@ -934,7 +934,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run runtime parity lane
         id: runtime_parity_lane
@@ -1101,7 +1101,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Matrix live lane
         id: run_lane
@@ -1199,7 +1199,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Telegram live lane
         id: run_lane
@@ -1295,7 +1295,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Discord live lane
         id: run_lane
@@ -1393,7 +1393,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run WhatsApp live lane
         id: run_lane
@@ -1488,7 +1488,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Slack live lane
         id: run_lane

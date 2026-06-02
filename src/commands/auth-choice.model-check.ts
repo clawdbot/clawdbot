@@ -8,9 +8,9 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   openAIProviderUsesCodexRuntimeByDefault,
 } from "../agents/openai-routing.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 function resolveAuthProviderCandidates(params: {
   config: OpenClawConfig;

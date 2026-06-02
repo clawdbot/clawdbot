@@ -6,6 +6,7 @@ const hoisted = vi.hoisted(() => ({
   getActivePluginRuntimeSubagentMode: vi.fn<() => "default" | "explicit" | "gateway-bindable">(
     () => "default",
   ),
+  getActivePluginRegistryWorkspaceDir: vi.fn<() => string | undefined>(() => undefined),
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -18,6 +19,7 @@ vi.mock("../plugins/runtime/standalone-runtime-registry-loader.js", () => ({
 
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRuntimeSubagentMode: hoisted.getActivePluginRuntimeSubagentMode,
+  getActivePluginRegistryWorkspaceDir: hoisted.getActivePluginRegistryWorkspaceDir,
 }));
 
 describe("ensureRuntimePluginsLoaded", () => {
@@ -30,6 +32,8 @@ describe("ensureRuntimePluginsLoaded", () => {
     hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReturnValue(undefined);
     hoisted.getActivePluginRuntimeSubagentMode.mockReset();
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
+    hoisted.getActivePluginRegistryWorkspaceDir.mockReset();
+    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     vi.resetModules();
     ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
   });

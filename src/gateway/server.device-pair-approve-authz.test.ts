@@ -166,6 +166,72 @@ async function openTrustedProxyPairingSession(
   return pairingWs;
 }
 
+type StartedGateway = Awaited<ReturnType<typeof startServerWithClient>>;
+type LoadedDeviceIdentity = ReturnType<typeof loadDeviceIdentity>;
+type PendingPairingRequest = Awaited<ReturnType<typeof requestDevicePairing>>;
+type IssuedOperatorToken = Awaited<ReturnType<typeof issueOperatorToken>>;
+
+async function openSharedAuthApprovalSession(params: {
+  port: number;
+  approver: IssuedOperatorToken;
+  pending: LoadedDeviceIdentity;
+  role: "node" | "operator";
+  roles?: string[];
+  scopes: string[];
+}) {
+  const request = await requestDevicePairingForRole({
+    identity: params.pending,
+    role: params.role,
+    roles: params.roles,
+    scopes: params.scopes,
+  });
+  const pairingWs = await openSharedAuthPairingSession(params.port, params.approver, [
+    "operator.pairing",
+  ]);
+  return { request, pairingWs };
+}
+
+async function approvePairingRequest(pairingWs: WebSocket, request: PendingPairingRequest) {
+  return await rpcReq(pairingWs, "device.pair.approve", {
+    requestId: request.request.requestId,
+  });
+}
+
+async function rejectPairingRequest(pairingWs: WebSocket, request: PendingPairingRequest) {
+  return await rpcReq(pairingWs, "device.pair.reject", {
+    requestId: request.request.requestId,
+  });
+}
+
+async function expectDeviceNotPaired(identity: LoadedDeviceIdentity) {
+  const paired = await getPairedDevice(identity.identity.deviceId);
+  expect(paired).toBeNull();
+}
+
+async function expectPairedDeviceScopes(identity: LoadedDeviceIdentity, scopes: string[]) {
+  const paired = await getPairedDevice(identity.identity.deviceId);
+  expect(paired?.approvedScopes).toEqual(scopes);
+  return paired;
+}
+
+async function expectApprovalDeniedAndUnpaired(params: {
+  pairingWs: WebSocket;
+  request: PendingPairingRequest;
+  pending: LoadedDeviceIdentity;
+}) {
+  const approve = await approvePairingRequest(params.pairingWs, params.request);
+  expect(approve.ok).toBe(false);
+  expect(approve.error?.message).toBe("device pairing approval denied");
+  await expectDeviceNotPaired(params.pending);
+}
+
+async function closePairingTest(started: StartedGateway, pairingWs?: WebSocket) {
+  pairingWs?.close();
+  started.ws.close();
+  await started.server.close();
+  started.envSnapshot.restore();
+}
+
 describe("gateway device.pair.approve caller scope guard", () => {
   test("rejects approving device scopes above the caller session scopes", async () => {
     const started = await startServerWithClient("secret");
@@ -180,19 +246,13 @@ describe("gateway device.pair.approve caller scope guard", () => {
       });
       pairingWs = await openPairingSession(started.port, approver);
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
+      const approve = await approvePairingRequest(pairingWs, request);
       expect(approve.ok).toBe(false);
       expect(approve.error?.message).toBe("missing scope: operator.admin");
 
-      const paired = await getPairedDevice(approverIdentity.identity.deviceId);
-      expect(paired?.approvedScopes).toEqual(["operator.admin"]);
+      await expectPairedDeviceScopes(approverIdentity, ["operator.admin"]);
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -203,26 +263,18 @@ describe("gateway device.pair.approve caller scope guard", () => {
 
     let pairingWs: WebSocket | undefined;
     try {
-      const request = await requestDevicePairingForRole({
-        identity: pending,
+      const session = await openSharedAuthApprovalSession({
+        port: started.port,
+        approver,
+        pending,
         role: "node",
         scopes: [],
       });
-      pairingWs = await openSharedAuthPairingSession(started.port, approver, ["operator.pairing"]);
+      pairingWs = session.pairingWs;
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
-      expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("device pairing approval denied");
-
-      const paired = await getPairedDevice(pending.identity.deviceId);
-      expect(paired).toBeNull();
+      await expectApprovalDeniedAndUnpaired({ pairingWs, request: session.request, pending });
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -233,26 +285,23 @@ describe("gateway device.pair.approve caller scope guard", () => {
 
     let pairingWs: WebSocket | undefined;
     try {
-      const request = await requestDevicePairingForRole({
-        identity: pending,
+      const session = await openSharedAuthApprovalSession({
+        port: started.port,
+        approver,
+        pending,
         role: "operator",
         scopes: ["operator.pairing"],
       });
-      pairingWs = await openSharedAuthPairingSession(started.port, approver, ["operator.pairing"]);
+      pairingWs = session.pairingWs;
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
+      const approve = await approvePairingRequest(pairingWs, session.request);
       expect(approve.ok).toBe(true);
 
       const paired = await getPairedDevice(pending.identity.deviceId);
       expect(paired?.role).toBe("operator");
       expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -263,27 +312,19 @@ describe("gateway device.pair.approve caller scope guard", () => {
 
     let pairingWs: WebSocket | undefined;
     try {
-      const request = await requestDevicePairingForRole({
-        identity: pending,
+      const session = await openSharedAuthApprovalSession({
+        port: started.port,
+        approver,
+        pending,
         role: "operator",
         roles: ["operator", "node"],
         scopes: ["operator.pairing"],
       });
-      pairingWs = await openSharedAuthPairingSession(started.port, approver, ["operator.pairing"]);
+      pairingWs = session.pairingWs;
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
-      expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("device pairing approval denied");
-
-      const paired = await getPairedDevice(pending.identity.deviceId);
-      expect(paired).toBeNull();
+      await expectApprovalDeniedAndUnpaired({ pairingWs, request: session.request, pending });
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -303,19 +344,9 @@ describe("gateway device.pair.approve caller scope guard", () => {
         "operator.pairing",
       ]);
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
-      expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("device pairing approval denied");
-
-      const paired = await getPairedDevice(pending.identity.deviceId);
-      expect(paired).toBeNull();
+      await expectApprovalDeniedAndUnpaired({ pairingWs, request, pending });
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -333,19 +364,14 @@ describe("gateway device.pair.approve caller scope guard", () => {
       });
       pairingWs = await openTrustedProxyPairingSession(started.port, approver, ["operator.admin"]);
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
+      const approve = await approvePairingRequest(pairingWs, request);
       expect(approve.ok).toBe(true);
 
       const paired = await getPairedDevice(pending.identity.deviceId);
       expect(paired?.role).toBe("node");
       expect(paired?.tokens?.node?.role).toBe("node");
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -362,19 +388,9 @@ describe("gateway device.pair.approve caller scope guard", () => {
       });
       pairingWs = await openPairingSession(started.port, approver);
 
-      const approve = await rpcReq(pairingWs, "device.pair.approve", {
-        requestId: request.request.requestId,
-      });
-      expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("device pairing approval denied");
-
-      const paired = await getPairedDevice(pending.identity.deviceId);
-      expect(paired).toBeNull();
+      await expectApprovalDeniedAndUnpaired({ pairingWs, request, pending });
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 
@@ -391,19 +407,14 @@ describe("gateway device.pair.approve caller scope guard", () => {
       });
       pairingWs = await openPairingSession(started.port, attacker);
 
-      const reject = await rpcReq(pairingWs, "device.pair.reject", {
-        requestId: request.request.requestId,
-      });
+      const reject = await rejectPairingRequest(pairingWs, request);
       expect(reject.ok).toBe(false);
       expect(reject.error?.message).toBe("device pairing rejection denied");
 
       const stillPending = await getPendingDevicePairing(request.request.requestId);
       expect(stillPending?.requestId).toBe(request.request.requestId);
     } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await closePairingTest(started, pairingWs);
     }
   });
 });

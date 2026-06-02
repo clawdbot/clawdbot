@@ -22,8 +22,9 @@ PORT="18789"
 MOCK_PORT="44180"
 CLICKCLACK_PORT="44181"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_RELEASE_USER_JOURNEY"
-MOCK_REQUEST_LOG="/tmp/openclaw-release-user-journey-openai.jsonl"
-CLICKCLACK_STATE="/tmp/openclaw-release-user-journey-clickclack.json"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-user-journey.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
+CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
 
 mock_pid=""
@@ -34,6 +35,7 @@ cleanup() {
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   openclaw_e2e_stop_process "${clickclack_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 

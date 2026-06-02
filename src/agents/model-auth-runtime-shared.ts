@@ -26,11 +26,27 @@ export class ProviderAuthError extends Error {
   }
 }
 
+export class MissingProviderAuthError extends ProviderAuthError {
+  readonly mode: ResolvedProviderAuth["mode"];
+  readonly source: string;
+
+  constructor(provider: string, auth: ResolvedProviderAuth) {
+    super("missing-api-key", provider, formatMissingAuthError(auth, provider));
+    this.name = "MissingProviderAuthError";
+    this.mode = auth.mode;
+    this.source = auth.source;
+  }
+}
+
 export function isProviderAuthError(
   err: unknown,
   code?: ProviderAuthErrorCode,
 ): err is ProviderAuthError {
   return err instanceof ProviderAuthError && (!code || err.code === code);
+}
+
+export function isMissingProviderAuthError(err: unknown): err is MissingProviderAuthError {
+  return err instanceof MissingProviderAuthError;
 }
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -55,5 +71,5 @@ export function requireApiKey(auth: ResolvedProviderAuth, provider: string): str
   if (key) {
     return key;
   }
-  throw new ProviderAuthError("missing-api-key", provider, formatMissingAuthError(auth, provider));
+  throw new MissingProviderAuthError(provider, auth);
 }

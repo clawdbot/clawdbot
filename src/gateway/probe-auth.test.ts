@@ -7,12 +7,43 @@ import {
   resolveGatewayProbeAuthWithSecretInputs,
 } from "./probe-auth.js";
 
-function expectUnresolvedProbeTokenWarning(cfg: OpenClawConfig) {
-  const result = resolveGatewayProbeAuthSafe({
+const EMPTY_PROBE_AUTH = {
+  token: undefined,
+  password: undefined,
+};
+
+function envSecretRef(id: string) {
+  return { source: "env", provider: "default", id } as const;
+}
+
+function tokenAuthConfig(id: string) {
+  return {
+    mode: "token",
+    token: envSecretRef(id),
+  } as const;
+}
+
+function configWithDefaultEnvProvider(gateway: NonNullable<OpenClawConfig["gateway"]>) {
+  return {
+    gateway,
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function resolveSafeProbeAuth(cfg: OpenClawConfig, mode: "local" | "remote" = "local") {
+  return resolveGatewayProbeAuthSafe({
     cfg,
-    mode: "local",
+    mode,
     env: {} as NodeJS.ProcessEnv,
   });
+}
+
+function expectUnresolvedProbeTokenWarning(cfg: OpenClawConfig) {
+  const result = resolveSafeProbeAuth(cfg);
 
   expect(result.auth).toStrictEqual({});
   expect(result.warning).toContain("gateway.auth.token");
@@ -21,17 +52,13 @@ function expectUnresolvedProbeTokenWarning(cfg: OpenClawConfig) {
 
 describe("resolveGatewayProbeAuthSafe", () => {
   it("returns probe auth credentials when available", () => {
-    const result = resolveGatewayProbeAuthSafe({
-      cfg: {
-        gateway: {
-          auth: {
-            token: "token-value",
-          },
+    const result = resolveSafeProbeAuth({
+      gateway: {
+        auth: {
+          token: "token-value",
         },
-      } as OpenClawConfig,
-      mode: "local",
-      env: {} as NodeJS.ProcessEnv,
-    });
+      },
+    } as OpenClawConfig);
 
     expect(result).toEqual({
       auth: {
@@ -42,93 +69,56 @@ describe("resolveGatewayProbeAuthSafe", () => {
   });
 
   it("returns warning and empty auth when token SecretRef is unresolved", () => {
-    expectUnresolvedProbeTokenWarning({
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as OpenClawConfig);
+    expectUnresolvedProbeTokenWarning(
+      configWithDefaultEnvProvider({
+        auth: tokenAuthConfig("MISSING_GATEWAY_TOKEN"),
+      }),
+    );
   });
 
   it("does not fall through to remote token when local token SecretRef is unresolved", () => {
-    expectUnresolvedProbeTokenWarning({
-      gateway: {
+    expectUnresolvedProbeTokenWarning(
+      configWithDefaultEnvProvider({
         mode: "local",
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
-        },
+        auth: tokenAuthConfig("MISSING_GATEWAY_TOKEN"),
         remote: {
           token: "remote-token",
         },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as OpenClawConfig);
+      }),
+    );
   });
 
   it("does not fall through to remote credentials for local probes", () => {
-    const result = resolveGatewayProbeAuthSafe({
-      cfg: {
-        gateway: {
-          mode: "local",
-          remote: {
-            url: "wss://gateway.example",
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
-          },
+    const result = resolveSafeProbeAuth({
+      gateway: {
+        mode: "local",
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+          password: "remote-password", // pragma: allowlist secret
         },
-      } as OpenClawConfig,
-      mode: "local",
-      env: {} as NodeJS.ProcessEnv,
-    });
+      },
+    } as OpenClawConfig);
 
     expect(result).toEqual({
-      auth: {
-        token: undefined,
-        password: undefined,
-      },
+      auth: EMPTY_PROBE_AUTH,
     });
   });
 
   it("ignores unresolved local token SecretRef in remote mode when remote-only auth is requested", () => {
-    const result = resolveGatewayProbeAuthSafe({
-      cfg: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example",
-          },
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
-          },
+    const result = resolveSafeProbeAuth(
+      configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
-      mode: "remote",
-      env: {} as NodeJS.ProcessEnv,
-    });
+        auth: tokenAuthConfig("MISSING_LOCAL_TOKEN"),
+      }),
+      "remote",
+    );
 
     expect(result).toEqual({
-      auth: {
-        token: undefined,
-        password: undefined,
-      },
+      auth: EMPTY_PROBE_AUTH,
     });
   });
 });
@@ -169,19 +159,9 @@ describe("resolveGatewayProbeTarget", () => {
 describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
   it("resolves env SecretRef token via async secret-inputs path", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: configWithDefaultEnvProvider({
+        auth: tokenAuthConfig("OPENCLAW_GATEWAY_TOKEN"),
+      }),
       mode: "local",
       env: {
         OPENCLAW_GATEWAY_TOKEN: "test-token-from-env",
@@ -197,20 +177,13 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
 
   it("returns empty auth without warning for gateway.remote SecretRefs in local probes", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: {
-        gateway: {
-          mode: "local",
-          remote: {
-            url: "wss://gateway.example",
-            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-          },
+      cfg: configWithDefaultEnvProvider({
+        mode: "local",
+        remote: {
+          url: "wss://gateway.example",
+          token: envSecretRef("REMOTE_GATEWAY_TOKEN"),
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      }),
       mode: "local",
       env: {
         REMOTE_GATEWAY_TOKEN: "remote-token",
@@ -219,26 +192,15 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
 
     expect(result.warning).toBeUndefined();
     expect(result.auth).toEqual({
-      token: undefined,
-      password: undefined,
+      ...EMPTY_PROBE_AUTH,
     });
   });
 
   it("returns warning and empty auth when SecretRef cannot be resolved via async path", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "MISSING_TOKEN_XYZ" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: configWithDefaultEnvProvider({
+        auth: tokenAuthConfig("MISSING_TOKEN_XYZ"),
+      }),
       mode: "local",
       env: {} as NodeJS.ProcessEnv,
     });
@@ -252,19 +214,9 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
 describe("resolveGatewayProbeAuthWithSecretInputs", () => {
   it("resolves local probe SecretRef values before shared credential selection", async () => {
     const auth = await resolveGatewayProbeAuthWithSecretInputs({
-      cfg: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "DAEMON_GATEWAY_TOKEN" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: configWithDefaultEnvProvider({
+        auth: tokenAuthConfig("DAEMON_GATEWAY_TOKEN"),
+      }),
       mode: "local",
       env: {
         DAEMON_GATEWAY_TOKEN: "resolved-daemon-token",

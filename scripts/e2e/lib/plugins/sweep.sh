@@ -3,14 +3,19 @@ set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/lib/docker-e2e-logs.sh
-OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
+OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY="${OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY:-0}"
+if [[ -z "${OPENCLAW_ENTRY:-}" && "$OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY" != "1" ]]; then
+  OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
+fi
 export OPENCLAW_ENTRY
-export OPENCLAW_PLUGINS_TMP_DIR="${OPENCLAW_PLUGINS_TMP_DIR:-/tmp}"
+OPENCLAW_PLUGINS_CREATED_TMP_DIR=0
+if [[ -z "${OPENCLAW_PLUGINS_TMP_DIR:-}" ]]; then
+  OPENCLAW_PLUGINS_TMP_DIR="$(mktemp -d "/tmp/openclaw-plugins.XXXXXX")"
+  OPENCLAW_PLUGINS_CREATED_TMP_DIR=1
+fi
+export OPENCLAW_PLUGINS_TMP_DIR
 OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"
 mkdir -p "$OPENCLAW_PLUGINS_TMP_DIR"
-PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(node scripts/e2e/lib/package-compat.mjs "$PACKAGE_VERSION")"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 run_plugins_openclaw_logged() {
   local label="$1"
@@ -31,13 +36,30 @@ run_plugins_shell_logged() {
   run_logged "$label" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" bash -c "$command"
 }
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-BUNDLED_PLUGIN_ROOT_DIR="extensions"
-OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
-
 source scripts/e2e/lib/plugins/fixtures.sh
 source scripts/e2e/lib/plugins/marketplace.sh
 source scripts/e2e/lib/plugins/clawhub.sh
+
+cleanup_openclaw_plugins_sweep() {
+  openclaw_plugins_cleanup_fixture_servers
+  if [[ "${OPENCLAW_PLUGINS_CREATED_TMP_DIR:-0}" = "1" ]]; then
+    rm -rf "$OPENCLAW_PLUGINS_TMP_DIR"
+  fi
+}
+
+if [[ "$OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY" = "1" ]]; then
+  return 0 2>/dev/null || { cleanup_openclaw_plugins_sweep; exit 0; }
+fi
+
+trap cleanup_openclaw_plugins_sweep EXIT
+
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
+OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(node scripts/e2e/lib/package-compat.mjs "$PACKAGE_VERSION")"
+export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+BUNDLED_PLUGIN_ROOT_DIR="extensions"
+OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
+
 demo_plugin_id="demo-plugin"
 demo_plugin_root="$OPENCLAW_PLUGIN_HOME/$demo_plugin_id"
 write_demo_fixture_plugin "$demo_plugin_root"

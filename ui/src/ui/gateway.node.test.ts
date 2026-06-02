@@ -126,6 +126,22 @@ type RequestTimingPayload = {
   errorCode?: string;
 };
 
+type ConnectTimingPayload = {
+  generation?: number;
+  phase?: string;
+  durationMs?: number;
+  phaseDurationMs?: number;
+  hasChallenge?: boolean;
+  usedFallback?: boolean;
+  secureContext?: boolean;
+  hasDeviceIdentity?: boolean;
+  hasDevice?: boolean;
+  hasAuthToken?: boolean;
+  hasDeviceToken?: boolean;
+  hasPassword?: boolean;
+  errorCode?: string;
+};
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label}`);
@@ -204,6 +220,12 @@ function expectLatestRequestTiming(
   ) {
     expect(timing.durationMs).toBe(Math.max(0, timing.endedAtMs - timing.startedAtMs));
   }
+}
+
+function connectTimingPayloads(onConnectTiming: ReturnType<typeof vi.fn>): ConnectTimingPayload[] {
+  return onConnectTiming.mock.calls.map(
+    ([payload]) => requireRecord(payload, "connect timing") as ConnectTimingPayload,
+  );
 }
 
 function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
@@ -554,6 +576,110 @@ describe("GatewayBrowserClient", () => {
       ok: false,
       errorCode: "CONFIG_ERROR",
     });
+  });
+
+  it("reports connect phase timing without credentials or nonce values", async () => {
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client, "nonce-secret");
+    const sentPayloads = connectTimingPayloads(onConnectTiming);
+    expect(sentPayloads.map((payload) => payload.phase)).toEqual([
+      "socket-open",
+      "challenge",
+      "device-identity-ready",
+      "connect-plan-ready",
+      "request-sent",
+    ]);
+    for (const payload of sentPayloads) {
+      expect(payload.generation).toBe(1);
+      expect(payload.durationMs).toBeTypeOf("number");
+      expect(payload.phaseDurationMs).toBeTypeOf("number");
+      expect(payload).not.toHaveProperty("token");
+      expect(payload).not.toHaveProperty("passwordValue");
+      expect(payload).not.toHaveProperty("nonce");
+      expect(JSON.stringify(payload)).not.toContain("shared-auth-token");
+      expect(JSON.stringify(payload)).not.toContain("nonce-secret");
+    }
+
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("hello");
+    });
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      generation: 1,
+      phase: "hello",
+      hasChallenge: true,
+      usedFallback: false,
+      secureContext: true,
+      hasDeviceIdentity: true,
+      hasDevice: true,
+      hasAuthToken: true,
+      hasDeviceToken: false,
+      hasPassword: false,
+    });
+  });
+
+  it("marks fallback connect timing when no challenge arrives", async () => {
+    useNodeFakeTimers();
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(connectTimingPayloads(onConnectTiming).map((payload) => payload.phase)).toContain(
+      "fallback",
+    );
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      phase: "request-sent",
+      hasChallenge: false,
+      usedFallback: true,
+    });
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
+  it("reports failed connect timing when the socket closes before hello", async () => {
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    const { ws } = await startConnect(client);
+    ws.emitClose(1006, "socket lost");
+
+    await vi.waitFor(() => {
+      expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+        phase: "failed",
+        errorCode: "SOCKET_CLOSED",
+      });
+    });
+
+    client.stop();
   });
 
   it("prefers explicit shared auth over cached device tokens", async () => {

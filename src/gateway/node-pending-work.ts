@@ -159,11 +159,11 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   }
   const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
   const state = stateByNodeId.get(normalizedNodeId);
-  const revision = state?.revision ?? 0;
   if (state) {
     pruneExpired(state, nowMs);
     pruneStateIfEmpty(normalizedNodeId, state);
   }
+  const revision = state?.revision ?? 0;
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
   const explicitItems = state ? sortedItems(state) : [];
   const items = explicitItems.slice(0, maxItems);

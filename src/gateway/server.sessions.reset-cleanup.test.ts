@@ -27,31 +27,30 @@ import {
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
+type ResetAcpState = {
+  backend?: string;
+  agent?: string;
+  runtimeSessionName?: string;
+  identity?: {
+    state?: string;
+    acpxRecordId?: string;
+    acpxSessionId?: string;
+  };
+  mode?: string;
+  runtimeOptions?: {
+    runtimeMode?: string;
+    timeoutSeconds?: number;
+  };
+  cwd?: string;
+  state?: string;
+};
+type ConfigFilePatch = Parameters<(typeof import("../config/config.js"))["writeConfigFile"]>[0];
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function expectResetAcpState(
-  acp:
-    | {
-        backend?: string;
-        agent?: string;
-        runtimeSessionName?: string;
-        identity?: {
-          state?: string;
-          acpxRecordId?: string;
-          acpxSessionId?: string;
-        };
-        mode?: string;
-        runtimeOptions?: {
-          runtimeMode?: string;
-          timeoutSeconds?: number;
-        };
-        cwd?: string;
-        state?: string;
-      }
-    | undefined,
-) {
+function expectResetAcpState(acp: ResetAcpState | undefined) {
   expect(acp?.backend).toBe("acpx");
   expect(acp?.agent).toBe("codex");
   expect(acp?.runtimeSessionName).toBe("runtime:reset");
@@ -65,8 +64,77 @@ function expectResetAcpState(
   expect(acp?.state).toBe("idle");
 }
 
-test("sessions.reset aborts active runs and clears queues", async () => {
+async function seedWaitingActiveMainSession() {
   await seedActiveMainSession();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+}
+
+async function resetMainSession() {
+  return await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+    "sessions.reset",
+    {
+      key: "main",
+    },
+  );
+}
+
+function installAcpRuntimeBackendWithFreshSession() {
+  const prepareFreshSession = vi.fn(async () => {});
+  acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+    id: "acpx",
+    runtime: {
+      prepareFreshSession,
+    },
+  });
+  return prepareFreshSession;
+}
+
+function resolvedAcpMeta(params: {
+  recordId: string;
+  backendSessionId: string;
+  runtimeSessionName?: string;
+  mode?: SessionAcpMeta["mode"];
+  runtimeOptions?: SessionAcpMeta["runtimeOptions"];
+}): SessionAcpMeta {
+  const meta: SessionAcpMeta = {
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: params.runtimeSessionName ?? "runtime:reset",
+    identity: {
+      state: "resolved",
+      acpxRecordId: params.recordId,
+      acpxSessionId: params.backendSessionId,
+      source: "status",
+      lastUpdatedAt: Date.now(),
+    },
+    mode: params.mode ?? "persistent",
+    cwd: "/tmp/acp-session",
+    state: "idle",
+    lastActivityAt: Date.now(),
+  };
+  if (params.runtimeOptions) {
+    meta.runtimeOptions = params.runtimeOptions;
+  }
+  return meta;
+}
+
+async function expectResetWithConfigSkipsBrowserCleanup(config: ConfigFilePatch) {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile(config);
+  try {
+    await seedWaitingActiveMainSession();
+    const reset = await resetMainSession();
+
+    expect(reset.ok).toBe(true);
+    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  } finally {
+    await writeConfigFile({});
+  }
+}
+
+test("sessions.reset aborts active runs and clears queues", async () => {
+  await seedWaitingActiveMainSession();
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
@@ -75,15 +143,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
   });
 
-  embeddedRunMock.activeIds.add("sess-main");
-  embeddedRunMock.waitResults.set("sess-main", true);
-
-  const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-    "sessions.reset",
-    {
-      key: "main",
-    },
-  );
+  const reset = await resetMainSession();
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
@@ -120,59 +180,19 @@ test("sessions.reset aborts active runs and clears queues", async () => {
 });
 
 test("sessions.reset skips browser cleanup when root browser support is disabled", async () => {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({ browser: { enabled: false } });
-  try {
-    await seedActiveMainSession();
-    embeddedRunMock.activeIds.add("sess-main");
-    embeddedRunMock.waitResults.set("sess-main", true);
-
-    const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      "sessions.reset",
-      {
-        key: "main",
-      },
-    );
-
-    expect(reset.ok).toBe(true);
-    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
-  } finally {
-    await writeConfigFile({});
-  }
+  await expectResetWithConfigSkipsBrowserCleanup({ browser: { enabled: false } });
 });
 
 test("sessions.reset skips browser cleanup when the browser plugin entry is disabled", async () => {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({ plugins: { entries: { browser: { enabled: false } } } });
-  try {
-    await seedActiveMainSession();
-    embeddedRunMock.activeIds.add("sess-main");
-    embeddedRunMock.waitResults.set("sess-main", true);
-
-    const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      "sessions.reset",
-      {
-        key: "main",
-      },
-    );
-
-    expect(reset.ok).toBe(true);
-    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
-  } finally {
-    await writeConfigFile({});
-  }
+  await expectResetWithConfigSkipsBrowserCleanup({
+    plugins: { entries: { browser: { enabled: false } } },
+  });
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  const prepareFreshSession = vi.fn(async () => {});
-  acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-    id: "acpx",
-    runtime: {
-      prepareFreshSession,
-    },
-  });
+  const prepareFreshSession = installAcpRuntimeBackendWithFreshSession();
 
   await writeSessionStore({
     entries: {
@@ -181,26 +201,14 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "runtime:reset",
-      identity: {
-        state: "resolved",
-        acpxRecordId: "agent:main:main",
-        acpxSessionId: "backend-session-1",
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
-      mode: "persistent",
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:main",
+      backendSessionId: "backend-session-1",
       runtimeOptions: {
         runtimeMode: "auto",
         timeoutSeconds: 30,
       },
-      cwd: "/tmp/acp-session",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
+    }),
   });
   const reset = await directSessionReq<{
     ok: true;
@@ -248,25 +256,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   });
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    {
-      acp?: {
-        backend?: string;
-        agent?: string;
-        runtimeSessionName?: string;
-        identity?: {
-          state?: string;
-          acpxRecordId?: string;
-          acpxSessionId?: string;
-        };
-        mode?: string;
-        runtimeOptions?: {
-          runtimeMode?: string;
-          timeoutSeconds?: number;
-        };
-        cwd?: string;
-        state?: string;
-      };
-    }
+    { acp?: ResetAcpState }
   >;
   expect(store["agent:main:main"]).not.toHaveProperty("acp");
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
@@ -275,13 +265,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  const prepareFreshSession = vi.fn(async () => {});
-  acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-    id: "acpx",
-    runtime: {
-      prepareFreshSession,
-    },
-  });
+  installAcpRuntimeBackendWithFreshSession();
 
   await writeSessionStore({
     entries: {
@@ -299,41 +283,19 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "runtime:reset",
-      identity: {
-        state: "resolved",
-        acpxRecordId: "agent:main:main",
-        acpxSessionId: "backend-session-main",
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
-      mode: "persistent",
-      cwd: "/tmp/acp-session",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:main",
+      backendSessionId: "backend-session-main",
+    }),
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:acp-child-1",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:acp-child-1",
+      backendSessionId: "backend-session-child-1",
       runtimeSessionName: "runtime:child-1",
-      identity: {
-        state: "resolved",
-        acpxRecordId: "agent:main:acp-child-1",
-        acpxSessionId: "backend-session-child-1",
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
       mode: "oneshot",
-      cwd: "/tmp/acp-session",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
+    }),
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:unrelated-acp-child",

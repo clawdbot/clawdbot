@@ -220,6 +220,15 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
       expectRecord(obj.memory, "device.health memory payload");
     },
   },
+  "device.apps": {
+    buildParams: () => ({ query: "calendar", includeSystem: true, limit: 5 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("device.apps", payload);
+      expect(Array.isArray(obj.apps)).toBe(true);
+    },
+  },
   "notifications.list": {
     buildParams: () => ({}),
     timeoutMs: 20_000,

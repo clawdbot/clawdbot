@@ -1,5 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -23,6 +26,7 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 type RunGroupParams = {
   args: string[];
@@ -645,6 +649,52 @@ describe("scripts/test-extension.mjs", () => {
     ]);
   });
 
+  posixIt(
+    "preserves wrapper termination when the pnpm child exits cleanly after SIGTERM",
+    async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
+      const fakePnpmPath = path.join(root, "pnpm");
+      const childPidPath = path.join(root, "child.pid");
+      const signaledPath = path.join(root, "signaled");
+
+      writeFakePnpm(fakePnpmPath);
+      const runner = spawn(process.execPath, [scriptPath, "firecrawl"], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+          OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+          npm_execpath: fakePnpmPath,
+        },
+        stdio: "ignore",
+      });
+      let childPid = 0;
+
+      try {
+        await waitFor(() => fileExists(childPidPath), 5_000);
+        childPid = Number(readFileSync(childPidPath, "utf8"));
+        expect(Number.isInteger(childPid)).toBe(true);
+
+        expect(runner.pid).toBeGreaterThan(0);
+        process.kill(runner.pid!, "SIGTERM");
+        const result = await waitForClose(runner);
+
+        expect(result).toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => fileExists(signaledPath), 5_000);
+        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        await waitFor(() => !isProcessAlive(childPid), 5_000);
+      } finally {
+        if (runner.pid && isProcessAlive(runner.pid)) {
+          process.kill(runner.pid, "SIGKILL");
+        }
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
   it("expands extension batch roots before applying exact Vitest excludes", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
     await runExtensionBatchPlan(
@@ -737,3 +787,63 @@ describe("scripts/test-extension.mjs", () => {
     expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
   });
 });
+
+function writeFakePnpm(filePath: string): void {
+  writeFileSync(
+    filePath,
+    [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs");',
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
+      'process.on("SIGTERM", () => {',
+      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
+      "  process.exit(0);",
+      "});",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(filePath, 0o755);
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+async function waitForClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await Promise.race([
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+    delay(timeoutMs).then(() => {
+      throw new Error("timed out waiting for child close");
+    }),
+  ]);
+}
+
+function fileExists(filePath: string): boolean {
+  try {
+    readFileSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

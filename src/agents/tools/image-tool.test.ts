@@ -1981,6 +1981,46 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("passes the shared remote read idle timeout when loading remote image references", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ content: "ok", base_resp: { status_code: 0, status_msg: "" } }),
+        ),
+    );
+    global.fetch = withFetchPreconnect(fetch);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    installImageUnderstandingProviderDeps([minimaxProvider, moonshotProvider], {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+    });
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+      });
+
+      await expectImageToolExecOk(tool, "https://example.test/reference.png");
+
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      const [, options] = fetchCallAt(loadWebMedia, 0);
+      expect((options as { readIdleTimeoutMs?: number }).readIdleTimeoutMs).toBe(120_000);
+    });
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");

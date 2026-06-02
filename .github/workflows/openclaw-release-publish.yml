@@ -46,11 +46,12 @@ on:
         default: true
         type: boolean
       release_profile:
-        description: Release coverage profile used for release evidence summaries
+        description: Release coverage profile used for release evidence summaries; default reads it from the validation manifest
         required: false
-        default: beta
+        default: from-validation
         type: choice
         options:
+          - from-validation
           - beta
           - stable
           - full
@@ -135,9 +136,9 @@ jobs:
             exit 1
           fi
           case "$RELEASE_PROFILE" in
-            beta|stable|full) ;;
+            from-validation|beta|stable|full) ;;
             *)
-              echo "release_profile must be one of: beta, stable, full" >&2
+              echo "release_profile must be one of: from-validation, beta, stable, full" >&2
               exit 1
               ;;
           esac
@@ -259,6 +260,7 @@ jobs:
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
 
       - name: Validate full release validation manifest
+        id: full_manifest
         if: ${{ inputs.publish_openclaw_npm }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -289,7 +291,7 @@ jobs:
             echo "Full release validation target SHA mismatch: expected $EXPECTED_SHA, got $target_sha" >&2
             exit 1
           fi
-          if [[ "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then
+          if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then
             echo "Full release validation profile mismatch: expected $EXPECTED_RELEASE_PROFILE, got $release_profile" >&2
             exit 1
           fi
@@ -297,6 +299,7 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
             exit 1
           fi
+          echo "release_profile=$release_profile" >> "$GITHUB_OUTPUT"
 
       - name: Validate release tag is reachable from a trusted release branch
         env:
@@ -332,7 +335,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RELEASE_PROFILE: ${{ steps.full_manifest.outputs.release_profile || inputs.release_profile }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
         run: |
           {
@@ -501,7 +504,7 @@ jobs:
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url updated_at created_at duration_seconds duration_label last_state
+            local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json
 
             last_state=""
             while true; do
@@ -509,6 +512,14 @@ jobs:
               status="$(printf '%s' "$run_json" | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
+                --jq '[.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' || true)"
+              if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
+                echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+                jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
+                print_failed_run_summary "${run_id}"
+                return 1
               fi
               url="$(printf '%s' "$run_json" | jq -r '.url')"
               updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"

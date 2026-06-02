@@ -847,6 +847,19 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function waitForChildExit(child: ChildProcess) {
+  return new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+}
+
 export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
   let stat: fs.Stats;
   try {
@@ -1011,50 +1024,122 @@ function writeSutConfig(params: {
   return { configPath, stateDir, tempRoot, workspace };
 }
 
-async function startLocalSut(params: {
-  gatewayPort: number;
-  groupId: string;
-  mockResponseText: string;
-  mockPort: number;
-  outputDir: string;
-  sutToken: string;
-  testerId: string;
-  repoRoot: string;
+type StartLocalSutDeps = {
+  createGatewaySpawnSpec?: typeof createOpenClawGatewaySpawnSpec;
+  drainUpdates?: typeof drainSutUpdates;
+  spawnLoggedCommand?: typeof spawnLogged;
+  waitForOutputReady?: typeof waitForOutput;
+  writeConfig?: typeof writeSutConfig;
+};
+
+export async function startLocalSut(
+  params: {
+    gatewayPort: number;
+    groupId: string;
+    mockResponseText: string;
+    mockPort: number;
+    outputDir: string;
+    sutToken: string;
+    testerId: string;
+    repoRoot: string;
+  },
+  deps: StartLocalSutDeps = {},
+) {
+  const drainUpdates = deps.drainUpdates ?? drainSutUpdates;
+  const writeConfig = deps.writeConfig ?? writeSutConfig;
+  const spawnLoggedCommand = deps.spawnLoggedCommand ?? spawnLogged;
+  const waitForOutputReady = deps.waitForOutputReady ?? waitForOutput;
+  const createGatewaySpawnSpec = deps.createGatewaySpawnSpec ?? createOpenClawGatewaySpawnSpec;
+  let gateway: ReturnType<typeof spawnLogged> | undefined;
+  let mock: ReturnType<typeof spawnLogged> | undefined;
+  try {
+    const drained = await drainUpdates(params.sutToken);
+    const config = writeConfig(params);
+    const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
+    mock = spawnLoggedCommand("node", ["scripts/e2e/mock-openai-server.mjs"], {
+      cwd: params.repoRoot,
+      env: mockServerEnv({ ...params, requestLog }),
+    });
+    await waitForOutputReady(
+      mock.child,
+      /mock-openai listening/u,
+      () => mock.output,
+      "mock-openai",
+      10_000,
+    );
+    const gatewaySpec = createGatewaySpawnSpec({
+      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      gatewayPort: params.gatewayPort,
+      repoRoot: params.repoRoot,
+    });
+    gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
+    await waitForOutputReady(
+      gateway.child,
+      /\[gateway\] ready/u,
+      () => gateway.output,
+      "gateway",
+      60_000,
+    );
+    return {
+      ...config,
+      drained,
+      gateway: gateway.child,
+      get gatewayLog() {
+        return gateway.output;
+      },
+      mock: mock.child,
+      get mockLog() {
+        return mock.output;
+      },
+      requestLog,
+    };
+  } catch (error) {
+    killTree(gateway?.child);
+    killTree(mock?.child);
+    throw error;
+  }
+}
+
+export async function recordProbeVideo(params: {
+  crabboxBin: string;
+  cwd: string;
+  durationSeconds: number;
+  leaseId: string;
+  outputPath: string;
+  provider: string;
+  runProbe: () => Promise<void>;
+  startDelayMs?: number;
+  target: string;
 }) {
-  const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
-  const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
-  const mock = spawnLogged("node", ["scripts/e2e/mock-openai-server.mjs"], {
-    cwd: params.repoRoot,
-    env: mockServerEnv({ ...params, requestLog }),
-  });
-  await waitForOutput(
-    mock.child,
-    /mock-openai listening/u,
-    () => mock.output,
-    "mock-openai",
-    10_000,
-  );
-  const gatewaySpec = createOpenClawGatewaySpawnSpec({
-    env: gatewayEnv({ ...config, sutToken: params.sutToken }),
-    gatewayPort: params.gatewayPort,
-    repoRoot: params.repoRoot,
-  });
-  const gateway = spawnLogged(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
-  await waitForOutput(gateway.child, /\[gateway\] ready/u, () => gateway.output, "gateway", 60_000);
-  return {
-    ...config,
-    drained,
-    gateway: gateway.child,
-    get gatewayLog() {
-      return gateway.output;
-    },
-    mock: mock.child,
-    get mockLog() {
-      return mock.output;
-    },
-    requestLog,
-  };
+  let recording: ChildProcess | undefined;
+  try {
+    recording = spawn(
+      params.crabboxBin,
+      [
+        "artifacts",
+        "video",
+        "--provider",
+        params.provider,
+        "--target",
+        params.target,
+        "--id",
+        params.leaseId,
+        "--duration",
+        `${params.durationSeconds}s`,
+        "--output",
+        params.outputPath,
+      ],
+      { cwd: params.cwd, stdio: "inherit" },
+    );
+    await sleep(params.startDelayMs ?? 3_000);
+    await params.runProbe();
+    const recordCode = await waitForChildExit(recording);
+    if (recordCode !== 0) {
+      throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
+    }
+  } finally {
+    killTree(recording);
+  }
 }
 
 async function startLocalSutDaemon(params: {
@@ -2512,34 +2597,18 @@ async function main() {
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
     const videoPath = path.join(outputDir, "telegram-user-crabbox-proof.mp4");
-    const recording = spawn(
-      opts.crabboxBin,
-      [
-        "artifacts",
-        "video",
-        "--provider",
-        opts.provider,
-        "--target",
-        opts.target,
-        "--id",
-        leaseId,
-        "--duration",
-        `${opts.recordSeconds}s`,
-        "--output",
-        videoPath,
-      ],
-      { cwd: root, stdio: "inherit" },
-    );
-    await new Promise((resolve) => {
-      setTimeout(resolve, 3_000);
+    await recordProbeVideo({
+      crabboxBin: opts.crabboxBin,
+      cwd: root,
+      durationSeconds: opts.recordSeconds,
+      leaseId,
+      outputPath: videoPath,
+      provider: opts.provider,
+      runProbe: async () => {
+        await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
+      },
+      target: opts.target,
     });
-    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
-    const recordCode = await new Promise<number | null>((resolve) => {
-      recording.on("exit", resolve);
-    });
-    if (recordCode !== 0) {
-      throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
-    }
     const motionVideoPath = path.join(outputDir, "telegram-user-crabbox-proof-motion.mp4");
     const motionGifPath = path.join(outputDir, "telegram-user-crabbox-proof-motion.gif");
     summary.mediaPreview = await createMotionPreview({

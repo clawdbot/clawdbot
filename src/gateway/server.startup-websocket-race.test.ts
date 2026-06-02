@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 type StartGatewayServer = typeof import("./test-helpers.js").startGatewayServer;
 type GatewayServerForTest = Awaited<ReturnType<StartGatewayServer>>;
@@ -52,25 +51,7 @@ afterEach(() => {
 
 describe("gateway startup websocket readiness", () => {
   it("attaches websocket upgrade handlers before exposing the listen step", async () => {
-    const registry = createEmptyPluginRegistry();
-    const runtimeState = await createGatewayRuntimeState({
-      cfg: {},
-      bindHost: "127.0.0.1",
-      port: 0,
-      controlUiEnabled: false,
-      controlUiBasePath: "/",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      resolvedAuth: {} as never,
-      getResolvedAuth: () => ({}) as never,
-      hooksConfig: () => null,
-      getHookClientIpConfig: () => ({}) as never,
-      pluginRegistry: registry,
-      deps: {} as never,
-      log: { info: () => {}, warn: () => {} },
-      logHooks: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
-      logPlugins: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
-    });
+    const runtimeState = await createGatewayRuntimeStateForTest();
     try {
       expect(runtimeState.httpBindHosts).toEqual([]);
       expect(runtimeState.httpServer.listenerCount("upgrade")).toBeGreaterThan(0);

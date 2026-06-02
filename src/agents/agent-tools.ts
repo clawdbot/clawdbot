@@ -110,11 +110,6 @@ import {
 } from "./tool-search.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-function isOpenAIProvider(provider?: string) {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return normalized === "openai";
-}
-
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 type GuardContainerMount = {
@@ -708,7 +703,6 @@ export function createOpenClawCodingTools(options?: {
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     applyPatchConfig?.enabled !== false &&
-    isOpenAIProvider(options?.modelProvider) &&
     isApplyPatchAllowedForModel({
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,

@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeGoogleModelId } from "./model-id.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
@@ -40,6 +41,9 @@ function normalizeGeminiProRequestId(id: string): string {
   }
   if (id === "gemini-3-pro" || id === "gemini-3-pro-preview" || id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
+  }
+  if (id === "gemma-4-26b") {
+    return normalizeGoogleModelId(id);
   }
   return id;
 }

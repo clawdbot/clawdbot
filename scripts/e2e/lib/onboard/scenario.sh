@@ -3,13 +3,37 @@ set -euo pipefail
 trap "" PIPE
 export TERM=xterm-256color
 source scripts/lib/openclaw-e2e-instance.sh
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
-ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
-OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
+OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY="${OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY:-0}"
+if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
+  openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
+fi
+ONBOARD_FLAGS="${ONBOARD_FLAGS:---flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui}"
+if [ -z "${OPENCLAW_ENTRY:-}" ] && [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
+  OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
+fi
 export OPENCLAW_ENTRY
+ONBOARD_TMP_ROOT="${OPENCLAW_ONBOARD_E2E_TMPDIR:-${TMPDIR:-/tmp}}"
+ONBOARD_TMP_ROOT="${ONBOARD_TMP_ROOT%/}"
+[ -n "$ONBOARD_TMP_ROOT" ] || ONBOARD_TMP_ROOT="/tmp"
+mkdir -p "$ONBOARD_TMP_ROOT"
+ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"
+OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"
+GATEWAY_LOG_PATH="$ONBOARD_TMP_DIR/gateway-e2e.log"
+export OPENCLAW_E2E_LOG_DIR
+export GATEWAY_LOG_PATH
+mkdir -p "$OPENCLAW_E2E_LOG_DIR"
+cleanup_onboard_artifacts() {
+  openclaw_e2e_stop_process "${GATEWAY_PID:-}"
+  rm -rf "$ONBOARD_TMP_DIR"
+}
+if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
+  trap cleanup_onboard_artifacts EXIT
+fi
 
 # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
-openclaw_e2e_install_trash_shim
+if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
+  openclaw_e2e_install_trash_shim
+fi
 
 send() {
   local payload="$1"
@@ -49,7 +73,7 @@ wait_for_log() {
 }
 
 start_gateway() {
-  GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 /tmp/gateway-e2e.log)"
+  GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")"
 }
 
 wait_for_gateway() {
@@ -57,7 +81,7 @@ wait_for_gateway() {
     if openclaw_e2e_probe_tcp 127.0.0.1 18789 500 >/dev/null 2>&1; then
       return 0
     fi
-    if [ -f /tmp/gateway-e2e.log ] && grep -E -q "listening on ws://[^ ]+:18789" /tmp/gateway-e2e.log; then
+    if [ -f "$GATEWAY_LOG_PATH" ] && grep -E -q "listening on ws://[^ ]+:18789" "$GATEWAY_LOG_PATH"; then
       if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
         return 0
       fi
@@ -65,12 +89,19 @@ wait_for_gateway() {
     sleep 1
   done
   echo "Gateway failed to start"
-  cat /tmp/gateway-e2e.log || true
+  cat "$GATEWAY_LOG_PATH" || true
   return 1
 }
 
 stop_gateway() {
   openclaw_e2e_stop_process "$1"
+}
+
+cleanup_wizard_case() {
+  exec 3>&- 2>/dev/null || true
+  openclaw_e2e_stop_process "${wizard_pid:-}"
+  stop_gateway "${gw_pid:-}"
+  rm -rf "${input_fifo_dir:-}"
 }
 
 run_wizard_cmd() {
@@ -89,21 +120,20 @@ run_wizard_cmd() {
   echo "== Wizard case: $case_name =="
   set_isolated_openclaw_env "$state_ref"
 
-  input_fifo_dir="$(mktemp -d "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
+  input_fifo_dir="$(mktemp -d "$ONBOARD_TMP_DIR/${case_name}.fifo.XXXXXX")"
   input_fifo="$input_fifo_dir/stdin.fifo"
   if ! mkfifo "$input_fifo"; then
     rm -rf "$input_fifo_dir"
     return 1
   fi
-  local log_path="/tmp/openclaw-onboard-${case_name}.log"
+  local log_path="$OPENCLAW_E2E_LOG_DIR/${case_name}.log"
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
   # Run under script to keep an interactive TTY for clack prompts.
   openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
   wizard_pid=$!
   if ! exec 3>"$input_fifo"; then
-    openclaw_e2e_stop_process "$wizard_pid"
-    rm -rf "$input_fifo_dir"
+    cleanup_wizard_case
     return 1
   fi
 
@@ -111,20 +141,14 @@ run_wizard_cmd() {
     start_gateway
     gw_pid="$GATEWAY_PID"
     if ! wait_for_gateway; then
-      exec 3>&-
-      openclaw_e2e_stop_process "$wizard_pid"
-      rm -rf "$input_fifo_dir"
-      stop_gateway "$gw_pid"
+      cleanup_wizard_case
       exit 1
     fi
   fi
 
   "$send_fn" || wizard_status=$?
   if [ "$wizard_status" -ne 0 ]; then
-    exec 3>&-
-    openclaw_e2e_stop_process "$wizard_pid"
-    rm -rf "$input_fifo_dir"
-    stop_gateway "$gw_pid"
+    cleanup_wizard_case
     echo "Wizard input driver exited with status $wizard_status"
     if [ -f "$log_path" ]; then
       tail -n 160 "$log_path" || true
@@ -133,19 +157,16 @@ run_wizard_cmd() {
   fi
 
   wait "$wizard_pid" || wizard_status=$?
+  wizard_pid=""
   if [ "$wizard_status" -ne 0 ]; then
-    exec 3>&-
-    rm -rf "$input_fifo_dir"
-    stop_gateway "$gw_pid"
+    cleanup_wizard_case
     echo "Wizard exited with status $wizard_status"
     if [ -f "$log_path" ]; then
       tail -n 160 "$log_path" || true
     fi
     exit "$wizard_status"
   fi
-  exec 3>&-
-  rm -rf "$input_fifo_dir"
-  stop_gateway "$gw_pid"
+  cleanup_wizard_case
   if [ -n "$validate_fn" ]; then
     "$validate_fn" "$log_path"
   fi
@@ -233,7 +254,7 @@ run_case_local_basic() {
     --skip-ui \
     --skip-health
 
-  validate_local_basic_log /tmp/openclaw-onboard-local-basic.log
+  validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"
 
   # Assert config + workspace scaffolding.
   workspace_dir="$OPENCLAW_STATE_DIR/workspace"
@@ -303,8 +324,10 @@ validate_local_basic_log() {
   openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"
 }
 
-run_case_local_basic
-run_case_remote_non_interactive
-run_case_reset
-run_case_channels
-run_case_skills
+if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
+  run_case_local_basic
+  run_case_remote_non_interactive
+  run_case_reset
+  run_case_channels
+  run_case_skills
+fi

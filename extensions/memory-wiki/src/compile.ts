@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { retryTransientMemoryRead } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
@@ -360,7 +361,10 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
   const readResult = await runTasksWithConcurrency({
     tasks: filePaths.map((relativePath) => async () => {
       const absolutePath = path.join(rootDir, relativePath);
-      const raw = await fs.readFile(absolutePath, "utf8");
+      const raw = await retryTransientMemoryRead(
+        () => fs.readFile(absolutePath, "utf8"),
+        `read wiki page ${absolutePath}`,
+      );
       return toWikiPageSummary({ absolutePath, relativePath, raw });
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,

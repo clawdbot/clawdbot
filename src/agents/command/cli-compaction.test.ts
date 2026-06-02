@@ -76,6 +76,7 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
+    setCliCompactionTestDeps({ resolveCliBackendConfig: () => null });
   });
 
   afterEach(async () => {
@@ -1405,5 +1406,213 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
       "claude-session",
     );
+  });
+
+  it("skips compaction when backend declares ownsNativeCompaction and has no harness endpoint", async () => {
+    const sessionKey = "agent:main:claude-owns-compaction";
+    const sessionId = "session-claude-owns";
+    const sessionFile = path.join(tmpDir, "session-claude-owns.jsonl");
+    const storePath = path.join(tmpDir, "sessions-claude-owns.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const compactAgentHarnessSession = vi.fn();
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+      resolveCliBackendConfig: () => ({
+        id: "claude-cli",
+        config: { command: "claude" },
+        bundleMcp: true,
+        ownsNativeCompaction: true,
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      recordCliCompactionInStore,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
+    expect(compactCalls).toHaveLength(0);
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(sessionEntry);
+  });
+
+  it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
+    const sessionKey = "agent:main:generic-no-ownership";
+    const sessionId = "session-generic";
+    const sessionFile = path.join(tmpDir, "session-generic.jsonl");
+    const storePath = path.join(tmpDir, "sessions-generic.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      resolveCliBackendConfig: () => ({
+        id: "generic-backend",
+        config: { command: "generic" },
+        bundleMcp: false,
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "generic-backend",
+      model: "model",
+    });
+
+    expect(compactCalls).toHaveLength(1);
+  });
+
+  it("still uses native harness path when backend declares ownsNativeCompaction and has agentHarnessId", async () => {
+    const sessionKey = "agent:main:codex-with-ownership";
+    const sessionId = "session-codex-ownership";
+    const sessionFile = path.join(tmpDir, "session-codex-ownership.jsonl");
+    const storePath = path.join(tmpDir, "sessions-codex-ownership.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+      agentHarnessId: "codex",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const contextEngine = buildContextEngine({ compactCalls });
+    const compactAgentHarnessSession = vi.fn(async () => ({
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 950, tokensAfter: 100 },
+    }));
+    const recordCliCompactionInStore = vi.fn(async () => ({
+      ...sessionEntry,
+      compactionCount: 1,
+    }));
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => contextEngine,
+      ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+      resolveCliBackendConfig: () => ({
+        id: "codex",
+        config: { command: "codex" },
+        bundleMcp: false,
+        ownsNativeCompaction: true,
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      applyAgentAutoCompactionGuard: vi.fn(async () => ({ supported: true, disabled: false })),
+      recordCliCompactionInStore,
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
+    expect(compactCalls).toHaveLength(0);
+    expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
   });
 });

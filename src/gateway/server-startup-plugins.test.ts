@@ -174,6 +174,65 @@ function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value:
   return call[0] as T;
 }
 
+function mockDeferredSlackStartupPlugins(): void {
+  loadPluginLookUpTable.mockReturnValueOnce({
+    manifestRegistry: pluginManifestRegistry,
+    startup: {
+      configuredDeferredChannelPluginIds: ["slack"] as string[],
+      pluginIds: ["slack", "memory-core"] as string[],
+    },
+    metrics: {
+      ...pluginLookUpTableMetrics,
+      startupPluginCount: 2,
+      deferredChannelPluginCount: 1,
+    },
+  });
+}
+
+function slackConfig(): OpenClawConfig {
+  return {
+    channels: {
+      slack: { enabled: true, token: "token" },
+    },
+  } as OpenClawConfig;
+}
+
+async function prepareBootstrapWithRuntimeConfig(
+  cfg: OpenClawConfig,
+  options: {
+    loadRuntimePlugins?: boolean;
+    loadSetupRuntimePlugins?: boolean;
+  } = {},
+) {
+  const log = createLog();
+  const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+  return await prepareGatewayPluginBootstrap({
+    cfgAtStart: cfg,
+    startupRuntimeConfig: cfg,
+    minimalTestGateway: false,
+    log,
+    ...options,
+  });
+}
+
+function expectStartupPluginLoad(params: {
+  pluginIds: string[];
+  preferSetupRuntimeForChannelPlugins: boolean;
+  suppressPluginInfoLogs: boolean;
+}): void {
+  const startupInput = firstCallArg<{
+    pluginIds?: string[];
+    preferSetupRuntimeForChannelPlugins?: boolean;
+    suppressPluginInfoLogs?: boolean;
+  }>(loadGatewayStartupPlugins);
+  expect(startupInput.pluginIds).toEqual(params.pluginIds);
+  expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(
+    params.preferSetupRuntimeForChannelPlugins,
+  );
+  expect(startupInput.suppressPluginInfoLogs).toBe(params.suppressPluginInfoLogs);
+}
+
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
@@ -308,83 +367,32 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   });
 
   it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {
-    loadPluginLookUpTable.mockReturnValueOnce({
-      manifestRegistry: pluginManifestRegistry,
-      startup: {
-        configuredDeferredChannelPluginIds: ["slack"] as string[],
-        pluginIds: ["slack", "memory-core"] as string[],
-      },
-      metrics: {
-        ...pluginLookUpTableMetrics,
-        startupPluginCount: 2,
-        deferredChannelPluginCount: 1,
-      },
-    });
-    const cfg = {
-      channels: {
-        slack: { enabled: true, token: "token" },
-      },
-    } as OpenClawConfig;
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    mockDeferredSlackStartupPlugins();
 
-    const result = await prepareGatewayPluginBootstrap({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
+    const result = await prepareBootstrapWithRuntimeConfig(slackConfig(), {
       loadRuntimePlugins: false,
       loadSetupRuntimePlugins: true,
     });
 
     expect(result.runtimePluginsLoaded).toBe(false);
-    const startupInput = firstCallArg<{
-      pluginIds?: string[];
-      preferSetupRuntimeForChannelPlugins?: boolean;
-      suppressPluginInfoLogs?: boolean;
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.pluginIds).toEqual(["slack"]);
-    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(true);
-    expect(startupInput.suppressPluginInfoLogs).toBe(true);
+    expectStartupPluginLoad({
+      pluginIds: ["slack"],
+      preferSetupRuntimeForChannelPlugins: true,
+      suppressPluginInfoLogs: true,
+    });
   });
 
   it("does not use setup-runtime preference for full bootstrap loads", async () => {
-    loadPluginLookUpTable.mockReturnValueOnce({
-      manifestRegistry: pluginManifestRegistry,
-      startup: {
-        configuredDeferredChannelPluginIds: ["slack"] as string[],
-        pluginIds: ["slack", "memory-core"] as string[],
-      },
-      metrics: {
-        ...pluginLookUpTableMetrics,
-        startupPluginCount: 2,
-        deferredChannelPluginCount: 1,
-      },
-    });
-    const cfg = {
-      channels: {
-        slack: { enabled: true, token: "token" },
-      },
-    } as OpenClawConfig;
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    mockDeferredSlackStartupPlugins();
 
-    const result = await prepareGatewayPluginBootstrap({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
-    });
+    const result = await prepareBootstrapWithRuntimeConfig(slackConfig());
 
     expect(result.runtimePluginsLoaded).toBe(true);
-    const startupInput = firstCallArg<{
-      pluginIds?: string[];
-      preferSetupRuntimeForChannelPlugins?: boolean;
-      suppressPluginInfoLogs?: boolean;
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.pluginIds).toEqual(["slack", "memory-core"]);
-    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
-    expect(startupInput.suppressPluginInfoLogs).toBe(false);
+    expectStartupPluginLoad({
+      pluginIds: ["slack", "memory-core"],
+      preferSetupRuntimeForChannelPlugins: false,
+      suppressPluginInfoLogs: false,
+    });
   });
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
@@ -402,15 +410,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
         },
       },
     } as OpenClawConfig;
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
 
-    const result = await prepareGatewayPluginBootstrap({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
-    });
+    const result = await prepareBootstrapWithRuntimeConfig(cfg);
     expect(result.startupPluginIds).toEqual([]);
     expect(result.deferredConfiguredChannelPluginIds).toEqual([]);
     expect(result.pluginLookUpTable).toBeUndefined();

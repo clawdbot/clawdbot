@@ -12,6 +12,7 @@ type GoogleApiCarrier = {
 };
 
 type GoogleProviderConfigLike = GoogleApiCarrier & {
+  baseUrl?: string | null;
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
@@ -35,6 +36,28 @@ function isGoogleGenerativeAiUrl(url: URL): boolean {
 function stripUrlUserInfo(url: URL): void {
   url.username = "";
   url.password = "";
+}
+
+const GOOGLE_VERTEX_HOST = "aiplatform.googleapis.com";
+const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
+
+export function isGoogleVertexHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === GOOGLE_VERTEX_HOST || normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX)
+  );
+}
+
+export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
+  const raw = normalizeOptionalString(baseUrl);
+  if (!raw) {
+    return false;
+  }
+  try {
+    return isGoogleVertexHostname(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
@@ -85,9 +108,12 @@ export function resolveGoogleGenerativeAiTransport<TApi extends string | null | 
   provider?: string;
   api: TApi;
   baseUrl?: string;
-}): { api: TApi | "google-generative-ai"; baseUrl?: string } {
+}): { api: TApi | "google-generative-ai" | "google-vertex"; baseUrl?: string } {
   const api =
     params.api ??
+    (params.provider === "google-vertex" && isGoogleVertexBaseUrl(params.baseUrl)
+      ? "google-vertex"
+      : undefined) ??
     (params.provider === "google" && params.baseUrl ? "google-generative-ai" : params.api);
   return {
     api,
@@ -107,6 +133,9 @@ export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
+  if (providerKey === "google-vertex" && isGoogleVertexBaseUrl(provider.baseUrl)) {
+    return false;
+  }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
   }

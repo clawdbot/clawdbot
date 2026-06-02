@@ -795,6 +795,91 @@ setInterval(() => {}, 1000);
     ).resolves.toBe("alpha,qa-channel,qa-lab,qa-matrix");
   });
 
+  it("fails successful QA chunks whose summary reports failed scenarios", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const qaSummaryJson = JSON.stringify({
+      counts: { failed: 1, passed: 1, total: 2 },
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      run: {
+        concurrency: 1,
+        fastMode: false,
+        finishedAt: "2026-05-30T00:00:01.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        primaryModelName: "gpt-5.5",
+        primaryProvider: "mock-openai",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+        startedAt: "2026-05-30T00:00:00.000Z",
+      },
+      scenarios: [
+        { name: "channel-chat-baseline", status: "pass", steps: [] },
+        { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
+      ],
+    });
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "gateway-restart-inflight-run",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain("diagnostic=qa-summary-failed-scenarios");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        diagnosticDetail: "QA suite reported 1 failed scenario(s)",
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
+    expect(summary.rows[0]).toEqual(
+      expect.objectContaining({
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      }),
+    );
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
   it("fails successful QA chunks that do not write the requested summary", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));

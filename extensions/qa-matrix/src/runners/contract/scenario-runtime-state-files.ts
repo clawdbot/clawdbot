@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -6,6 +7,8 @@ import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
+const MATRIX_PLUGIN_ID = "matrix";
+const MATRIX_INBOUND_DEDUPE_NAMESPACE = "inbound-dedupe";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 
 async function readJsonFile(pathname: string): Promise<unknown> {
@@ -191,6 +194,92 @@ function hasPersistedMatrixDedupeEntry(params: {
   return params.parsed.entries.some((entry) => isRecord(entry) && entry.key === expectedKey);
 }
 
+function buildMatrixInboundDedupePluginStateKey(params: {
+  accountId: string;
+  eventId: string;
+  roomId: string;
+}): string {
+  const accountId = params.accountId.trim() || "sut";
+  const roomId = params.roomId.trim();
+  const eventId = params.eventId.trim();
+  const digest = createHash("sha256")
+    .update(accountId)
+    .update("\0")
+    .update(roomId)
+    .update("\0")
+    .update(eventId)
+    .digest("hex");
+  return `${accountId}:${digest}`;
+}
+
+async function hasPersistedMatrixPluginStateDedupeEntry(params: {
+  accountId: string;
+  eventId: string;
+  roomId: string;
+  stateDir: string;
+}): Promise<string | null> {
+  const entryKey = buildMatrixInboundDedupePluginStateKey({
+    accountId: params.accountId,
+    eventId: params.eventId,
+    roomId: params.roomId,
+  });
+  const databasePaths = await findFilesByName({
+    filename: "openclaw.sqlite",
+    rootDir: params.stateDir,
+    maxDepth: 4,
+  });
+  if (databasePaths.length === 0) {
+    databasePaths.push(path.join(params.stateDir, "state", "openclaw.sqlite"));
+  }
+  const now = Date.now();
+  const isExpectedValue = (raw: unknown) => {
+    if (typeof raw !== "string") {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return (
+        isRecord(parsed) && parsed.roomId === params.roomId && parsed.eventId === params.eventId
+      );
+    } catch {
+      return false;
+    }
+  };
+  try {
+    const sqlite = await import("node:sqlite");
+    for (const databasePath of databasePaths) {
+      try {
+        await fs.access(databasePath);
+        const db = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+        try {
+          const rows = db
+            .prepare(
+              `SELECT entry_key AS entryKey, value_json AS valueJson
+                 FROM plugin_state_entries
+                WHERE plugin_id = ?
+                  AND namespace = ?
+                  AND (expires_at IS NULL OR expires_at > ?)`,
+            )
+            .all(MATRIX_PLUGIN_ID, MATRIX_INBOUND_DEDUPE_NAMESPACE, now) as Array<{
+            entryKey?: unknown;
+            valueJson?: unknown;
+          }>;
+          if (rows.some((row) => row.entryKey === entryKey || isExpectedValue(row.valueJson))) {
+            return databasePath;
+          }
+        } finally {
+          db.close();
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export async function waitForMatrixInboundDedupeEntry(params: {
   context: MatrixQaScenarioContext;
   eventId: string;
@@ -200,6 +289,15 @@ export async function waitForMatrixInboundDedupeEntry(params: {
 }) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
+    const sqlitePath = await hasPersistedMatrixPluginStateDedupeEntry({
+      accountId: params.context.sutAccountId ?? "sut",
+      eventId: params.eventId,
+      roomId: params.roomId,
+      stateDir: params.stateDir,
+    });
+    if (sqlitePath) {
+      return sqlitePath;
+    }
     const pathname = await resolveBestMatrixStateFile({
       context: params.context,
       filename: MATRIX_INBOUND_DEDUPE_FILENAME,

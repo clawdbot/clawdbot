@@ -44,6 +44,20 @@ function getSessionsSendTool(): SessionSendTool {
   return cachedSessionsSendTool;
 }
 
+function expectSessionsSendDetails(
+  result: { details?: unknown },
+  expected: { reply: string; sessionKey: string },
+): void {
+  const details = result.details as {
+    status?: string;
+    reply?: string;
+    sessionKey?: string;
+  };
+  expect(details.status).toBe("ok");
+  expect(details.reply).toBe(expected.reply);
+  expect(details.sessionKey).toBe(expected.sessionKey);
+}
+
 async function emitLifecycleAssistantReply(params: {
   opts: unknown;
   defaultSessionId: string;
@@ -159,14 +173,7 @@ describe("sessions_send gateway loopback", () => {
       message: "ping",
       timeoutSeconds: 5,
     });
-    const details = result.details as {
-      status?: string;
-      reply?: string;
-      sessionKey?: string;
-    };
-    expect(details.status).toBe("ok");
-    expect(details.reply).toBe("pong");
-    expect(details.sessionKey).toBe("main");
+    expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0] as
       | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
@@ -338,14 +345,10 @@ describe("sessions_send label lookup", () => {
         message: "hello labeled session",
         timeoutSeconds: 5,
       });
-      const details = result.details as {
-        status?: string;
-        reply?: string;
-        sessionKey?: string;
-      };
-      expect(details.status).toBe("ok");
-      expect(details.reply).toBe("labeled response");
-      expect(details.sessionKey).toBe("agent:main:test-labeled-session");
+      expectSessionsSendDetails(result, {
+        reply: "labeled response",
+        sessionKey: "agent:main:test-labeled-session",
+      });
     },
   );
 });
@@ -411,14 +414,10 @@ describe("sessions_send agent targeting", () => {
           message: "hello orion",
           timeoutSeconds: 5,
         });
-        const details = result.details as {
-          status?: string;
-          reply?: string;
-          sessionKey?: string;
-        };
-        expect(details.status).toBe("ok");
-        expect(details.reply).toBe("orion response");
-        expect(details.sessionKey).toBe("agent:orion:main");
+        expectSessionsSendDetails(result, {
+          reply: "orion response",
+          sessionKey: "agent:orion:main",
+        });
 
         const orionCall = spy.mock.calls
           .map(([opts]) => opts as { sessionId?: string; sessionKey?: string })

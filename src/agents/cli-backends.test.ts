@@ -31,6 +31,7 @@ function createBackendEntry(params: {
   bundleMcpMode?: CliBundleMcpMode;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   normalizeConfig?: (
@@ -48,6 +49,7 @@ function createBackendEntry(params: {
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
@@ -230,6 +232,7 @@ beforeEach(() => {
       id: "claude-cli",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
+      ownsNativeCompaction: true,
       config: {
         command: "claude",
         args: [
@@ -544,6 +547,11 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("declares ownsNativeCompaction for claude-cli", () => {
+    const resolved = requireCliBackendConfig("claude-cli");
+    expect(resolved?.ownsNativeCompaction).toBe(true);
   });
 
   it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {

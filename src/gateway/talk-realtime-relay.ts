@@ -220,6 +220,34 @@ function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   return session.activeAgentRuns.size;
 }
 
+function broadcastToolResultToOwner(
+  session: RelaySession,
+  params: {
+    callId: string;
+    turnId: string;
+    result: unknown;
+    final: boolean;
+    forced?: boolean;
+  },
+): void {
+  const payload =
+    params.forced === true
+      ? { result: params.result, forced: true }
+      : { result: params.result };
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "toolResult",
+    callId: params.callId,
+    talkEvent: session.talk.emit({
+      type: "tool.result",
+      callId: params.callId,
+      turnId: params.turnId,
+      payload,
+      final: params.final,
+    }),
+  });
+}
+
 function submitRelayAgentControlProviderResults(
   session: RelaySession,
   result: RealtimeVoiceAgentControlResult,
@@ -241,17 +269,11 @@ function submitRelayAgentControlProviderResults(
     } else {
       session.bridge.submitToolResult(callId, result.providerResult, { suppressResponse: true });
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolResult",
+    broadcastToolResultToOwner(session, {
       callId,
-      talkEvent: session.talk.emit({
-        type: "tool.result",
-        callId,
-        turnId,
-        payload: { result: result.providerResult },
-        final: true,
-      }),
+      turnId,
+      result: result.providerResult,
+      final: true,
     });
     session.activeAgentToolCalls.delete(callId);
     session.completedAgentToolCalls.add(callId);
@@ -787,17 +809,12 @@ export function submitTalkRealtimeRelayToolResult(params: {
     if (final && !cancelled && !isWorkingToolResult(params.result)) {
       session.forcedConsults.markDelivered(forcedConsult);
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolResult",
+    broadcastToolResultToOwner(session, {
       callId: params.callId,
-      talkEvent: session.talk.emit({
-        type: "tool.result",
-        callId: params.callId,
-        turnId,
-        payload: { result: params.result, forced: true },
-        final,
-      }),
+      turnId,
+      result: params.result,
+      forced: true,
+      final,
     });
     return;
   }
@@ -811,17 +828,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
       session.activeAgentToolCalls.delete(params.callId);
     }
   }
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "toolResult",
+  broadcastToolResultToOwner(session, {
     callId: params.callId,
-    talkEvent: session.talk.emit({
-      type: "tool.result",
-      callId: params.callId,
-      turnId,
-      payload: { result: params.result },
-      final,
-    }),
+    turnId,
+    result: params.result,
+    final,
   });
 }
 

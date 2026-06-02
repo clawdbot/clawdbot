@@ -155,7 +155,7 @@ export async function runPostCorePluginConvergence(params: {
       ...peerLinkRepair.changes,
     ],
     warnings,
-    errored: warnings.length > 0,
+    errored: smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };
@@ -215,6 +215,8 @@ export function filterRecordsToActive(params: {
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
  *  - `errored` boolean that callers translate into `status: "error"`.
+ *    Repair warnings are nonblocking; smoke failures remain blocking
+ *    because they prove an active installed payload is unloadable.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];

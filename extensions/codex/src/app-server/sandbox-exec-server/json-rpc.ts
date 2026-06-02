@@ -80,7 +80,9 @@ export function sendResult(
   id: string | number,
   result: JsonValue | undefined,
 ): void {
-  socket.send(JSON.stringify({ jsonrpc: "2.0", id, result: result ?? {} }));
+  socket.send(
+    JSON.stringify({ jsonrpc: "2.0", id, result: result === undefined ? {} : result }),
+  );
 }
 
 export function sendError(

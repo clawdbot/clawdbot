@@ -110,6 +110,25 @@ function resolveProviderFromModelRef(model: string | undefined): string | undefi
   return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
 }
 
+function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+  cfg: OpenClawConfig,
+  selectedModels: readonly string[],
+): string | undefined {
+  const currentModel = cfg.agents?.defaults?.model;
+  const primary =
+    typeof currentModel === "string"
+      ? currentModel.trim()
+      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
+        ? currentModel.primary.trim()
+        : undefined;
+  const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
+  if (!modelId) {
+    return undefined;
+  }
+  const canonical = `openai/${modelId}`;
+  return selectedModels.find((model) => model.trim() === canonical);
+}
+
 function resolveConfiguredProviderFromAuthChange(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -285,6 +304,13 @@ export async function promptAuthConfig(
       loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
+      const canonicalPrimary = resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+        next,
+        allowlistSelection.models,
+      );
+      if (canonicalPrimary) {
+        next = applyPrimaryModel(next, canonicalPrimary);
+      }
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
         scopeKeys: allowlistSelection.scopeKeys,
       });

@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectGateway } from "./app-gateway.ts";
-import type { GatewayHelloOk } from "./gateway.ts";
+import type { GatewayConnectTiming, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 
-const refreshActiveTabMock = vi.hoisted(() => vi.fn(async () => undefined));
+const refreshActiveTabMock = vi.hoisted(() =>
+  vi.fn(async (_host?: unknown, _opts?: unknown) => undefined),
+);
 const refreshChatAvatarMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -19,6 +21,7 @@ const verifyPushMock = vi.hoisted(() => vi.fn(async () => undefined));
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  emitConnectTiming: (timing?: Partial<GatewayConnectTiming>) => void;
   emitHello: (hello?: GatewayHelloOk) => void;
 };
 
@@ -42,10 +45,26 @@ vi.mock("./gateway.ts", async (importOriginal) => {
     readonly stop = vi.fn();
     readonly request = vi.fn(async () => ({}));
 
-    constructor(private opts: { onHello?: (hello: GatewayHelloOk) => void }) {
+    constructor(
+      private opts: {
+        onConnectTiming?: (timing: GatewayConnectTiming) => void;
+        onHello?: (hello: GatewayHelloOk) => void;
+      },
+    ) {
       gatewayClients.push({
         start: this.start,
         stop: this.stop,
+        emitConnectTiming: (timing) => {
+          this.opts.onConnectTiming?.({
+            generation: 1,
+            phase: "hello",
+            durationMs: 20,
+            phaseDurationMs: 2,
+            hasChallenge: true,
+            usedFallback: false,
+            ...timing,
+          });
+        },
         emitHello: (hello) => {
           this.opts.onHello?.(
             hello ?? {
@@ -219,6 +238,16 @@ function connectHost(tab: Tab) {
   return { host, client };
 }
 
+function eventPayloads(
+  host: ReturnType<typeof createHost>,
+  event: string,
+): Record<string, unknown>[] {
+  const buffer = host.eventLogBuffer as { event?: string; payload?: unknown }[];
+  return buffer
+    .filter((entry) => entry.event === event && entry.payload && typeof entry.payload === "object")
+    .map((entry) => entry.payload as Record<string, unknown>);
+}
+
 beforeEach(() => {
   gatewayClients.length = 0;
   refreshActiveTabMock.mockClear();
@@ -242,7 +271,9 @@ describe("connectGateway chat load startup work", () => {
 
     client.emitHello();
 
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() =>
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+    );
     expect(loadAgentsMock).toHaveBeenCalledWith(host);
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
 
@@ -250,6 +281,85 @@ describe("connectGateway chat load startup work", () => {
     await agentsList.promise;
     await Promise.resolve();
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips agents.list when the startup chat refresh returns agents", async () => {
+    refreshActiveTabMock.mockImplementationOnce(async (target: unknown) => {
+      (target as { agentsList: unknown }).agentsList = {
+        agents: [{ id: "main", name: "Main" }],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      };
+    });
+    const { host, client } = connectHost("chat");
+
+    client.emitHello();
+
+    await vi.waitFor(() =>
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+    );
+    await Promise.resolve();
+    expect(loadAgentsMock).not.toHaveBeenCalled();
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for startup bootstrap before the first chat refresh", async () => {
+    const bootstrap = createDeferred();
+    const { host, client } = connectHost("chat");
+    (host as typeof host & { controlUiBootstrapReady?: Promise<void> }).controlUiBootstrapReady =
+      bootstrap.promise;
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(refreshActiveTabMock).not.toHaveBeenCalled();
+
+    bootstrap.resolve();
+    await vi.waitFor(() =>
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+    );
+  });
+
+  it("records connect timing through the Control UI performance buffer", () => {
+    const { host, client } = connectHost("chat");
+
+    client.emitConnectTiming({ phase: "request-sent", hasAuthToken: true });
+
+    expect(eventPayloads(host, "control-ui.connect")).toContainEqual(
+      expect.objectContaining({
+        generation: 1,
+        phase: "request-sent",
+        durationMs: 20,
+        hasChallenge: true,
+        hasAuthToken: true,
+      }),
+    );
+  });
+
+  it("starts chat refresh before lower-priority hello work", async () => {
+    const agentsList = createDeferred();
+    loadAgentsMock.mockReturnValueOnce(agentsList.promise);
+    const { host, client } = connectHost("chat");
+
+    client.emitHello();
+
+    await vi.waitFor(() =>
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+    );
+    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+
+    await vi.waitFor(() =>
+      expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, {
+        applyIdentity: false,
+      }),
+    );
+    expect(refreshActiveTabMock.mock.invocationCallOrder[0]).toBeLessThan(
+      loadControlUiBootstrapConfigMock.mock.invocationCallOrder[0],
+    );
+    expect(loadAssistantIdentityMock).toHaveBeenCalledWith(host);
+    expect(loadHealthStateMock).toHaveBeenCalledWith(host);
+    expect(verifyPushMock).toHaveBeenCalledWith();
   });
 
   it("starts literal global chat refresh before agents.list when hello names the default agent", async () => {
@@ -271,7 +381,9 @@ describe("connectGateway chat load startup work", () => {
       auth: { role: "operator", scopes: [] },
     });
 
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() =>
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+    );
     expect(loadAgentsMock).toHaveBeenCalledWith(host);
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
 
@@ -371,7 +483,9 @@ describe("connectGateway chat load startup work", () => {
 
     client.emitHello();
 
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() =>
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+    );
     expect(refreshChatAvatarMock).not.toHaveBeenCalled();
   });
 

@@ -352,6 +352,9 @@ export async function runWatchMain(params = {}) {
       });
       watchProcess.on("exit", (exitCode, exitSignal) => {
         watchProcess = null;
+        if (settled) {
+          return;
+        }
         if (settleIfShuttingDown()) {
           return;
         }
@@ -422,6 +425,9 @@ export async function runWatchMain(params = {}) {
       });
       watchProcess.on("exit", (exitCode, exitSignal) => {
         watchProcess = null;
+        if (settled) {
+          return;
+        }
         if (settleIfShuttingDown()) {
           return;
         }

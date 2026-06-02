@@ -449,6 +449,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         {
           check: false,
           quiet: true,
+          timeoutMs: this.remainingPhaseTimeoutMs(),
         },
       );
       this.log(result.stdout);
@@ -469,9 +470,14 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     }
     this.waitForVmNotRestoring(240);
     if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 240);
+      waitForVmStatus(this.options.vmName, "stopped", 240, {
+        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     }
   }
 
@@ -481,6 +487,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       }).stdout;
       if (!status.includes(" restoring")) {
         return;

@@ -1144,6 +1144,31 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
+  it("clears the visible local draft immediately when send clears the host draft", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    expect(onDraftChange).toHaveBeenCalledWith("submitted message");
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+  });
+
   it("commits local draft input before Enter sends", () => {
     const onDraftChange = vi.fn();
     const onSend = vi.fn();

@@ -439,18 +439,18 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
-async function assertModelFallbackCandidateHarnessAvailable(
+async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<void> {
+): Promise<{ skipsProviderAuthCooldown: boolean }> {
   if (!params.cfg) {
-    return;
+    return { skipsProviderAuthCooldown: false };
   }
   const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
     params.provider,
     params.model,
   );
   if (isCliProvider(params.provider, params.cfg)) {
-    return;
+    return { skipsProviderAuthCooldown: false };
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -469,28 +469,25 @@ async function assertModelFallbackCandidateHarnessAvailable(
       ? "model"
       : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return;
+    return { skipsProviderAuthCooldown: false };
   }
-  if (
-    agentRuntime === "auto" ||
-    agentRuntime === "openclaw" ||
-    (agentRuntime === "codex" && agentRuntimeSource === "implicit")
-  ) {
-    return;
+  if (agentRuntime === "openclaw") {
+    return { skipsProviderAuthCooldown: false };
+  }
+  if (agentRuntime === "auto" || (agentRuntime === "codex" && agentRuntimeSource === "implicit")) {
+    return { skipsProviderAuthCooldown: false };
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (
-    agentRuntime !== "auto" &&
-    agentRuntime !== "openclaw" &&
-    !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
-    !getRegisteredAgentHarness(agentRuntime)
-  ) {
+  if (!getRegisteredAgentHarness(agentRuntime)) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
+  // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
+  // provider cooldowns must not block the harness before it starts.
+  return { skipsProviderAuthCooldown: agentRuntime !== "codex" };
 }
 
 function resolveCandidateAttemptError(
@@ -1275,7 +1272,7 @@ export async function runWithModelFallback<T>(
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    await assertModelFallbackCandidateHarnessAvailable({
+    const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -1342,7 +1339,7 @@ export async function runWithModelFallback<T>(
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore) {
+    if (authRuntime && authStore && !candidateHarnessAuth.skipsProviderAuthCooldown) {
       const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,

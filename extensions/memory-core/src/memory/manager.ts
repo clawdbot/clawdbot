@@ -47,6 +47,7 @@ import {
   resolveMemoryProviderState,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import {
@@ -171,6 +172,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionsDirty = false;
   protected override sessionsDirtyFiles = new Set<string>();
   protected override sessionPendingFiles = new Set<string>();
+  private indexIdentityDirty = false;
   protected override sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
@@ -183,6 +185,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private indexIdentityState: MemoryIndexIdentityState = {
+    status: "missing",
+    reason: "index metadata is missing",
+  };
 
   private static async loadProviderResult(params: {
     cfg: OpenClawConfig;
@@ -267,6 +273,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
+    const initialIndexIdentity = this.resolveCurrentIndexIdentityState({
+      meta,
+      providerKeyKnown: Boolean(params.providerResult),
+    });
+    this.indexIdentityState = initialIndexIdentity;
+    this.indexIdentityDirty =
+      initialIndexIdentity.status === "mismatched" ||
+      (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
     const transient = params.purpose === "status" || params.purpose === "cli";
     if (!transient) {
       this.ensureWatcher();
@@ -377,6 +391,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+    const provider = this.providerInitialized
+      ? this.provider
+        ? { id: this.provider.id, model: this.provider.model }
+        : null
+      : undefined;
+    const state = this.resolveCurrentIndexIdentityState({
+      ...(provider !== undefined ? { provider } : {}),
+      providerKeyKnown: params?.providerKeyKnown,
+    });
+    this.indexIdentityState = state;
+    this.indexIdentityDirty =
+      state.status === "mismatched" ||
+      (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+    return state;
+  }
+
   async search(
     query: string,
     opts?: {
@@ -423,6 +454,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
     }
+    if (!this.provider && this.providerLifecycle.mode === "degraded") {
+      const activatedFallback = await this.activateFallbackProvider(
+        this.providerLifecycle.reason,
+      ).catch((fallbackErr: unknown) => {
+        log.warn(
+          `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+        );
+        return false;
+      });
+      if (activatedFallback) {
+        this.refreshIndexIdentityDirty({
+          providerKeyKnown: this.providerInitialized,
+        });
+      }
+    }
+    const indexIdentity = this.refreshIndexIdentityDirty({
+      providerKeyKnown: this.providerInitialized,
+    });
+    if (indexIdentity.status !== "valid") {
+      return [];
+    }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const searchSources =
@@ -442,20 +494,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
-
-    if (!this.provider && this.providerLifecycle.mode === "degraded") {
-      const activatedFallback = await this.activateFallbackProvider(
-        this.providerLifecycle.reason,
-      ).catch((fallbackErr: unknown) => {
-        log.warn(
-          `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
-        );
-        return false;
-      });
-      if (activatedFallback) {
-        await this.runSafeReindex({ reason: "fallback", force: true });
-      }
-    }
 
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
@@ -552,7 +590,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           })
         : false;
       if (activatedFallback) {
-        await this.runSafeReindex({ reason: "fallback", force: true });
+        if (
+          this.refreshIndexIdentityDirty({
+            providerKeyKnown: this.providerInitialized,
+          }).status !== "valid"
+        ) {
+          return [];
+        }
         keywordResults = await loadKeywordResults();
         queryVec = await this.embedQueryWithRetry(cleaned);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
@@ -856,6 +900,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
+    this.refreshIndexIdentityDirty({
+      providerKeyKnown: this.providerInitialized,
+    });
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
       db: {
@@ -884,7 +931,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
-      dirty: this.dirty || this.sessionsDirty,
+      dirty: this.dirty || this.sessionsDirty || this.indexIdentityDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
       provider: providerInfo.provider,
@@ -937,6 +984,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         searchMode: providerInfo.searchMode,
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
+        indexIdentity: this.indexIdentityState,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
           successes: this.readonlyRecoverySuccesses,

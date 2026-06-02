@@ -6,9 +6,9 @@ import { describe, expect, it } from "vitest";
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 const coldProviderSetupFiles = [
+  "src/agents/provider-auth-recovery-hint.ts",
   "src/commands/auth-choice-options.ts",
   "src/commands/configure.gateway-auth.ts",
-  "src/commands/provider-auth-guidance.ts",
   "src/flows/provider-flow.ts",
   "src/plugins/provider-auth-choices.ts",
   "src/plugins/provider-install-catalog.ts",

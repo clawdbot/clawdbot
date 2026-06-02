@@ -279,14 +279,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       defaultAgentId: "ops",
-      deferredMethods: ["agents.list", "chat.history"],
+      deferredMethods: ["chat.startup"],
       historyMessages: [],
       sessionKey: "global",
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("chat.startup");
+      expect(await gateway.getRequests("agents.list")).toHaveLength(0);
 
       const prompt = "send before agents list completes";
       await page
@@ -296,6 +297,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
       const params = requireRecord(sendRequest.params);
       expect(params.message).toBe(prompt);
       expect(params.sessionKey).toBe("global");
@@ -338,7 +344,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           (payload) => payload.phase === "first-assistant-visible" && payload.runId === runId,
         ),
       ).toBe(true);
-      await gateway.resolveDeferred("chat.history", {
+      await gateway.resolveDeferred("chat.startup", {
+        agentsList: {
+          agents: [{ id: "ops", name: "OpenClaw" }],
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "agent",
+        },
         messages: [],
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
@@ -346,8 +358,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
-
-      await gateway.resolveDeferred("agents.list");
+      expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -371,6 +382,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 

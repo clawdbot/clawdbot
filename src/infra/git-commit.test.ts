@@ -1,8 +1,7 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
@@ -51,21 +50,18 @@ async function makeFakeGitRepo(
   }
 }
 
+async function makeFakeOpenClawPackage(root: string) {
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+}
+
 describe("git commit resolution", () => {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
   let testing: (typeof import("./git-commit.js"))["testing"];
-  let repoHead: string;
 
   beforeAll(async () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-      .trim()
-      .slice(0, 7);
     ({ resolveCommitHash, testing } = await import("./git-commit.js"));
   });
 
@@ -86,6 +82,11 @@ describe("git commit resolution", () => {
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
     const temp = await makeTempDir("git-commit-cwd");
+    const repoRoot = path.join(temp, "openclaw");
+    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
+    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
+    await makeFakeOpenClawPackage(repoRoot);
+
     const otherRepo = path.join(temp, "other");
     const otherCommit = "1234567890abcdef1234567890abcdef12345678";
     await makeFakeGitRepo(otherRepo, { head: otherCommit });
@@ -93,11 +94,16 @@ describe("git commit resolution", () => {
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
     vi.spyOn(process, "cwd").mockReturnValue(otherRepo);
 
-    expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
+    expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoCommit.slice(0, 7));
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherCommit.slice(0, 7));
   });
 
-  it("prefers live git metadata over stale build info in a real checkout", () => {
+  it("prefers live git metadata over stale build info in a package checkout", async () => {
+    const temp = await makeTempDir("git-commit-live-checkout");
+    const repoRoot = path.join(temp, "openclaw");
+    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
+    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
+    await makeFakeOpenClawPackage(repoRoot);
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(
@@ -108,7 +114,7 @@ describe("git commit resolution", () => {
           readBuildInfoCommit: () => "deadbee",
         },
       }),
-    ).toBe(repoHead);
+    ).toBe(repoCommit.slice(0, 7));
   });
 
   it("caches build-info fallback results per resolved search directory", async () => {
@@ -155,9 +161,15 @@ describe("git commit resolution", () => {
     expect(readPackageJsonCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
-  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", () => {
+  it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
+    const temp = await makeTempDir("git-commit-invalid-module-url");
+    const repoRoot = path.join(temp, "openclaw");
+    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
+    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
+    await makeFakeOpenClawPackage(repoRoot);
+
     expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
-      repoHead,
+      repoCommit.slice(0, 7),
     );
   });
 

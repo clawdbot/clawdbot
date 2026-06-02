@@ -1,4 +1,9 @@
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
@@ -12,6 +17,7 @@ import {
   resolveRunVitestSpawnEnv,
   resolveTestProjectsDelegationArgs,
   resolveTestProjectsRunnerEnv,
+  resolveTestProjectsRunnerSpawnParams,
   resolveVitestCliEntry,
   resolveVitestNoOutputHeartbeatMs,
   resolveVitestNodeArgs,
@@ -19,6 +25,8 @@ import {
   resolveVitestSpawnParams,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
+
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -503,6 +511,80 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("spawns delegated test-project runs in a cleanup-friendly process group", () => {
+    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
+      env: { PATH: "/usr/bin" },
+      detached: true,
+      stdio: "inherit",
+    });
+    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
+      env: { PATH: "/usr/bin" },
+      detached: false,
+      stdio: "inherit",
+    });
+  });
+
+  posixIt("cleans delegated test-project children when the wrapper is signaled", async () => {
+    const fixturePath = nodePath.join(
+      "test",
+      "scripts",
+      `run-vitest-delegated-signal-${process.pid}-${Date.now()}.test.ts`,
+    );
+    const childPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
+    );
+
+    fs.writeFileSync(
+      fixturePath,
+      [
+        'import fs from "node:fs";',
+        'import { it } from "vitest";',
+        'it("waits for wrapper termination", async () => {',
+        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
+        "  await new Promise(() => {});",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const runner = spawn(
+      process.execPath,
+      ["scripts/run-vitest.mjs", fixturePath, "--reporter=verbose"],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
+        },
+        stdio: "ignore",
+      },
+    );
+    let childPid = 0;
+
+    try {
+      await waitFor(() => fs.existsSync(childPidPath), 10_000);
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      expect(Number.isInteger(childPid)).toBe(true);
+      expect(isProcessAlive(childPid)).toBe(true);
+
+      expect(runner.pid).toBeGreaterThan(0);
+      process.kill(runner.pid!, "SIGTERM");
+      const result = await waitForClose(runner);
+
+      expect(result).toEqual({ code: 143, signal: null });
+      await waitFor(() => !isProcessAlive(childPid), 5_000);
+    } finally {
+      if (runner.pid && isProcessAlive(runner.pid)) {
+        process.kill(runner.pid, "SIGKILL");
+      }
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(fixturePath, { force: true });
+      fs.rmSync(childPidPath, { force: true });
+    }
+  });
+
   it("spawns vitest in a detached process group on Unix hosts", () => {
     expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
       env: { PATH: "/usr/bin" },
@@ -713,3 +795,33 @@ describe("scripts/run-vitest", () => {
     ).toBeNull();
   });
 });
+
+async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
+  return await Promise.race([
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+    delay(timeoutMs).then(() => {
+      throw new Error("timed out waiting for child close");
+    }),
+  ]);
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

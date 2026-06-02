@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectRecordFields } from "../test-helpers.assertions.js";
 import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -174,13 +175,7 @@ function requireNonEmptyString(value: unknown, message: string): string {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expectRecordFields(value, "fields", expected);
 }
 
 function expectArtifactScopeNotFound(

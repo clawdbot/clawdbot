@@ -19,7 +19,8 @@ export OPENAI_API_KEY="sk-openclaw-release-typed-onboarding"
 PORT="18789"
 MOCK_PORT="44190"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_TYPED_ONBOARDING"
-MOCK_REQUEST_LOG="/tmp/openclaw-release-typed-onboarding-openai.jsonl"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 
 mock_pid=""
@@ -32,6 +33,7 @@ cleanup() {
   if [ -n "${input_fifo_dir:-}" ]; then
     rm -rf "$input_fifo_dir"
   fi
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 

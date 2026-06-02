@@ -6,6 +6,7 @@ const pluginRegistryMocks = vi.hoisted(() => {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
     loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
       const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
       return {
@@ -26,6 +27,8 @@ const pluginRegistryMocks = vi.hoisted(() => {
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex:
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+  resolveInstalledManifestRegistryIndexFingerprint:
+    pluginRegistryMocks.resolveInstalledManifestRegistryIndexFingerprint,
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
@@ -38,11 +41,100 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
 }));
 
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   resetProviderAuthAliasMapCacheForTest,
   resolveProviderIdForAuth,
 } from "./provider-auth-aliases.js";
+
+function createPluginManifestRecord(
+  plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    rootDir: `/plugins/${plugin.id}`,
+    source: `/plugins/${plugin.id}`,
+    manifestPath: `/plugins/${plugin.id}/.codex-plugin/plugin.json`,
+    ...plugin,
+  };
+}
+
+function createInstalledPluginIndexRecord(
+  plugin: PluginManifestRecord,
+): InstalledPluginIndexRecord {
+  return {
+    pluginId: plugin.id,
+    manifestPath: plugin.manifestPath,
+    manifestHash: `${plugin.id}:manifest`,
+    rootDir: plugin.rootDir,
+    origin: plugin.origin,
+    enabled: true,
+    enabledByDefault: true,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+    },
+    compat: [],
+  };
+}
+
+function createPluginMetadataSnapshot(params: {
+  config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+  plugins: readonly PluginManifestRecord[];
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  return {
+    policyHash,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [...params.plugins], diagnostics: [] },
+    plugins: params.plugins,
+    diagnostics: [],
+    byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: params.plugins.length,
+      manifestPluginCount: params.plugins.length,
+    },
+  };
+}
 
 describe("provider auth aliases", () => {
   beforeEach(() => {
@@ -56,9 +148,9 @@ describe("provider auth aliases", () => {
   });
 
   it("treats deprecated auth choice ids as provider auth aliases", () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    const metadataSnapshot = createPluginMetadataSnapshot({
       plugins: [
-        {
+        createPluginManifestRecord({
           id: "openai",
           origin: "bundled",
           providerAuthChoices: [
@@ -69,49 +161,52 @@ describe("provider auth aliases", () => {
               deprecatedChoiceIds: ["codex-cli", "openai-chatgpt-import"],
             },
           ],
-        },
+        }),
       ],
-      diagnostics: [],
     });
 
-    expect(resolveProviderIdForAuth("codex-cli")).toBe("openai");
-    expect(resolveProviderIdForAuth("openai-chatgpt-import")).toBe("openai");
-    expect(resolveProviderIdForAuth("openai")).toBe("openai");
+    expect(resolveProviderIdForAuth("codex-cli", { metadataSnapshot })).toBe("openai");
+    expect(resolveProviderIdForAuth("openai-chatgpt-import", { metadataSnapshot })).toBe("openai");
+    expect(resolveProviderIdForAuth("openai", { metadataSnapshot })).toBe("openai");
   });
 
   it("does not reuse aliases across env-resolved plugin roots", () => {
+    const config = {};
     const env = {
       HOME: "/home/one",
       OPENCLAW_HOME: undefined,
     } as NodeJS.ProcessEnv;
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry
-      .mockReturnValueOnce({
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({
+        config,
         plugins: [
-          {
+          createPluginManifestRecord({
             id: "one",
             origin: "global",
             providerAuthAliases: { fixture: "provider-one" },
-          },
+          }),
         ],
-        diagnostics: [],
-      })
-      .mockReturnValueOnce({
+      }),
+      { config, env },
+    );
+
+    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-one");
+    env.HOME = "/home/two";
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({
+        config,
         plugins: [
-          {
+          createPluginManifestRecord({
             id: "two",
             origin: "global",
             providerAuthAliases: { fixture: "provider-two" },
-          },
+          }),
         ],
-        diagnostics: [],
-      });
-
-    expect(resolveProviderIdForAuth("fixture", { config: {}, env })).toBe("provider-one");
-    env.HOME = "/home/two";
-    expect(resolveProviderIdForAuth("fixture", { config: {}, env })).toBe("provider-two");
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(
-      2,
+      }),
+      { config, env },
     );
+
+    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-two");
   });
 
   it("uses caller-provided metadata snapshots without loading plugin metadata", () => {

@@ -68,15 +68,30 @@ class MockGatewayClient {
     gatewayClientState.requests = [];
   }
 
+  private async emitHelloOk(): Promise<void> {
+    const onHelloOk = this.opts.onHelloOk;
+    if (typeof onHelloOk === "function") {
+      await onHelloOk({
+        type: "hello-ok",
+        server: gatewayClientState.helloServer,
+        auth: gatewayClientState.helloAuth,
+      });
+    }
+  }
+
+  private emitClose(): void {
+    const onClose = this.opts.onClose;
+    if (typeof onClose === "function") {
+      onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
+    }
+  }
+
   start(): void {
     gatewayClientState.startCalls += 1;
     void Promise.resolve()
       .then(async () => {
         if (gatewayClientState.startMode === "close") {
-          const onClose = this.opts.onClose;
-          if (typeof onClose === "function") {
-            onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
-          }
+          this.emitClose();
           return;
         }
         if (gatewayClientState.startMode === "connect-error-close") {
@@ -89,31 +104,14 @@ class MockGatewayClient {
               }),
             );
           }
-          const onClose = this.opts.onClose;
-          if (typeof onClose === "function") {
-            onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
-          }
+          this.emitClose();
           return;
         }
         if (gatewayClientState.startMode === "startup-retry-then-hello") {
-          const onHelloOk = this.opts.onHelloOk;
-          if (typeof onHelloOk === "function") {
-            await onHelloOk({
-              type: "hello-ok",
-              server: gatewayClientState.helloServer,
-              auth: gatewayClientState.helloAuth,
-            });
-          }
+          await this.emitHelloOk();
           return;
         }
-        const onHelloOk = this.opts.onHelloOk;
-        if (typeof onHelloOk === "function") {
-          await onHelloOk({
-            type: "hello-ok",
-            server: gatewayClientState.helloServer,
-            auth: gatewayClientState.helloAuth,
-          });
-        }
+        await this.emitHelloOk();
       })
       .catch(() => {});
   }
@@ -180,6 +178,8 @@ vi.mock("./event-loop-ready.js", () => ({
 
 const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
+type ProbeGatewayParams = Parameters<typeof probeGateway>[0];
+
 function expectProbeResultFields(
   result: Awaited<ReturnType<typeof probeGateway>>,
   fields: Partial<Awaited<ReturnType<typeof probeGateway>>>,
@@ -221,6 +221,49 @@ async function runLightweightProbe(url: string): Promise<Awaited<ReturnType<type
     timeoutMs: 1_000,
     includeDetails: false,
   });
+}
+
+async function runTokenProbe(
+  params: Partial<ProbeGatewayParams> = {},
+): Promise<Awaited<ReturnType<typeof probeGateway>>> {
+  return await probeGateway({
+    url: "ws://127.0.0.1:18789",
+    auth: { token: "secret" },
+    timeoutMs: 1_000,
+    ...params,
+  });
+}
+
+async function runTokenLightweightProbe(
+  params: Partial<ProbeGatewayParams> = {},
+): Promise<Awaited<ReturnType<typeof probeGateway>>> {
+  return await runTokenProbe({
+    includeDetails: false,
+    ...params,
+  });
+}
+
+function expectLightweightProbeResult(result: Awaited<ReturnType<typeof probeGateway>>): void {
+  expect(result.ok).toBe(true);
+  expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+  expect(gatewayClientState.requests).toStrictEqual([]);
+}
+
+async function primeDeviceRequiredProbeFailures(url: string): Promise<void> {
+  for (let i = 0; i < 3; i += 1) {
+    await runLightweightProbe(url);
+  }
+}
+
+function expectDeviceRequiredClose(
+  result: Awaited<ReturnType<typeof probeGateway>>,
+  hint?: string,
+): void {
+  expect(result.close).toEqual(
+    hint
+      ? { code: 1008, reason: "device identity required", hint }
+      : { code: 1008, reason: "device identity required" },
+  );
 }
 
 describe("probeGateway", () => {
@@ -313,11 +356,7 @@ describe("probeGateway", () => {
   });
 
   it("connects with operator.read scope", async () => {
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-    });
+    const result = await runTokenProbe();
 
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
@@ -345,12 +384,7 @@ describe("probeGateway", () => {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-probe-service-state",
     } as NodeJS.ProcessEnv;
 
-    await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      env,
-    });
+    await runTokenProbe({ env });
 
     expect(deviceIdentityState.identityPaths).toEqual([
       "/tmp/openclaw-probe-service-state/identity/device.json",
@@ -366,10 +400,8 @@ describe("probeGateway", () => {
   });
 
   it("keeps device identity enabled for remote probes", async () => {
-    await probeGateway({
+    await runTokenProbe({
       url: "wss://gateway.example/ws",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
     });
 
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
@@ -378,11 +410,7 @@ describe("probeGateway", () => {
   it("does not create or attach a device identity for first-time authenticated probes", async () => {
     deviceIdentityState.cachedToken = null;
 
-    await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-    });
+    await runTokenProbe();
 
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
@@ -415,32 +443,19 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result.ok).toBe(true);
-    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toStrictEqual([]);
+    expectLightweightProbeResult(result);
   });
 
   it("keeps device identity enabled for authenticated lightweight probes", async () => {
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
+    const result = await runTokenLightweightProbe();
 
-    expect(result.ok).toBe(true);
-    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toStrictEqual([]);
+    expectLightweightProbeResult(result);
   });
 
   it("falls back to token/password auth when device identity cannot be persisted", async () => {
     deviceIdentityState.throwOnLoad = true;
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-    });
+    const result = await runTokenProbe();
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
@@ -467,12 +482,9 @@ describe("probeGateway", () => {
   });
 
   it("passes through tls fingerprints for secure daemon probes", async () => {
-    await probeGateway({
+    await runTokenLightweightProbe({
       url: "wss://gateway.example/ws",
-      auth: { token: "secret" },
       tlsFingerprint: "sha256:abc",
-      timeoutMs: 1_000,
-      includeDetails: false,
     });
 
     expect(gatewayClientState.options?.tlsFingerprint).toBe("sha256:abc");
@@ -481,11 +493,8 @@ describe("probeGateway", () => {
   it("surfaces immediate close failures before the probe timeout", async () => {
     gatewayClientState.startMode = "close";
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
+    const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
-      includeDetails: false,
     });
 
     expectProbeResultFields(result, {
@@ -500,11 +509,8 @@ describe("probeGateway", () => {
   it("waits for gateway client close drain before resolving", async () => {
     gatewayClientState.stopAndWaitMode = "defer";
 
-    const probePromise = probeGateway({
+    const probePromise = runTokenLightweightProbe({
       url: nextProbeUrl("close-drain"),
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
     });
     let resolved = false;
     void probePromise.then(() => {
@@ -529,11 +535,8 @@ describe("probeGateway", () => {
   it("falls back to stop when close drain fails", async () => {
     gatewayClientState.stopAndWaitMode = "reject";
 
-    const result = await probeGateway({
+    const result = await runTokenLightweightProbe({
       url: nextProbeUrl("close-drain-fallback"),
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
     });
 
     expect(result.ok).toBe(true);
@@ -547,12 +550,7 @@ describe("probeGateway", () => {
       scopes: ["operator.write"],
     };
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
+    const result = await runTokenLightweightProbe();
 
     expectProbeAuthFields(result, {
       scopes: ["operator.write"],
@@ -563,12 +561,7 @@ describe("probeGateway", () => {
   it("keeps capability unknown when hello-ok omits auth metadata", async () => {
     gatewayClientState.helloAuth = undefined;
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
+    const result = await runTokenLightweightProbe();
 
     expectProbeAuthFields(result, {
       role: null,
@@ -580,12 +573,7 @@ describe("probeGateway", () => {
   it("reports connect-only only when hello-ok explicitly includes empty auth metadata", async () => {
     gatewayClientState.helloAuth = {};
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
+    const result = await runTokenLightweightProbe();
 
     expectProbeAuthFields(result, {
       role: null,
@@ -597,11 +585,8 @@ describe("probeGateway", () => {
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
+    const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
-      includeDetails: false,
     });
 
     expectProbeResultFields(result, {
@@ -614,12 +599,7 @@ describe("probeGateway", () => {
   it("keeps probing through internally retried startup-unavailable handshakes", async () => {
     gatewayClientState.startMode = "startup-retry-then-hello";
 
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      auth: { token: "secret" },
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
+    const result = await runTokenLightweightProbe();
 
     expectProbeResultFields(result, {
       ok: true,
@@ -639,8 +619,8 @@ describe("probeGateway", () => {
       expectProbeResultFields(result, {
         ok: false,
         error: "gateway closed (1008): device identity required",
-        close: { code: 1008, reason: "device identity required" },
       });
+      expectDeviceRequiredClose(result);
       expect(lastGatewayClientOptions()?.url).toBe(url);
     }
 
@@ -692,14 +672,12 @@ describe("probeGateway", () => {
     const firstUrl = nextProbeUrl("first-device-required");
     const secondUrl = nextProbeUrl("second-device-required");
 
-    for (let i = 0; i < 3; i += 1) {
-      await runLightweightProbe(firstUrl);
-    }
+    await primeDeviceRequiredProbeFailures(firstUrl);
 
     gatewayClientState.options = null;
     const result = await runLightweightProbe(secondUrl);
 
-    expect(result.close).toEqual({ code: 1008, reason: "device identity required" });
+    expectDeviceRequiredClose(result);
     expect(result.close?.hint).toBeUndefined();
     expect(lastGatewayClientOptions()?.url).toBe(secondUrl);
   });
@@ -710,15 +688,13 @@ describe("probeGateway", () => {
     let nowMs = 1_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     try {
-      for (let i = 0; i < 3; i += 1) {
-        await runLightweightProbe(url);
-      }
+      await primeDeviceRequiredProbeFailures(url);
 
       nowMs += 5 * 60_000;
       gatewayClientState.options = null;
       const result = await runLightweightProbe(url);
 
-      expect(result.close).toEqual({ code: 1008, reason: "device identity required" });
+      expectDeviceRequiredClose(result);
       expect(result.close?.hint).toBeUndefined();
       expect(lastGatewayClientOptions()?.url).toBe(url);
     } finally {
@@ -730,9 +706,7 @@ describe("probeGateway", () => {
     setDeviceRequiredProbeMode();
     const url = nextProbeUrl("paired-device-required");
 
-    for (let i = 0; i < 3; i += 1) {
-      await runLightweightProbe(url);
-    }
+    await primeDeviceRequiredProbeFailures(url);
 
     deviceIdentityState.cachedToken = {
       token: "cached-operator-token",
@@ -753,7 +727,7 @@ describe("probeGateway", () => {
     gatewayClientState.options = null;
     const afterSuccess = await runLightweightProbe(url);
 
-    expect(afterSuccess.close).toEqual({ code: 1008, reason: "device identity required" });
+    expectDeviceRequiredClose(afterSuccess);
     expect(afterSuccess.close?.hint).toBeUndefined();
     expect(lastGatewayClientOptions()?.url).toBe(url);
   });
@@ -762,19 +736,15 @@ describe("probeGateway", () => {
     setDeviceRequiredProbeMode();
     const url = nextProbeUrl("explicit-auth-device-required");
 
-    for (let i = 0; i < 3; i += 1) {
-      await runLightweightProbe(url);
-    }
+    await primeDeviceRequiredProbeFailures(url);
 
     gatewayClientState.startMode = "hello";
     gatewayClientState.helloAuth = {};
     gatewayClientState.options = null;
 
-    const result = await probeGateway({
+    const result = await runTokenLightweightProbe({
       url,
       auth: { token: "explicit-token" },
-      timeoutMs: 1_000,
-      includeDetails: false,
     });
 
     expect(result.ok).toBe(true);

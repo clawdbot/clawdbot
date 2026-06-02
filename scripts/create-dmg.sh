@@ -73,7 +73,7 @@ for vol in "/Volumes/$DMG_VOLUME_NAME"* "/Volumes/$APP_NAME"*; do
   fi
 done
 
-DMG_TEMP="$(mktemp -d /tmp/openclaw-dmg.XXXXXX)"
+DMG_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-dmg.XXXXXX")"
 trap 'hdiutil detach "/Volumes/'"$DMG_VOLUME_NAME"'" -force 2>/dev/null || true; rm -rf "$DMG_TEMP" 2>/dev/null || true' EXIT
 
 cp -R "$APP_PATH" "$DMG_TEMP/"
@@ -162,9 +162,9 @@ for i in {1..5}; do
   sleep 2
 done
 
-hdiutil resize -limits "$DMG_RW_PATH" >/tmp/openclaw-dmg-limits.txt 2>/dev/null || true
-MIN_SECTORS="$(tail -n 1 /tmp/openclaw-dmg-limits.txt 2>/dev/null | awk '{print $1}')"
-rm -f /tmp/openclaw-dmg-limits.txt
+DMG_LIMITS_PATH="$DMG_TEMP/resize-limits.txt"
+hdiutil resize -limits "$DMG_RW_PATH" >"$DMG_LIMITS_PATH" 2>/dev/null || true
+MIN_SECTORS="$(tail -n 1 "$DMG_LIMITS_PATH" 2>/dev/null | awk '{print $1}')"
 if [[ "$MIN_SECTORS" =~ ^[0-9]+$ ]] && [[ "$DMG_EXTRA_SECTORS" =~ ^[0-9]+$ ]]; then
   TARGET_SECTORS=$((MIN_SECTORS + DMG_EXTRA_SECTORS))
   echo "Shrinking RW image: min sectors=$MIN_SECTORS (+$DMG_EXTRA_SECTORS) -> $TARGET_SECTORS"

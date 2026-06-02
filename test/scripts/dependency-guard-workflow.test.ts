@@ -221,6 +221,17 @@ describe("dependency guard workflow", () => {
     expect(autoscrubCommentIndex).toBeGreaterThan(deleteCommentIndex);
   });
 
+  it("checks trusted actors before autoscrub can mutate dependency changes", () => {
+    const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
+    const trustedActorIndex = script.indexOf("const trustedActor =");
+    const autoscrubCandidateIndex = script.indexOf("const autoscrubCandidate =");
+    const autoscrubOutputIndex = script.indexOf('await setOutput("autoscrub", "true")');
+
+    expect(trustedActorIndex).toBeGreaterThan(0);
+    expect(autoscrubCandidateIndex).toBeGreaterThan(trustedActorIndex);
+    expect(autoscrubOutputIndex).toBeGreaterThan(trustedActorIndex);
+  });
+
   it("requires secops review for future workflow or guard changes", () => {
     const codeowners = readFileSync(CODEOWNERS, "utf8");
     expect(codeowners).toContain(

@@ -28,7 +28,11 @@ export function isSlackApprovalAuthorizedSender(params: {
   if (!senderId) {
     return false;
   }
-  return getSlackApprovalApprovers(params).includes(senderId);
+  const approvers = getSlackApprovalApprovers(params);
+  if (approvers.length > 0) {
+    return approvers.includes(senderId);
+  }
+  return (resolveSlackAccountAllowFrom(params) ?? []).some((entry) => entry.trim() === "*");
 }
 
 export const slackApprovalAuth = createResolvedApproverActionAuthAdapter({

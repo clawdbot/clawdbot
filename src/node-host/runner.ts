@@ -28,6 +28,7 @@ import {
 } from "./plugin-node-host.js";
 
 export { buildNodeInvokeResultParams };
+export { buildNodeEventParams } from "./invoke.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;

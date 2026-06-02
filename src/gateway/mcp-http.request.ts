@@ -12,6 +12,7 @@ import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
+const MCP_HTTP_BODY_TOO_LARGE_CODE = "ETOOBIG";
 
 function shouldLogMcpLoopbackHttp(): boolean {
   return (
@@ -168,18 +169,62 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let received = 0;
-    req.on("data", (chunk: Buffer) => {
+    let settled = false;
+    const cleanup = (options?: { keepErrorListener?: boolean }) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      if (options?.keepErrorListener !== true) {
+        req.off("error", onError);
+      }
+    };
+    const rejectOnce = (error: Error, options?: { keepErrorListener?: boolean }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(options);
+      reject(error);
+    };
+    const onData = (chunk: Buffer) => {
       received += chunk.length;
       if (received > MAX_MCP_BODY_BYTES) {
-        req.destroy();
-        reject(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`));
+        req.pause();
+        rejectOnce(createMcpHttpBodyTooLargeError(), { keepErrorListener: true });
         return;
       }
       chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
+    };
+    const onEnd = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf-8"));
+    };
+    const onError = (error: Error) => {
+      rejectOnce(error);
+    };
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   });
+}
+
+function createMcpHttpBodyTooLargeError(): Error & { code: string } {
+  return Object.assign(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`), {
+    code: MCP_HTTP_BODY_TOO_LARGE_CODE,
+  });
+}
+
+export function isMcpHttpBodyTooLargeError(
+  error: unknown,
+): error is Error & { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === MCP_HTTP_BODY_TOO_LARGE_CODE
+  );
 }
 
 export function resolveMcpRequestContext(

@@ -165,7 +165,7 @@ import {
 } from "./dynamic-tool-execution.js";
 import {
   filterCodexDynamicTools,
-  resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -595,7 +595,7 @@ export async function runCodexAppServerAttempt(
     tools,
     registeredTools,
     signal: runAbortController.signal,
-    loading: resolveCodexDynamicToolsLoading(pluginConfig),
+    loading: resolveCodexDynamicToolsLoadingForModel(pluginConfig, params.modelId),
     directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
     hookContext: {
       agentId: sessionAgentId,
@@ -2640,7 +2640,7 @@ export const testing = {
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   includeForcedCodexDynamicToolAllow,
-  resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
   resolveCodexAppServerHookChannelId,
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,

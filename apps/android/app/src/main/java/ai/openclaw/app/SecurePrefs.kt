@@ -40,11 +40,13 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+    private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
   }
 
   private val appContext = context.applicationContext
   private val json = Json { ignoreUnknownKeys = true }
+
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
@@ -113,6 +115,10 @@ class SecurePrefs(
   private val _canvasDebugStatusEnabled =
     MutableStateFlow(plainPrefs.getBoolean("canvas.debugStatusEnabled", false))
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
+
+  private val _installedAppsSharingEnabled =
+    MutableStateFlow(plainPrefs.getBoolean(installedAppsSharingEnabledKey, false))
+  val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
 
   private val _notificationForwardingEnabled =
     MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
@@ -250,6 +256,11 @@ class SecurePrefs(
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("canvas.debugStatusEnabled", value) }
     _canvasDebugStatusEnabled.value = value
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(installedAppsSharingEnabledKey, value) }
+    _installedAppsSharingEnabled.value = value
   }
 
   internal fun getNotificationForwardingPolicy(appPackageName: String): NotificationForwardingPolicy {

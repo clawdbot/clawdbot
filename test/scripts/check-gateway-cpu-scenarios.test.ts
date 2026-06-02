@@ -108,6 +108,31 @@ describe("gateway CPU scenario guard", () => {
     ]);
   });
 
+  it("fails startup build spawn errors and skips the startup bench", async () => {
+    const outputDir = makeTempRoot();
+    const calls: string[][] = [];
+    const options = testing.parseArgs(["--output-dir", outputDir, "--skip-qa"]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      silent: true,
+      spawnSync: (_command: string, args: string[]) => {
+        calls.push(args);
+        return {
+          error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
+          signal: null,
+          status: null,
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(calls).toEqual([["scripts/ensure-cli-startup-build.mjs"]]);
+    expect(result.summary.steps).toEqual([
+      { name: "startup build", error: "spawn ENOENT", signal: null, status: 1 },
+      { name: "startup bench", signal: null, status: 1 },
+    ]);
+  });
+
   it("prebuilds private QA dist before running QA scenarios when it is missing", async () => {
     const cwd = makeTempRoot();
     const outputDir = path.join(cwd, "out");

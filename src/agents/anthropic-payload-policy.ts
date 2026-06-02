@@ -52,7 +52,7 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   );
 }
 
-function resolveAnthropicEphemeralCacheControl(
+export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
 ): AnthropicEphemeralCacheControl | undefined {
@@ -231,6 +231,7 @@ export function applyAnthropicPayloadPolicyToParams(
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function applyAnthropicEphemeralCacheControlMarkers(
   payloadObj: Record<string, unknown>,
+  cacheControl: AnthropicEphemeralCacheControl | null = { type: "ephemeral" },
 ): void {
   const messages = payloadObj.messages;
   if (!Array.isArray(messages)) {
@@ -239,10 +240,11 @@ export function applyAnthropicEphemeralCacheControlMarkers(
 
   for (const message of messages as Array<{ role?: string; content?: unknown }>) {
     if (message.role === "system" || message.role === "developer") {
+      if (!cacheControl) {
+        continue;
+      }
       if (typeof message.content === "string") {
-        message.content = [
-          { type: "text", text: message.content, cache_control: { type: "ephemeral" } },
-        ];
+        message.content = [{ type: "text", text: message.content, cache_control: cacheControl }];
         continue;
       }
       if (Array.isArray(message.content) && message.content.length > 0) {
@@ -250,7 +252,7 @@ export function applyAnthropicEphemeralCacheControlMarkers(
         if (last && typeof last === "object") {
           const record = last as Record<string, unknown>;
           if (record.type !== "thinking" && record.type !== "redacted_thinking") {
-            record.cache_control = { type: "ephemeral" };
+            record.cache_control = cacheControl;
           }
         }
       }

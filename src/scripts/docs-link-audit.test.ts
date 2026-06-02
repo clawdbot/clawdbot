@@ -7,12 +7,27 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 const {
   normalizeRoute,
   prepareAnchorAuditDocsDir,
+  prepareMirroredDocsDir,
   resolveRoute,
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
 } = (await import("../../scripts/docs-link-audit.mjs")) as unknown as {
   normalizeRoute: (route: string) => string;
   prepareAnchorAuditDocsDir: (sourceDir?: string) => string;
+  prepareMirroredDocsDir: (
+    sourceDir?: string,
+    options?: {
+      resolveClawHubRepoPathImpl?: (value?: string, options?: { required?: boolean }) => string;
+      syncClawHubDocsTreeImpl?: (
+        targetDocsDir: string,
+        options?: { repoPath?: string; required?: boolean },
+      ) => unknown;
+    },
+  ) => {
+    cleanup: () => void;
+    dir: string;
+    mirroredClawHub: boolean;
+  };
   resolveRoute: (
     route: string,
     options?: { redirects?: Map<string, string>; routes?: Set<string> },
@@ -30,11 +45,20 @@ const {
     npmExecPath?: string;
     prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
     cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
+    prepareMirroredDocsDirImpl?: (sourceDir?: string) => {
+      cleanup: () => void;
+      dir: string;
+      mirroredClawHub: boolean;
+    };
   }) => number;
   sanitizeDocsConfigForEnglishOnly: (value: unknown) => unknown;
 };
 
 describe("docs-link-audit", () => {
+  function tempEntries(prefix: string): Set<string> {
+    return new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith(prefix)));
+  }
+
   it("normalizes route fragments away", () => {
     expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
       "/plugins/building-plugins",
@@ -148,6 +172,87 @@ describe("docs-link-audit", () => {
       fs.rmSync(anchorDocsDir, { recursive: true, force: true });
       cleanupTempDirs(tempDirs);
     }
+  });
+
+  it("cleans anchor audit docs copies when docs.json is invalid", () => {
+    const tempDirs: string[] = [];
+    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-invalid-");
+    const docsRoot = path.join(fixtureRoot, "docs");
+    fs.mkdirSync(docsRoot, { recursive: true });
+    fs.writeFileSync(path.join(docsRoot, "docs.json"), "{ invalid json", "utf8");
+
+    const before = tempEntries("openclaw-docs-anchor-audit-");
+    try {
+      expect(() => prepareAnchorAuditDocsDir(docsRoot)).toThrow();
+      const after = tempEntries("openclaw-docs-anchor-audit-");
+      expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("does not create mirrored docs copies for non-root docs trees", () => {
+    const tempDirs: string[] = [];
+    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-mirror-");
+    const docsRoot = path.join(fixtureRoot, "docs");
+    fs.mkdirSync(docsRoot, { recursive: true });
+
+    const before = tempEntries("openclaw-docs-link-audit-");
+    try {
+      const mirroredDocsDir = prepareMirroredDocsDir(docsRoot);
+      expect(mirroredDocsDir).toEqual({
+        cleanup: expect.any(Function),
+        dir: path.resolve(docsRoot),
+        mirroredClawHub: false,
+      });
+      mirroredDocsDir.cleanup();
+      const after = tempEntries("openclaw-docs-link-audit-");
+      expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("cleans mirrored docs copies when ClawHub sync fails", () => {
+    const before = tempEntries("openclaw-docs-link-audit-");
+
+    expect(() =>
+      prepareMirroredDocsDir(undefined, {
+        resolveClawHubRepoPathImpl() {
+          return path.join(os.tmpdir(), "clawhub-docs");
+        },
+        syncClawHubDocsTreeImpl() {
+          throw new Error("sync failed");
+        },
+      }),
+    ).toThrow("sync failed");
+
+    const after = tempEntries("openclaw-docs-link-audit-");
+    expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
+  });
+
+  it("cleans mirrored docs copies when anchor prep fails", () => {
+    let mirroredCleaned = false;
+
+    expect(() =>
+      runDocsLinkAuditCli({
+        args: ["--anchors"],
+        cleanupAnchorAuditDocsDirImpl() {
+          throw new Error("anchor cleanup should not run");
+        },
+        prepareAnchorAuditDocsDirImpl() {
+          throw new Error("anchor prep failed");
+        },
+        prepareMirroredDocsDirImpl: () => ({
+          cleanup() {
+            mirroredCleaned = true;
+          },
+          dir: path.join(os.tmpdir(), "openclaw-docs-mirrored"),
+          mirroredClawHub: true,
+        }),
+      }),
+    ).toThrow("anchor prep failed");
+    expect(mirroredCleaned).toBe(true);
   });
 
   it("uses Mintlify through pnpm dlx for anchor validation", () => {

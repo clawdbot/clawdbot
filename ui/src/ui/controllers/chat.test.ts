@@ -1347,6 +1347,58 @@ describe("loadChatHistory filtering", () => {
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
     );
   });
+
+  it("loads startup history with agents in one request", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+      agentsList: {
+        agents: [{ id: "ops", name: "Ops" }],
+        defaultId: "ops",
+        mainKey: "main",
+        scope: "agent",
+      },
+    });
+    const state = createState({
+      agentsError: "previous agents.list failure",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "global",
+    });
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(request).toHaveBeenCalledWith("chat.startup", {
+      sessionKey: "global",
+      limit: 100,
+    });
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "ready" }] },
+    ]);
+    expect(state.agentsError).toBeNull();
+    expect(state.agentsList?.defaultId).toBe("ops");
+    expect(state.agentsSelectedId).toBe("ops");
+  });
+
+  it("falls back to chat.history when startup history is not advertised", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        features: { methods: ["chat.history"], events: [] },
+      },
+    });
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 100,
+    });
+  });
 });
 
 describe("sendChatMessage", () => {
@@ -1717,6 +1769,38 @@ describe("abortChatRun", () => {
 });
 
 describe("loadChatHistory retry handling", () => {
+  it("falls back to chat.history when chat.startup is unknown", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: chat.startup",
+        }),
+      )
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: [{ type: "text", text: "fallback" }] }],
+      });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
+      sessionKey: "main",
+      limit: 100,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: "main",
+      limit: 100,
+    });
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fallback" }] },
+    ]);
+  });
+
   it("retries retryable startup unavailability before showing history", async () => {
     vi.useFakeTimers();
     try {

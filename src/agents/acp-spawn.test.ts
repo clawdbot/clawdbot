@@ -1033,7 +1033,7 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("does not treat a configured runtime=acp agent primary model as an ACP startup model", async () => {
+  it("uses configured runtime=acp agent primary model as an ACP startup model", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -1067,8 +1067,13 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
-    const initInput = expectInitializeSessionFields({ agent: "codex" });
-    expect(initInput.runtimeOptions).toBeUndefined();
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "anthropic/claude-sonnet-4-6",
+        thinking: "adaptive",
+      },
+    });
   });
 
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {

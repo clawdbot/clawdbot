@@ -16,11 +16,11 @@ run_plugins_clawhub_scenario() {
       node scripts/e2e/lib/clawhub-fixture-server.cjs plugins "$server_port_file" >"$server_log" 2>&1 &
       local server_pid="$!"
       echo "$server_pid" >"$server_pid_file"
+      openclaw_plugins_register_fixture_pid_file "$server_pid_file"
 
       for _ in $(seq 1 100); do
         if [[ -s "$server_port_file" ]]; then
           export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
-          openclaw_plugins_register_fixture_pid_file "$server_pid_file"
           return 0
         fi
         if ! kill -0 "$server_pid" 2>/dev/null; then

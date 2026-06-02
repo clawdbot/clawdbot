@@ -14,7 +14,7 @@ import Testing
     @Test func `forward options defaults`() {
         let opts = VoiceWakeForwarder.ForwardOptions()
         #expect(opts.sessionKey == "main")
-        #expect(opts.thinking == "low")
+        #expect(opts.thinking == nil)
         #expect(opts.deliver == true)
         #expect(opts.to == nil)
         #expect(opts.channel == .webchat)
@@ -38,6 +38,7 @@ import Testing
         #expect(opts.channel == .telegram)
         #expect(opts.to == "telegram:6812765697")
         #expect(opts.voiceWakeTrigger == "open claw")
+        #expect(opts.thinking == nil)
         #expect(opts.channel.shouldDeliver(opts.deliver) == true)
     }
 

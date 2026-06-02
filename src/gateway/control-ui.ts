@@ -754,6 +754,22 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.end(body);
 }
 
+function readOpenedFile(fd: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    fs.readFile(fd, (error, data) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(data);
+    });
+  });
+}
+
+async function readOpenedFileText(fd: number): Promise<string> {
+  return (await readOpenedFile(fd)).toString("utf8");
+}
+
 function isExpectedSafePathError(error: unknown): boolean {
   const code =
     typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
@@ -995,10 +1011,10 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
         return true;
       }
-      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
+      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
       return true;
     } finally {
       fs.closeSync(safeFile.fd);
@@ -1023,7 +1039,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

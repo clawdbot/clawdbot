@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
+  buildLiveShardPnpmArgs,
+  buildLiveShardSpawnParams,
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   selectLiveShardFiles,
@@ -121,6 +123,9 @@ describe("scripts/test-live-shard", () => {
 
   it("rejects unknown shard names", () => {
     expect(() => selectLiveShardFiles("native-live-missing")).toThrow(/Unknown live test shard/u);
+    expect(() => selectLiveShardFiles("native-live-extensions-l-z")).toThrow(
+      /Unknown live test shard/u,
+    );
   });
 
   it("parses list mode and rejects unknown live shard options", () => {
@@ -151,6 +156,26 @@ describe("scripts/test-live-shard", () => {
       shard: "native-live-test",
       listOnly: false,
       passthroughArgs: ["-t", "smoke"],
+    });
+    expect(buildLiveShardPnpmArgs(["test/foo.live.test.ts"], ["-t", "smoke"])).toEqual([
+      "test:live",
+      "--",
+      "test/foo.live.test.ts",
+      "-t",
+      "smoke",
+    ]);
+  });
+
+  it("spawns live shard children in a cleanup-friendly process group", () => {
+    expect(buildLiveShardSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
+      detached: true,
+      env: { PATH: "/usr/bin" },
+      stdio: "inherit",
+    });
+    expect(buildLiveShardSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
+      detached: false,
+      env: { PATH: "/usr/bin" },
+      stdio: "inherit",
     });
   });
 });

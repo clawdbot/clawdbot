@@ -96,6 +96,33 @@ type TailscaleUser = {
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
+type GatewayAuthRequestContext = {
+  authSurface: GatewayAuthSurface;
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+  localDirect: boolean;
+};
+
+function resolveGatewayAuthRequestContext(
+  params: AuthorizeGatewayConnectParams,
+): GatewayAuthRequestContext {
+  const { req, trustedProxies } = params;
+  const authSurface = params.authSurface ?? "http";
+  const ip =
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
+
+  return {
+    authSurface,
+    limiter: params.rateLimiter,
+    ip,
+    rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    localDirect: isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true),
+  };
+}
+
 function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean {
   return Boolean(
     normalizeOptionalString(connectAuth?.token) || normalizeOptionalString(connectAuth?.password),
@@ -402,23 +429,33 @@ function authorizePasswordAuth(params: {
   return { ok: true, method: "password" };
 }
 
+function rejectIfRateLimited(params: {
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+}): GatewayAuthResult | undefined {
+  if (!params.limiter) {
+    return undefined;
+  }
+  const rlCheck: RateLimitCheckResult = params.limiter.check(params.ip, params.rateLimitScope);
+  if (rlCheck.allowed) {
+    return undefined;
+  }
+  return {
+    ok: false,
+    reason: "rate_limited",
+    rateLimited: true,
+    retryAfterMs: rlCheck.retryAfterMs,
+  };
+}
+
 /** Authorize a gateway connection, including rate-limit handling around shared-secret failures. */
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
-  const { auth, req, trustedProxies } = params;
-  const authSurface = params.authSurface ?? "http";
-  const limiter = params.rateLimiter;
-  const ip =
-    params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
-    req?.socket?.remoteAddress;
-  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
-  const localDirect = isLocalDirectRequest(
-    req,
-    trustedProxies,
-    params.allowRealIpFallback === true,
-  );
+  const { auth } = params;
+  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
+    resolveGatewayAuthRequestContext(params);
 
   // Keep the limiter strict on the async Tailscale branch by serializing
   // attempts for the same {scope, ip} key across the pre-check and failure write.
@@ -443,19 +480,9 @@ async function authorizeGatewayConnectCore(
 ): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const authSurface = params.authSurface ?? "http";
+  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
+    resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
-  const limiter = params.rateLimiter;
-  const ip =
-    params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
-    req?.socket?.remoteAddress;
-  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
-  const localDirect = isLocalDirectRequest(
-    req,
-    trustedProxies,
-    params.allowRealIpFallback === true,
-  );
 
   if (auth.mode === "trusted-proxy") {
     // Same-host reverse proxies may forward identity headers without a full
@@ -485,16 +512,9 @@ async function authorizeGatewayConnectCore(
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     if (localDirect && auth.password && connectAuth?.password) {
-      if (limiter) {
-        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
-        if (!rlCheck.allowed) {
-          return {
-            ok: false,
-            reason: "rate_limited",
-            rateLimited: true,
-            retryAfterMs: rlCheck.retryAfterMs,
-          };
-        }
+      const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+      if (rateLimitResult) {
+        return rateLimitResult;
       }
       return authorizePasswordAuth({
         authPassword: auth.password,
@@ -511,16 +531,9 @@ async function authorizeGatewayConnectCore(
     return { ok: true, method: "none" };
   }
 
-  if (limiter) {
-    const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
-    if (!rlCheck.allowed) {
-      return {
-        ok: false,
-        reason: "rate_limited",
-        rateLimited: true,
-        retryAfterMs: rlCheck.retryAfterMs,
-      };
-    }
+  const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+  if (rateLimitResult) {
+    return rateLimitResult;
   }
 
   if (

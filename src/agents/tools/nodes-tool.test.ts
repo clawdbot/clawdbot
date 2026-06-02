@@ -462,6 +462,19 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
   });
 
+  it("preserves explicit null location_get payloads from node.invoke", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: null });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-location-null", {
+      action: "location_get",
+      node: "macbook",
+    });
+
+    expect(result.details).toBeNull();
+    expect(result.content).toEqual([{ type: "text", text: "null" }]);
+  });
+
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
     mockNodePairApproveFlow({
       requiredApproveScopes: ["operator.pairing", "operator.admin"],

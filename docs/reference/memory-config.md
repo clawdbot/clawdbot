@@ -58,6 +58,15 @@ explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
 Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
+<Warning>
+Changing the embedding provider, model, provider settings, sources, scope,
+chunking, or tokenizer can make the existing SQLite vector index incompatible.
+OpenClaw pauses vector search and reports an index identity warning instead of
+automatically re-embedding everything. Rebuild when you are ready with
+`openclaw memory status --index --agent <id>` or
+`openclaw memory index --force --agent <id>`.
+</Warning>
+
 If OpenAI embeddings are unreachable from your network, memory recall fails open
 instead of blocking the turn. Set the existing `memorySearch.provider` field to a
 reachable local, Ollama, regional, or OpenAI-compatible provider to restore
@@ -155,7 +164,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | `outputDimensionality` | `number` | `3072`                 | For Embedding 2: 768, 1536, or 3072        |
 
     <Warning>
-    Changing model or `outputDimensionality` triggers an automatic full reindex.
+    Changing model or `outputDimensionality` changes the index identity. OpenClaw
+    pauses vector search until you explicitly rebuild the memory index.
     </Warning>
 
   </Accordion>

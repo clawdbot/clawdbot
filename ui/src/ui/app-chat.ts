@@ -68,7 +68,12 @@ import {
 } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
-import type { ChatModelOverride, GatewaySessionRow, ModelCatalogEntry } from "./types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+} from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -109,12 +114,17 @@ export type ChatHost = ChatInputHistoryState & {
   chatSubmitGuards?: Map<string, Promise<void>>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  agentsList?: ChatAgentsListSnapshot | null;
+  agentsSelectedId?: string | null;
   eventLogBuffer?: unknown[];
   eventLog?: unknown[];
   tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
+};
+
+type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
+  agents?: Array<{ id: string }>;
 };
 
 function setChatError(host: ChatHost, error: string | null) {
@@ -1806,12 +1816,14 @@ function injectCommandResult(host: ChatHost, content: string) {
 
 export async function refreshChat(
   host: ChatHost,
-  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
+  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean; startup?: boolean },
 ) {
   const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState);
+  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+    startup: opts?.startup === true,
+  });
   const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);

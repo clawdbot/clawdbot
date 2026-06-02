@@ -219,7 +219,7 @@ What you set:
     - `--custom-model-id`
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
-    - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+    - `--custom-compatibility <openai|openai-responses|anthropic>` (optional; default `openai`)
     - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
 
   </Accordion>

@@ -201,4 +201,36 @@ describe("proxy stream wrappers", () => {
       { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
     ]);
   });
+
+  it("does not forward OpenRouter Anthropic cacheRetention to the underlying OpenAI transport", () => {
+    const payload = {
+      messages: [{ role: "system", content: "system prompt" }],
+    };
+    const calls: Array<{ cacheRetention?: unknown }> = [];
+    const baseStreamFn: StreamFn = (resolvedModel, _context, options) => {
+      calls.push({ cacheRetention: options?.cacheRetention });
+      options?.onPayload?.(payload, resolvedModel);
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenRouterSystemCacheWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4.6",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      { cacheRetention: "long" },
+    );
+
+    expect(calls[0]).toEqual({ cacheRetention: undefined });
+    expect(payload.messages[0]?.content).toEqual([
+      {
+        type: "text",
+        text: "system prompt",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+  });
 });

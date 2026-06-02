@@ -262,7 +262,12 @@ export async function createIsolatedCodexAppServerClient(
 
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
+  const clients = collectSharedClients(state);
   state.clients.clear();
+  state.leasedReleases = new WeakMap();
+  for (const client of clients) {
+    client.close();
+  }
 }
 
 export function clearSharedCodexAppServerClient(): void {

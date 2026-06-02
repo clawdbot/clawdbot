@@ -164,6 +164,41 @@ describe("session startup catch-up", () => {
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 
+  it("retries transient session transcript reads during session indexing", async () => {
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    const realOpen = fs.open;
+    let attempts = 0;
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+        const [target, flags, mode] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === session.filePath &&
+          attempts++ === 0
+        ) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, open",
+          ) as NodeJS.ErrnoException;
+          err.code = "UNKNOWN";
+          err.errno = -11;
+          throw err;
+        }
+        return await realOpen(target, flags, mode);
+      });
+
+    try {
+      await expect((harness as any).syncSessionFiles({ needsFullReindex: true })).resolves.toBe(
+        undefined,
+      );
+      expect(attempts).toBe(2);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("can mark startup catch-up files without scheduling background sync", async () => {
     const session = await writeSessionFile("thread.jsonl");
     const harness = new SessionStartupCatchupHarness([
@@ -196,5 +231,72 @@ describe("session startup catch-up", () => {
     expect(harness.getDirtySessionFiles()).toEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
     expect(harness.syncCalls).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "read",
+      fileName: "delta-read.jsonl",
+      failOn: "read" as const,
+      code: "EWOULDBLOCK",
+    },
+    {
+      name: "open",
+      fileName: "delta-open.jsonl",
+      failOn: "open" as const,
+      code: "EAGAIN",
+    },
+  ])("retries transient session transcript $name failures during delta updates", async (params) => {
+    const session = await writeSessionFile(params.fileName);
+    const harness = new SessionStartupCatchupHarness([]);
+    let attempts = 0;
+    const sessionBuffer = await fs.readFile(session.filePath);
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        const [target] = args;
+        if (
+          params.failOn === "open" &&
+          typeof target === "string" &&
+          path.resolve(target) === session.filePath &&
+          attempts++ === 0
+        ) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, open",
+          ) as NodeJS.ErrnoException;
+          err.code = params.code;
+          err.errno = -11;
+          throw err;
+        }
+
+        return {
+          read: async (buffer: Buffer, offset: number, length: number, position: number | null) => {
+            if (params.failOn === "read" && attempts++ === 0) {
+              const err = new Error(
+                "Unknown system error -11: Unknown system error -11, read",
+              ) as NodeJS.ErrnoException;
+              err.code = params.code;
+              err.errno = -11;
+              throw err;
+            }
+            const start = position ?? 0;
+            const chunk = sessionBuffer.subarray(start, start + length);
+            chunk.copy(buffer, offset);
+            return { bytesRead: chunk.length, buffer };
+          },
+          close: async () => {},
+        } as unknown as Awaited<ReturnType<typeof fs.open>>;
+      });
+
+    try {
+      const delta = await (harness as any).updateSessionDelta(session.filePath);
+      expect(delta).toMatchObject({
+        pendingBytes: session.size,
+        pendingMessages: 1,
+      });
+      expect(attempts).toBe(2);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });

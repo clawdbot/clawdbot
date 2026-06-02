@@ -28,6 +28,7 @@ data class NodeRuntimeFlags(
   val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
+  val installedAppsSharingEnabled: Boolean,
   val debugBuild: Boolean,
 )
 
@@ -43,6 +44,7 @@ enum class InvokeCommandAvailability {
   PhotosAvailable,
   MotionActivityAvailable,
   MotionPedometerAvailable,
+  InstalledAppsSharingEnabled,
   DebugBuild,
 }
 
@@ -194,6 +196,10 @@ object InvokeCommandRegistry {
         name = OpenClawDeviceCommand.Health.rawValue,
       ),
       InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Apps.rawValue,
+        availability = InvokeCommandAvailability.InstalledAppsSharingEnabled,
+      ),
+      InvokeCommandSpec(
         name = OpenClawNotificationsCommand.List.rawValue,
       ),
       InvokeCommandSpec(
@@ -281,6 +287,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.PhotosAvailable -> flags.photosAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
+          InvokeCommandAvailability.InstalledAppsSharingEnabled -> flags.installedAppsSharingEnabled
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
       }.map { it.name }

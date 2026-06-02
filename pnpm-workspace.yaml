@@ -17,7 +17,7 @@ minimumReleaseAgeExclude:
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
   - "hono"
-  - "libopus-wasm@0.1.0"
+  - "libopus-wasm@0.2.0"
   - "libsignal@6.0.0"
   - "openclaw"
   - "protobufjs"

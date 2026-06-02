@@ -21,6 +21,7 @@ import {
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
 } from "./read-file-shared.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
 async function isAllowedAdditionalDirectoryPath(
   additionalPath: string,
@@ -126,7 +127,12 @@ export async function readMemoryFile(params: {
   }
   let content: string;
   try {
-    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    content = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read memory file ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
   } catch (err) {
     if (isFileDisappearedDuringReadError(err)) {
       return { text: "", path: relPath };

@@ -294,6 +294,25 @@ export function createRuntimeSecretsActivator(params: {
               const candidate = value as PreparedRuntimeSecretsSnapshot;
               return isDeepStrictEqual(candidate.sourceConfig, sourceConfig) ? candidate : null;
             };
+            const prepareFastPathRuntimeSnapshot = async (
+              secretsRuntime: typeof import("../secrets/runtime.js"),
+              sourceConfig: OpenClawConfig,
+              includeAuthStoreRefs: boolean | undefined,
+            ) =>
+              await secretsRuntime.prepareSecretsRuntimeSnapshot({
+                config: sourceConfig,
+                env: fastPath.refreshContext.env,
+                agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
+                includeAuthStoreRefs:
+                  includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
+                loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
+                ...(fastPath.refreshContext.manifestRegistry
+                  ? { manifestRegistry: fastPath.refreshContext.manifestRegistry }
+                  : {}),
+                ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
+                  ? {}
+                  : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
+              });
             return await finishPreparedSnapshot(fastPath.snapshot, activationParams, {
               activateRuntimeSecretsSnapshot: (snapshot) =>
                 activateSecretsRuntimeSnapshotState({
@@ -306,20 +325,11 @@ export function createRuntimeSecretsActivator(params: {
                       if (!activeSnapshot) {
                         return false;
                       }
-                      return await secretsRuntime.prepareSecretsRuntimeSnapshot({
-                        config: sourceConfig,
-                        env: fastPath.refreshContext.env,
-                        agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
-                        includeAuthStoreRefs:
-                          includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
-                        loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
-                        ...(fastPath.refreshContext.manifestRegistry
-                          ? { manifestRegistry: fastPath.refreshContext.manifestRegistry }
-                          : {}),
-                        ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
-                          ? {}
-                          : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
-                      });
+                      return await prepareFastPathRuntimeSnapshot(
+                        secretsRuntime,
+                        sourceConfig,
+                        includeAuthStoreRefs,
+                      );
                     },
                     refresh: async ({ sourceConfig, includeAuthStoreRefs, preflightResult }) => {
                       const secretsRuntime = await loadSecretsRuntime();
@@ -329,21 +339,11 @@ export function createRuntimeSecretsActivator(params: {
                         fastPath.refreshContext.includeAuthStoreRefs;
                       const refreshed =
                         coercePreflightSnapshot(preflightResult, sourceConfig) ??
-                        (await secretsRuntime.prepareSecretsRuntimeSnapshot({
-                          config: sourceConfig,
-                          env: fastPath.refreshContext.env,
-                          agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
-                          includeAuthStoreRefs:
-                            includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
-                          loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
-                          ...(fastPath.refreshContext.manifestRegistry
-                            ? { manifestRegistry: fastPath.refreshContext.manifestRegistry }
-                            : {}),
-                          ...(fastPath.usesAuthStoreFallback ||
-                          !fastPath.refreshContext.loadAuthStore
-                            ? {}
-                            : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
-                        }));
+                        (await prepareFastPathRuntimeSnapshot(
+                          secretsRuntime,
+                          sourceConfig,
+                          includeAuthStoreRefs,
+                        ));
                       if (oneShotSkipAuthStoreRefs && activeSnapshot) {
                         // Preserve live auth-store handles across a one-shot
                         // preflight that intentionally skipped auth-store refs.

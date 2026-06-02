@@ -383,6 +383,33 @@ describe("runCli exit behavior", () => {
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses startup progress for json output commands before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "sessions", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "sessions", "--json", "--limit", "all"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "sessions",
+      "--json",
+      "--limit",
+      "all",
+    ]);
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
   it("pauses non-tty stdin after full CLI command completion", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);

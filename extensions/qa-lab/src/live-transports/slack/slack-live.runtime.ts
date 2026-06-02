@@ -49,7 +49,7 @@ type SlackChannelStatus = {
 
 type SlackChannelReadinessMode = "connected" | "started";
 
-const SLACK_QA_READY_TIMEOUT_MS = 45_000;
+const SLACK_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 const SLACK_QA_READY_STABILITY_MS = 3_000;
 const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
 const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
@@ -1540,8 +1540,9 @@ async function waitForSlackChannelRunning(
   mode: SlackChannelReadinessMode,
 ): Promise<SlackChannelStatus> {
   const startedAt = Date.now();
+  const timeoutMs = resolveSlackQaReadyTimeoutMs();
   let lastStatus: SlackChannelStatus | undefined;
-  while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
+  while (Date.now() - startedAt < timeoutMs) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -1598,8 +1599,9 @@ async function waitForSlackChannelStable(
   mode: SlackChannelReadinessMode,
 ) {
   const startedAt = Date.now();
+  const timeoutMs = resolveSlackQaReadyTimeoutMs();
   let readySince: number | undefined;
-  while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
+  while (Date.now() - startedAt < timeoutMs) {
     const status = await waitForSlackChannelRunning(gateway, accountId, mode);
     const observedAt = Date.now();
     readySince = resolveSlackChannelReadySince({
@@ -1644,6 +1646,14 @@ function resolveSlackChannelReadySince(params: {
     return params.status.lastConnectedAt;
   }
   return params.previousReadySince ?? params.observedAt;
+}
+
+function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+  const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
+  if (!raw) {
+    return SLACK_QA_DEFAULT_READY_TIMEOUT_MS;
+  }
+  return parseStrictPositiveInteger(raw) ?? SLACK_QA_DEFAULT_READY_TIMEOUT_MS;
 }
 
 function isRetryableSlackQaScenarioError(error: unknown) {
@@ -2167,6 +2177,7 @@ export const testing = {
   parseSlackQaCredentialPayload,
   preserveSlackGatewayDebugArtifacts,
   resolveSlackChannelReadySince,
+  resolveSlackQaReadyTimeoutMs,
   resolveSlackApprovalCheckpointConfig,
   resolveApprovalDecision,
   resolveSlackQaRuntimeEnv,

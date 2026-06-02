@@ -618,12 +618,20 @@ export function buildNodeInvokeResultParams(
   return params;
 }
 
+export function buildNodeEventParams(
+  event: string,
+  payload: unknown,
+): { event: string; payloadJSON: string | null } {
+  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
+  return {
+    event,
+    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
+  };
+}
+
 async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
   try {
-    await client.request("node.event", {
-      event,
-      payloadJSON: payload ? JSON.stringify(payload) : null,
-    });
+    await client.request("node.event", buildNodeEventParams(event, payload));
   } catch {
     // ignore: node events are best-effort
   }

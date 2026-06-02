@@ -43,6 +43,7 @@ const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
+const POSIX_PROCESS_SNAPSHOT_ARGS = ["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="];
 const ERROR_LOG_DENY_PATTERNS = [
   /\buncaught exception\b/iu,
   /\bunhandled rejection\b/iu,
@@ -403,11 +404,27 @@ function findBalancedJsonObjectEnd(text, startIndex) {
   return -1;
 }
 
-function unwrapRpcPayload(raw) {
+function hasOwnPayloadField(raw, field) {
+  return (
+    ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
+    Object.hasOwn(raw, field)
+  );
+}
+
+export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
   }
-  return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
+  if (hasOwnPayloadField(raw, "result")) {
+    return raw.result;
+  }
+  if (hasOwnPayloadField(raw, "payload")) {
+    return raw.payload;
+  }
+  if (hasOwnPayloadField(raw, "data")) {
+    return raw.data;
+  }
+  return raw;
 }
 
 async function rpcCall(method, params, options) {
@@ -1034,7 +1051,7 @@ async function samplePosixProcessWithDescendants(pid, run) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1054,7 +1071,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);

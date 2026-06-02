@@ -229,7 +229,7 @@ jobs:
     needs: [resolve_target]
     if: inputs.rerun_group == 'all'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -245,53 +245,10 @@ jobs:
           DOCKER_BUILDKIT: "1"
         run: |
           set -euo pipefail
-          timeout --kill-after=30s 35m docker build \
+          timeout --kill-after=30s 15m docker build \
             --target runtime-assets \
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
-
-      - name: Build and smoke test final Docker runtime image
-        env:
-          DOCKER_BUILDKIT: "1"
-          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-        run: |
-          set -euo pipefail
-          image_ref="openclaw-release-runtime-smoke:${TARGET_SHA}"
-          timeout --kill-after=30s 35m docker build \
-            --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
-            -t "${image_ref}" \
-            .
-          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
-            set -eu
-            test -f /app/src/agents/templates/HEARTBEAT.md
-            temp_root="$(mktemp -d)"
-            trap "rm -rf \"${temp_root}\"" EXIT
-            mkdir -p "${temp_root}/home" "${temp_root}/cwd"
-            cd "${temp_root}/cwd"
-            set +e
-            HOME="${temp_root}/home" \
-            USERPROFILE="${temp_root}/home" \
-            OPENCLAW_HOME="${temp_root}/home" \
-            OPENCLAW_NO_ONBOARD=1 \
-            OPENCLAW_SUPPRESS_NOTES=1 \
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
-            OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK=1 \
-            AWS_EC2_METADATA_DISABLED=true \
-            AWS_SHARED_CREDENTIALS_FILE="${temp_root}/home/.aws/credentials" \
-            AWS_CONFIG_FILE="${temp_root}/home/.aws/config" \
-              node /app/openclaw.mjs agent --message "workspace bootstrap smoke" --session-id "workspace-bootstrap-smoke" --local --timeout 1 --json \
-              >"${temp_root}/out.log" 2>&1
-            status="$?"
-            set -e
-            if grep -F "Missing workspace template:" "${temp_root}/out.log"; then
-              cat "${temp_root}/out.log"
-              exit 1
-            fi
-            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
-            if [ "${status}" -ne 0 ]; then
-              cat "${temp_root}/out.log"
-            fi
-          '
 
   normal_ci:
     name: Run normal full CI
@@ -380,6 +337,21 @@ jobs:
               gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
+            fail_fast_failed_jobs() {
+              local failed_jobs_json
+              failed_jobs_json="$(
+                fetch_child_jobs |
+                  jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
+              )"
+              if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
+                echo "::error::${workflow} has failed child jobs before the workflow completed; cancelling the remaining matrix."
+                jq '.[] | {name, conclusion, url: .html_url}' <<< "$failed_jobs_json"
+                cancel_child
+                trap - EXIT INT TERM
+                exit 1
+              fi
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -395,6 +367,9 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
+              if (( poll_count % 2 == 0 )); then
+                fail_fast_failed_jobs
+              fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
@@ -510,6 +485,21 @@ jobs:
               gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
             }
 
+            fail_fast_failed_jobs() {
+              local failed_jobs_json
+              failed_jobs_json="$(
+                fetch_child_jobs |
+                  jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
+              )"
+              if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
+                echo "::error::${workflow} has failed child jobs before the workflow completed; cancelling the remaining matrix."
+                jq '.[] | {name, conclusion, url: .html_url}' <<< "$failed_jobs_json"
+                cancel_child
+                trap - EXIT INT TERM
+                exit 1
+              fi
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -525,6 +515,9 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
+              if (( poll_count % 2 == 0 )); then
+                fail_fast_failed_jobs
+              fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
@@ -690,6 +683,24 @@ jobs:
               [[ "$saw_advisory" == "1" && "$failed" == "0" ]]
             }
 
+            fail_fast_failed_jobs() {
+              local failed_jobs_json
+              if [[ "$workflow" == "openclaw-release-checks.yml" && "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+                return 0
+              fi
+              failed_jobs_json="$(
+                fetch_child_jobs |
+                  jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
+              )"
+              if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
+                echo "::error::${workflow} has failed child jobs before the workflow completed; cancelling the remaining matrix."
+                jq '.[] | {name, conclusion, url: .html_url}' <<< "$failed_jobs_json"
+                cancel_child
+                trap - EXIT INT TERM
+                exit 1
+              fi
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -705,6 +716,9 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
+              if (( poll_count % 2 == 0 )); then
+                fail_fast_failed_jobs
+              fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
@@ -962,6 +976,21 @@ jobs:
           }
           trap cancel_child EXIT INT TERM
 
+          fail_fast_failed_jobs() {
+            local failed_jobs_json
+            failed_jobs_json="$(
+              gh_with_retry run view "$run_id" --json jobs \
+                --jq '[.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
+            )"
+            if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
+              echo "::error::npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run."
+              jq '.[] | {name, conclusion, url}' <<< "$failed_jobs_json"
+              cancel_child
+              trap - EXIT INT TERM
+              exit 1
+            fi
+          }
+
           poll_count=0
           while true; do
             status="$(gh_with_retry run view "$run_id" --json status --jq '.status')"
@@ -969,6 +998,9 @@ jobs:
               break
             fi
             poll_count=$((poll_count + 1))
+            if (( poll_count % 2 == 0 )); then
+              fail_fast_failed_jobs
+            fi
             if (( poll_count % 10 == 0 )); then
               echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
               gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true

@@ -27,6 +27,19 @@ type ChatAbortPayload = {
   };
 };
 
+type CreatedChatAbortOps = ChatAbortOps & {
+  broadcast: ReturnType<typeof vi.fn>;
+  nodeSendToSession: ReturnType<typeof vi.fn>;
+  removeChatRun: ReturnType<typeof vi.fn>;
+  clearedState: {
+    chatDeltaSentAt: Map<string, number>;
+    chatDeltaLastBroadcastLen: Map<string, number>;
+    chatDeltaLastBroadcastText: Map<string, string>;
+    agentDeltaSentAt: Map<string, number>;
+    bufferedAgentEvents: Map<string, unknown>;
+  };
+};
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -46,18 +59,7 @@ function createOps(params: {
   runId: string;
   entry: ChatAbortControllerEntry;
   buffer?: string;
-}): ChatAbortOps & {
-  broadcast: ReturnType<typeof vi.fn>;
-  nodeSendToSession: ReturnType<typeof vi.fn>;
-  removeChatRun: ReturnType<typeof vi.fn>;
-  clearedState: {
-    chatDeltaSentAt: Map<string, number>;
-    chatDeltaLastBroadcastLen: Map<string, number>;
-    chatDeltaLastBroadcastText: Map<string, string>;
-    agentDeltaSentAt: Map<string, number>;
-    bufferedAgentEvents: Map<string, unknown>;
-  };
-} {
+}): CreatedChatAbortOps {
   const { runId, entry, buffer } = params;
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
@@ -110,12 +112,46 @@ function createOps(params: {
   };
 }
 
+function createAbortRunFixture(params: {
+  runId?: string;
+  sessionKey?: string;
+  entry?: ChatAbortControllerEntry;
+  buffer?: string;
+  now?: Date;
+}): {
+  runId: string;
+  sessionKey: string;
+  entry: ChatAbortControllerEntry;
+  ops: CreatedChatAbortOps;
+} {
+  const runId = params.runId ?? "run-1";
+  const sessionKey = params.sessionKey ?? "main";
+  if (params.now) {
+    vi.useFakeTimers();
+    vi.setSystemTime(params.now);
+  }
+  const entry = params.entry ?? createActiveEntry(sessionKey);
+  const ops = createOps({ runId, entry, buffer: params.buffer });
+  return { runId, sessionKey, entry, ops };
+}
+
 function firstBroadcastPayload(ops: { broadcast: ReturnType<typeof vi.fn> }): unknown {
   const call = ops.broadcast.mock.calls[0];
   if (!call) {
     throw new Error("expected broadcast call");
   }
   return call[1];
+}
+
+function expectRunAborted(params: {
+  result: ReturnType<typeof abortChatRunById>;
+  entry: ChatAbortControllerEntry;
+  ops: ChatAbortOps;
+  runId: string;
+}): void {
+  expect(params.result).toEqual({ aborted: true });
+  expect(params.entry.controller.signal.aborted).toBe(true);
+  expect(params.ops.chatAbortControllers.has(params.runId)).toBe(false);
 }
 
 describe("isChatStopCommandText", () => {
@@ -202,21 +238,17 @@ describe("registerChatAbortController", () => {
 describe("abortChatRunById", () => {
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    const runId = "run-1";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry, buffer: "  Partial reply  " });
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      buffer: "  Partial reply  ",
+      now,
+    });
     ops.agentRunSeq.set(runId, 2);
     ops.agentRunSeq.set("client-run-1", 4);
     ops.removeChatRun.mockReturnValue({ sessionKey, clientRunId: "client-run-1" });
 
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
 
-    expect(result).toEqual({ aborted: true });
-    expect(entry.controller.signal.aborted).toBe(true);
-    expect(ops.chatAbortControllers.has(runId)).toBe(false);
+    expectRunAborted({ result, entry, ops, runId });
     expect(ops.chatRunBuffers.has(runId)).toBe(false);
     expect(ops.clearedState.chatDeltaSentAt.has(runId)).toBe(false);
     expect(ops.clearedState.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
@@ -258,52 +290,46 @@ describe("abortChatRunById", () => {
   });
 
   it("aborts hidden internal runs without broadcasting chat events", () => {
-    const runId = "run-hidden";
     const sessionKey = "main";
-    const entry = { ...createActiveEntry(sessionKey), controlUiVisible: false };
-    const ops = createOps({ runId, entry, buffer: "hidden partial" });
+    const { runId, entry, ops } = createAbortRunFixture({
+      runId: "run-hidden",
+      sessionKey,
+      entry: { ...createActiveEntry(sessionKey), controlUiVisible: false },
+      buffer: "hidden partial",
+    });
 
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
 
-    expect(result).toEqual({ aborted: true });
-    expect(entry.controller.signal.aborted).toBe(true);
-    expect(ops.chatAbortControllers.has(runId)).toBe(false);
+    expectRunAborted({ result, entry, ops, runId });
     expect(ops.broadcast).not.toHaveBeenCalled();
     expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 
-  it("fans out default-agent global aborts to scoped and legacy global subscribers", () => {
-    const runId = "run-main-global";
-    const entry = {
-      ...createActiveEntry("global"),
-      agentId: "main",
-    };
-    const ops = createOps({ runId, entry });
-    ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+  for (const testCase of [
+    {
+      name: "fans out default-agent global aborts to scoped and legacy global subscribers",
+      runId: "run-main-global",
+      createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+    },
+    {
+      name: "resolves unscoped global aborts to the default agent subscribers",
+      runId: "run-unscoped-global",
+      createEntry: () => createActiveEntry("global"),
+    },
+  ]) {
+    it(testCase.name, () => {
+      const ops = createOps({ runId: testCase.runId, entry: testCase.createEntry() });
+      ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
 
-    const result = abortChatRunById(ops, { runId, sessionKey: "global" });
+      const result = abortChatRunById(ops, { runId: testCase.runId, sessionKey: "global" });
 
-    expect(result).toEqual({ aborted: true });
-    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
-    expect(payload.agentId).toBe("main");
-    expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
-    expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
-  });
-
-  it("resolves unscoped global aborts to the default agent subscribers", () => {
-    const runId = "run-unscoped-global";
-    const entry = createActiveEntry("global");
-    const ops = createOps({ runId, entry });
-    ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
-
-    const result = abortChatRunById(ops, { runId, sessionKey: "global" });
-
-    expect(result).toEqual({ aborted: true });
-    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
-    expect(payload.agentId).toBe("main");
-    expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
-    expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
-  });
+      expect(result).toEqual({ aborted: true });
+      const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+      expect(payload.agentId).toBe("main");
+      expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
+      expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
+    });
+  }
 
   it("tags maintenance timeouts as timeout abort reasons", () => {
     const runId = "run-timeout";
@@ -322,12 +348,10 @@ describe("abortChatRunById", () => {
 
   it("preserves partial message even when abort listeners clear buffers synchronously", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    const runId = "run-1";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry, buffer: "streamed text" });
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      buffer: "streamed text",
+      now,
+    });
 
     // Simulate synchronous cleanup triggered by AbortController listeners.
     entry.controller.signal.addEventListener("abort", () => {

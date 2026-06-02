@@ -312,6 +312,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 

@@ -425,6 +425,28 @@ describe("requireApiKey", () => {
       'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
     );
   });
+
+  it("throws typed missing auth errors with source metadata", () => {
+    let thrown: unknown;
+    try {
+      requireApiKey(
+        {
+          source: "env: OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        "openai",
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({
+      name: "MissingProviderAuthError",
+      code: "missing-api-key",
+      provider: "openai",
+      mode: "api-key",
+      source: "env: OPENAI_API_KEY",
+    });
+  });
 });
 
 describe("resolveUsableCustomProviderApiKey", () => {

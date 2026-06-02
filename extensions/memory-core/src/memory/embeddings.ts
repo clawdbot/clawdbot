@@ -146,6 +146,17 @@ export function resolveEmbeddingProviderFallbackModel(
   return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
+export function resolveEmbeddingProviderAdapterId(
+  providerId: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
+): string | undefined {
+  try {
+    return getAdapter(providerId, config).id;
+  } catch {
+    return undefined;
+  }
+}
+
 async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,

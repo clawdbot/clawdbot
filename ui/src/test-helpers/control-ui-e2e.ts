@@ -382,7 +382,7 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: [] },
+          features: { events: [], methods: ["chat.startup"] },
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -428,6 +428,24 @@ function installControlUiMockGateway(input: {
         return null;
       case "chat.history":
         return {
+          messages: scenario.historyMessages,
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        };
+      case "chat.startup":
+        return {
+          agentsList: {
+            agents: [
+              {
+                id: scenario.defaultAgentId,
+                identity: { name: scenario.assistantName },
+                name: scenario.assistantName,
+              },
+            ],
+            defaultId: scenario.defaultAgentId,
+            mainKey: "main",
+            scope: "agent",
+          },
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,

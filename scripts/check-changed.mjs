@@ -1,4 +1,12 @@
-import { accessSync, chmodSync, constants, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -36,6 +44,7 @@ const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
 let corepackPnpmShimDir;
+let corepackPnpmShimCleanupRegistered = false;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -464,7 +473,25 @@ function ensureCorepackPnpmShimDir() {
   chmodSync(pnpmPath, 0o755);
   writeFileSync(path.join(dir, "pnpm.cmd"), "@echo off\r\ncorepack pnpm %*\r\n", "utf8");
   corepackPnpmShimDir = dir;
+  registerCorepackPnpmShimCleanup();
   return dir;
+}
+
+function registerCorepackPnpmShimCleanup() {
+  if (corepackPnpmShimCleanupRegistered) {
+    return;
+  }
+  corepackPnpmShimCleanupRegistered = true;
+  process.once("exit", cleanupCorepackPnpmShimDir);
+}
+
+export function cleanupCorepackPnpmShimDir() {
+  if (!corepackPnpmShimDir) {
+    return;
+  }
+  const dir = corepackPnpmShimDir;
+  corepackPnpmShimDir = undefined;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 async function runCommand(command, timings) {

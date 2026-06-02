@@ -15,6 +15,10 @@ const LOG_SCAN_BYTES = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES,
   256 * 1024,
 );
+const GATEWAY_LOG_CAPTURE_BYTES = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES,
+  16 * 1024 * 1024,
+);
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
@@ -33,14 +37,29 @@ const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
   5000,
 );
+const GATEWAY_TEARDOWN_GRACE_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS,
+  10000,
+);
+const GATEWAY_TEARDOWN_KILL_GRACE_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS,
+  1000,
+);
 const GATEWAY_READY_LOG_NEEDLE = Buffer.from("[gateway] ready");
 const READY_OFFSET_LOG_NEEDLES = [
   GATEWAY_READY_LOG_NEEDLE,
   Buffer.from("listening on ws://"),
   Buffer.from("[gateway] http server listening"),
 ];
+const GATEWAY_LOG_TRUNCATED_NEEDLE = "[gateway log truncated after ";
 const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
+const PACKAGE_MANAGER_PROCESS_BASENAME = /^(?:npm|pnpm|yarn|corepack)(?:$|[.-])/u;
+const PROCESS_SNAPSHOT_ARGS = ["-ww", "-eo", "pid=,ppid=,args="];
 const isolatedStateRoots = new WeakMap();
+const activeCommandChildren = new Set();
+const activeGatewayChildren = new Set();
+const parentSignalHandlers = new Map();
+let parentCleanupInstalled = false;
 
 function readPositiveInt(raw, fallback) {
   const text = String(raw ?? "").trim();
@@ -268,6 +287,28 @@ export function activateSmokePlugin(config, pluginId, channels = []) {
   };
 }
 
+function channelActivationEnvName(channel) {
+  return `${channel
+    .replace(/[^a-z0-9]+/giu, "_")
+    .replace(/^_+|_+$/gu, "")
+    .toUpperCase()}_RUNTIME_SMOKE`;
+}
+
+export function withManifestChannelActivationEnv(env, channels = []) {
+  const nextEnv = { ...env };
+  for (const channel of channels) {
+    if (!isNonEmptyString(channel)) {
+      continue;
+    }
+    const key = channelActivationEnvName(channel);
+    if (key === "_RUNTIME_SMOKE") {
+      continue;
+    }
+    nextEnv[key] ??= "1";
+  }
+  return nextEnv;
+}
+
 function buildPluginPlan(manifest) {
   const contracts =
     manifest.contracts && typeof manifest.contracts === "object" ? manifest.contracts : {};
@@ -319,13 +360,56 @@ function formatCapturedOutput(label, buffer) {
   return `${prefix}${buffer.text}`;
 }
 
+function createBoundedGatewayLog(logPath) {
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const fd = fs.openSync(logPath, "w");
+  let bytes = 0;
+  let closed = false;
+  let truncated = false;
+  const marker = Buffer.from(
+    `\n[gateway log truncated after ${String(GATEWAY_LOG_CAPTURE_BYTES)} bytes]\n`,
+  );
+  return {
+    append(chunk) {
+      if (closed || truncated) {
+        return;
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const remaining = GATEWAY_LOG_CAPTURE_BYTES - bytes;
+      if (buffer.length <= remaining) {
+        fs.writeSync(fd, buffer);
+        bytes += buffer.length;
+        return;
+      }
+      if (remaining > 0) {
+        fs.writeSync(fd, buffer.subarray(0, remaining));
+      }
+      fs.writeSync(fd, marker);
+      bytes = GATEWAY_LOG_CAPTURE_BYTES;
+      truncated = true;
+    },
+    close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      fs.closeSync(fd);
+    },
+  };
+}
+
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const { timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
+    const detached = spawnOptions.detached ?? process.platform !== "win32";
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
+      detached,
     });
+    if (detached) {
+      trackCommandChild(child);
+    }
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
@@ -339,7 +423,7 @@ export function runCommand(command, args, options = {}) {
     const clearCommandTimer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          child.kill("SIGKILL");
+          signalChildProcessTree(child, "SIGKILL");
         }, timeoutMs)
       : undefined;
     child.on("error", (error) => {
@@ -384,8 +468,8 @@ export function runCommand(command, args, options = {}) {
   });
 }
 
-function startGateway(params) {
-  const log = fs.openSync(params.logPath, "w");
+export function startGateway(params) {
+  const log = createBoundedGatewayLog(params.logPath);
   const child = childProcess.spawn(
     "node",
     [
@@ -405,11 +489,15 @@ function startGateway(params) {
         OPENCLAW_SKIP_CHANNELS: params.skipChannels ? "1" : "0",
         OPENCLAW_SKIP_PROVIDERS: "0",
       },
-      stdio: ["ignore", log, log],
-      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     },
   );
-  fs.closeSync(log);
+  child.stdout?.on("data", (chunk) => log.append(chunk));
+  child.stderr?.on("data", (chunk) => log.append(chunk));
+  child.once("error", () => log.close());
+  child.once("close", () => log.close());
+  trackGatewayChild(child);
   return child;
 }
 
@@ -417,17 +505,124 @@ export function hasChildExited(child) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
 }
 
+function trackGatewayChild(child) {
+  activeGatewayChildren.add(child);
+  const untrack = () => {
+    if (!processTreeIsAlive(child)) {
+      activeGatewayChildren.delete(child);
+    }
+  };
+  child.once("error", untrack);
+  child.once("close", untrack);
+  installParentCleanup();
+}
+
+function trackCommandChild(child) {
+  activeCommandChildren.add(child);
+  const untrack = () => {
+    activeCommandChildren.delete(child);
+  };
+  child.once("error", untrack);
+  child.once("close", untrack);
+  installParentCleanup();
+}
+
+function installParentCleanup() {
+  if (!parentCleanupInstalled) {
+    parentCleanupInstalled = true;
+    process.once("exit", () => {
+      cleanupActiveChildren("SIGTERM");
+    });
+  }
+  for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+    if (parentSignalHandlers.has(signal)) {
+      continue;
+    }
+    const handler = () => {
+      cleanupActiveChildren(signal);
+      for (const [registeredSignal, registeredHandler] of parentSignalHandlers) {
+        process.off(registeredSignal, registeredHandler);
+      }
+      parentSignalHandlers.clear();
+      process.kill(process.pid, signal);
+    };
+    parentSignalHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+}
+
+function cleanupActiveChildren(signal) {
+  for (const child of activeCommandChildren) {
+    signalChildProcessTree(child, signal);
+    if (process.platform !== "win32") {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+  }
+  for (const child of activeGatewayChildren) {
+    signalChildProcessTree(child, signal);
+    if (process.platform !== "win32") {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+  }
+}
+
 export async function stopGateway(child) {
-  if (!child || hasChildExited(child)) {
+  if (!child || !processTreeIsAlive(child)) {
     return;
   }
-  child.kill("SIGTERM");
-  const started = Date.now();
-  while (!hasChildExited(child) && Date.now() - started < 10000) {
-    await delay(100);
+  const waitForExit = async (ms) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (!processTreeIsAlive(child)) {
+        return true;
+      }
+      await delay(100);
+    }
+    return !processTreeIsAlive(child);
+  };
+
+  signalChildProcessTree(child, "SIGTERM");
+  if (await waitForExit(GATEWAY_TEARDOWN_GRACE_MS)) {
+    return;
   }
-  if (!hasChildExited(child)) {
-    child.kill("SIGKILL");
+  signalChildProcessTree(child, "SIGKILL");
+  await waitForExit(GATEWAY_TEARDOWN_KILL_GRACE_MS);
+}
+
+function processTreeIsAlive(child) {
+  if (!child || typeof child.pid !== "number") {
+    return !hasChildExited(child);
+  }
+  if (process.platform === "win32") {
+    return !hasChildExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
+}
+
+function signalChildProcessTree(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Non-detached callers may not own a process group keyed by child.pid; keep
+      // the legacy direct-child kill path as the fallback.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
   }
 }
 
@@ -635,11 +830,27 @@ function parseJsonOutput(stdout) {
   }
 }
 
-function unwrapRpcPayload(raw) {
+function hasOwnPayloadField(raw, field) {
+  return (
+    ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
+    Object.hasOwn(raw, field)
+  );
+}
+
+export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
   }
-  return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
+  if (hasOwnPayloadField(raw, "result")) {
+    return raw.result;
+  }
+  if (hasOwnPayloadField(raw, "payload")) {
+    return raw.payload;
+  }
+  if (hasOwnPayloadField(raw, "data")) {
+    return raw.data;
+  }
+  return raw;
 }
 
 async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, pluginRoot) {
@@ -659,6 +870,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
   );
+  const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
     config.messages = {
@@ -682,7 +894,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
     entrypoint,
     port,
     logPath,
-    env: process.env,
+    env,
     skipChannels: plan.channels.length === 0,
   });
   try {
@@ -690,12 +902,12 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
     await assertBaseGatewayProbes({
       entrypoint,
       port,
-      env: process.env,
+      env,
       pluginId,
       allowDegradedReadyz: plan.channels.length > 0,
     });
-    await runManifestProbes(plan, { entrypoint, port, env: process.env, pluginId });
-    await runWatchdog({ child, logPath, port, entrypoint, env: process.env, pluginId });
+    await runManifestProbes(plan, { entrypoint, port, env, pluginId });
+    await runWatchdog({ child, logPath, port, entrypoint, env, pluginId });
     console.log(`Runtime smoke passed for ${pluginId}`);
   } catch (error) {
     console.error(tailFile(logPath));
@@ -842,12 +1054,23 @@ async function runWatchdog(options) {
     );
   }
   await retryRpcCall("health", {}, options);
+  assertGatewayLogNotTruncated(options.logPath);
   assertNoPostReadyRuntimeDepsWork(options.logPath, readyOffset);
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
 export function findReadyLogOffset(logPath) {
   return findFirstNeedleOffset(logPath, READY_OFFSET_LOG_NEEDLES);
+}
+
+export function assertGatewayLogNotTruncated(logPath) {
+  if (readFileTail(logPath).includes(GATEWAY_LOG_TRUNCATED_NEEDLE)) {
+    throw new Error(
+      `gateway log exceeded ${String(
+        GATEWAY_LOG_CAPTURE_BYTES,
+      )} bytes; runtime smoke cannot validate complete post-ready output`,
+    );
+  }
 }
 
 export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
@@ -878,28 +1101,81 @@ export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
   }
 }
 
-async function assertNoPackageManagerChildren(pid) {
+function commandIncludesPackageManager(args) {
+  return String(args ?? "")
+    .trim()
+    .split(/\s+/u)
+    .some((token) =>
+      PACKAGE_MANAGER_PROCESS_BASENAME.test(
+        path.basename(token.replace(/^['"]|['"]$/gu, "")).toLowerCase(),
+      ),
+    );
+}
+
+function parseProcessSnapshot(stdout) {
+  const processes = [];
+  for (const line of String(stdout ?? "").split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line);
+    if (!match) {
+      continue;
+    }
+    processes.push({
+      args: match[3],
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+    });
+  }
+  return processes;
+}
+
+export function findPackageManagerDescendants(psOutput, rootPid) {
+  const root = Number(rootPid);
+  if (!Number.isInteger(root) || root <= 0) {
+    return [];
+  }
+
+  const childrenByParent = new Map();
+  for (const processInfo of parseProcessSnapshot(psOutput)) {
+    const list = childrenByParent.get(processInfo.ppid) ?? [];
+    list.push(processInfo);
+    childrenByParent.set(processInfo.ppid, list);
+  }
+
+  const matches = [];
+  const pending = [...(childrenByParent.get(root) ?? [])];
+  const seen = new Set();
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current || seen.has(current.pid)) {
+      continue;
+    }
+    seen.add(current.pid);
+    if (commandIncludesPackageManager(current.args)) {
+      matches.push(current);
+    }
+    pending.push(...(childrenByParent.get(current.pid) ?? []));
+  }
+  return matches;
+}
+
+export async function assertNoPackageManagerChildren(pid) {
   if (!pid || process.platform === "win32") {
     return;
   }
   try {
-    const { stdout } = await runCommand("pgrep", [
-      "-P",
-      String(pid),
-      "-af",
-      "npm|pnpm|yarn|corepack",
-    ]);
-    if (stdout.trim()) {
+    const { stdout } = await runCommand("ps", PROCESS_SNAPSHOT_ARGS);
+    const packageManagerDescendants = findPackageManagerDescendants(stdout, pid);
+    if (packageManagerDescendants.length > 0) {
+      const formatted = packageManagerDescendants
+        .map((entry) => `${entry.pid} ${entry.args}`)
+        .join("\n");
       throw new Error(
-        `package manager child process still running under gateway ${pid}:\n${stdout}`,
+        `package manager descendant process still running under gateway ${pid}:\n${formatted}`,
       );
     }
   } catch (error) {
     if (error?.code === "ENOENT") {
-      console.log("Runtime deps child-process watchdog skipped: pgrep unavailable");
-      return;
-    }
-    if (error instanceof Error && error.message.includes("failed with 1")) {
+      console.log("Runtime deps child-process watchdog skipped: ps unavailable");
       return;
     }
     throw error;

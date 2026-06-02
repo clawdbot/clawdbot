@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectRunJobsFromPages,
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
@@ -79,6 +80,54 @@ describe("scripts/ci-run-timings.mjs", () => {
       event: "push",
       headSha: "current",
     });
+  });
+
+  it("normalizes paginated GitHub Actions job payloads", () => {
+    expect(
+      collectRunJobsFromPages([
+        {
+          jobs: [
+            {
+              completed_at: "2026-06-01T13:26:16Z",
+              conclusion: "success",
+              id: 101,
+              name: "preflight",
+              started_at: "2026-06-01T13:25:16Z",
+              status: "completed",
+            },
+          ],
+        },
+        {
+          jobs: [
+            {
+              completedAt: "2026-06-01T13:28:00Z",
+              conclusion: "failure",
+              databaseId: 102,
+              name: "ci-timings-summary",
+              startedAt: "2026-06-01T13:27:00Z",
+              status: "completed",
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        completedAt: "2026-06-01T13:26:16Z",
+        conclusion: "success",
+        databaseId: 101,
+        name: "preflight",
+        startedAt: "2026-06-01T13:25:16Z",
+        status: "completed",
+      },
+      {
+        completedAt: "2026-06-01T13:28:00Z",
+        conclusion: "failure",
+        databaseId: 102,
+        name: "ci-timings-summary",
+        startedAt: "2026-06-01T13:27:00Z",
+        status: "completed",
+      },
+    ]);
   });
 
   it("summarizes the pnpm store warmup fanout barrier", () => {

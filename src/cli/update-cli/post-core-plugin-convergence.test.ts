@@ -275,7 +275,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
-  it("flags errored=true and surfaces actionable guidance when repair warns", async () => {
+  it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [
@@ -289,7 +289,7 @@ describe("runPostCorePluginConvergence", () => {
       } as unknown as OpenClawConfig,
       env: {},
     });
-    expect(result.errored).toBe(true);
+    expect(result.errored).toBe(false);
     expect(result.warnings).toStrictEqual([
       {
         reason:

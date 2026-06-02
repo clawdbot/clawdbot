@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
 import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
-import { buildNodeInvokeResultParams } from "./runner.js";
+import { buildNodeEventParams, buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
@@ -119,5 +119,30 @@ describe("buildNodeInvokeResultParams", () => {
     );
 
     expect(params.payload).toEqual({ reason: "bad" });
+  });
+});
+
+describe("buildNodeEventParams", () => {
+  it("serializes explicit falsy event payloads", () => {
+    expect(buildNodeEventParams("node.test", undefined)).toEqual({
+      event: "node.test",
+      payloadJSON: null,
+    });
+    expect(buildNodeEventParams("node.test", null)).toEqual({
+      event: "node.test",
+      payloadJSON: "null",
+    });
+    expect(buildNodeEventParams("node.test", false)).toEqual({
+      event: "node.test",
+      payloadJSON: "false",
+    });
+    expect(buildNodeEventParams("node.test", 0)).toEqual({
+      event: "node.test",
+      payloadJSON: "0",
+    });
+    expect(buildNodeEventParams("node.test", "")).toEqual({
+      event: "node.test",
+      payloadJSON: '""',
+    });
   });
 });

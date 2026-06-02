@@ -148,6 +148,7 @@ class MainViewModel(
   val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
@@ -297,6 +298,10 @@ class MainViewModel(
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    ensureRuntime().setInstalledAppsSharingEnabled(value)
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {

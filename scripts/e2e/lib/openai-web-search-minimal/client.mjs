@@ -14,22 +14,23 @@ async function loadCallGateway() {
   throw new Error(`unable to find callGateway export in /app/dist (${candidates.join(", ")})`);
 }
 
-const callGateway = await loadCallGateway();
+const DEFAULT_RAW_SCHEMA_ERROR =
+  "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
+const DEFAULT_GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
 
-const port = process.env.PORT;
-const token = process.env.OPENCLAW_GATEWAY_TOKEN;
-const mode = process.argv[2];
-const sessionKey = `agent:main:openai-web-search-minimal:${mode}`;
-const message =
-  mode === "reject" ? "FORCE_SCHEMA_REJECT" : "Return exactly OPENCLAW_SCHEMA_E2E_OK.";
-const id = mode === "reject" ? "schema-reject" : "schema-success";
-
-if (!port || !token) {
-  throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
+function readExpectedRawSchemaError() {
+  return process.env.RAW_SCHEMA_ERROR?.trim() || DEFAULT_RAW_SCHEMA_ERROR;
 }
 
 async function gatewayAgent(params) {
+  const port = process.env.PORT;
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN;
+  if (!port || !token) {
+    throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
+  }
+
   try {
+    const callGateway = await loadCallGateway();
     return {
       ok: true,
       value: await callGateway({
@@ -51,24 +52,54 @@ async function gatewayAgent(params) {
   }
 }
 
-const result = await gatewayAgent({
-  sessionKey,
-  message,
-  thinking: "minimal",
-  deliver: false,
-  timeout: 180,
-  idempotencyKey: id,
-});
+function stringifyError(value) {
+  return value instanceof Error ? value.message || String(value) : String(value);
+}
 
-if (mode === "reject") {
-  console.error(result.ok ? JSON.stringify(result.value) : String(result.error));
-  process.exit(0);
+function validateRejectResult(result, expectedRawSchemaError = readExpectedRawSchemaError()) {
+  if (result.ok) {
+    throw new Error(`reject mode unexpectedly completed: ${JSON.stringify(result.value)}`);
+  }
+  const errorText = stringifyError(result.error);
+  if (
+    !errorText.includes(expectedRawSchemaError) &&
+    !errorText.includes(DEFAULT_GATEWAY_SCHEMA_ERROR)
+  ) {
+    throw new Error(
+      `reject mode failed for an unexpected reason; expected ${JSON.stringify(
+        expectedRawSchemaError,
+      )} or ${JSON.stringify(DEFAULT_GATEWAY_SCHEMA_ERROR)} in ${JSON.stringify(errorText)}`,
+    );
+  }
+  return errorText;
 }
-if (!result.ok) {
-  throw toLintErrorObject(result.error, "Non-Error thrown");
-}
-if (result.value?.status !== "ok") {
-  throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
+
+async function main() {
+  const mode = process.argv[2];
+  const sessionKey = `agent:main:openai-web-search-minimal:${mode}`;
+  const message =
+    mode === "reject" ? "FORCE_SCHEMA_REJECT" : "Return exactly OPENCLAW_SCHEMA_E2E_OK.";
+  const id = mode === "reject" ? "schema-reject" : "schema-success";
+
+  const result = await gatewayAgent({
+    sessionKey,
+    message,
+    thinking: "minimal",
+    deliver: false,
+    timeout: 180,
+    idempotencyKey: id,
+  });
+
+  if (mode === "reject") {
+    console.error(validateRejectResult(result));
+    return;
+  }
+  if (!result.ok) {
+    throw toLintErrorObject(result.error, "Non-Error thrown");
+  }
+  if (result.value?.status !== "ok") {
+    throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
+  }
 }
 
 function toLintErrorObject(value, fallbackMessage) {
@@ -84,3 +115,18 @@ function toLintErrorObject(value, fallbackMessage) {
   }
   return error;
 }
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.stack || error.message : String(error));
+    process.exit(1);
+  }
+}
+
+export const testing = {
+  DEFAULT_GATEWAY_SCHEMA_ERROR,
+  DEFAULT_RAW_SCHEMA_ERROR,
+  validateRejectResult,
+};

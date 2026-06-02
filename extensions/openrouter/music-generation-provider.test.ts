@@ -208,6 +208,8 @@ describe("openrouter music generation provider", () => {
   });
 
   it("caps oversized OpenRouter music stream timeouts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       postJsonRequestMock.mockResolvedValue({
@@ -231,6 +233,7 @@ describe("openrouter music generation provider", () => {
       expect(streamTimeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 

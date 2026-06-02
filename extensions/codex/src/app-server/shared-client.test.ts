@@ -133,8 +133,8 @@ describe("shared Codex app-server client", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();

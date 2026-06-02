@@ -63,6 +63,21 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun installedAppsSharing_defaultsOffAndPersistsOptIn() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+
+    prefs.setInstalledAppsSharingEnabled(true)
+
+    assertTrue(prefs.installedAppsSharingEnabled.value)
+    assertTrue(plainPrefs.getBoolean("device.apps.sharing.enabled", false))
+  }
+
+  @Test
   fun saveGatewayBootstrapToken_persistsSeparatelyFromSharedToken() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)

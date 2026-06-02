@@ -21,6 +21,8 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.js";
 import { MissingAgentHarnessError } from "./harness/errors.js";
+import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
+import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   FallbackSummaryError,
@@ -191,6 +193,7 @@ afterAll(() => {
 
 function resetModelFallbackTestState(): void {
   resetFallbackSkipCacheForTest();
+  clearAgentHarnesses();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
@@ -969,6 +972,68 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow('Requested agent harness "codex" is not registered.');
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("lets external plugin harnesses bypass stale provider auth cooldowns", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-tmux" } },
+          },
+        },
+      },
+    });
+    registerAgentHarness(
+      {
+        id: "claude-tmux",
+        label: "Claude tmux",
+        supports: ({ provider }) =>
+          provider === "anthropic" ? { supported: true } : { supported: false },
+        runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+          throw new Error("fallback test should not invoke the harness runtime");
+        }),
+      },
+      { ownerPluginId: "claude-tmux-test" },
+    );
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { rate_limit: 4 },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (provider: string) => {
+      if (provider === "anthropic") {
+        return "external cli ok";
+      }
+      throw new Error(`unexpected provider: ${provider}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      agentDir: tempDir,
+      run,
+    });
+
+    expect(result.result).toBe("external cli ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(result.attempts).toStrictEqual([]);
   });
 
   it("lets configured CLI runtimes reach the run callback", async () => {
@@ -1781,9 +1846,9 @@ describe("runWithModelFallback", () => {
       { provider: "openai", model: "gpt-4.1-mini" },
       { provider: "tui-pty-mock", model: "gpt-5.5" },
     ]);
-    expect(providerModelNormalizationMock.normalizeProviderModelIdWithRuntime).not.toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "tui-pty-mock" }),
-    );
+    expect(
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+    ).not.toHaveBeenCalledWith(expect.objectContaining({ provider: "tui-pty-mock" }));
   });
 
   it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {

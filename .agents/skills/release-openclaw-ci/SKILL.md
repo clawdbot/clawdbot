@@ -16,6 +16,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
 - Fetch logs only for failed or currently-blocking jobs. If quota is low, stop polling and wait for reset.
 - Treat live-provider flakes separately from code failures: prove key validity, provider HTTP status, retry evidence, and exact failing lane before editing code.
+- Full Release Validation parent monitors fail fast: once a required child job
+  fails, the parent cancels the remaining child matrix and prints the failed
+  job summary. Inspect that first red job instead of waiting for unrelated
+  matrix tails.
 
 ## Preflight
 
@@ -73,6 +77,9 @@ gh workflow run full-release-validation.yml \
 ```
 
 Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Use narrow `rerun_group` after focused fixes.
+Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
+unless a maintainer intentionally wants to cross-check a specific profile; the
+publish workflow reads the effective profile from the full-validation manifest.
 
 ## Watch
 

@@ -457,6 +457,44 @@ describe("promptAuthConfig", () => {
     expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
   });
 
+  it("canonicalizes a legacy Codex primary when OpenAI OAuth selects the matching model", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-device-code");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "codex/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": {},
+              "openai/gpt-5.3-codex": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai/gpt-5.5", "openai/gpt-5.3-codex"],
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.3-codex"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
+    expect(mocks.applyPrimaryModel).toHaveBeenCalledWith(expect.any(Object), "openai/gpt-5.5");
+    expect(result.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.3-codex"],
+    });
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
+      "openai/gpt-5.5",
+      "openai/gpt-5.3-codex",
+    ]);
+  });
+
   it("keeps the selected provider scope when existing config has another provider", async () => {
     vi.clearAllMocks();
     mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");

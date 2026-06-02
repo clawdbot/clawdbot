@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.6.1",
+  "version": "2026.6.2",
   "description": "OpenClaw Mattermost channel plugin",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.1"
+    "openclaw": ">=2026.6.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {

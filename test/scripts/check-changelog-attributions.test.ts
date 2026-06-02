@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,12 +10,15 @@ import {
 } from "../../scripts/check-changelog-attributions.mjs";
 
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
+const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
+const gatesScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "gates.sh");
 
 function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync(command, args, {
     cwd,
     encoding: "utf8",
     env: env ? { ...process.env, ...env } : process.env,
+    stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
 
@@ -42,6 +45,12 @@ function createRepoWithPrChangelogDiff(entry: string): string {
   return repo;
 }
 
+function createRepoWithChangelog(content: string): string {
+  const repo = mkdtempSync(path.join(os.tmpdir(), "openclaw-changelog-policy-"));
+  writeFileSync(repo + "/CHANGELOG.md", content, "utf8");
+  return repo;
+}
+
 function validateChangelogEntry(repo: string, contrib: string): string {
   return run(
     repo,
@@ -53,6 +62,17 @@ function validateChangelogEntry(repo: string, contrib: string): string {
     {
       OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
       OPENCLAW_TEST_CONTRIB: contrib,
+    },
+  );
+}
+
+function validateChangelogAttributionPolicy(repo: string): string {
+  return run(
+    repo,
+    "bash",
+    ["-c", 'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_attribution_policy'],
+    {
+      OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
     },
   );
 }
@@ -164,24 +184,76 @@ describe("check-changelog-attributions", () => {
     }
   });
 
-  it("keeps PR changelog gates on the same attribution policy", () => {
-    const commonLib = readFileSync("scripts/pr-lib/common.sh", "utf8");
-    const changelogLib = readFileSync("scripts/pr-lib/changelog.sh", "utf8");
-    const gates = readFileSync("scripts/pr-lib/gates.sh", "utf8");
-    const mergeLib = readFileSync("scripts/pr-lib/merge.sh", "utf8");
-    const prepareCore = readFileSync("scripts/pr-lib/prepare-core.sh", "utf8");
+  it("runs the shell attribution policy over real changelog content", () => {
+    const forbiddenRepo = createRepoWithChangelog(
+      "# Changelog\n\n## Unreleased\n\n### Fixes\n\n- Bot repair. Thanks @dependabot[bot].\n",
+    );
+    try {
+      let output = "";
+      try {
+        validateChangelogAttributionPolicy(forbiddenRepo);
+      } catch (error) {
+        output = String((error as { stderr?: unknown }).stderr ?? error);
+      }
+      expect(output).toContain("Forbidden changelog thanks attribution");
+      expect(output).toContain("CHANGELOG.md:7 uses Thanks @dependabot[bot]");
+    } finally {
+      rmSync(forbiddenRepo, { recursive: true, force: true });
+    }
 
-    expect(commonLib).toContain("pr_contributor_allows_human_trailers");
-    expect(commonLib).toContain("resolve_contributor_coauthor_email");
-    expect(changelogLib).toContain("changelog_attribution_script");
-    expect(changelogLib).toContain("--is-forbidden-handle");
-    expect(changelogLib).toContain("--requires-explicit-human-thanks");
-    expect(changelogLib).toContain("changelog_thanks_required_for_contributor");
-    expect(changelogLib).toContain("changelog_explicit_human_thanks_required_for_contributor");
-    expect(changelogLib).toContain("Choose the credited original contributor");
-    expect(gates).toContain("validate_changelog_attribution_policy");
-    expect(prepareCore).toContain("resolve_contributor_coauthor_email");
-    expect(mergeLib).toContain("pr_contributor_allows_human_trailers");
-    expect(mergeLib).toContain("Skipping PR author co-author trailer check for bot/app author");
+    const allowedRepo = createRepoWithChangelog(
+      "# Changelog\n\n## Unreleased\n\n### Fixes\n\n- User fix. Thanks @alice.\n",
+    );
+    try {
+      expect(validateChangelogAttributionPolicy(allowedRepo)).toBe("");
+    } finally {
+      rmSync(allowedRepo, { recursive: true, force: true });
+    }
+  });
+
+  it("runs changelog attribution policy from prepare gates when CHANGELOG changes", () => {
+    const repo = createRepoWithPrChangelogDiff("- User fix (#123). Thanks @alice.");
+    const callsPath = path.join(repo, "calls.log");
+    mkdirSync(path.join(repo, ".local"));
+    writeFileSync(path.join(repo, ".local", "pr-meta.env"), "PR_AUTHOR=alice\n", "utf8");
+    try {
+      const output = run(
+        repo,
+        "bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+source "$OPENCLAW_PR_COMMON_SH"
+source "$OPENCLAW_PR_CHANGELOG_SH"
+source "$OPENCLAW_PR_GATES_SH"
+
+enter_worktree() { :; }
+checkout_prep_branch() { :; }
+bootstrap_deps_if_needed() { :; }
+require_artifact() { [ -s "$1" ]; }
+normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
+validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
+validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
+validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
+run_quiet_logged() { printf 'gate:%s\\n' "$1" >>"$OPENCLAW_TEST_CALLS"; }
+
+prepare_gates 123
+`,
+        ],
+        {
+          OPENCLAW_PR_COMMON_SH: commonScriptPath,
+          OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
+          OPENCLAW_PR_GATES_SH: gatesScriptPath,
+          OPENCLAW_TEST_CALLS: callsPath,
+        },
+      );
+      const calls = readFileSync(callsPath, "utf8");
+
+      expect(output).toContain("docs_only=true");
+      expect(calls).toContain("normalize\npolicy\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

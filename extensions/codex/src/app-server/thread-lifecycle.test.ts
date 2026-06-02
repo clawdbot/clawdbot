@@ -21,6 +21,7 @@ function createAttemptParams(params: {
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   images?: EmbeddedRunAttemptParams["images"];
+  modelId?: string;
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -30,7 +31,7 @@ function createAttemptParams(params: {
   const authProfileType = params.authProfileType ?? "oauth";
   return {
     provider: params.provider,
-    modelId: "gpt-5.4",
+    modelId: params.modelId ?? "gpt-5.4",
     prompt: "test prompt",
     authProfileId: params.authProfileId,
     ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
@@ -151,7 +152,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
   });
 
-  it("keeps durable dynamic tool fingerprints independent from presentation mode", () => {
+  it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
     const inputSchema = {
       type: "object",
       additionalProperties: false,
@@ -177,7 +178,7 @@ describe("Codex app-server native code mode config", () => {
       },
     ]);
 
-    expect(searchableFingerprint).toBe(directFingerprint);
+    expect(searchableFingerprint).not.toBe(directFingerprint);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
@@ -212,6 +213,25 @@ describe("Codex app-server native code mode config", () => {
       "features.apply_patch_streaming_events": true,
     });
     expect(request.personality).toBe("none");
+  });
+
+  it("disables Codex tool-search features for nano models", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({ provider: "openai", modelId: "gpt-5.4-nano" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+      "features.multi_agent": false,
+    });
   });
 
   it("removes Codex model personality on thread/resume", () => {

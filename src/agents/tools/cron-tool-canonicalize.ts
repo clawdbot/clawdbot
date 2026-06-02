@@ -41,6 +41,9 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "agentId",
   "sessionKey",
   "failureAlert",
+  "namePayload",
+  "scheduleKind",
+  "sessionTargetName",
   ...CRON_FLAT_PAYLOAD_KEYS,
   ...CRON_FLAT_SCHEDULE_KEYS,
 ]);
@@ -75,6 +78,31 @@ function moveDefinedField(params: {
   params.target[params.to ?? params.from] = params.source[params.from];
   delete params.source[params.from];
   return true;
+}
+
+function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
+  // Some small/local tool-call parsers can return valid JSON with adjacent cron
+  // key names merged. Recover only the observed schema-specific pairs before
+  // strict gateway validation sees the malformed property names.
+  if (!isRecord(value.payload) && isRecord(value.namePayload)) {
+    value.payload = { ...value.namePayload };
+  }
+  const rawScheduleKind = value.scheduleKind;
+  if (!isRecord(value.schedule)) {
+    if (isRecord(rawScheduleKind)) {
+      value.schedule = { ...rawScheduleKind };
+    } else if (isCronScheduleKind(rawScheduleKind)) {
+      value.schedule = { kind: rawScheduleKind };
+    }
+  } else if (isCronScheduleKind(rawScheduleKind) && !isCronScheduleKind(value.schedule.kind)) {
+    value.schedule = { ...value.schedule, kind: rawScheduleKind };
+  }
+  if (!isNonEmptyString(value.name) && isNonEmptyString(value.sessionTargetName)) {
+    value.name = value.sessionTargetName;
+  }
+  delete value.namePayload;
+  delete value.scheduleKind;
+  delete value.sessionTargetName;
 }
 
 function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): void {
@@ -213,6 +241,7 @@ export function canonicalizeCronToolObject(
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
+  repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
   return next;

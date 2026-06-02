@@ -239,6 +239,89 @@ function expectTranscriptBackfill(
   }
 }
 
+function sessionEntry(overrides: Partial<SessionEntry> = {}, updatedAt = Date.now()): SessionEntry {
+  return {
+    sessionId: MAIN_SESSION_ID,
+    updatedAt,
+    ...overrides,
+  } as SessionEntry;
+}
+
+function mainSessionStore(entry: SessionEntry): Record<string, SessionEntry> {
+  return { [MAIN_SESSION_KEY]: entry };
+}
+
+function transcriptFallbackEntry(now: number, overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return sessionEntry(
+    {
+      totalTokens: 0,
+      totalTokensFresh: false,
+      ...overrides,
+    },
+    now,
+  );
+}
+
+function expectAnthropicBackfill(session: ListedSession | undefined) {
+  expectTranscriptBackfill(session, {
+    contextTokens: ANTHROPIC_CONTEXT_TOKENS,
+    estimatedCostUsd: TRANSCRIPT_COST_USD,
+  });
+}
+
+function expectOpenAiGpt54Backfill(session: ListedSession | undefined) {
+  expectSessionModel(session, {
+    key: MAIN_SESSION_KEY,
+    provider: "openai",
+    model: "gpt-5.4",
+  });
+  expectTranscriptBackfill(session);
+}
+
+function freeOpenAiUsageEntry(): SessionEntry {
+  return sessionEntry({
+    modelProvider: "openai",
+    model: FREE_OPENAI_MODEL,
+    inputTokens: FREE_OPENAI_USAGE.input,
+    outputTokens: FREE_OPENAI_USAGE.output,
+    cacheRead: FREE_OPENAI_USAGE.cacheRead,
+    cacheWrite: 0,
+  });
+}
+
+function anthropicUsageEntry(now: number, overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: MAIN_SESSION_ID,
+    updatedAt: now,
+    totalTokens: 0,
+    totalTokensFresh: false,
+    inputTokens: ANTHROPIC_USAGE.input,
+    outputTokens: ANTHROPIC_USAGE.output,
+    cacheRead: ANTHROPIC_USAGE.cacheRead,
+    ...overrides,
+  } as SessionEntry;
+}
+
+function zeroUsageTranscriptEntry(
+  now: number,
+  overrides: Partial<SessionEntry> = {},
+): SessionEntry {
+  return transcriptFallbackEntry(now, {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    ...overrides,
+  });
+}
+
+function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
+  return transcriptFallbackEntry(now, {
+    sessionId,
+    spawnedBy: MAIN_SESSION_KEY,
+  });
+}
+
 describe("listSessionsFromStore search", () => {
   afterEach(() => {
     resetSubagentRegistryForTests();
@@ -271,15 +354,31 @@ describe("listSessionsFromStore search", () => {
     } as SessionEntry,
   });
 
+  function listSearchSessions(params: {
+    opts: Parameters<typeof listSessionsFromStore>[0]["opts"];
+    cfg?: OpenClawConfig;
+    store?: Record<string, SessionEntry>;
+  }) {
+    return listSessionsFromStore({
+      cfg: params.cfg ?? baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: params.store ?? makeStore(),
+      opts: params.opts,
+    });
+  }
+
+  function listConfiguredMainSession(cfg: OpenClawConfig, entry: SessionEntry) {
+    return listSearchSessions({
+      cfg,
+      store: mainSessionStore(entry),
+      opts: {},
+    });
+  }
+
   test("returns all sessions when search is empty or missing", () => {
     const cases = [{ opts: { search: "" } }, { opts: {} }] as const;
     for (const testCase of cases) {
-      const result = listSessionsFromStore({
-        cfg: baseCfg,
-        storePath: "/tmp/sessions.json",
-        store: makeStore(),
-        opts: testCase.opts,
-      });
+      const result = listSearchSessions({ opts: testCase.opts });
       expect(result.sessions).toHaveLength(3);
     }
   });
@@ -297,12 +396,7 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSessionsFromStore({
-        cfg: baseCfg,
-        storePath: "/tmp/sessions.json",
-        store: makeStore(),
-        opts: { search: testCase.search },
-      });
+      const result = listSearchSessions({ opts: { search: testCase.search } });
       if (!testCase.expectedKey) {
         expect(result.sessions).toHaveLength(0);
         continue;
@@ -348,9 +442,8 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSessionsFromStore({
+      const result = listSearchSessions({
         cfg,
-        storePath: "/tmp/sessions.json",
         store,
         opts: { search: testCase.search },
       });
@@ -365,9 +458,8 @@ describe("listSessionsFromStore search", () => {
     const cfg = createModelDefaultsConfig({
       primary: "ollama/qwen3:0.6b",
     });
-    const result = listSessionsFromStore({
+    const result = listSearchSessions({
       cfg,
-      storePath: "/tmp/sessions.json",
       store: {
         "agent:main:inherited-local-model": {
           sessionId: "sess-inherited-local-model",
@@ -399,9 +491,7 @@ describe("listSessionsFromStore search", () => {
       } as SessionEntry,
     };
 
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
+    const result = listSearchSessions({
       store,
       opts: {},
     });
@@ -431,9 +521,8 @@ describe("listSessionsFromStore search", () => {
       expectedProvider: "vercel-ai-gateway",
     },
   ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
-    const result = listSessionsFromStore({
+    const result = listSearchSessions({
       cfg,
-      storePath: "/tmp/sessions.json",
       store: createLegacyRuntimeStore(runtimeModel),
       opts: {},
     });
@@ -465,9 +554,7 @@ describe("listSessionsFromStore search", () => {
       } as SessionEntry,
     };
 
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
+    const result = listSearchSessions({
       store,
       opts: {},
     });
@@ -489,23 +576,17 @@ describe("listSessionsFromStore search", () => {
       label: "GPT 5.4",
       cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
     });
-    const result = listSessionsFromStore({
+    const result = listConfiguredMainSession(
       cfg,
-      storePath: "/tmp/sessions.json",
-      store: {
-        [MAIN_SESSION_KEY]: {
-          sessionId: MAIN_SESSION_ID,
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          inputTokens: 2_000,
-          outputTokens: 500,
-          cacheRead: 1_000,
-          cacheWrite: 200,
-        } as SessionEntry,
-      },
-      opts: {},
-    });
+      sessionEntry({
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        inputTokens: 2_000,
+        outputTokens: 500,
+        cacheRead: 1_000,
+        cacheWrite: 200,
+      }),
+    );
 
     expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(TRANSCRIPT_COST_USD, 8);
   });
@@ -517,15 +598,11 @@ describe("listSessionsFromStore search", () => {
         const result = listMainSession({
           cfg: baseCfg,
           storePath,
-          entry: {
-            sessionId: MAIN_SESSION_ID,
-            updatedAt: now,
+          entry: transcriptFallbackEntry(now, {
             modelProvider: "anthropic",
             model: ANTHROPIC_MODEL,
             estimatedCostUsd: 0.1234,
-            totalTokens: 0,
-            totalTokensFresh: false,
-          } as SessionEntry,
+          }),
         });
 
         expect(result.sessions[0]?.estimatedCostUsd).toBe(0.1234);
@@ -540,23 +617,7 @@ describe("listSessionsFromStore search", () => {
       label: "GPT 5.3 Codex Spark",
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     });
-    const result = listSessionsFromStore({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store: {
-        [MAIN_SESSION_KEY]: {
-          sessionId: MAIN_SESSION_ID,
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: FREE_OPENAI_MODEL,
-          inputTokens: FREE_OPENAI_USAGE.input,
-          outputTokens: FREE_OPENAI_USAGE.output,
-          cacheRead: FREE_OPENAI_USAGE.cacheRead,
-          cacheWrite: 0,
-        } as SessionEntry,
-      },
-      opts: {},
-    });
+    const result = listConfiguredMainSession(cfg, freeOpenAiUsageEntry());
 
     expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
   });
@@ -568,18 +629,10 @@ describe("listSessionsFromStore search", () => {
         const result = listMainSession({
           cfg: baseCfg,
           storePath,
-          entry: {
-            sessionId: MAIN_SESSION_ID,
-            updatedAt: now,
+          entry: zeroUsageTranscriptEntry(now, {
             modelProvider: "openai",
             model: FREE_OPENAI_MODEL,
-            totalTokens: 0,
-            totalTokensFresh: false,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-          } as SessionEntry,
+          }),
         });
 
         expect(result.sessions[0]?.totalTokens).toBe(6_643);
@@ -596,24 +649,13 @@ describe("listSessionsFromStore search", () => {
         const result = listMainSession({
           cfg: createAnthropicContext1mConfig(),
           storePath,
-          entry: {
-            sessionId: MAIN_SESSION_ID,
-            updatedAt: now,
+          entry: zeroUsageTranscriptEntry(now, {
             modelProvider: "anthropic",
             model: ANTHROPIC_MODEL,
-            totalTokens: 0,
-            totalTokensFresh: false,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-          } as SessionEntry,
+          }),
         });
 
-        expectTranscriptBackfill(result.sessions[0], {
-          contextTokens: ANTHROPIC_CONTEXT_TOKENS,
-          estimatedCostUsd: TRANSCRIPT_COST_USD,
-        });
+        expectAnthropicBackfill(result.sessions[0]);
       },
     });
   });
@@ -668,13 +710,7 @@ describe("listSessionsFromStore search", () => {
           cfg: createAnthropicContext1mConfig(),
           storePath,
           key: "agent:main:subagent:child-live",
-          entry: {
-            sessionId: "sess-child",
-            updatedAt: now,
-            spawnedBy: "agent:main:main",
-            totalTokens: 0,
-            totalTokensFresh: false,
-          } as SessionEntry,
+          entry: childTranscriptEntry("sess-child", now),
         });
 
         expectSessionModel(result.sessions[0], {
@@ -683,10 +719,7 @@ describe("listSessionsFromStore search", () => {
           model: ANTHROPIC_MODEL,
         });
         expect(result.sessions[0]?.status).toBe("running");
-        expectTranscriptBackfill(result.sessions[0], {
-          contextTokens: ANTHROPIC_CONTEXT_TOKENS,
-          estimatedCostUsd: TRANSCRIPT_COST_USD,
-        });
+        expectAnthropicBackfill(result.sessions[0]);
       },
     });
   });
@@ -707,13 +740,7 @@ describe("listSessionsFromStore search", () => {
           cfg: createAnthropicContext1mConfig(),
           storePath,
           key: "agent:main:subagent:child-live-stale-transcript",
-          entry: {
-            sessionId: "sess-child-stale",
-            updatedAt: now,
-            spawnedBy: "agent:main:main",
-            totalTokens: 0,
-            totalTokensFresh: false,
-          } as SessionEntry,
+          entry: childTranscriptEntry("sess-child-stale", now),
         });
 
         expectSessionModel(result.sessions[0], {
@@ -735,22 +762,14 @@ describe("listSessionsFromStore search", () => {
         const result = listMainSession({
           cfg: createAnthropicContext1mConfig(),
           storePath,
-          entry: {
+          entry: transcriptFallbackEntry(now, {
             sessionId: "sess-override",
-            updatedAt: now,
             providerOverride: "openai",
             modelOverride: "gpt-5.4",
-            totalTokens: 0,
-            totalTokensFresh: false,
-          } as SessionEntry,
+          }),
         });
 
-        expectSessionModel(result.sessions[0], {
-          key: MAIN_SESSION_KEY,
-          provider: "openai",
-          model: "gpt-5.4",
-        });
-        expectTranscriptBackfill(result.sessions[0]);
+        expectOpenAiGpt54Backfill(result.sessions[0]);
       },
     });
   });
@@ -768,26 +787,17 @@ describe("listSessionsFromStore search", () => {
             },
           } as unknown as OpenClawConfig,
           storePath,
-          entry: {
+          entry: anthropicUsageEntry(now, {
             sessionId: "sess-pricing",
-            updatedAt: now,
             modelProvider: "openai",
             model: "gpt-5.4",
             contextTokens: 200_000,
             totalTokens: TRANSCRIPT_TOTAL_TOKENS,
             totalTokensFresh: true,
-            inputTokens: ANTHROPIC_USAGE.input,
-            outputTokens: ANTHROPIC_USAGE.output,
-            cacheRead: ANTHROPIC_USAGE.cacheRead,
-          } as SessionEntry,
+          }),
         });
 
-        expectSessionModel(result.sessions[0], {
-          key: MAIN_SESSION_KEY,
-          provider: "openai",
-          model: "gpt-5.4",
-        });
-        expectTranscriptBackfill(result.sessions[0]);
+        expectOpenAiGpt54Backfill(result.sessions[0]);
         expect(result.sessions[0]?.contextTokens).toBe(200_000);
       },
     });

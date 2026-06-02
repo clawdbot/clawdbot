@@ -52,6 +52,13 @@ function mockCallRecord(mock: ReturnType<typeof vi.fn>, index: number): unknown[
   return call;
 }
 
+function expectUnauthorizedPayload(res: ServerResponse, end: ReturnType<typeof vi.fn>): void {
+  expect(res.statusCode).toBe(401);
+  expect(end).toHaveBeenCalledWith(
+    JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
+  );
+}
+
 describe("setDefaultSecurityHeaders", () => {
   it("sets X-Content-Type-Options", () => {
     const { res, setHeader } = makeMockHttpResponse();
@@ -144,10 +151,7 @@ describe("sendUnauthorized", () => {
   it("responds with 401 and a structured unauthorized payload", () => {
     const { res, end } = makeMockHttpResponse();
     sendUnauthorized(res);
-    expect(res.statusCode).toBe(401);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-    );
+    expectUnauthorizedPayload(res, end);
   });
 });
 
@@ -203,10 +207,7 @@ describe("sendGatewayAuthFailure", () => {
     const { res, end } = makeMockHttpResponse();
     const authResult = { ok: false, rateLimited: false } as GatewayAuthResult;
     sendGatewayAuthFailure(res, authResult);
-    expect(res.statusCode).toBe(401);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-    );
+    expectUnauthorizedPayload(res, end);
   });
 });
 

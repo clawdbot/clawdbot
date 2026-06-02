@@ -134,6 +134,20 @@ describe("createTalkSessionController", () => {
     expect(talk.outputAudioActive).toBe(false);
   });
 
+  it("preserves explicit null lifecycle payloads", () => {
+    const talk = createController();
+
+    const started = talk.startTurn({ payload: null });
+    const ended = talk.endTurn({ payload: null, turnId: started.turnId });
+    const audioStarted = talk.startOutputAudio({ payload: null });
+    const audioDone = talk.finishOutputAudio({ payload: null });
+
+    expect(started.event?.payload).toBeNull();
+    expect(ended.ok ? ended.event.payload : undefined).toBeNull();
+    expect(audioStarted.event?.payload).toBeNull();
+    expect(audioDone?.payload).toBeNull();
+  });
+
   it("notifies an event hook for emitted and controller-created events", () => {
     const events: string[] = [];
     const talk = createTalkSessionController(

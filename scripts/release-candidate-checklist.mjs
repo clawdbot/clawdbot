@@ -477,7 +477,7 @@ export function buildPublishCommand(options) {
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
-    ["release_profile", options.releaseProfile],
+    ["release_profile", "from-validation"],
     ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {

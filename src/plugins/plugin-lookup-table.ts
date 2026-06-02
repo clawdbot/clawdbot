@@ -5,7 +5,6 @@ import {
   resolveGatewayStartupPluginPlanFromRegistry,
   type GatewayStartupPluginPlan,
 } from "./channel-plugin-ids.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
 import {
   isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
@@ -57,29 +56,6 @@ export function clearPluginLookUpTableMemoForTest(): void {
   lookupTableMemoBySnapshot = new WeakMap<PluginMetadataSnapshot, Map<string, PluginLookUpTable>>();
 }
 
-function createPluginLookUpTableMemoKey(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  index?: PluginRegistrySnapshot;
-}): string {
-  return hashJson({
-    activationSourceConfig: params.activationSourceConfig ?? null,
-    config: params.config,
-    env: params.env,
-    indexPolicyHash: params.index?.policyHash ?? null,
-    indexGeneratedAtMs: params.index?.generatedAtMs ?? null,
-    indexPlugins:
-      params.index?.plugins.map((plugin) => [
-        plugin.pluginId,
-        plugin.manifestHash,
-        plugin.installRecordHash,
-      ]) ?? null,
-    workspaceDir: params.workspaceDir ?? null,
-  });
-}
-
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
   const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
@@ -112,15 +88,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
           ...(params.index ? { index: params.index } : {}),
           pluginIdScope,
         });
-  const memoKey = createPluginLookUpTableMemoKey({
-    config: params.config,
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    env: params.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.index !== undefined ? { index: params.index } : {}),
-  });
+  const memoKey = pluginIdScope.key;
   const memo = lookupTableMemoBySnapshot.get(metadataSnapshot)?.get(memoKey);
   if (memo) {
     return memo;

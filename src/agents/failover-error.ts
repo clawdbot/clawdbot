@@ -23,6 +23,7 @@ export class FailoverError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
+  readonly authProfileFailure?: { allInCooldown: boolean };
   // Originating request attribution propagated through wrapper errors so
   // structured log ingestion (e.g. api_health_log) can attribute exhausted
   // failover failures back to a session/lane and the last attempted provider.
@@ -41,6 +42,7 @@ export class FailoverError extends Error {
       status?: number;
       code?: string;
       rawError?: string;
+      authProfileFailure?: { allInCooldown: boolean };
       sessionId?: string;
       lane?: string;
       cause?: unknown;
@@ -56,6 +58,7 @@ export class FailoverError extends Error {
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
+    this.authProfileFailure = params.authProfileFailure;
     this.sessionId = params.sessionId;
     this.lane = params.lane;
     this.suspend = params.suspend;

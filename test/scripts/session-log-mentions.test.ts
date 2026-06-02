@@ -1,16 +1,26 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   countSessionLogMentions,
   readSessionLogMentionLimits,
 } from "../../scripts/e2e/lib/session-log-mentions.ts";
 
+const tempRoots: string[] = [];
+
 function makeTempRoot() {
-  return mkdtempSync(path.join(tmpdir(), "openclaw-session-log-mentions-"));
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-session-log-mentions-"));
+  tempRoots.push(root);
+  return root;
 }
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 describe("session log mention scanner", () => {
   it("counts mentions across bounded session logs", async () => {

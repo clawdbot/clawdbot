@@ -56,6 +56,10 @@ export type TalkSessionControllerOptions = {
   sequencer?: TalkEventSequencer;
 };
 
+function defaultTalkEventPayload(payload: unknown): unknown {
+  return payload === undefined ? {} : payload;
+}
+
 export function createTalkSessionController(
   params: TalkSessionControllerParams,
   options: TalkSessionControllerOptions = {},
@@ -111,7 +115,7 @@ export function createTalkSessionController(
       event: emit({
         type: "turn.started",
         turnId,
-        payload: startParams.payload ?? {},
+        payload: defaultTalkEventPayload(startParams.payload),
       }),
     };
   };
@@ -132,7 +136,7 @@ export function createTalkSessionController(
       event: emit({
         type,
         turnId,
-        payload: paramsForTurn.payload ?? {},
+        payload: defaultTalkEventPayload(paramsForTurn.payload),
         final: true,
       }),
     };
@@ -174,7 +178,7 @@ export function createTalkSessionController(
       return emit({
         type: "output.audio.done",
         turnId,
-        payload: paramsForOutput.payload ?? {},
+        payload: defaultTalkEventPayload(paramsForOutput.payload),
         final: true,
       });
     },
@@ -189,7 +193,7 @@ export function createTalkSessionController(
         event: emit({
           type: "output.audio.started",
           turnId: turn.turnId,
-          payload: paramsForOutput.payload ?? {},
+          payload: defaultTalkEventPayload(paramsForOutput.payload),
         }),
       };
     },

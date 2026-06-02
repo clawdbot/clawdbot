@@ -678,8 +678,8 @@ importers:
         specifier: 0.38.48
         version: 0.38.48
       libopus-wasm:
-        specifier: 0.1.0
-        version: 0.1.0
+        specifier: 0.2.0
+        version: 0.2.0
       typebox:
         specifier: 1.1.39
         version: 1.1.39
@@ -5541,8 +5541,8 @@ packages:
     resolution: {integrity: sha512-s6WVJyEZrbm6jhBpiKHsGHyePMrVQKJ85wZCFCr9W4QHv6WTjWIrdvTmO9hDEA3bNK0xkrE2DqrHsXMLWuZpQg==}
     engines: {node: '>=22.0.0'}
 
-  libopus-wasm@0.1.0:
-    resolution: {integrity: sha512-/aurGcAVgy0GcBEUzFaX9pm9qv7zYcy8W5hBXFiK+cyqOXAX4lOS6rlFogkY9CcSIajhjnuXyixsbmziSHCDMQ==}
+  libopus-wasm@0.2.0:
+    resolution: {integrity: sha512-x/2Gu1/C6L3IICY09zyfp984AWiOYjn53u4WfdY3yh+3KTzMN8Xkm77q3lenWMVIk5SnSzjGEkQT+VQMFHLBHQ==}
     engines: {node: '>=20'}
 
   libsignal@6.0.0:
@@ -11150,7 +11150,7 @@ snapshots:
 
   kysely@0.29.2: {}
 
-  libopus-wasm@0.1.0: {}
+  libopus-wasm@0.2.0: {}
 
   libsignal@6.0.0:
     dependencies:

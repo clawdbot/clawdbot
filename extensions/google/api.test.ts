@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,
+  isGoogleVertexBaseUrl,
+  isGoogleVertexHostname,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
   normalizeGoogleProviderConfig,
@@ -83,6 +85,23 @@ describe("google generative ai helpers", () => {
         models: [{ api: "openai-completions" }],
       }),
     ).toBe(false);
+    expect(
+      shouldNormalizeGoogleGenerativeAiProviderConfig("google-vertex", {
+        baseUrl: "https://aiplatform.googleapis.com",
+      }),
+    ).toBe(false);
+  });
+
+  it("detects native Google Vertex hosts by hostname only", () => {
+    expect(isGoogleVertexHostname("aiplatform.googleapis.com")).toBe(true);
+    expect(isGoogleVertexHostname("us-central1-aiplatform.googleapis.com")).toBe(true);
+    expect(isGoogleVertexHostname("generativelanguage.googleapis.com")).toBe(false);
+    expect(isGoogleVertexHostname("evil-aiplatform.googleapis.com.attacker.com")).toBe(false);
+    expect(
+      isGoogleVertexBaseUrl(
+        "https://generativelanguage.googleapis.com/v1beta/proxy/aiplatform.googleapis.com",
+      ),
+    ).toBe(false);
   });
 
   it("normalizes transport baseUrls only for Google Generative AI", () => {
@@ -113,6 +132,28 @@ describe("google generative ai helpers", () => {
     ).toEqual({
       api: "openai-completions",
       baseUrl: "https://generativelanguage.googleapis.com",
+    });
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        provider: "google-vertex",
+        api: undefined,
+        baseUrl: "https://us-central1-aiplatform.googleapis.com",
+      }),
+    ).toEqual({
+      api: "google-vertex",
+      baseUrl: "https://us-central1-aiplatform.googleapis.com",
+    });
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        provider: "google-vertex",
+        api: "openai-completions",
+        baseUrl:
+          "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl:
+        "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
     });
   });
 

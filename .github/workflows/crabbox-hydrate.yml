@@ -32,11 +32,11 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   PNPM_CONFIG_CHILD_CONCURRENCY: "1"
-  PNPM_CONFIG_MODULES_DIR: "/tmp/openclaw-pnpm-node-modules"
+  PNPM_CONFIG_MODULES_DIR: "/var/tmp/openclaw-pnpm-node-modules"
   PNPM_CONFIG_NETWORK_CONCURRENCY: "1"
-  PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"
+  PNPM_CONFIG_STORE_DIR: "/var/tmp/openclaw-pnpm-store"
   PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
-  PNPM_CONFIG_VIRTUAL_STORE_DIR: "/tmp/openclaw-pnpm-virtual-store"
+  PNPM_CONFIG_VIRTUAL_STORE_DIR: "/var/tmp/openclaw-pnpm-virtual-store"
 
 jobs:
   hydrate:

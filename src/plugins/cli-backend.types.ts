@@ -83,6 +83,11 @@ export type CliBackendPlugin = {
    */
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   /**
+   * Backend-owned compaction for non-harness CLI sessions.
+   * Set only when the backend bounds its own transcript and persists resumable state.
+   */
+  ownsNativeCompaction?: boolean;
+  /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
    * Keep provider-specific test wiring here instead of scattering it across

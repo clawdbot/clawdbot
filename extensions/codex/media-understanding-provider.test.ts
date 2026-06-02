@@ -253,6 +253,8 @@ describe("codex media understanding provider", () => {
       expect(result?.text).toBe("A red square.");
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
+      vi.restoreAllMocks();
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gmi-provider",
-  "version": "2026.6.1",
+  "version": "2026.6.2",
   "private": true,
   "description": "OpenClaw GMI Cloud provider plugin",
   "type": "module",

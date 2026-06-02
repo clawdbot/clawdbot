@@ -40,14 +40,26 @@ function parseQaLabUpArgs(argv: readonly string[]) {
 
 export const qaLabUpTesting = {
   parseQaLabUpArgs,
+  runQaLabUp,
   usage,
 };
 
-async function main(argv: readonly string[]): Promise<number> {
+type QaLabRuntime = typeof import("../extensions/qa-lab/src/cli.runtime.ts");
+
+type QaLabUpDeps = {
+  loadRuntime?: () => Promise<Pick<QaLabRuntime, "runQaDockerUpCommand">>;
+  writeStdout?: (text: string) => void;
+};
+
+async function loadQaLabRuntime(): Promise<Pick<QaLabRuntime, "runQaDockerUpCommand">> {
+  return await import("../extensions/qa-lab/src/cli.runtime.ts");
+}
+
+async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Promise<number> {
   const values = parseQaLabUpArgs(argv);
 
   if (values.help) {
-    process.stdout.write(usage());
+    (deps.writeStdout ?? ((text: string) => process.stdout.write(text)))(usage());
     return 0;
   }
 
@@ -62,7 +74,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return parsed;
   };
 
-  const { runQaDockerUpCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
+  const { runQaDockerUpCommand } = await (deps.loadRuntime ?? loadQaLabRuntime)();
 
   await runQaDockerUpCommand({
     outputDir: values["output-dir"],
@@ -75,6 +87,10 @@ async function main(argv: readonly string[]): Promise<number> {
     skipUiBuild: values["skip-ui-build"],
   });
   return 0;
+}
+
+async function main(argv: readonly string[]): Promise<number> {
+  return await runQaLabUp(argv);
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {

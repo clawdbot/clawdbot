@@ -372,6 +372,30 @@ its own control markers and channel delivery.
 For CLIs that emit Claude Code stream-json compatible JSONL, set
 `jsonlDialect: "claude-stream-json"` on that backend's config.
 
+## Native compaction ownership
+
+Some CLI backends run an agent that compacts its **own** transcript, so OpenClaw must
+not run its safeguard summarizer against them - doing so fights the backend's own
+compaction and can hard-fail the turn.
+
+`claude-cli` has no harness endpoint - Claude Code compacts internally - so it declares
+`ownsNativeCompaction: true`, and OpenClaw returns a no-op from the compaction path.
+Native-harness sessions such as Codex keep routing to their harness compaction endpoint
+instead.
+
+Because the backend owns compaction, the old stopgap of setting
+`contextTokens: 1_000_000` purely to keep OpenClaw's safeguard from firing on a
+claude-cli session is **no longer needed** - the opt-out replaces it.
+
+```typescript
+api.registerCliBackend({ id: "my-cli", ownsNativeCompaction: true /* ... */ });
+```
+
+Only declare `ownsNativeCompaction` for a backend that genuinely owns its compaction: it
+must reliably bound its own transcript as it nears its context window and persist a
+resumable session (e.g. `--resume` / `--session-id`); otherwise a deferred session can
+stay over budget. Matching `agentHarnessId` sessions still route to the harness endpoint.
+
 ## Bundle MCP overlays
 
 CLI backends do **not** receive OpenClaw tool calls directly, but a backend can

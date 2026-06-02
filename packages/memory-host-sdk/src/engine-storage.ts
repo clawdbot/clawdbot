@@ -16,6 +16,7 @@ export {
   type MemoryFileEntry,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
+export { isTransientMemoryReadError, retryTransientMemoryRead } from "./host/read-retry.js";
 export {
   buildMemoryReadResult,
   buildMemoryReadResultFromSlice,

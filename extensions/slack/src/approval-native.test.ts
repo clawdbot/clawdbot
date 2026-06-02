@@ -323,7 +323,7 @@ describe("slack native approval adapter", () => {
           targets: [{ channel: "slack", to: "U123OWNER" }],
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const request = {
       id: "plugin:req-1",
       request: {
@@ -370,6 +370,251 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("delivers plugin forwarding session approvals to the Slack origin without concrete approvers", async () => {
+    const cfg = {
+      ...buildConfig({
+        allowFrom: ["*"],
+        execApprovals: {
+          enabled: false,
+          approvers: ["U999EXEC"],
+          target: "dm",
+        },
+      }),
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "session",
+          sessionFilter: ["slack:"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const request = {
+      id: "plugin:req-open-session",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        sessionKey: "slack:D123APPROVALS:test-run",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:D123APPROVALS",
+        turnSourceAccountId: "default",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1_000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.isConfigured({
+        cfg,
+        accountId: "default",
+      }),
+    ).toBe(true);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual({
+      enabled: true,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: false,
+      notifyOriginWhenDmOnly: true,
+    });
+    expect(
+      await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual({
+      to: "channel:D123APPROVALS",
+      threadId: undefined,
+    });
+  });
+
+  it("requires Slack socket transport readiness before plugin forwarding enables native delivery", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              allowFrom: ["U123OWNER"],
+              execApprovals: {
+                enabled: false,
+                target: "both",
+              },
+            },
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "slack", accountId: "work", to: "user:U123OWNER" }],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const request = {
+      id: "plugin:req-transport",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.isConfigured({
+        cfg,
+        accountId: "work",
+      }),
+    ).toBe(false);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "work",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "work",
+        approvalKind: "plugin",
+        request,
+      }).enabled,
+    ).toBe(false);
+  });
+
+  it("treats HTTP signing secret configuration as Slack transport readiness", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              mode: "http",
+              botToken: "xoxb-work",
+              signingSecret: "signing-secret",
+              allowFrom: ["U123OWNER"],
+              execApprovals: {
+                enabled: false,
+                target: "both",
+              },
+            },
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "slack", accountId: "work", to: "user:U123OWNER" }],
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "plugin:req-http",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.isConfigured({
+        cfg,
+        accountId: "work",
+      }),
+    ).toBe(true);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "work",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "work",
+        approvalKind: "plugin",
+        request,
+      }).enabled,
+    ).toBe(true);
+  });
+
+  it("treats HTTP signing secret SecretRefs as Slack transport readiness", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              mode: "http",
+              botToken: "xoxb-work",
+              signingSecret: {
+                source: "env",
+                id: "SLACK_SIGNING_SECRET",
+              },
+              allowFrom: ["U123OWNER"],
+              execApprovals: {
+                enabled: false,
+                target: "both",
+              },
+            },
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "slack", accountId: "work", to: "user:U123OWNER" }],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const request = {
+      id: "plugin:req-http-secret-ref",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.isConfigured({
+        cfg,
+        accountId: "work",
+      }),
+    ).toBe(true);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "work",
         request,
       }),
     ).toBe(true);

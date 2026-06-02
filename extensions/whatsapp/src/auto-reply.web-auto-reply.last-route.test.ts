@@ -1,5 +1,4 @@
 import "./test-helpers.js";
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -151,17 +150,6 @@ describe("web auto-reply last-route", () => {
       to: "+1000",
       accountId: "default",
     });
-    const body = formatInboundEnvelope({
-      channel: "WhatsApp",
-      from: "+1000",
-      timestamp: now,
-      body: "hello",
-      chatType: "direct",
-      sender: {
-        e164: "+1000",
-        id: "+1000",
-      },
-    });
     expect(ctx).toMatchObject({
       From: "+1000",
       To: "+2000",
@@ -178,7 +166,7 @@ describe("web auto-reply last-route", () => {
       SenderE164: "+1000",
       SenderId: "+1000",
       RawBody: "hello",
-      Body: body,
+      Body: expect.stringMatching(/^\[WhatsApp \+1000 .+\] \+1000: hello$/),
       BodyForAgent: "hello",
       CommandBody: "hello",
       Timestamp: now,

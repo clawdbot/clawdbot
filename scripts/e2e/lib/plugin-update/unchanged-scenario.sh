@@ -19,7 +19,7 @@ node "$probe" seed
 
 node scripts/e2e/lib/plugin-update/registry-server.mjs >/tmp/openclaw-e2e-registry.log 2>&1 &
 registry_pid=$!
-trap 'kill "$registry_pid" >/dev/null 2>&1 || true' EXIT
+trap 'openclaw_e2e_stop_process "${registry_pid:-}"' EXIT
 
 if ! node "$probe" wait-registry; then
   echo "Local npm metadata registry failed to start"

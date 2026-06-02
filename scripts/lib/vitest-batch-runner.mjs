@@ -12,6 +12,7 @@ const repoRoot = path.resolve(scriptDir, "../..");
 
 export async function runVitestBatch(params) {
   return await new Promise((resolve, reject) => {
+    let forwardedSignal;
     const child = spawnPnpmRunner({
       cwd: repoRoot,
       detached: shouldUseDetachedVitestProcessGroup(),
@@ -19,7 +20,12 @@ export async function runVitestBatch(params) {
       pnpmArgs: buildVitestBatchPnpmArgs(params),
       stdio: "inherit",
     });
-    const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+    const teardownChildCleanup = installVitestProcessGroupCleanup({
+      child,
+      onSignal(signal) {
+        forwardedSignal = signal;
+      },
+    });
 
     child.on("error", (error) => {
       teardownChildCleanup();
@@ -29,6 +35,10 @@ export async function runVitestBatch(params) {
       teardownChildCleanup();
       if (signal) {
         process.kill(process.pid, signal);
+        return;
+      }
+      if (forwardedSignal) {
+        process.kill(process.pid, forwardedSignal);
         return;
       }
       resolve(code ?? 1);

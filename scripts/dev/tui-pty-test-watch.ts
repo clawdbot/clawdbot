@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 type Options = {
   altScreen: boolean;
@@ -20,6 +21,24 @@ const MODE_TEST_FILES = {
 const MIRROR_TERMINAL_QUERIES = ["\x1b[?u", "\x1b[16t"];
 const DEFAULT_PTY_COLS = 100;
 const DEFAULT_PTY_ROWS = 30;
+const CHILD_SIGTERM_GRACE_MS = 500;
+const CHILD_SIGKILL_GRACE_MS = 5_000;
+
+type KillableChild = {
+  pid?: number;
+  kill(signal: NodeJS.Signals): boolean;
+};
+
+type ChildStopper = {
+  cancel: () => void;
+  stop: () => void;
+};
+
+type SignalChild = (child: KillableChild, signal: NodeJS.Signals) => void;
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  (timer as { unref?: () => void }).unref?.();
+}
 
 function readOption(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
@@ -72,6 +91,64 @@ function currentTerminalDimension(value: number | undefined, fallback: number): 
   return String(value && value > 0 ? value : fallback);
 }
 
+function signalChildProcessTree(child: KillableChild, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Non-detached fallback or already-exited group; direct child signaling is
+      // still useful on platforms without process groups.
+    }
+  }
+  child.kill(signal);
+}
+
+function createChildStopper(
+  child: KillableChild,
+  options: {
+    signalChild?: SignalChild;
+    sigtermGraceMs?: number;
+    sigkillGraceMs?: number;
+  } = {},
+): ChildStopper {
+  const signalChild = options.signalChild ?? signalChildProcessTree;
+  const sigtermGraceMs = options.sigtermGraceMs ?? CHILD_SIGTERM_GRACE_MS;
+  const sigkillGraceMs = options.sigkillGraceMs ?? CHILD_SIGKILL_GRACE_MS;
+  let stopping = false;
+  let termTimer: ReturnType<typeof setTimeout> | undefined;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const cancel = () => {
+    if (termTimer) {
+      clearTimeout(termTimer);
+      termTimer = undefined;
+    }
+    if (killTimer) {
+      clearTimeout(killTimer);
+      killTimer = undefined;
+    }
+  };
+
+  const stop = () => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    signalChild(child, "SIGINT");
+    termTimer = setTimeout(() => {
+      signalChild(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        signalChild(child, "SIGKILL");
+      }, sigkillGraceMs);
+      unrefTimer(killTimer);
+    }, sigtermGraceMs);
+    unrefTimer(termTimer);
+  };
+
+  return { cancel, stop };
+}
+
 async function createMirrorFile(mirrorPath: string): Promise<void> {
   await mkdir(path.dirname(mirrorPath), { recursive: true });
   await writeFile(mirrorPath, "", "utf8");
@@ -108,6 +185,7 @@ async function main(): Promise<void> {
     ],
     {
       cwd: process.cwd(),
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         OPENCLAW_TUI_PTY_MIRROR_PATH: options.mirrorPath,
@@ -172,10 +250,8 @@ async function main(): Promise<void> {
     }
   };
 
-  const stopChild = () => {
-    child.kill("SIGINT");
-    setTimeout(() => child.kill("SIGTERM"), 500).unref();
-  };
+  const childStopper = createChildStopper(child);
+  const stopChild = childStopper.stop;
 
   const ignoredInput = (chunk: Buffer) => {
     if (chunk.includes(0x03)) {
@@ -238,12 +314,20 @@ async function main(): Promise<void> {
     childStderr += chunk.toString("utf8");
   });
 
-  let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  child.on("exit", (code, signal) => {
-    childExit = { code, signal };
+  type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
+  let childExit: ChildExit | null = null;
+  const childFinished = new Promise<ChildExit>((resolve) => {
+    child.once("exit", (code, signal) => {
+      childExit = { code, signal };
+      childStopper.cancel();
+      resolve(childExit);
+    });
   });
 
-  process.once("SIGINT", stopChild);
+  const parentSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const signal of parentSignals) {
+    process.once(signal, stopChild);
+  }
 
   try {
     for (;;) {
@@ -265,12 +349,22 @@ async function main(): Promise<void> {
       writeMirrorChunk(result.chunk);
     }
   } finally {
+    if (!childExit) {
+      stopChild();
+    }
+    for (const signal of parentSignals) {
+      process.off(signal, stopChild);
+    }
     await drainParentInput();
     restoreInput();
     if (useAltScreen) {
       process.stdout.write("\x1b[?2026l\x1b[?2004l\x1b[>4;0m\x1b[?25h");
     }
     restoreScreen();
+  }
+
+  if (!childExit) {
+    childExit = await childFinished;
   }
 
   if (childStdout) {
@@ -288,9 +382,16 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
-  );
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  });
+}
+
+export const testing = {
+  createChildStopper,
+  signalChildProcessTree,
+};

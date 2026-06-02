@@ -21,8 +21,9 @@ PORT="18789"
 MOCK_PORT="44210"
 CLICKCLACK_PORT="44211"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_RELEASE_UPGRADE"
-MOCK_REQUEST_LOG="/tmp/openclaw-release-upgrade-user-journey-openai.jsonl"
-CLICKCLACK_STATE="/tmp/openclaw-release-upgrade-user-journey-clickclack.json"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-upgrade-user-journey.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
+CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
 BASELINE_SPEC="${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
 
@@ -38,6 +39,7 @@ cleanup() {
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   openclaw_e2e_stop_process "${clickclack_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 

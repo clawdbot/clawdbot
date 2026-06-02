@@ -534,7 +534,7 @@ export async function runPreparedCliAgent(
           };
     const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
-    if (!assistantText) {
+    if (!assistantText && params.allowEmptyAssistantReplyAsSilent !== true) {
       throw new FailoverError("CLI backend returned an empty response.", {
         reason: "empty_response",
         provider: params.provider,
@@ -588,7 +588,11 @@ export async function runPreparedCliAgent(
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
-    const payloads = text ? [{ text }] : undefined;
+    const payloads = text
+      ? [{ text }]
+      : params.allowEmptyAssistantReplyAsSilent === true
+        ? [{ text: SILENT_REPLY_TOKEN }]
+        : undefined;
     const unflushedCliSessionId =
       resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
         ? resultParams.effectiveCliSessionId

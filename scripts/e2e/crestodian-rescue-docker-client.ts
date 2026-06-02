@@ -2,12 +2,12 @@
 // Imports packaged dist modules so the Docker lane verifies the npm tarball,
 // while this small test driver stays mounted from the checkout.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { handleCrestodianCommand } from "../../dist/auto-reply/reply/commands-crestodian.js";
 import { clearConfigCache } from "../../dist/config/config.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
 import { runCrestodianRescueMessage } from "../../dist/crestodian/rescue-message.js";
+import { createE2eStateDir } from "./lib/temp-state-dir.ts";
 
 type CommandResult = Awaited<ReturnType<typeof handleCrestodianCommand>>;
 
@@ -51,9 +51,9 @@ async function invoke(commandBody: string, cfg: OpenClawConfig, isGroup = false)
 }
 
 async function main() {
-  const stateDir =
-    process.env.OPENCLAW_STATE_DIR ??
-    (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-crestodian-")));
+  const tempState = await createE2eStateDir("openclaw-crestodian-");
+  tempState.registerExitCleanup();
+  const stateDir = tempState.stateDir;
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = configPath;

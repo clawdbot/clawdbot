@@ -6,6 +6,7 @@ import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const [logPath, command, ...args] = process.argv.slice(2);
 const OUTPUT_MAX_BYTES = readPositiveIntEnv("OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES", 16 * 1024 * 1024);
+const FORCE_KILL_MS = readPositiveIntEnv("OPENCLAW_E2E_PTY_FORCE_KILL_MS", 5_000);
 
 if (!logPath || !command) {
   console.error("usage: run-with-pty.mjs <log-path> <command> [args...]");
@@ -22,6 +23,8 @@ const pty = spawn(command, args, {
 });
 
 let exiting = false;
+let forwardedSignal = null;
+let forceKillTimer = null;
 const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
 const outputState = {
   bytes: 0,
@@ -57,7 +60,11 @@ pty.onData((data) => {
 
 pty.onExit(({ exitCode, signal }) => {
   exiting = true;
+  clearTimeout(forceKillTimer);
   log.end(() => {
+    if (forwardedSignal) {
+      process.exit(signalExitCode(forwardedSignal));
+    }
     if (typeof exitCode === "number") {
       process.exit(exitCode);
     }
@@ -69,10 +76,28 @@ process.stdin.on("data", (chunk) => {
   pty.write(chunk.toString("utf8"));
 });
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     if (!exiting) {
+      forwardedSignal ??= signal;
       pty.kill(signal);
+      forceKillTimer ??= setTimeout(() => {
+        pty.kill("SIGKILL");
+      }, FORCE_KILL_MS);
+      forceKillTimer.unref?.();
     }
   });
+}
+
+function signalExitCode(signal) {
+  switch (signal) {
+    case "SIGHUP":
+      return 129;
+    case "SIGINT":
+      return 130;
+    case "SIGTERM":
+      return 143;
+    default:
+      return 1;
+  }
 }

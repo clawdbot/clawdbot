@@ -19,6 +19,13 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+function cleanupTestStateHomeTrap(): string {
+  return [
+    'cleanup_openclaw_test_state_home() { [ -z "${OPENCLAW_TEST_STATE_HOME:-}" ] || rm -rf "$OPENCLAW_TEST_STATE_HOME"; }',
+    "trap cleanup_openclaw_test_state_home EXIT",
+  ].join("; ");
+}
+
 const secretKeyPattern = /^[a-f0-9]{64}$/u;
 
 describe("scripts/lib/openclaw-test-state", () => {
@@ -112,7 +119,7 @@ describe("scripts/lib/openclaw-test-state", () => {
 
       const probe = await execFileAsync("bash", [
         "-lc",
-        `source ${shellQuote(snippetFile)}; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,openclawHome:process.env.OPENCLAW_HOME,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,channel:config.update.channel}));'; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; source ${shellQuote(snippetFile)}; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,openclawHome:process.env.OPENCLAW_HOME,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,channel:config.update.channel}));'`,
       ]);
 
       const payload = JSON.parse(probe.stdout);
@@ -128,7 +135,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       const customTemp = path.join(tempRoot, "state-tmp");
       const customProbe = await execFileAsync("bash", [
         "-lc",
-        `export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(customTemp)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT}));'; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(customTemp)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT}));'`,
       ]);
       const customPayload = JSON.parse(customProbe.stdout);
       expect(customPayload.tmpRoot).toBe(customTemp);
@@ -140,7 +147,7 @@ describe("scripts/lib/openclaw-test-state", () => {
 
       const trailingSlashProbe = await execFileAsync("bash", [
         "-lc",
-        `export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(`${customTemp}/`)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT,stateDir:process.env.OPENCLAW_STATE_DIR}));'; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(`${customTemp}/`)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT,stateDir:process.env.OPENCLAW_STATE_DIR}));'`,
       ]);
       const trailingSlashPayload = JSON.parse(trailingSlashProbe.stdout);
       expect(trailingSlashPayload.tmpRoot).toBe(customTemp);
@@ -181,7 +188,7 @@ describe("scripts/lib/openclaw-test-state", () => {
 
       const shellProbe = await execFileAsync("bash", [
         "-lc",
-        `export PATH=${shellQuote(fakeBin)}:$PATH; source ${shellQuote(snippetFile)}; printf '%s' "$OPENCLAW_AUTH_PROFILE_SECRET_KEY"; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; export PATH=${shellQuote(fakeBin)}:$PATH; source ${shellQuote(snippetFile)}; printf '%s' "$OPENCLAW_AUTH_PROFILE_SECRET_KEY"`,
       ]);
       expect(shellProbe.stdout).toMatch(secretKeyPattern);
 
@@ -193,7 +200,7 @@ describe("scripts/lib/openclaw-test-state", () => {
 
       const functionProbe = await execFileAsync("bash", [
         "-lc",
-        `export PATH=${shellQuote(fakeBin)}:$PATH; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(functionFile)}; openclaw_test_state_create "path node" minimal; printf '%s' "$OPENCLAW_AUTH_PROFILE_SECRET_KEY"; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; export PATH=${shellQuote(fakeBin)}:$PATH; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(functionFile)}; openclaw_test_state_create "path node" minimal; printf '%s' "$OPENCLAW_AUTH_PROFILE_SECRET_KEY"`,
       ]);
       expect(functionProbe.stdout).toMatch(secretKeyPattern);
     } finally {
@@ -248,7 +255,7 @@ describe("scripts/lib/openclaw-test-state", () => {
 
       const probe = await execFileAsync("bash", [
         "-lc",
-        `export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(snippetFile)}; export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,agentDir:process.env.OPENCLAW_AGENT_DIR || null,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,config}));'; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(snippetFile)}; export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,agentDir:process.env.OPENCLAW_AGENT_DIR || null,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,secretKey:process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,config}));'`,
       ]);
 
       const payload = JSON.parse(probe.stdout);
@@ -262,7 +269,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       const trailingTmpDir = path.join(tempRoot, "function-trailing-tmp");
       const trailingProbe = await execFileAsync("bash", [
         "-lc",
-        `export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(`${trailingTmpDir}/`)}; source ${shellQuote(snippetFile)}; openclaw_test_state_create "onboard case" minimal; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,stateDir:process.env.OPENCLAW_STATE_DIR,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR}));'; rm -rf "$HOME"`,
+        `${cleanupTestStateHomeTrap()}; export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(`${trailingTmpDir}/`)}; source ${shellQuote(snippetFile)}; openclaw_test_state_create "onboard case" minimal; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,stateDir:process.env.OPENCLAW_STATE_DIR,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR}));'`,
       ]);
 
       const trailingPayload = JSON.parse(trailingProbe.stdout);

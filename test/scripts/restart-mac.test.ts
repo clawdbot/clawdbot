@@ -74,6 +74,15 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).not.toContain("lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true");
   });
 
+  it("keeps the default restart log scoped to the current worktree lock", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain(
+      'LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"',
+    );
+    expect(script).not.toContain('LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"');
+  });
+
   it("prefers the freshly packaged app unless an explicit app bundle is set", () => {
     const script = readFileSync(restartScriptPath, "utf8");
     const chooseBlock = script.slice(

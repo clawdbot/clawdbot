@@ -70,6 +70,8 @@ type TaskRunDetailHandle = {
   runId: string;
 };
 
+export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
+
 export function applyImageModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageModelConfig: ImageModelConfig,

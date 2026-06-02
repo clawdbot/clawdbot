@@ -1169,8 +1169,8 @@ describe("memory plugin e2e", () => {
 
   test("clamps oversized auto-recall timeout timers", async () => {
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       await expect(
         testing.runWithTimeout({
           timeoutMs: Number.MAX_SAFE_INTEGER,
@@ -1180,14 +1180,15 @@ describe("memory plugin e2e", () => {
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });
 
   test("falls back for invalid auto-recall timeout timers", async () => {
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       await expect(
         testing.runWithTimeout({
           timeoutMs: Number.NaN,
@@ -1197,6 +1198,7 @@ describe("memory plugin e2e", () => {
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1);
     } finally {
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });

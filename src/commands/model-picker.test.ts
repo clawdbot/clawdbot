@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -1422,6 +1423,64 @@ describe("promptModelAllowlist", () => {
 
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["openai/gpt-5.5", "openai/gpt-5.4-mini"]);
+  });
+
+  it("includes stale configured preferred provider models in the scoped cleanup", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openrouter",
+        id: "meta-llama/llama-3.3-70b:free",
+        name: "Llama 3.3 70B",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const activeModel = "openrouter/meta-llama/llama-3.3-70b:free";
+    const staleModel = "openrouter/elephant-alpha";
+    const multiselect = vi.fn(async (params: WizardMultiSelectParams) =>
+      params.options.map((option) => option.value).filter((value) => value === activeModel),
+    );
+    const prompter = makePrompter({
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+    });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            [activeModel]: { alias: "llama" },
+            [staleModel]: { alias: "elephant" },
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openrouter",
+    });
+
+    const options = pickerOptions(multiselect as MockCallSource);
+    expect(optionValues(options)).toEqual([activeModel, staleModel]);
+    expect(requireOption(options, staleModel).hint).toBe("configured (not in catalog)");
+    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual([activeModel, staleModel]);
+    expect(result).toEqual({
+      models: [activeModel],
+      scopeKeys: [activeModel, staleModel],
+    });
+
+    const next = applyModelAllowlist(config, result.models ?? [], {
+      scopeKeys: result.scopeKeys,
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      [activeModel]: { alias: "llama" },
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+    });
   });
 
   it("shows configured preferred provider models when the catalog has no entries", async () => {

@@ -363,7 +363,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private phase = async (name: string, timeoutSeconds: number, fn: () => Promise<void> | void) =>
     await this.phases.phase(name, timeoutSeconds, fn);
 
-  private remainingPhaseTimeoutMs = (): number | undefined => this.phases.remainingTimeoutMs();
+  private remainingPhaseTimeoutMs = (fallbackMs?: number): number | undefined =>
+    this.phases.remainingTimeoutMs(fallbackMs);
 
   private logGuestPreflight(): void {
     this.guestBash(String.raw`set -euo pipefail
@@ -406,11 +407,17 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
       quiet: true,
+      timeoutMs: this.remainingPhaseTimeoutMs(),
     });
     if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 180);
+      waitForVmStatus(this.options.vmName, "stopped", 180, {
+        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     }
     this.waitForGuestReady();
   }

@@ -42,6 +42,50 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 import { createChatRunState } from "./server-chat-state.js";
 import { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
 
+type StartGatewayEarlyRuntimeInput = Parameters<typeof startGatewayEarlyRuntime>[0];
+
+const log = {
+  info: () => {},
+  warn: () => {},
+};
+
+function earlyRuntimeInput(
+  overrides: Partial<StartGatewayEarlyRuntimeInput> = {},
+): StartGatewayEarlyRuntimeInput {
+  const chatRunState = createChatRunState();
+  return {
+    minimalTestGateway: true,
+    cfgAtStart: {} as never,
+    port: 18_789,
+    gatewayTls: { enabled: false },
+    gatewayDirectReachable: false,
+    tailscaleMode: "off" as never,
+    log,
+    logDiscovery: log,
+    nodeRegistry: {} as never,
+    broadcast: () => {},
+    nodeSendToAllSubscribed: () => {},
+    getPresenceVersion: () => 0,
+    getHealthVersion: () => 0,
+    refreshGatewayHealthSnapshot: async () => ({}) as never,
+    logHealth: { error: () => {} },
+    dedupe: new Map(),
+    chatAbortControllers: new Map(),
+    chatRunState,
+    chatRunBuffers: chatRunState.buffers,
+    chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
+    removeChatRun: () => undefined,
+    agentRunSeq: new Map(),
+    nodeSendToSession: () => {},
+    skillsRefreshDelayMs: 30_000,
+    getSkillsRefreshTimer: () => null,
+    setSkillsRefreshTimer: () => {},
+    getRuntimeConfig: () => ({}) as never,
+    ...overrides,
+  };
+}
+
 describe("startGatewayEarlyRuntime", () => {
   beforeEach(() => {
     mocks.getMachineDisplayName.mockClear();
@@ -60,88 +104,21 @@ describe("startGatewayEarlyRuntime", () => {
   });
 
   it("does not eagerly start the MCP loopback server", async () => {
-    const chatRunState = createChatRunState();
-    const earlyRuntime = await startGatewayEarlyRuntime({
-      minimalTestGateway: true,
-      cfgAtStart: {} as never,
-      port: 18_789,
-      gatewayTls: { enabled: false },
-      gatewayDirectReachable: false,
-      tailscaleMode: "off" as never,
-      log: {
-        info: () => {},
-        warn: () => {},
-      },
-      logDiscovery: {
-        info: () => {},
-        warn: () => {},
-      },
-      nodeRegistry: {} as never,
-      broadcast: () => {},
-      nodeSendToAllSubscribed: () => {},
-      getPresenceVersion: () => 0,
-      getHealthVersion: () => 0,
-      refreshGatewayHealthSnapshot: async () => ({}) as never,
-      logHealth: { error: () => {} },
-      dedupe: new Map(),
-      chatAbortControllers: new Map(),
-      chatRunState,
-      chatRunBuffers: chatRunState.buffers,
-      chatDeltaSentAt: chatRunState.deltaSentAt,
-      chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
-      removeChatRun: () => undefined,
-      agentRunSeq: new Map(),
-      nodeSendToSession: () => {},
-      skillsRefreshDelayMs: 30_000,
-      getSkillsRefreshTimer: () => null,
-      setSkillsRefreshTimer: () => {},
-      getRuntimeConfig: () => ({}) as never,
-    });
+    const earlyRuntime = await startGatewayEarlyRuntime(earlyRuntimeInput());
 
     expect(earlyRuntime).not.toHaveProperty("mcpServer");
   });
 
   it("wires non-minimal skills runtime through lazy startup imports", async () => {
-    const chatRunState = createChatRunState();
     const nodeRegistry = { node: { id: "node" } };
     mocks.getInspectableActiveTaskRestartBlockers.mockReturnValueOnce(["active-task"]);
 
-    const earlyRuntime = await startGatewayEarlyRuntime({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      port: 18_789,
-      gatewayTls: { enabled: false },
-      gatewayDirectReachable: false,
-      tailscaleMode: "off" as never,
-      log: {
-        info: () => {},
-        warn: () => {},
-      },
-      logDiscovery: {
-        info: () => {},
-        warn: () => {},
-      },
-      nodeRegistry: nodeRegistry as never,
-      broadcast: () => {},
-      nodeSendToAllSubscribed: () => {},
-      getPresenceVersion: () => 0,
-      getHealthVersion: () => 0,
-      refreshGatewayHealthSnapshot: async () => ({}) as never,
-      logHealth: { error: () => {} },
-      dedupe: new Map(),
-      chatAbortControllers: new Map(),
-      chatRunState,
-      chatRunBuffers: chatRunState.buffers,
-      chatDeltaSentAt: chatRunState.deltaSentAt,
-      chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
-      removeChatRun: () => undefined,
-      agentRunSeq: new Map(),
-      nodeSendToSession: () => {},
-      skillsRefreshDelayMs: 30_000,
-      getSkillsRefreshTimer: () => null,
-      setSkillsRefreshTimer: () => {},
-      getRuntimeConfig: () => ({}) as never,
-    });
+    const earlyRuntime = await startGatewayEarlyRuntime(
+      earlyRuntimeInput({
+        minimalTestGateway: false,
+        nodeRegistry: nodeRegistry as never,
+      }),
+    );
 
     expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);

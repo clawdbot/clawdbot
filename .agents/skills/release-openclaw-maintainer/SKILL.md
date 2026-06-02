@@ -49,17 +49,21 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   the next beta number until the matching npm package has actually published.
   If a published beta needs a fix, commit the fix on the release branch and
   increment to the next `-beta.N`.
-- For a beta release train, run the fast local preflight first, publish the
-  beta to npm `beta`, then run the expensive published-package roster focused
-  on install/update/Docker/Parallels/NPM Telegram. If anything fails, fix it on
-  the release branch, commit/push/pull, increment beta number, and repeat. Run
-  the full expensive roster at least once before stable/latest promotion; for
-  later beta attempts, rerun only lanes whose evidence changed unless the fix
-  touches broad release, install/update, plugin, Docker, Parallels, or live QA
-  behavior. After each beta is published, scan current `main` once for critical
-  fixes that landed after the release branch cut and backport only important
-  low-risk fixes. Operators may authorize up to 4 autonomous beta attempts;
-  after 4 failed beta attempts, stop and report.
+- For a beta release train, keep Full Release Validation as a pre-publish gate
+  unless the operator explicitly waives it. Run the fast local preflight, npm
+  preflight, full release validation, and performance in parallel where safe.
+  If anything fails before npm publish, fix it on the release branch,
+  forward-port the fix to `main`, move the unpublished beta tag/prerelease to
+  the fixed commit, and rerun the affected pre-publish gates. If anything fails
+  after npm publish, fix it, forward-port to `main`, increment beta number, and
+  repeat. After each beta publish, run the published-package roster focused on
+  install/update/Docker/Parallels/NPM Telegram. For later beta attempts, rerun
+  only lanes whose evidence changed unless the fix touches broad release,
+  install/update, plugin, Docker, Parallels, or live QA behavior. After each
+  beta is live, scan current `main` once for critical fixes that landed after
+  the release branch cut and backport only important low-risk fixes. Operators
+  may authorize up to 4 autonomous beta attempts; after 4 failed beta attempts,
+  stop and report.
 - As soon as the release candidate SHA exists, dispatch `OpenClaw Performance`
   with `target_ref=<release-sha>` in parallel with the other release work. Do
   not wait for full release validation to start the performance signal.
@@ -468,8 +472,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
-- Real npm publish requires a prior successful npm preflight run id so the
-  publish job promotes the prepared tarball instead of rebuilding it.
+- Real npm publish requires a prior successful npm preflight run id and the
+  successful Full Release Validation run id for the same tag/SHA so the publish
+  job promotes the prepared tarball instead of rebuilding it and attaches the
+  correct release evidence.
 - Real private mac publish requires a prior successful private mac preflight
   run id so the publish job promotes the prepared artifacts instead of
   rebuilding or renotarizing them again.
@@ -499,11 +505,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   instead of uploading public GitHub release assets.
 - Private smoke-test runs upload ad-hoc, non-notarized build artifacts as
   workflow artifacts and intentionally skip stable `appcast.xml` generation.
-- For stable releases, npm preflight, public mac validation, private mac
-  validation, and private mac preflight must all pass before any real publish
-  run starts. For beta releases, npm preflight plus the selected Docker,
-  install/update, Parallels, and release-check lanes are sufficient unless mac
-  beta validation was explicitly requested.
+- For stable releases, npm preflight, Full Release Validation, public mac
+  validation, private mac validation, and private mac preflight must all pass
+  before any real publish run starts. For beta releases, npm preflight and Full
+  Release Validation must pass before npm publish unless the operator explicitly
+  waives the full gate; mac beta validation is still only required when
+  requested.
 - Real publish runs may be dispatched from `main` or from a
   `release/YYYY.M.D` branch. For release-branch runs, the tag must be contained
   in that release branch, and the real publish must reuse a successful preflight

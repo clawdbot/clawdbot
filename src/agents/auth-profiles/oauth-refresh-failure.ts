@@ -9,6 +9,23 @@ export type OAuthRefreshFailureReason =
   | "invalid_refresh_token"
   | "revoked";
 
+export type OAuthRefreshFailure = {
+  provider: string | null;
+  reason: OAuthRefreshFailureReason | null;
+};
+
+export class OAuthRefreshFailureError extends Error {
+  readonly provider: string;
+  readonly reason: OAuthRefreshFailureReason | null;
+
+  constructor(params: { provider: string; message: string; cause?: unknown }) {
+    super(params.message, { cause: params.cause });
+    this.name = "OAuthRefreshFailureError";
+    this.provider = params.provider;
+    this.reason = classifyOAuthRefreshFailureReason(params.message);
+  }
+}
+
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
@@ -54,16 +71,23 @@ export function classifyOAuthRefreshFailureReason(
   return null;
 }
 
-export function classifyOAuthRefreshFailure(message: string): {
-  provider: string | null;
-  reason: OAuthRefreshFailureReason | null;
-} | null {
+export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailure | null {
   if (!isOAuthRefreshFailureMessage(message)) {
     return null;
   }
   return {
     provider: sanitizeOAuthRefreshFailureProvider(extractOAuthRefreshFailureProvider(message)),
     reason: classifyOAuthRefreshFailureReason(message),
+  };
+}
+
+export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
+  if (!(err instanceof OAuthRefreshFailureError)) {
+    return null;
+  }
+  return {
+    provider: sanitizeOAuthRefreshFailureProvider(err.provider),
+    reason: err.reason,
   };
 }
 

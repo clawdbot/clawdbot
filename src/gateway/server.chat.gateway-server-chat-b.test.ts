@@ -372,6 +372,60 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.startup returns chat history with the initial agents list", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const updatedAt = Date.now();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt,
+            modelProvider: "openai",
+            model: "gpt-5",
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "startup hydrate" }],
+            timestamp: updatedAt,
+          },
+        }),
+      ]);
+
+      const startup = await rpcReq<{
+        agentsList?: {
+          agents?: Array<{ id?: string }>;
+          defaultId?: string | null;
+          mainKey?: string | null;
+        };
+        messages?: unknown[];
+        sessionInfo?: { key?: string; sessionId?: string };
+      }>(ws, "chat.startup", { sessionKey: "main" });
+
+      expect(startup.ok).toBe(true);
+      expect(startup.payload?.agentsList?.defaultId).toBe("main");
+      expect(startup.payload?.agentsList?.mainKey).toBe("main");
+      expect(startup.payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(startup.payload?.sessionInfo).toMatchObject({
+        key: "agent:main:main",
+        sessionId: "sess-main",
+      });
+      expect(startup.payload?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: [{ type: "text", text: "startup hydrate" }],
+          }),
+        ]),
+      );
+    });
+  });
+
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();

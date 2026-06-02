@@ -1515,6 +1515,30 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
   });
 
+  it("passes direct remote reference URLs to the provider without local media loading", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoPluginTool();
+
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      image: "https://example.test/reference.png",
+    });
+
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    const call = firstMockCallArg(generateSpy) as {
+      inputImages?: Array<{ url?: string }>;
+    };
+    expect(call.inputImages).toEqual([{ url: "https://example.test/reference.png" }]);
+  });
+
   it("passes web_fetch SSRF policy when loading reference assets", async () => {
     mockVideoPluginProvider({
       imageToVideo: { enabled: true, maxInputImages: 1 },

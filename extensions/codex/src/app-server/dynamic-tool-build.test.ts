@@ -18,6 +18,8 @@ import {
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
+  shouldUseDirectCodexDynamicToolsForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -177,6 +179,22 @@ describe("Codex app-server dynamic tool build", () => {
       "message",
     ]);
     expect(resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
+  });
+
+  it("uses direct dynamic tools for OpenAI nano models without tool_search support", () => {
+    const tools = [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("web_search")];
+    const toolBridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: resolveCodexDynamicToolsLoadingForModel({}, "openai/gpt-5.4-nano"),
+    });
+
+    expect(shouldUseDirectCodexDynamicToolsForModel("gpt-5.4-nano")).toBe(true);
+    expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.4-nano")).toBe("direct");
+    expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.5")).toBe("searchable");
+    const webSearch = toolBridge.specs.find((tool) => tool.name === "web_search");
+    expect(webSearch).not.toHaveProperty("deferLoading");
+    expect(webSearch).not.toHaveProperty("namespace");
   });
 
   it("quarantines unreadable tool entries before Codex-specific filtering", async () => {

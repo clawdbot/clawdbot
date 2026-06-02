@@ -7,6 +7,8 @@ import { buildCmdExeCommandLine } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
 const command = args.shift();
+export const CONFIG_COMMAND_TIMEOUT_MS = 120_000;
+export const CONFIG_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 function option(name, fallback) {
   const index = args.indexOf(name);
@@ -217,21 +219,34 @@ export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
   };
 }
 
-function runOpenClaw(step) {
+function errorCode(error) {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+}
+
+export function runUpgradeSurvivorOpenClawStep(step, params = {}) {
   const invocation = resolveUpgradeSurvivorOpenClawCommand(step.argv);
-  const result = spawnSync(invocation.command, invocation.args, {
+  const run = params.spawnSyncCommand ?? spawnSync;
+  const timeoutMs = params.timeoutMs ?? CONFIG_COMMAND_TIMEOUT_MS;
+  const maxBuffer = params.maxBufferBytes ?? CONFIG_COMMAND_MAX_BUFFER_BYTES;
+  const result = run(invocation.command, invocation.args, {
     encoding: "utf8",
     env: process.env,
+    killSignal: "SIGTERM",
+    maxBuffer,
     shell: invocation.shell,
+    timeout: timeoutMs,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
+  const code = errorCode(result.error);
   return {
     id: step.id,
     intent: step.intent,
     command: invocation.commandLabel,
     status: result.status,
     signal: result.signal,
-    ok: result.status === 0,
+    ok: result.status === 0 && !result.error,
+    errorCode: code,
+    errorMessage: result.error?.message ? tail(result.error.message) : undefined,
     stdout: tail(result.stdout),
     stderr: tail(result.stderr),
   };
@@ -268,11 +283,12 @@ function applyRecipe() {
     if (!adaptedStep) {
       continue;
     }
-    const outcome = runOpenClaw(adaptedStep);
+    const outcome = runUpgradeSurvivorOpenClawStep(adaptedStep);
     summary.steps.push(outcome);
     writeJson(summaryPath, summary);
     if (!outcome.ok) {
-      throw new Error(`baseline config recipe failed at ${step.id}`);
+      const detail = outcome.errorCode ?? outcome.signal ?? outcome.status ?? "unknown";
+      throw new Error(`baseline config recipe failed at ${step.id}: ${detail}`);
     }
   }
 }

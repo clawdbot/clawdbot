@@ -1111,15 +1111,30 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
     const targetMediaUrls = collectMessagingToolDeliveredMediaUrls({
       messagingToolSentTargets: [target],
     });
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      continue;
+    }
+    const targetRecord = target as Record<string, unknown>;
+    const targetTo = typeof targetRecord.to === "string" ? targetRecord.to.trim() : "";
+    if (!targetTo) {
+      if (
+        !deliveryTarget.to ||
+        !sourceDeliveryTargetsMatch({ ...targetRecord, to: deliveryTarget.to }, deliveryTarget)
+      ) {
+        for (const url of targetMediaUrls) {
+          targetedUrls.add(url);
+        }
+        continue;
+      }
+      for (const url of targetMediaUrls) {
+        urls.add(url);
+      }
+      continue;
+    }
     for (const url of targetMediaUrls) {
       targetedUrls.add(url);
     }
-    if (
-      !target ||
-      typeof target !== "object" ||
-      Array.isArray(target) ||
-      !sourceDeliveryTargetsMatch(target as Record<string, unknown>, deliveryTarget)
-    ) {
+    if (!sourceDeliveryTargetsMatch(targetRecord, deliveryTarget)) {
       continue;
     }
     for (const url of targetMediaUrls) {

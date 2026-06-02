@@ -494,6 +494,24 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("canonicalizes Gemma 4 26B shorthand before cloning templates", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemma-4-26b",
+        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: false })],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+  });
+
   it("preserves template reasoning for non-Gemma 4 gemma models", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google",

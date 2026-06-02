@@ -120,7 +120,6 @@ function createLookUpTableForTest(params: {
   pluginIds?: readonly string[];
 }): PluginLookUpTable {
   return {
-    key: "test",
     policyHash: "test",
     index: {
       version: 1,

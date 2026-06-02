@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -76,6 +76,10 @@ describe("server-runtime-services", () => {
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("skips model pricing bootstrap import when pricing is disabled", async () => {
     activateGatewayScheduledServices({
       minimalTestGateway: false,
@@ -120,17 +124,7 @@ describe("server-runtime-services", () => {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
     };
-    const cron = { start: vi.fn(async () => undefined) };
-    const log = createLog();
-
-    const services = activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
-      logCron: { error: vi.fn() },
-      log,
+    const { cron, services } = activateScheduledServicesForTest({
       pluginLookUpTable: pluginLookUpTable as never,
     });
 
@@ -146,16 +140,7 @@ describe("server-runtime-services", () => {
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
-    const cron = { start: vi.fn(async () => undefined) };
-    const services = activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
-      logCron: { error: vi.fn() },
-      log: createLog(),
-    });
+    const { services } = activateScheduledServicesForTest();
 
     services.stopModelPricingRefresh();
     await vi.dynamicImportSettled();
@@ -166,18 +151,8 @@ describe("server-runtime-services", () => {
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {
     vi.useFakeTimers();
-    const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
-
-    const services = activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
-      logCron: { error: vi.fn() },
-      log,
-    });
+    const { cron, services } = activateScheduledServicesForTest({ log });
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
     expect(cron.start).toHaveBeenCalledTimes(1);
@@ -352,6 +327,28 @@ function createLog() {
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+function createTestCron() {
+  return { start: vi.fn(async () => undefined) };
+}
+
+function activateScheduledServicesForTest(
+  overrides: Partial<Parameters<typeof activateGatewayScheduledServices>[0]> = {},
+) {
+  const cron = overrides.cron ?? createTestCron();
+  const log = overrides.log ?? createLog();
+  const services = activateGatewayScheduledServices({
+    minimalTestGateway: false,
+    cfgAtStart: {} as never,
+    deps: {} as never,
+    sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+    logCron: { error: vi.fn() },
+    ...overrides,
+    cron,
+    log,
+  });
+  return { cron, log, services };
 }
 
 function createPostReadyMaintenanceScheduleParams(

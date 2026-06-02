@@ -103,6 +103,7 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -626,6 +627,23 @@ export class OpenClawApp extends LitElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+  @state() skillWorkshopLoading = false;
+  @state() skillWorkshopLoaded = false;
+  @state() skillWorkshopError: string | null = null;
+  @state() skillWorkshopInspectingKey: string | null = null;
+  @state() skillWorkshopProposals: SkillWorkshopState["skillWorkshopProposals"] = [];
+  @state() skillWorkshopSelectedKey: string | null = null;
+  @state() skillWorkshopActionBusy: SkillWorkshopState["skillWorkshopActionBusy"] = null;
+  @state() skillWorkshopActionNotice: SkillWorkshopState["skillWorkshopActionNotice"] = null;
+  skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  @state() skillWorkshopRevisionKey: string | null = null;
+  @state() skillWorkshopRevisionDraft = "";
+  @state() skillWorkshopStatusFilter: SkillWorkshopState["skillWorkshopStatusFilter"] = "pending";
+  @state() skillWorkshopQuery = "";
+  @state() skillWorkshopFilePreviewKey: string | null = null;
+  @state() skillWorkshopFilePreviewQuery = "";
+  @state() skillWorkshopQueueWidth = 360;
+  @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = "today";
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;

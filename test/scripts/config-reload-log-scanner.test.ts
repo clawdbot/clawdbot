@@ -95,4 +95,28 @@ describe("config reload log scanner", () => {
     expect(result.reloadLines).toEqual([]);
     expect(result.restartLines).toEqual(["config change requires gateway restart: new.path"]);
   });
+
+  it("resets accumulated matches when a rotated log keeps the same size", () => {
+    const logPath = path.join(makeTempRoot(), "gateway.log");
+    const scanner = createConfigReloadLogScanner(logPath, {
+      maxReadBytes: 1024,
+      tailLineLimit: 4,
+    });
+    const oldText = "config change detected; evaluating reload: old.path with enough padding\n";
+    const restartLine = "config change requires gateway restart: new.path";
+    const restartText = `${restartLine}${" ".repeat(oldText.length - restartLine.length - 1)}\n`;
+
+    expect(Buffer.byteLength(restartText)).toBe(Buffer.byteLength(oldText));
+    writeFileSync(logPath, oldText);
+    expect(scanner.scan().reloadLines).toEqual([
+      "config change detected; evaluating reload: old.path with enough padding",
+    ]);
+
+    rmSync(logPath, { force: true });
+    writeFileSync(logPath, restartText);
+
+    const result = scanner.scan();
+    expect(result.reloadLines).toEqual([]);
+    expect(result.restartLines).toEqual([restartText.replace(/\n$/u, "")]);
+  });
 });

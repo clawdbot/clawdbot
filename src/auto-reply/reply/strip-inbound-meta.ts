@@ -46,6 +46,10 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
+export function hasInboundMetadataSentinel(text: string): boolean {
+  return Boolean(text && SENTINEL_FAST_RE.test(text));
+}
+
 function isMessageToolDeliveryHintLine(line: string): boolean {
   const trimmed = line.trim();
   return MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => hint === trimmed);

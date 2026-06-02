@@ -4,14 +4,35 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { assert, connectGateway, type GatewayRpcClient, waitFor } from "./mcp-channels-harness.ts";
+import type { GatewayRpcClient } from "./mcp-channels-harness.ts";
 
 const execFileAsync = promisify(execFile);
+const PROBE_PID_WAIT_MS = readPositiveInt(
+  process.env.OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS,
+  120_000,
+);
+type McpChannelsHarness = typeof import("./mcp-channels-harness.ts");
+let mcpChannelsHarness: McpChannelsHarness | undefined;
 
 type CronJob = { id?: string };
 type CronRunResult = { ok?: boolean; enqueued?: boolean; runId?: string };
 type AgentRunResult = { runId?: string; status?: string };
+
+async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
+  mcpChannelsHarness ??= await import("./mcp-channels-harness.ts");
+  return mcpChannelsHarness;
+}
+
+function readPositiveInt(raw: string | undefined, fallback: number): number {
+  const text = (raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 async function readProbePid(pidPath: string): Promise<number | undefined> {
   try {
@@ -52,14 +73,19 @@ async function describeProbePid(pid: number): Promise<string | undefined> {
   }
 }
 
-async function waitForProbePid(pidPath: string): Promise<number | undefined> {
+export async function waitForProbePid(
+  pidPath: string,
+  options: { pollMs?: number; timeoutMs?: number } = {},
+): Promise<number | undefined> {
+  const timeoutMs = options.timeoutMs ?? PROBE_PID_WAIT_MS;
+  const pollMs = options.pollMs ?? 100;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 600_000) {
+  while (Date.now() - startedAt < timeoutMs) {
     const pid = await readProbePid(pidPath);
     if (pid) {
       return pid;
     }
-    await delay(100);
+    await delay(pollMs);
   }
   return undefined;
 }
@@ -128,6 +154,7 @@ async function runCronCleanupScenario(params: {
   gateway: GatewayRpcClient;
   pidPath: string;
 }): Promise<{ jobId: string; runId?: string; pid: number; status?: unknown }> {
+  const { assert, waitFor } = await loadMcpChannelsHarness();
   const { gateway, pidPath } = params;
   const job = await gateway.request<CronJob>("cron.add", {
     name: "cron mcp cleanup docker e2e",
@@ -171,7 +198,7 @@ async function runCronCleanupScenario(params: {
   const pid = await waitForProbePid(pidPath);
   assert(
     pid,
-    `cron MCP probe did not start; missing pid file at ${pidPath}; events=${JSON.stringify(
+    `cron MCP probe did not start within ${PROBE_PID_WAIT_MS}ms; missing pid file at ${pidPath}; events=${JSON.stringify(
       gateway.events.slice(-10),
     )}`,
   );
@@ -209,6 +236,7 @@ async function runSubagentCleanupScenario(params: {
   pidsPath: string;
   exitPath: string;
 }): Promise<{ runId: string; exitedPids: number[]; pids: number[] }> {
+  const { assert } = await loadMcpChannelsHarness();
   const { gateway, pidPath, pidsPath, exitPath } = params;
   await resetProbeFiles({ pidPath, pidsPath, exitPath });
 
@@ -258,6 +286,7 @@ async function runSubagentCleanupScenario(params: {
 }
 
 async function main() {
+  const { assert, connectGateway } = await loadMcpChannelsHarness();
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
@@ -283,4 +312,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

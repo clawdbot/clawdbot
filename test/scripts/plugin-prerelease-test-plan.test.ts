@@ -545,21 +545,34 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
       "inputs.rerun_group == 'all'",
     );
+    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-      (step) => step.name === "Build and smoke test final Docker runtime image",
+      (step) => step.name === "Verify Docker runtime-assets prune path",
     );
     expect(dockerPreflightStep).toBeDefined();
     expect(dockerPreflightStep?.run).toContain("docker build");
-    expect(dockerPreflightStep?.run).toContain("node /app/openclaw.mjs agent");
+    expect(dockerPreflightStep?.run).toContain("--target runtime-assets");
+    expect(dockerPreflightStep?.run).toContain("timeout --kill-after=30s 15m docker build");
     expect(dockerPreflightStep?.run).toContain(
       '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
     );
-    expect(dockerPreflightStep?.run).toContain("/app/src/agents/templates/HEARTBEAT.md");
+    expect(
+      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
+        (step) => step.name === "Build and smoke test final Docker runtime image",
+      ),
+    ).toBe(false);
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );
     expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+    );
+    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    expect(
+      fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
+    ).toBeGreaterThanOrEqual(3);
+    expect(fullReleaseSource).toContain(
+      "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
   });
 

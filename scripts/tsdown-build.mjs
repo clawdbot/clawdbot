@@ -21,6 +21,7 @@ const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
+const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const CGROUP_MEMORY_LIMIT_PATHS = [
@@ -382,21 +383,25 @@ function readProcMemTotalBytes(params = {}) {
 }
 
 function resolveTsdownMaxOldSpaceMb(params = {}) {
+  const defaultMaxOldSpaceMb =
+    (params.platform ?? process.platform) === "win32"
+      ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
+      : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
   const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
   if (limitBytes === null) {
-    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+    return defaultMaxOldSpaceMb;
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
   if (limitMb <= 0) {
-    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+    return defaultMaxOldSpaceMb;
   }
 
   const cgroupCap = Math.max(
     MIN_TSDOWN_MAX_OLD_SPACE_MB,
     limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
   );
-  return Math.min(DEFAULT_TSDOWN_MAX_OLD_SPACE_MB, cgroupCap);
+  return Math.min(defaultMaxOldSpaceMb, cgroupCap);
 }
 
 function parseMaxOldSpaceSizeMb(value, fallbackMb) {

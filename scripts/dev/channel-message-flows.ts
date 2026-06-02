@@ -51,6 +51,10 @@ type TelegramFlowResult = {
   previewUpdates: number;
 };
 
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
 type TelegramThinkingFinalDeps = {
   createDraftStream?: (params: {
     accountId?: string;
@@ -310,15 +314,35 @@ export async function runTelegramThinkingFinalFlow(
   });
   const wait = deps.sleep ?? sleep;
 
-  for (const update of thinkingUpdates) {
-    stream.update(formatReasoningMessage(update));
-    await stream.flush();
-    if (delayMs > 0) {
-      await wait(delayMs);
+  let previewStarted = false;
+  let flowError: unknown;
+  try {
+    for (const update of thinkingUpdates) {
+      previewStarted = true;
+      stream.update(formatReasoningMessage(update));
+      await stream.flush();
+      if (delayMs > 0) {
+        await wait(delayMs);
+      }
+    }
+  } catch (error) {
+    flowError = error;
+  }
+  let cleanupError: unknown;
+  if (previewStarted) {
+    try {
+      await stream.clear();
+    } catch (error) {
+      cleanupError = error;
     }
   }
+  if (flowError) {
+    throw toError(flowError);
+  }
+  if (cleanupError) {
+    throw toError(cleanupError);
+  }
 
-  await stream.clear();
   const final = await (deps.sendFinal ?? sendTelegramFinal)({
     accountId: options.accountId,
     cfg: options.cfg,
@@ -350,19 +374,39 @@ export async function runTelegramWorkingFinalFlow(
   let previewUpdates = 0;
   let lastPreviewText = "";
   const updateIntervalMs = delayMs > 0 ? delayMs : 1_000;
-  for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += updateIntervalMs) {
-    const previewText = formatWorkingProgressPreview(elapsedMs);
-    if (previewText !== lastPreviewText) {
-      await draft.update(previewText);
-      lastPreviewText = previewText;
-      previewUpdates += 1;
+  let draftStarted = false;
+  let flowError: unknown;
+  try {
+    for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += updateIntervalMs) {
+      const previewText = formatWorkingProgressPreview(elapsedMs);
+      if (previewText !== lastPreviewText) {
+        draftStarted = true;
+        await draft.update(previewText);
+        lastPreviewText = previewText;
+        previewUpdates += 1;
+      }
+      if (delayMs > 0 && elapsedMs + updateIntervalMs < durationMs) {
+        await wait(delayMs);
+      }
     }
-    if (delayMs > 0 && elapsedMs + updateIntervalMs < durationMs) {
-      await wait(delayMs);
+  } catch (error) {
+    flowError = error;
+  }
+  let cleanupError: unknown;
+  if (draftStarted) {
+    try {
+      draft.stop();
+    } catch (error) {
+      cleanupError = error;
     }
   }
+  if (flowError) {
+    throw toError(flowError);
+  }
+  if (cleanupError) {
+    throw toError(cleanupError);
+  }
 
-  draft.stop();
   const final = await (deps.sendFinal ?? sendTelegramFinal)({
     accountId: options.accountId,
     cfg: options.cfg,

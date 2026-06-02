@@ -71,16 +71,43 @@ function firstResponseResult(respond: ReturnType<typeof vi.fn>) {
   return respond.mock.calls[0]?.[1];
 }
 
-test("e2e #76482: session with different model gets its own thinking levels through gateway row + consumer fallback", async () => {
+type ThinkingSession = {
+  key: string;
+  modelProvider?: string;
+  model?: string;
+  thinkingLevels?: Array<{ label: string }>;
+  thinkingOptions?: string[];
+};
+
+type SessionsListResult = {
+  sessions?: ThinkingSession[];
+  defaults?: Parameters<typeof resolveThinkingLevelsConsumerSide>[1];
+};
+
+async function listMainSessionWithThinking(params: {
+  reqId: string;
+  primaryModel: string;
+  sessionModelProvider: string;
+  sessionModel: string;
+  loadGatewayModelCatalog?: () => Promise<
+    Array<{
+      provider: string;
+      id: string;
+      name: string;
+      reasoning: boolean;
+      compat?: { supportedReasoningEfforts?: string[] };
+    }>
+  >;
+}) {
   await createSessionStoreDir();
   testState.agentConfig = {
-    model: { primary: "openai/gpt-5.5" },
+    model: { primary: params.primaryModel },
   };
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
-        modelProvider: "test-extended",
-        model: "extended-reasoner",
+        modelProvider: params.sessionModelProvider,
+        model: params.sessionModel,
       }),
     },
   });
@@ -89,30 +116,42 @@ test("e2e #76482: session with different model gets its own thinking levels thro
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   await sessionsHandlers["sessions.list"]({
-    req: { type: "req", id: "req-e2e-extended", method: "sessions.list", params: {} },
+    req: { type: "req", id: params.reqId, method: "sessions.list", params: {} },
     params: {},
     respond,
     client: null,
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      // Provide a catalog with xhigh support — simulates what a real gateway
-      // resolves for models like DeepSeek V4 Pro
-      loadGatewayModelCatalog: async () => [
-        {
-          provider: "test-extended",
-          id: "extended-reasoner",
-          name: "Extended Reasoner",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["xhigh"] },
-        },
-      ],
+      loadGatewayModelCatalog: params.loadGatewayModelCatalog ?? (async () => []),
     } as never,
   });
 
-  const result = firstResponseResult(respond);
-  const session = result?.sessions?.find((s: { key: string }) => s.key === "agent:main:main");
-  const defaults = result?.defaults;
+  const result = firstResponseResult(respond) as SessionsListResult | undefined;
+  return {
+    session: result?.sessions?.find((s) => s.key === "agent:main:main"),
+    defaults: result?.defaults,
+  };
+}
+
+test("e2e #76482: session with different model gets its own thinking levels through gateway row + consumer fallback", async () => {
+  const { session, defaults } = await listMainSessionWithThinking({
+    reqId: "req-e2e-extended",
+    primaryModel: "openai/gpt-5.5",
+    sessionModelProvider: "test-extended",
+    sessionModel: "extended-reasoner",
+    loadGatewayModelCatalog: async () => [
+      // Provide a catalog with xhigh support — simulates what a real gateway
+      // resolves for models like DeepSeek V4 Pro
+      {
+        provider: "test-extended",
+        id: "extended-reasoner",
+        name: "Extended Reasoner",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ],
+  });
 
   // Gateway includes thinkingOptions for lightweight rows (needed by Control UI)
   expect(session?.thinkingOptions?.length).toBeGreaterThan(0);
@@ -130,34 +169,12 @@ test("e2e #76482: session with different model gets its own thinking levels thro
 });
 
 test("e2e #76482: Anthropic session does not leak DeepSeek thinking levels from defaults", async () => {
-  await createSessionStoreDir();
-  testState.agentConfig = {
-    model: { primary: "deepseek/deepseek-v4-pro" },
-  };
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
-      }),
-    },
+  const { session, defaults } = await listMainSessionWithThinking({
+    reqId: "req-e2e-anthropic",
+    primaryModel: "deepseek/deepseek-v4-pro",
+    sessionModelProvider: "anthropic",
+    sessionModel: "claude-sonnet-4-6",
   });
-
-  const respond = vi.fn();
-  const sessionsHandlers = await getSessionsHandlers();
-  const { getRuntimeConfig } = await getGatewayConfigModule();
-  await sessionsHandlers["sessions.list"]({
-    req: { type: "req", id: "req-e2e-anthropic", method: "sessions.list", params: {} },
-    params: {},
-    respond,
-    client: null,
-    isWebchatConnect: () => false,
-    context: { getRuntimeConfig, loadGatewayModelCatalog: async () => [] } as never,
-  });
-
-  const result = firstResponseResult(respond);
-  const session = result?.sessions?.find((s: { key: string }) => s.key === "agent:main:main");
-  const defaults = result?.defaults;
 
   // Session model differs from default
   expect(session?.modelProvider).toBe("anthropic");
@@ -173,34 +190,12 @@ test("e2e #76482: Anthropic session does not leak DeepSeek thinking levels from 
 });
 
 test("e2e #76482: session matching default model inherits default thinking levels", async () => {
-  await createSessionStoreDir();
-  testState.agentConfig = {
-    model: { primary: "openai/gpt-5.5" },
-  };
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai",
-        model: "gpt-5.5",
-      }),
-    },
+  const { session, defaults } = await listMainSessionWithThinking({
+    reqId: "req-e2e-same",
+    primaryModel: "openai/gpt-5.5",
+    sessionModelProvider: "openai",
+    sessionModel: "gpt-5.5",
   });
-
-  const respond = vi.fn();
-  const sessionsHandlers = await getSessionsHandlers();
-  const { getRuntimeConfig } = await getGatewayConfigModule();
-  await sessionsHandlers["sessions.list"]({
-    req: { type: "req", id: "req-e2e-same", method: "sessions.list", params: {} },
-    params: {},
-    respond,
-    client: null,
-    isWebchatConnect: () => false,
-    context: { getRuntimeConfig, loadGatewayModelCatalog: async () => [] } as never,
-  });
-
-  const result = firstResponseResult(respond);
-  const session = result?.sessions?.find((s: { key: string }) => s.key === "agent:main:main");
-  const defaults = result?.defaults;
 
   // Session matches default → consumer should use defaults
   expect(session?.modelProvider).toBe(defaults?.modelProvider);

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -105,68 +105,72 @@ describe("generate-dependency-release-evidence", () => {
 
   it("collects report counts and renders human summaries", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
-    await writeJson(dir, "dependency-vulnerability-gate.json", {
-      blockers: [{ id: "GHSA-blocker" }],
-      findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
-    });
-    await writeJson(dir, "transitive-manifest-risk-report.json", {
-      findingCount: 17,
-      workspaceExcludedFindingCount: 3,
-      metadataFailures: [{ packageName: "missing" }],
-    });
-    await writeJson(dir, "dependency-ownership-surface-report.json", {
-      summary: {
-        lockfilePackageCount: 101,
-        buildRiskPackageCount: 8,
-      },
-    });
-    await writeJson(dir, "dependency-changes-report.json", {
-      summary: {
+    try {
+      await writeJson(dir, "dependency-vulnerability-gate.json", {
+        blockers: [{ id: "GHSA-blocker" }],
+        findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
+      });
+      await writeJson(dir, "transitive-manifest-risk-report.json", {
+        findingCount: 17,
+        workspaceExcludedFindingCount: 3,
+        metadataFailures: [{ packageName: "missing" }],
+      });
+      await writeJson(dir, "dependency-ownership-surface-report.json", {
+        summary: {
+          lockfilePackageCount: 101,
+          buildRiskPackageCount: 8,
+        },
+      });
+      await writeJson(dir, "dependency-changes-report.json", {
+        summary: {
+          dependencyFileChanges: 4,
+          addedPackages: 5,
+          removedPackages: 6,
+          changedPackages: 7,
+        },
+      });
+
+      const counts = await collectDependencyEvidenceSummaryCounts(dir);
+      expect(counts).toEqual({
+        vulnerabilityBlockers: 1,
+        vulnerabilityFindings: 2,
+        transitiveRiskSignals: 17,
+        workspaceExcludedTransitiveSignals: 3,
+        transitiveMetadataFailures: 1,
+        ownershipLockfilePackages: 101,
+        ownershipBuildRiskPackages: 8,
         dependencyFileChanges: 4,
-        addedPackages: 5,
-        removedPackages: 6,
-        changedPackages: 7,
-      },
-    });
+        dependencyAddedPackages: 5,
+        dependencyRemovedPackages: 6,
+        dependencyChangedPackages: 7,
+      });
 
-    const counts = await collectDependencyEvidenceSummaryCounts(dir);
-    expect(counts).toEqual({
-      vulnerabilityBlockers: 1,
-      vulnerabilityFindings: 2,
-      transitiveRiskSignals: 17,
-      workspaceExcludedTransitiveSignals: 3,
-      transitiveMetadataFailures: 1,
-      ownershipLockfilePackages: 101,
-      ownershipBuildRiskPackages: 8,
-      dependencyFileChanges: 4,
-      dependencyAddedPackages: 5,
-      dependencyRemovedPackages: 6,
-      dependencyChangedPackages: 7,
-    });
+      const summary = renderDependencyEvidenceSummary({
+        releaseTag: "v2026.5.13",
+        releaseSha: "abc123",
+        baseRef: "v2026.5.1",
+        counts,
+      });
+      expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
+      expect(summary).toContain("- Transitive manifest reported risk signals: 17");
+      expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
+      expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
 
-    const summary = renderDependencyEvidenceSummary({
-      releaseTag: "v2026.5.13",
-      releaseSha: "abc123",
-      baseRef: "v2026.5.1",
-      counts,
-    });
-    expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
-    expect(summary).toContain("- Transitive manifest reported risk signals: 17");
-    expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
-    expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
+      const stepSummary = renderDependencyEvidenceStepSummary({
+        evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
+        baseRef: "v2026.5.1",
+        counts,
+      });
+      expect(stepSummary).toContain(
+        "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
+      );
+      expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
 
-    const stepSummary = renderDependencyEvidenceStepSummary({
-      evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
-      baseRef: "v2026.5.1",
-      counts,
-    });
-    expect(stepSummary).toContain(
-      "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
-    );
-    expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
-
-    await expect(
-      readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),
-    ).resolves.toContain("GHSA-blocker");
+      await expect(
+        readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),
+      ).resolves.toContain("GHSA-blocker");
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
   });
 });

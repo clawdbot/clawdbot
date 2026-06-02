@@ -27,6 +27,9 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
     return "gemini-3-flash-preview";
   }
+  if (id === "gemma-4-26b") {
+    return "gemma-4-26b-a4b-it";
+  }
   return id;
 }
 

@@ -30,11 +30,11 @@ import {
   resolveAuthStorePath,
   resolveLegacyAuthStorePath,
 } from "../agents/auth-profiles/paths.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";

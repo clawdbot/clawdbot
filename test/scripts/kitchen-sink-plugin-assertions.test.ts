@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -193,6 +201,14 @@ function runScanLogs({ home, scratchRoot }: { home: string; scratchRoot: string 
   });
 }
 
+function runSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
+  return spawnSync("/bin/bash", ["-c", script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
+
 describe("kitchen-sink plugin assertions", () => {
   it("fails full-surface installs when stable diagnostic canaries disappear", () => {
     const result = runAssertInstalled();
@@ -306,5 +322,89 @@ describe("kitchen-sink plugin assertions", () => {
     expect(sweep).toContain('mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX"');
     expect(sweep).not.toContain('KITCHEN_SINK_TMP_DIR="${KITCHEN_SINK_TMP_DIR:-/tmp}"');
     expect(sweep).not.toContain('mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX"');
+  });
+
+  it("cleans the default kitchen-sink scratch root", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-cleanup-"));
+    const marker = path.join(parent, "scratch-path.txt");
+    try {
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+printf '%s\\n' "$KITCHEN_SINK_TMP_DIR" > "$MARKER"
+test -d "$KITCHEN_SINK_TMP_DIR"
+cleanup_kitchen_sink_sweep
+test ! -e "$KITCHEN_SINK_TMP_DIR"
+`,
+        { MARKER: marker },
+      );
+
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const scratchRoot = readFileSync(marker, "utf8").trim();
+      expect(scratchRoot).toContain("/tmp/openclaw-kitchen-sink.");
+      expect(existsSync(scratchRoot)).toBe(false);
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("cleans a ClawHub fixture server that times out before readiness", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-"));
+    const fakeBin = path.join(parent, "bin");
+    const scratchRoot = path.join(parent, "scratch");
+    const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
+    const nodeShim = path.join(fakeBin, "node");
+    try {
+      mkdirSync(fakeBin, { recursive: true });
+      mkdirSync(fixtureDir, { recursive: true });
+      writeFileSync(nodeShim, "#!/usr/bin/env bash\nsleep 30\n");
+      chmodSync(nodeShim, 0o755);
+
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export PATH="$FAKE_BIN:$PATH"
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=1
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+set +e
+start_kitchen_sink_clawhub_fixture_server "$FIXTURE_DIR"
+status="$?"
+set -e
+if [[ "$status" -eq 0 ]]; then
+  echo "fixture unexpectedly became ready" >&2
+  exit 1
+fi
+server_pid="$(cat "$FIXTURE_DIR/clawhub-fixture-pid")"
+kill -0 "$server_pid"
+cleanup_kitchen_sink_sweep
+if kill -0 "$server_pid" 2>/dev/null; then
+  echo "fixture server still running after cleanup" >&2
+  exit 1
+fi
+test ! -e "$FIXTURE_DIR"
+test -d "$SCRATCH_ROOT"
+`,
+        {
+          FAKE_BIN: fakeBin,
+          FIXTURE_DIR: fixtureDir,
+          SCRATCH_ROOT: scratchRoot,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "Timed out waiting for kitchen-sink ClawHub fixture server.",
+      );
+      expect(existsSync(fixtureDir)).toBe(false);
+      expect(existsSync(scratchRoot)).toBe(true);
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
   });
 });

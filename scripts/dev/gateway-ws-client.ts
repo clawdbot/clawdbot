@@ -108,18 +108,26 @@ export function createGatewayWsClient(params: {
 
   const waitOpen = () =>
     new Promise<void>((resolve, reject) => {
-      const t = setTimeout(
-        () => reject(new Error("ws open timeout")),
-        params.openTimeoutMs ?? 8000,
-      );
-      ws.once("open", () => {
+      const cleanup = () => {
         clearTimeout(t);
+        ws.off("open", onOpen);
+        ws.off("error", onError);
+      };
+      const onOpen = () => {
+        cleanup();
         resolve();
-      });
-      ws.once("error", (err) => {
-        clearTimeout(t);
+      };
+      const onError = (err: Error) => {
+        cleanup();
         reject(err instanceof Error ? err : new Error(String(err)));
-      });
+      };
+      const t = setTimeout(() => {
+        cleanup();
+        ws.terminate();
+        reject(new Error("ws open timeout"));
+      }, params.openTimeoutMs ?? 8000);
+      ws.once("open", onOpen);
+      ws.once("error", onError);
     });
 
   ws.on("message", (data) => {

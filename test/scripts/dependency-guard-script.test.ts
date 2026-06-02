@@ -1,26 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
   dependencyGuardCommentHeadSha,
+  dependencyGuardTrustedActorCandidates,
   dependencyFieldChanges,
   dependencyOverrideExpectedSha,
   findDependencyOverrideCommand,
   findDependencyOverrideCommandAsync,
+  findTrustedDependencyGuardActor,
   githubApi,
   isAutoscrubbedDependencyComment,
   isDependencyGuardAuthorizedForHead,
   isDependencyFile,
   isDependencyGuardMarkerComment,
   isDependencyManifest,
+  isDependencyGuardTrustedForHead,
   isPackageLockfile,
   readBoundedGitHubErrorText,
   renderAuthorizedDependencyComment,
   renderAutoscrubbedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
+  renderTrustedDependencyComment,
   sanitizeDisplayValue,
   securityApproverSet,
   shouldAutoscrubDependencyLockfiles,
@@ -30,6 +34,10 @@ const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
 
 describe("dependency guard script", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("detects dependency guard file surfaces", () => {
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile("package.json")).toBe(false);
@@ -140,6 +148,89 @@ describe("dependency guard script", () => {
         newerThan: "2026-05-28T20:01:00Z",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("accepts repository admins through the same sha-bound override command", async () => {
+    const comments = [
+      {
+        body: "/allow-dependencies-change admin reviewed",
+        created_at: "2026-05-28T20:03:00Z",
+        html_url: "https://example.test/comment",
+        user: { login: "repo-admin" },
+      },
+    ];
+
+    await expect(
+      findDependencyOverrideCommandAsync({
+        comments,
+        expectedSha: headSha,
+        isSecurityMember: async (login) => login === "repo-admin",
+        newerThan: "2026-05-28T20:02:00Z",
+      }),
+    ).resolves.toEqual({
+      login: "repo-admin",
+      reason: "admin reviewed",
+      sha: headSha,
+      url: "https://example.test/comment",
+    });
+  });
+
+  it("recognizes trusted dependency guard actors automatically", async () => {
+    const sameActorCandidates = dependencyGuardTrustedActorCandidates({
+      pullRequest: { user: { login: "repo-admin" } },
+      event: { pull_request: { head: { sha: headSha } }, sender: { login: "repo-admin" } },
+      currentHeadSha: headSha,
+    });
+    const untrustedAuthorCandidate = dependencyGuardTrustedActorCandidates({
+      pullRequest: { user: { login: "contributor" } },
+      event: { after: headSha, sender: { login: "security-user" } },
+      currentHeadSha: headSha,
+    });
+    const staleAuthorCandidate = dependencyGuardTrustedActorCandidates({
+      pullRequest: { user: { login: "repo-admin" } },
+      event: { pull_request: { head: { sha: staleSha } }, sender: { login: "repo-admin" } },
+      currentHeadSha: headSha,
+    });
+
+    expect(sameActorCandidates).toEqual([{ login: "repo-admin", source: "pull request author" }]);
+    expect(untrustedAuthorCandidate).toEqual([
+      { login: "contributor", source: "pull request author" },
+    ]);
+    expect(staleAuthorCandidate).toEqual([]);
+
+    await expect(
+      findTrustedDependencyGuardActor({
+        candidates: untrustedAuthorCandidate,
+        isDependencyApprover: async (login) =>
+          login === "security-user" || login === "repo-admin" ? "openclaw-secops" : null,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      findTrustedDependencyGuardActor({
+        candidates: sameActorCandidates,
+        isDependencyApprover: async (login) => (login === "repo-admin" ? "repository admin" : null),
+      }),
+    ).resolves.toEqual({
+      login: "repo-admin",
+      reason: "pull request author; repository admin",
+    });
+  });
+
+  it("renders trusted dependency graph comments without blocker language", () => {
+    const body = renderTrustedDependencyComment({
+      actor: { login: "repo-admin", reason: "pull request author; repository admin" },
+      headSha,
+    });
+
+    expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
+    expect(body).toContain("Dependency graph changes noted");
+    expect(body).toContain("informational");
+    expect(body).toContain("@repo-admin");
+    expect(body).toContain(headSha);
+    expect(body).not.toContain("are blocked");
+    expect(body).not.toContain("/allow-dependencies-change");
+    expect(isDependencyGuardTrustedForHead({ body }, headSha)).toBe(true);
+    expect(isDependencyGuardTrustedForHead({ body }, staleSha)).toBe(false);
   });
 
   it("rejects override commands without a freshness barrier", () => {
@@ -575,5 +666,66 @@ describe("dependency guard script", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("aborts stalled GitHub API fetches at the request timeout", async () => {
+    let signal: AbortSignal | undefined;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+
+    vi.useFakeTimers();
+    const request = githubApi("token", {
+      timeoutMs: 5,
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        markFetchStarted();
+        return new Promise(() => {});
+      }) as typeof fetch,
+    }).request("/repos/openclaw/openclaw");
+    const rejection = expect(request).rejects.toThrow(
+      /GitHub API GET \/repos\/openclaw\/openclaw exceeded timeout 5ms/u,
+    );
+
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("keeps the GitHub API timeout active while reading response bodies", async () => {
+    let signal: AbortSignal | undefined;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+
+    vi.useFakeTimers();
+    const request = githubApi("token", {
+      timeoutMs: 5,
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        markFetchStarted();
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start() {},
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+      }) as typeof fetch,
+    }).request("/repos/openclaw/openclaw");
+    const rejection = expect(request).rejects.toThrow(
+      /GitHub API GET \/repos\/openclaw\/openclaw exceeded timeout 5ms/u,
+    );
+
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
   });
 });

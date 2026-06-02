@@ -2345,6 +2345,82 @@ describe("message tool internal-runtime-context sanitization", () => {
     },
   );
 
+  it("strips inbound metadata and delivery hints from outbound message text before dispatch (#89100)", async () => {
+    mockSendResult({ channel: "signal", to: "signal:group-1" });
+
+    const call = await executeSend({
+      action: {
+        target: "signal:group-1",
+        message: [
+          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+          "",
+          "Conversation info (untrusted metadata):",
+          "```json",
+          '{"chat_id":"group:abc","sender_id":"+15551234567","is_group_chat":true}',
+          "```",
+          "",
+          "Sender (untrusted metadata):",
+          "```json",
+          '{"label":"Bob (+15551234567)","id":"+15551234567"}',
+          "```",
+          "",
+          "Visible reply only.",
+        ].join("\n"),
+      },
+    });
+
+    expect(call?.params?.message).toBe("Visible reply only.");
+    expect(JSON.stringify(call?.params)).not.toContain("sender_id");
+    expect(JSON.stringify(call?.params)).not.toContain("+15551234567");
+  });
+
+  it.each([
+    {
+      name: "delivery hint only",
+      message:
+        "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    },
+    {
+      name: "inbound metadata only",
+      message: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"chat_id":"group:abc","sender_id":"+15551234567"}',
+        "```",
+      ].join("\n"),
+    },
+  ])("suppresses outbound sends that contain only $name (#89100)", async ({ message }) => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        target: "signal:group-1",
+        message,
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "inbound_metadata_echo",
+    });
+    expect(JSON.stringify(result)).not.toContain("sender_id");
+    expect(JSON.stringify(result)).not.toContain("+15551234567");
+  });
+
+  it("preserves legitimate outbound messages that start with timestamp-like text", async () => {
+    mockSendResult({ channel: "signal", to: "signal:group-1" });
+
+    const message = "[Wed 2026-03-11 23:51 PDT] Standup starts now";
+    const call = await executeSend({
+      action: {
+        target: "signal:group-1",
+        message,
+      },
+    });
+
+    expect(call?.params?.message).toBe(message);
+  });
+
   it("strips internal-runtime-context blocks from poll creation text before dispatch", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 

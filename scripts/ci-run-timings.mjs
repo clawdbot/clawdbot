@@ -2,6 +2,53 @@
 
 import { execFileSync } from "node:child_process";
 
+const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
+const RUN_JOBS_PAGE_SIZE = 20;
+const RUN_JOBS_MAX_PAGES = 25;
+const GH_JSON_RETRY_DELAYS_MS = [1_000, 3_000, 6_000];
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function parseJsonCommand(command, args, options = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= GH_JSON_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return JSON.parse(
+        execFileSync(command, args, {
+          encoding: "utf8",
+          ...options,
+        }),
+      );
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /HTTP 5\d\d|Server Error|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u.test(message);
+      if (!retryable || attempt === GH_JSON_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      sleepSync(GH_JSON_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+}
+
+function normalizeRunJob(job) {
+  return {
+    completedAt: job.completedAt ?? job.completed_at ?? null,
+    conclusion: job.conclusion ?? "",
+    databaseId: job.databaseId ?? job.id,
+    name: job.name,
+    startedAt: job.startedAt ?? job.started_at ?? null,
+    status: job.status ?? "",
+  };
+}
+
+export function collectRunJobsFromPages(pages) {
+  return pages.flatMap((page) => (Array.isArray(page.jobs) ? page.jobs.map(normalizeRunJob) : []));
+}
+
 function parseTime(value) {
   if (!value || value === "0001-01-01T00:00:00Z") {
     return null;
@@ -216,15 +263,37 @@ function listRecentSuccessfulCiRuns(limit) {
 }
 
 function loadRun(runId) {
-  return JSON.parse(
-    execFileSync(
-      "gh",
-      ["run", "view", runId, "--json", "status,conclusion,createdAt,updatedAt,jobs"],
-      {
-        encoding: "utf8",
-      },
-    ),
-  );
+  const run = parseJsonCommand("gh", [
+    "run",
+    "view",
+    runId,
+    "--json",
+    "status,conclusion,createdAt,updatedAt",
+  ]);
+  const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
+  const pages = [];
+  let totalCount = null;
+  for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
+    const payload = parseJsonCommand("gh", [
+      "api",
+      "-X",
+      "GET",
+      `repos/${repository}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PAGE_SIZE}&page=${page}`,
+    ]);
+    pages.push(payload);
+    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
+    if (
+      jobs.length === 0 ||
+      (totalCount !== null && collectRunJobsFromPages(pages).length >= totalCount)
+    ) {
+      break;
+    }
+  }
+  return {
+    ...run,
+    jobs: collectRunJobsFromPages(pages),
+  };
 }
 
 function summarizeJobs(run) {

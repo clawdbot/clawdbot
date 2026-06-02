@@ -29,8 +29,8 @@ describe("CodexAppServerClient", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }

@@ -1341,6 +1341,15 @@ function isToolNonceProbeMiss(error: string): boolean {
   return msg.includes("tool probe missing nonce") || msg.includes("exec+read probe missing nonce");
 }
 
+function isTransientToolReadProbeErrorForLiveModel(error: string): boolean {
+  const msg = error.toLowerCase();
+  return (
+    msg.includes("tool-read: agent-wait") &&
+    msg.includes("failovererror") &&
+    msg.includes("unknown error occurred")
+  );
+}
+
 function isExecReadNonceProbeMiss(error: string): boolean {
   return error.toLowerCase().includes("exec+read probe missing nonce");
 }
@@ -1361,6 +1370,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (
     provider === "anthropic" ||
     provider === "minimax" ||
+    provider === "minimax-portal" ||
     provider === "opencode" ||
     provider === "opencode-go" ||
     provider === "openrouter" ||
@@ -1380,6 +1390,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
   it.each([
     { modelKey: "anthropic/claude-opus-4-6", expected: true },
     { modelKey: "minimax/minimax-m1", expected: true },
+    { modelKey: "minimax-portal/MiniMax-M3", expected: true },
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
     { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
@@ -1390,6 +1401,21 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
+  });
+});
+
+describe("isTransientToolReadProbeErrorForLiveModel", () => {
+  it("matches generic provider failover during the tool-read phase", () => {
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 google/gemini-3.1-pro-preview: tool-read: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 google/gemini-3.1-pro-preview: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -2835,21 +2861,42 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 toolReadAttempt += 1
               ) {
                 const strictReply = toolReadAttempt > 0;
-                toolText = await requestGatewayAgentText({
-                  client,
-                  sessionKey,
-                  idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
-                  modelKey,
-                  message: strictReply
-                    ? "OpenClaw live tool probe (local, safe): " +
-                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                      `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
-                    : "OpenClaw live tool probe (local, safe): " +
-                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                      "Then reply with the two nonce values you read (include both).",
-                  thinkingLevel,
-                  context: `${progressLabel}: tool-read`,
-                });
+                try {
+                  toolText = await requestGatewayAgentText({
+                    client,
+                    sessionKey,
+                    idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
+                    modelKey,
+                    message: strictReply
+                      ? "OpenClaw live tool probe (local, safe): " +
+                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
+                      : "OpenClaw live tool probe (local, safe): " +
+                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        "Then reply with the two nonce values you read (include both).",
+                    thinkingLevel,
+                    context: `${progressLabel}: tool-read`,
+                  });
+                } catch (error) {
+                  const message = String(error instanceof Error ? error.message : error);
+                  if (
+                    isTransientToolReadProbeErrorForLiveModel(message) &&
+                    toolReadAttempt + 1 < maxToolReadAttempts
+                  ) {
+                    logProgress(
+                      `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) transient provider failover`,
+                    );
+                    continue;
+                  }
+                  if (
+                    isTransientToolReadProbeErrorForLiveModel(message) &&
+                    shouldSkipToolNonceProbeMissForLiveModel(modelKey)
+                  ) {
+                    logProgress(`${progressLabel}: skip (${modelKey} tool-read provider failover)`);
+                    return "skip";
+                  }
+                  throw error;
+                }
                 if (
                   isEmptyStreamText(toolText) &&
                   shouldSkipEmptyResponseForLiveModel({

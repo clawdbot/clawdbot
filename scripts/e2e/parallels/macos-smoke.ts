@@ -565,8 +565,8 @@ class MacosSmoke {
     await this.phases.phase(name, timeoutSeconds, fn);
   }
 
-  private remainingPhaseTimeoutMs(): number | undefined {
-    return this.phases.remainingTimeoutMs();
+  private remainingPhaseTimeoutMs(fallbackMs?: number): number | undefined {
+    return this.phases.remainingTimeoutMs(fallbackMs);
   }
 
   private async phaseReturns(
@@ -653,6 +653,7 @@ exec node "$entry" ${argv}`,
       run("prlctl", ["exec", this.options.vmName, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       })
         .stdout.trim()
         .replaceAll("\r", "")
@@ -671,6 +672,7 @@ exec node "$entry" ${argv}`,
       {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
@@ -700,7 +702,7 @@ exec node "$entry" ${argv}`,
         `/Users/${user}`,
         "NFSHomeDirectory",
       ],
-      { check: false, quiet: true },
+      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
     ).stdout.replaceAll("\r", "");
     const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
     return match?.[1]?.trim() || `/Users/${user}`;
@@ -713,7 +715,7 @@ exec node "$entry" ${argv}`,
       const result = run(
         "prlctl",
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
-        { check: false, quiet: true, timeoutMs: 360_000 },
+        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);
       this.log(result.stderr);
@@ -725,10 +727,17 @@ exec node "$entry" ${argv}`,
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(60_000),
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
-        run("prlctl", ["stop", this.options.vmName, "--kill"], { check: false, quiet: true });
-        waitForVmStatus(this.options.vmName, "stopped", 360);
+        run("prlctl", ["stop", this.options.vmName, "--kill"], {
+          check: false,
+          quiet: true,
+          timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+        });
+        waitForVmStatus(this.options.vmName, "stopped", 360, {
+          probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+        });
       }
       run("sleep", ["3"], { quiet: true });
     }
@@ -738,15 +747,23 @@ exec node "$entry" ${argv}`,
     const status = run("prlctl", ["status", this.options.vmName], {
       check: false,
       quiet: true,
-      timeoutMs: 60_000,
+      timeoutMs: this.remainingPhaseTimeoutMs(60_000),
     }).stdout;
     if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
-      waitForVmStatus(this.options.vmName, "stopped", 360);
+      waitForVmStatus(this.options.vmName, "stopped", 360, {
+        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     } else if (status.includes(" suspended")) {
       say(`Resume restored snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     }
     this.waitForCurrentUser();
   }

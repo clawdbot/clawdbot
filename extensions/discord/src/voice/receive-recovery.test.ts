@@ -1,3 +1,4 @@
+import { OpusError, OpusErrorCode } from "libopus-wasm";
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeVoiceReceiveError,
@@ -15,6 +16,7 @@ describe("voice receive recovery", () => {
     ).toEqual({
       message: "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
       isAbortLike: false,
+      isDecodeCorruption: false,
       shouldAttemptPassthrough: true,
       countsAsDecryptFailure: true,
     });
@@ -24,8 +26,52 @@ describe("voice receive recovery", () => {
     expect(analyzeVoiceReceiveError(new Error("memory access out of bounds"))).toEqual({
       message: "memory access out of bounds",
       isAbortLike: false,
+      isDecodeCorruption: false,
       shouldAttemptPassthrough: false,
       countsAsDecryptFailure: true,
+    });
+  });
+
+  it("treats corrupt Opus packets as non-recoverable decode noise", () => {
+    expect(
+      analyzeVoiceReceiveError(
+        new OpusError(OpusErrorCode.InvalidPacket, "not inspected", "decode"),
+      ),
+    ).toEqual({
+      message: "not inspected",
+      isAbortLike: false,
+      isDecodeCorruption: true,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: false,
+    });
+  });
+
+  it("treats structurally equivalent Opus errors as decode corruption", () => {
+    const analysis = analyzeVoiceReceiveError({
+      name: "OpusError",
+      message: "libopus decode failed (-4): corrupted stream",
+      code: OpusErrorCode.InvalidPacket,
+      codeName: "InvalidPacket",
+      operation: "decode",
+    });
+
+    expect(analysis).toMatchObject({
+      isAbortLike: false,
+      isDecodeCorruption: true,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: false,
+    });
+  });
+
+  it("does not classify corrupt Opus packet text without the Opus error contract", () => {
+    expect(
+      analyzeVoiceReceiveError(new Error("libopus decode failed (-4): corrupted stream")),
+    ).toEqual({
+      message: "libopus decode failed (-4): corrupted stream",
+      isAbortLike: false,
+      isDecodeCorruption: false,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: false,
     });
   });
 
@@ -33,6 +79,7 @@ describe("voice receive recovery", () => {
     expect(analyzeVoiceReceiveError(new Error("Premature close"))).toEqual({
       message: "Premature close",
       isAbortLike: true,
+      isDecodeCorruption: false,
       shouldAttemptPassthrough: false,
       countsAsDecryptFailure: false,
     });

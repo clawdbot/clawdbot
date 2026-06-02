@@ -26,6 +26,7 @@ describe("managed-child-process", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
     expect(signalExitCode("SIGINT")).toBe(130);
     expect(signalExitCode("SIGTERM")).toBe(143);
+    expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
   it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {

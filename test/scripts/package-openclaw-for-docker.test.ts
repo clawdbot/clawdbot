@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
@@ -243,6 +243,37 @@ describe("package-openclaw-for-docker", () => {
         process.kill(childPid, "SIGKILL");
       }
       fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("does not fire delayed SIGKILL after a timed-out child exits during grace", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const killSpy = vi.spyOn(process, "kill");
+    try {
+      const script = [
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      await expect(
+        runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
+          killAfterMs: 100,
+          timeoutMs: 25,
+        }),
+      ).rejects.toThrow(/timed out after 25ms/u);
+
+      const sigkillCallsAfterExit = killSpy.mock.calls.filter(
+        ([, signal]) => signal === "SIGKILL",
+      ).length;
+      await sleep(150);
+      expect(killSpy.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toHaveLength(
+        sigkillCallsAfterExit,
+      );
+    } finally {
+      killSpy.mockRestore();
     }
   });
 

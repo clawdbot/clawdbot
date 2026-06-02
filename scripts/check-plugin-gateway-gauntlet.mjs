@@ -724,6 +724,13 @@ function readQaSuiteSummary(summaryPath) {
         summary: null,
       };
     }
+    if (summary.counts.failed > 0) {
+      return {
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
+        summary,
+      };
+    }
     return {
       diagnosticFailure: null,
       diagnosticDetail: null,

@@ -132,6 +132,19 @@ docker_e2e_cleanup_package_mount_args() {
   done
 }
 
+docker_e2e_cleanup_container_cidfile() {
+  local cidfile="${1:-}"
+  [ -n "$cidfile" ] || return 0
+  if [ -f "$cidfile" ]; then
+    local container_id
+    container_id="$(head -n 1 "$cidfile" 2>/dev/null || true)"
+    if [ -n "$container_id" ]; then
+      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
+    fi
+    rm -f "$cidfile"
+  fi
+}
+
 docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
@@ -143,7 +156,14 @@ docker_e2e_harness_mount_args() {
 docker_e2e_run_with_harness() {
   docker_e2e_harness_mount_args
   local run_status=0
-  docker_e2e_docker_run_cmd run --rm "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" || run_status="$?"
+  local cid_dir
+  local cidfile
+  cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
+  cidfile="$cid_dir/container.cid"
+  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" ||
+    run_status="$?"
+  docker_e2e_cleanup_container_cidfile "$cidfile"
+  rmdir "$cid_dir" 2>/dev/null || true
   docker_e2e_cleanup_package_mount_args
   return "$run_status"
 }

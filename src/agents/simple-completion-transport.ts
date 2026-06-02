@@ -3,6 +3,7 @@ import { getApiProvider } from "../llm/api-registry.js";
 import type { Api, Model } from "../llm/types.js";
 import { createAnthropicVertexStreamFnForModel } from "./anthropic-vertex-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
+import { prepareGoogleSimpleCompletionModel } from "./google-simple-completion-stream.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import {
   buildTransportAwareSimpleStreamFn,
@@ -97,6 +98,10 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
       ensureCustomApiRegistered(transportAwareModel.api, streamFn);
       return transportAwareModel;
     }
+  }
+
+  if (model.api === "google-generative-ai") {
+    return prepareGoogleSimpleCompletionModel(model);
   }
 
   if (model.provider === "anthropic-vertex") {

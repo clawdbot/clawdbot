@@ -1388,6 +1388,7 @@ export function renderChat(props: ChatProps) {
   };
   const draftMirror = getComposerDraftMirror(props);
   const visibleDraft = draftMirror.value;
+  let composerTextarea: HTMLTextAreaElement | null = null;
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
@@ -1624,6 +1625,21 @@ export function renderChat(props: ChatProps) {
     </div>
   `;
 
+  const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
+    const hostDraft = props.getDraft?.();
+    if (typeof hostDraft !== "string") {
+      return;
+    }
+    // Sends can clear the host draft synchronously before Lit rerenders; keep
+    // the local mirror aligned so the submitted text does not stay editable.
+    draftMirror.hostDraft = hostDraft;
+    draftMirror.value = hostDraft;
+    if (target && target.value !== hostDraft) {
+      target.value = hostDraft;
+      adjustTextareaHeight(target);
+    }
+  };
+
   const handleKeyDown = (e: KeyboardEvent) => {
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
@@ -1743,6 +1759,7 @@ export function renderChat(props: ChatProps) {
         const target = e.target as HTMLTextAreaElement;
         commitComposerDraft(props, target.value);
         props.onSend();
+        syncComposerDraftAfterSend(target);
       }
     }
   };
@@ -1764,6 +1781,7 @@ export function renderChat(props: ChatProps) {
   const handleSend = () => {
     commitComposerDraft(props, draftMirror.value);
     props.onSend();
+    syncComposerDraftAfterSend(composerTextarea);
   };
   const slashMenuVisible = isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
@@ -1899,7 +1917,12 @@ export function renderChat(props: ChatProps) {
 
         <div class="agent-chat__composer-combobox">
           <textarea
-            ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+            ${ref((el) => {
+              composerTextarea = el instanceof HTMLTextAreaElement ? el : null;
+              if (composerTextarea) {
+                adjustTextareaHeight(composerTextarea);
+              }
+            })}
             .value=${visibleDraft}
             dir=${detectTextDirection(visibleDraft)}
             ?disabled=${!props.connected}

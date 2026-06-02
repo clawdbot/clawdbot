@@ -6,17 +6,54 @@ import {
   listKnownNodes,
 } from "./node-catalog.js";
 
+type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
+type TestPairedDevice = CatalogInput["pairedDevices"][number];
+type TestPairedNode = NonNullable<CatalogInput["pairedNodes"]>[number];
+
+function pairedDevice(overrides: Partial<TestPairedDevice> = {}): TestPairedDevice {
+  return {
+    deviceId: "mac-1",
+    publicKey: "public-key",
+    displayName: "Mac",
+    clientId: "openclaw-macos",
+    clientMode: "node",
+    role: "node",
+    roles: ["node"],
+    tokens: {
+      node: {
+        token: "current-token",
+        role: "node",
+        scopes: [],
+        createdAtMs: 1,
+      },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 99,
+    ...overrides,
+  };
+}
+
+function pairedNode(overrides: Partial<TestPairedNode> = {}): TestPairedNode {
+  return {
+    nodeId: "mac-1",
+    token: "node-token",
+    platform: "macos",
+    caps: ["camera"],
+    commands: ["system.run"],
+    createdAtMs: 1,
+    approvedAtMs: 100,
+    ...overrides,
+  };
+}
+
 describe("gateway/node-catalog", () => {
   it("filters paired nodes by active node token instead of sticky historical roles", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [
-        {
+        pairedDevice({
           deviceId: "legacy-mac",
-          publicKey: "legacy-public-key",
           displayName: "Peter's Mac Studio",
           clientId: "clawdbot-macos",
-          role: "node",
-          roles: ["node"],
           tokens: {
             node: {
               token: "legacy-token",
@@ -26,27 +63,13 @@ describe("gateway/node-catalog", () => {
               revokedAtMs: 2,
             },
           },
-          createdAtMs: 1,
           approvedAtMs: 1,
-        },
-        {
+        }),
+        pairedDevice({
           deviceId: "current-mac",
-          publicKey: "current-public-key",
           displayName: "Peter's Mac Studio",
-          clientId: "openclaw-macos",
-          role: "node",
-          roles: ["node"],
-          tokens: {
-            node: {
-              token: "current-token",
-              role: "node",
-              scopes: [],
-              createdAtMs: 1,
-            },
-          },
-          createdAtMs: 1,
           approvedAtMs: 1,
-        },
+        }),
       ],
       pairedNodes: [],
       connectedNodes: [],
@@ -59,42 +82,19 @@ describe("gateway/node-catalog", () => {
     const connectedAtMs = 123;
     const catalog = createKnownNodeCatalog({
       pairedDevices: [
-        {
-          deviceId: "mac-1",
-          publicKey: "public-key",
-          displayName: "Mac",
-          clientId: "openclaw-macos",
-          clientMode: "node",
-          role: "node",
-          roles: ["node"],
+        pairedDevice({
           remoteIp: "100.0.0.10",
-          tokens: {
-            node: {
-              token: "current-token",
-              role: "node",
-              scopes: [],
-              createdAtMs: 1,
-            },
-          },
-          createdAtMs: 1,
-          approvedAtMs: 99,
-        },
+        }),
       ],
       pairedNodes: [
-        {
-          nodeId: "mac-1",
-          token: "node-token",
+        pairedNode({
           displayName: "Mac",
-          platform: "macos",
           version: "1.2.0",
           coreVersion: "1.2.0",
           uiVersion: "1.2.0",
           remoteIp: "100.0.0.9",
-          caps: ["camera"],
-          commands: ["system.run"],
-          createdAtMs: 1,
           approvedAtMs: 100,
-        },
+        }),
       ],
       connectedNodes: [
         {
@@ -141,38 +141,15 @@ describe("gateway/node-catalog", () => {
   it("surfaces node-pair metadata even when the node is offline", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [
-        {
-          deviceId: "mac-1",
-          publicKey: "public-key",
-          displayName: "Mac",
-          clientId: "openclaw-macos",
-          clientMode: "node",
-          role: "node",
-          roles: ["node"],
-          tokens: {
-            node: {
-              token: "current-token",
-              role: "node",
-              scopes: [],
-              createdAtMs: 1,
-            },
-          },
-          createdAtMs: 1,
-          approvedAtMs: 99,
-        },
+        pairedDevice(),
       ],
       pairedNodes: [
-        {
-          nodeId: "mac-1",
-          token: "node-token",
-          platform: "macos",
+        pairedNode({
           caps: ["system"],
-          commands: ["system.run"],
           lastSeenAtMs: 456,
           lastSeenReason: "silent_push",
-          createdAtMs: 1,
           approvedAtMs: 123,
-        },
+        }),
       ],
       connectedNodes: [],
     });
@@ -196,39 +173,25 @@ describe("gateway/node-catalog", () => {
   it("uses the newest durable last-seen source for offline nodes", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [
-        {
+        pairedDevice({
           deviceId: "ios-1",
-          publicKey: "public-key",
           displayName: "iPhone",
-          role: "node",
-          roles: ["node"],
-          tokens: {
-            node: {
-              token: "current-token",
-              role: "node",
-              scopes: [],
-              createdAtMs: 1,
-            },
-          },
           lastSeenAtMs: 300,
           lastSeenReason: "silent_push",
-          createdAtMs: 1,
           approvedAtMs: 10,
-        },
+        }),
       ],
       pairedNodes: [
-        {
+        pairedNode({
           nodeId: "ios-1",
-          token: "node-token",
           platform: "ios",
           caps: [],
           commands: [],
           lastConnectedAtMs: 200,
           lastSeenAtMs: 100,
           lastSeenReason: "bg_app_refresh",
-          createdAtMs: 1,
           approvedAtMs: 11,
-        },
+        }),
       ],
       connectedNodes: [],
     });
@@ -242,15 +205,10 @@ describe("gateway/node-catalog", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [],
       pairedNodes: [
-        {
-          nodeId: "mac-1",
-          token: "node-token",
-          platform: "macos",
+        pairedNode({
           caps: ["system"],
-          commands: ["system.run"],
-          createdAtMs: 1,
           approvedAtMs: 123,
-        },
+        }),
       ],
       connectedNodes: [
         {

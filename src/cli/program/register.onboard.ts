@@ -141,7 +141,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
     .option("--custom-text-input", "Mark the custom provider model as text-only")
@@ -217,7 +217,11 @@ export function registerOnboardCommand(program: Command): void {
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          customCompatibility: opts.customCompatibility as
+            | "openai"
+            | "openai-responses"
+            | "anthropic"
+            | undefined,
           customImageInput:
             opts.customTextInput === true
               ? false

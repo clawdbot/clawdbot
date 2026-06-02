@@ -68,6 +68,27 @@ vi.mock("./client.js", () => ({
 
 const { withOperatorApprovalsGatewayClient } = await import("./operator-approvals-client.js");
 
+const DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME = "Matrix approval (@owner:example.org)";
+
+async function runOperatorApprovalsGatewayClient(
+  params: { gatewayUrl?: string } = {},
+  callback: Parameters<typeof withOperatorApprovalsGatewayClient>[1] = async () => undefined,
+) {
+  await withOperatorApprovalsGatewayClient(
+    {
+      config: {} as never,
+      clientDisplayName: DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME,
+      ...params,
+    },
+    callback,
+  );
+}
+
+function expectRuntimeTokenApprovalClient(): void {
+  expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
+  expect(clientState.options?.deviceIdentity).toBeNull();
+}
+
 describe("withOperatorApprovalsGatewayClient", () => {
   beforeEach(() => {
     clientState.options = null;
@@ -82,18 +103,12 @@ describe("withOperatorApprovalsGatewayClient", () => {
   });
 
   it("waits for hello before running the callback and stops cleanly", async () => {
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async (client) => {
-        await client.request("exec.approval.resolve", {
-          id: "req-123",
-          decision: "allow-once",
-        });
-      },
-    );
+    await runOperatorApprovalsGatewayClient({}, async (client) => {
+      await client.request("exec.approval.resolve", {
+        id: "req-123",
+        decision: "allow-once",
+      });
+    });
 
     expect(clientState.options?.scopes).toEqual(["operator.approvals"]);
     expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
@@ -109,76 +124,40 @@ describe("withOperatorApprovalsGatewayClient", () => {
     bootstrapState.url = "wss://gateway.example/ws";
     bootstrapState.urlSource = "config gateway.remote.url";
 
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
+    await runOperatorApprovalsGatewayClient();
 
     expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
     expect(clientState.options?.deviceIdentity).toBeUndefined();
   });
 
-  it("omits approval runtime token for explicit loopback gateway URL overrides", async () => {
-    bootstrapState.urlSource = "cli --url";
+  it.each([
+    {
+      name: "explicit loopback gateway URL overrides",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "cli --url",
+      gatewayUrl: "ws://127.0.0.1:18789",
+    },
+    {
+      name: "remote explicit gateway URL overrides",
+      url: "wss://gateway.example/ws",
+      urlSource: "cli --url",
+      gatewayUrl: "wss://gateway.example/ws",
+    },
+    {
+      name: "configured remote loopback gateway URLs",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config gateway.remote.url",
+    },
+    {
+      name: "env loopback gateway URL overrides",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "env OPENCLAW_GATEWAY_URL",
+    },
+  ])("omits approval runtime token for $name", async ({ url, urlSource, gatewayUrl }) => {
+    bootstrapState.url = url;
+    bootstrapState.urlSource = urlSource;
 
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        gatewayUrl: "ws://127.0.0.1:18789",
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
-
-    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
-
-  it("omits approval runtime token for remote explicit gateway URL overrides", async () => {
-    bootstrapState.url = "wss://gateway.example/ws";
-    bootstrapState.urlSource = "cli --url";
-
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        gatewayUrl: "wss://gateway.example/ws",
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
-
-    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
-
-  it("omits approval runtime token for configured remote loopback gateway URLs", async () => {
-    bootstrapState.url = "ws://127.0.0.1:18789";
-    bootstrapState.urlSource = "config gateway.remote.url";
-
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
-
-    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
-
-  it("omits approval runtime token for env loopback gateway URL overrides", async () => {
-    bootstrapState.url = "ws://127.0.0.1:18789";
-    bootstrapState.urlSource = "env OPENCLAW_GATEWAY_URL";
-
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
-
+    await runOperatorApprovalsGatewayClient(gatewayUrl ? { gatewayUrl } : {});
     expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
   });
 
@@ -186,57 +165,31 @@ describe("withOperatorApprovalsGatewayClient", () => {
     bootstrapState.url = "ws://127.0.0.1:18789";
     bootstrapState.urlSource = "missing gateway.remote.url (fallback local)";
 
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
+    await runOperatorApprovalsGatewayClient();
 
-    expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
-    expect(clientState.options?.deviceIdentity).toBeNull();
+    expectRuntimeTokenApprovalClient();
   });
 
   it("omits stored device identity for local runtime-token approval clients without shared auth", async () => {
     bootstrapState.auth = { token: undefined, password: undefined };
 
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
+    await runOperatorApprovalsGatewayClient();
 
-    expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
-    expect(clientState.options?.deviceIdentity).toBeNull();
+    expectRuntimeTokenApprovalClient();
   });
 
   it("surfaces close failures before hello", async () => {
     clientState.startMode = "close";
 
-    await expect(
-      withOperatorApprovalsGatewayClient(
-        {
-          config: {} as never,
-          clientDisplayName: "Matrix approval (@owner:example.org)",
-        },
-        async () => undefined,
-      ),
-    ).rejects.toThrow("gateway closed (1008): pairing required");
+    await expect(runOperatorApprovalsGatewayClient()).rejects.toThrow(
+      "gateway closed (1008): pairing required",
+    );
   });
 
   it("falls back to stop when stopAndWait rejects", async () => {
     clientState.stopAndWaitSpy.mockRejectedValueOnce(new Error("close failed"));
 
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: {} as never,
-        clientDisplayName: "Matrix approval (@owner:example.org)",
-      },
-      async () => undefined,
-    );
+    await runOperatorApprovalsGatewayClient();
 
     expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
     expect(clientState.stopSpy).toHaveBeenCalledTimes(1);

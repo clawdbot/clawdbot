@@ -1,8 +1,13 @@
 import { die, run } from "./host-command.ts";
 import type { SnapshotInfo } from "./types.ts";
 
+const SNAPSHOT_LIST_TIMEOUT_MS = 120_000;
+
 export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
-  const output = run("prlctl", ["snapshot-list", vmName, "--json"], { quiet: true }).stdout;
+  const output = run("prlctl", ["snapshot-list", vmName, "--json"], {
+    quiet: true,
+    timeoutMs: SNAPSHOT_LIST_TIMEOUT_MS,
+  }).stdout;
   const payload = JSON.parse(output) as Record<string, { name?: string; state?: string }>;
   let best: SnapshotInfo | null = null;
   let bestScore = -1;

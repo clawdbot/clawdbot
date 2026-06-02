@@ -61,6 +61,7 @@ export function installVitestProcessGroupCleanup(params) {
   const cleanupSignal = params.cleanupSignal ?? "SIGTERM";
   const forwardedSignals = params.forwardedSignals ?? ["SIGINT", "SIGTERM"];
   const child = params.child;
+  const onSignal = params.onSignal;
 
   let active = true;
 
@@ -79,6 +80,7 @@ export function installVitestProcessGroupCleanup(params) {
   const signalHandlers = new Map();
   for (const signal of forwardedSignals) {
     const handler = () => {
+      onSignal?.(signal);
       forward(signal);
     };
     signalHandlers.set(signal, handler);

@@ -530,8 +530,8 @@ export async function applySessionsPatchToStore(params: {
           entry: next,
           provider: resolvedDefault.provider,
         }),
-        markLiveSwitchPending: true,
       });
+      delete next.liveModelSwitchPending;
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {

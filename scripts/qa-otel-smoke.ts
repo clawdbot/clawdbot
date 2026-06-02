@@ -867,12 +867,38 @@ async function stopDockerContainer(name: string): Promise<void> {
   });
 }
 
-async function startDockerOtelCollector(receiverPort: number) {
-  const collectorPort = await reserveLocalPort();
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-otel-collector-"));
+type StartDockerOtelCollectorDeps = {
+  mkdtemp?: typeof mkdtemp;
+  platform?: NodeJS.Platform;
+  randomUUID?: typeof randomUUID;
+  reserveLocalPort?: typeof reserveLocalPort;
+  rm?: typeof rm;
+  spawn?: typeof spawn;
+  stopDockerContainer?: typeof stopDockerContainer;
+  tmpdir?: typeof tmpdir;
+  waitForLocalPort?: typeof waitForLocalPort;
+  writeFile?: typeof writeFile;
+};
+
+async function startDockerOtelCollector(
+  receiverPort: number,
+  deps: StartDockerOtelCollectorDeps = {},
+) {
+  const reservePort = deps.reserveLocalPort ?? reserveLocalPort;
+  const makeTempDir = deps.mkdtemp ?? mkdtemp;
+  const writeConfigFile = deps.writeFile ?? writeFile;
+  const spawnProcess = deps.spawn ?? spawn;
+  const waitForPort = deps.waitForLocalPort ?? waitForLocalPort;
+  const stopContainer = deps.stopDockerContainer ?? stopDockerContainer;
+  const removePath = deps.rm ?? rm;
+  const makeUuid = deps.randomUUID ?? randomUUID;
+  const osTmpdir = deps.tmpdir ?? tmpdir;
+
+  const collectorPort = await reservePort();
+  const tempDir = await makeTempDir(path.join(osTmpdir(), "openclaw-otel-collector-"));
   const configPath = path.join(tempDir, "collector.yaml");
-  const containerName = `openclaw-otel-smoke-${randomUUID()}`;
-  const useHostNetwork = process.platform === "linux";
+  const containerName = `openclaw-otel-smoke-${makeUuid()}`;
+  const useHostNetwork = (deps.platform ?? process.platform) === "linux";
   const collectorEndpoint = useHostNetwork ? `127.0.0.1:${collectorPort}` : "0.0.0.0:4318";
   const receiverEndpoint = useHostNetwork
     ? `http://127.0.0.1:${receiverPort}`
@@ -897,7 +923,7 @@ service:
       receivers: [otlp]
       exporters: [otlphttp/openclaw]
 `;
-  await writeFile(configPath, config, "utf8");
+  await writeConfigFile(configPath, config, "utf8");
 
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -916,7 +942,7 @@ service:
     DEFAULT_DOCKER_COLLECTOR_IMAGE,
     "--config=/etc/otelcol/config.yaml",
   ];
-  const child = spawn("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawnProcess("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
   child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
   child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
   child.on("error", (err) => {
@@ -927,13 +953,22 @@ service:
     exitCode = code ?? 1;
   });
 
-  await waitForLocalPort(collectorPort, 60_000, () => {
-    if (exitCode === null) {
-      return "";
+  try {
+    await waitForPort(collectorPort, 60_000, () => {
+      if (exitCode === null) {
+        return "";
+      }
+      const output = [...stdout, ...stderr].join("").trim();
+      return `OpenTelemetry Collector exited before readiness (code=${exitCode})${output ? `:\n${output}` : ""}`;
+    });
+  } catch (error) {
+    try {
+      await stopContainer(containerName);
+    } finally {
+      await removePath(tempDir, { force: true, recursive: true });
     }
-    const output = [...stdout, ...stderr].join("").trim();
-    return `OpenTelemetry Collector exited before readiness (code=${exitCode})${output ? `:\n${output}` : ""}`;
-  });
+    throw error;
+  }
 
   return {
     port: collectorPort,
@@ -943,8 +978,8 @@ service:
       return tailText([...stdout, ...stderr].join("").trim(), COLLECTOR_OUTPUT_TAIL_BYTES);
     },
     async close(): Promise<void> {
-      await stopDockerContainer(containerName);
-      await rm(tempDir, { force: true, recursive: true });
+      await stopContainer(containerName);
+      await removePath(tempDir, { force: true, recursive: true });
     },
   };
 }
@@ -1524,6 +1559,7 @@ export const testing = {
   parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,
+  startDockerOtelCollector,
   terminateChildTree,
   waitForChild,
 };

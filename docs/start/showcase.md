@@ -101,6 +101,8 @@ Automated UK school meal booking via ParentPay. Uses mouse coordinates for relia
   **@julianengel** • `files` `r2` `presigned-urls`
 
 Upload to Cloudflare R2/S3 and generate secure presigned download links. Useful for remote OpenClaw instances.
+
+  <img src="/assets/showcase/r2-upload.png" alt="R2 upload skill on ClawHub" />
 </Card>
 
 <Card title="iOS app via Telegram" icon="mobile">
@@ -269,6 +271,8 @@ Vapi voice assistant to OpenClaw HTTP bridge. Near real-time phone calls with yo
   **@obviyus** • `transcription` `multilingual` `skill`
 
 Multi-lingual audio transcription via OpenRouter (Gemini, and more). Available on ClawHub.
+
+  <img src="/assets/showcase/openrouter-transcribe.png" alt="OpenRouter transcription skill on ClawHub" />
 </Card>
 
 </CardGroup>
@@ -289,6 +293,8 @@ OpenClaw gateway running on Home Assistant OS with SSH tunnel support and persis
   **ClawHub** • `homeassistant` `skill` `automation`
 
 Control and automate Home Assistant devices via natural language.
+
+  <img src="/assets/showcase/homeassistant.png" alt="Home Assistant skill on ClawHub" />
 </Card>
 
 <Card title="Nix packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
@@ -301,6 +307,8 @@ Batteries-included nixified OpenClaw configuration for reproducible deployments.
   **ClawHub** • `calendar` `caldav` `skill`
 
 Calendar skill using khal and vdirsyncer. Self-hosted calendar integration.
+
+  <img src="/assets/showcase/caldav-calendar.png" alt="CalDAV calendar skill on ClawHub" />
 </Card>
 
 </CardGroup>

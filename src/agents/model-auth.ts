@@ -58,7 +58,9 @@ export {
 } from "./auth-profiles.js";
 export {
   formatMissingAuthError,
+  isMissingProviderAuthError,
   isProviderAuthError,
+  MissingProviderAuthError,
   ProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,

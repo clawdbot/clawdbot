@@ -21,7 +21,12 @@ const NOTIFICATION_COMMANDS = ["notifications.list"];
 const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
-const ANDROID_DEVICE_COMMANDS = [...DEVICE_COMMANDS, "device.permissions", "device.health"];
+const ANDROID_DEVICE_COMMANDS = [
+  ...DEVICE_COMMANDS,
+  "device.permissions",
+  "device.health",
+  "device.apps",
+];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
 const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];

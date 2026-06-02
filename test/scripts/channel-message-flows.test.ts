@@ -107,6 +107,39 @@ describe("channel message flows dev runner", () => {
     expect(result).toEqual({ finalMessageId: "99", previewUpdates: 3 });
   });
 
+  it("clears thinking previews when streaming fails before the final answer", async () => {
+    const stream = {
+      update: vi.fn(() => {}),
+      flush: vi.fn(async () => {
+        throw new Error("flush failed");
+      }),
+      clear: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      messageId: vi.fn(() => 17),
+      forceNewMessage: vi.fn(),
+    };
+    const sendFinal = vi.fn(async () => ({ messageId: "99", chatId: "123" }));
+
+    await expect(
+      runTelegramThinkingFinalFlow(
+        {
+          cfg: {} as OpenClawConfig,
+          delayMs: 0,
+          target: "123",
+          thinkingUpdates: ["Checking the request."],
+        },
+        {
+          createDraftStream: vi.fn(() => stream),
+          sendFinal,
+          sleep: vi.fn(async () => {}),
+        },
+      ),
+    ).rejects.toThrow("flush failed");
+
+    expect(stream.clear).toHaveBeenCalledOnce();
+    expect(sendFinal).not.toHaveBeenCalled();
+  });
+
   it("streams working updates through native message drafts before the final answer", async () => {
     const draft = {
       update: vi.fn(async () => true),
@@ -149,6 +182,35 @@ describe("channel message flows dev runner", () => {
     });
     expect(draft.update).not.toHaveBeenCalledWith(expect.stringContaining("Working for"));
     expect(result).toEqual({ finalMessageId: "100", previewUpdates: 6 });
+  });
+
+  it("stops native working drafts when progress updates fail before the final answer", async () => {
+    const draft = {
+      update: vi.fn(async () => {
+        throw new Error("draft update failed");
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const sendFinal = vi.fn(async () => ({ messageId: "100", chatId: "123" }));
+
+    await expect(
+      runTelegramWorkingFinalFlow(
+        {
+          cfg: {} as OpenClawConfig,
+          delayMs: 0,
+          durationMs: 12_000,
+          target: "123",
+        },
+        {
+          createNativeToolProgressDraft: vi.fn(() => draft),
+          sendFinal,
+          sleep: vi.fn(async () => {}),
+        },
+      ),
+    ).rejects.toThrow("draft update failed");
+
+    expect(draft.stop).toHaveBeenCalledOnce();
+    expect(sendFinal).not.toHaveBeenCalled();
   });
 
   it("uses two second progress update cadence by default", async () => {

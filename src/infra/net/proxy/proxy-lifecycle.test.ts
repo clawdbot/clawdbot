@@ -115,6 +115,8 @@ describe("startProxy", () => {
   });
 
   afterEach(() => {
+    resetProxyLifecycleForTests();
+    resetActiveManagedProxyStateForTests();
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }

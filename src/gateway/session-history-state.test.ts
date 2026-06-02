@@ -4,26 +4,93 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionUtils from "./session-utils.js";
 
+type HistorySnapshot = ReturnType<typeof buildSessionHistorySnapshot>;
+type RawStateOptions = Omit<
+  Parameters<typeof SessionHistorySseState.fromRawSnapshot>[0],
+  "target" | "rawMessages"
+>;
+
+function textContent(text: string) {
+  return [{ type: "text" as const, text }];
+}
+
+function assistantTextMessage(text: string, seq: number) {
+  return {
+    role: "assistant" as const,
+    content: textContent(text),
+    __openclaw: { seq },
+  };
+}
+
+function userTextMessage(text: string, seq: number) {
+  return {
+    role: "user" as const,
+    content: textContent(text),
+    __openclaw: { seq },
+  };
+}
+
+function newState(rawMessages: Array<Record<string, unknown>>, options: RawStateOptions = {}) {
+  return SessionHistorySseState.fromRawSnapshot({
+    target: { sessionId: "sess-main" },
+    rawMessages,
+    ...options,
+  });
+}
+
+function newStateWithUserText(text: string): SessionHistorySseState {
+  return newState([userTextMessage(text, 1)]);
+}
+
+function expectOnlyAssistantText(snapshot: HistorySnapshot, text: string, seq: number): void {
+  expect(snapshot.history.messages).toEqual([assistantTextMessage(text, seq)]);
+}
+
+function messageToolCall(id: string, message: string, args: Record<string, unknown> = {}) {
+  return {
+    type: "toolCall" as const,
+    id,
+    name: "message",
+    arguments: {
+      action: "send",
+      message,
+      ...args,
+    },
+  };
+}
+
+function messageToolResult(
+  toolCallId: string,
+  messageId: string,
+  seq?: number,
+  content: Record<string, unknown> = {},
+) {
+  return {
+    role: "toolResult" as const,
+    toolName: "message",
+    toolCallId,
+    content: { ok: true, messageId, ...content },
+    ...(seq === undefined ? {} : { __openclaw: { seq } }),
+  };
+}
+
+function appendAssistantText(state: SessionHistorySseState, text: string, messageSeq?: number) {
+  return state.appendInlineMessage({
+    message: {
+      role: "assistant",
+      content: textContent(text),
+    },
+    ...(messageSeq === undefined ? {} : { messageSeq }),
+  });
+}
+
 describe("SessionHistorySseState", () => {
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
-    const readSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale disk message" }],
-        __openclaw: { seq: 1 },
-      },
-    ]);
+    const readSpy = vi
+      .spyOn(sessionUtils, "readSessionMessagesAsync")
+      .mockResolvedValue([assistantTextMessage("stale disk message", 1)]);
     try {
-      const state = SessionHistorySseState.fromRawSnapshot({
-        target: { sessionId: "sess-main" },
-        rawMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "fresh snapshot message" }],
-            __openclaw: { seq: 2 },
-          },
-        ],
-      });
+      const state = newState([assistantTextMessage("fresh snapshot message", 2)]);
 
       expect(state.snapshot().messages).toHaveLength(1);
       expect(
@@ -58,18 +125,7 @@ describe("SessionHistorySseState", () => {
 
   test("reuses one canonical array for items and messages", () => {
     const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "first" }],
-          __openclaw: { seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "second" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
+      rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
       limit: 1,
     });
 
@@ -79,56 +135,25 @@ describe("SessionHistorySseState", () => {
   });
 
   test("uses carried sequence for inline SSE appends", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "initial" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-    });
+    const state = newState([assistantTextMessage("initial", 2)]);
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "carried" }],
-      },
-      messageSeq: 9,
-    });
+    const appended = appendAssistantText(state, "carried", 9);
 
     expect(appended?.messageSeq).toBe(9);
     expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(9);
   });
 
   test("emits message-tool mirror when silent control reply completes inline append", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "reply here" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
-    });
+    const state = newStateWithUserText("reply here");
 
     expect(
       state.appendInlineMessage({
         message: {
           role: "assistant",
           content: [
-            {
-              type: "toolCall",
-              id: "call-message-channel-hint",
-              name: "message",
-              arguments: {
-                action: "send",
-                channel: "telegram",
-                message: "Still the current chat.",
-              },
-            },
+            messageToolCall("call-message-channel-hint", "Still the current chat.", {
+              channel: "telegram",
+            }),
           ],
         },
         messageSeq: 2,
@@ -136,23 +161,14 @@ describe("SessionHistorySseState", () => {
     ).toBe(2);
     expect(
       state.appendInlineMessage({
-        message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-channel-hint",
-          content: { ok: true, messageId: "24270", chatId: "current-run" },
-        },
+        message: messageToolResult("call-message-channel-hint", "24270", undefined, {
+          chatId: "current-run",
+        }),
         messageSeq: 3,
       })?.messageSeq,
     ).toBe(3);
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
-      messageSeq: 4,
-    });
+    const appended = appendAssistantText(state, "NO_REPLY", 4);
 
     expect(appended?.messageSeq).toBe(4);
     expect(
@@ -174,38 +190,14 @@ describe("SessionHistorySseState", () => {
   test("keeps cursors when a paginated history page starts with a message-tool mirror", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "reply here" }],
-          __openclaw: { seq: 1 },
-        },
+        userTextMessage("reply here", 1),
         {
           role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-message-cursor",
-              name: "message",
-              arguments: {
-                action: "send",
-                message: "Cursor-visible reply.",
-              },
-            },
-          ],
+          content: [messageToolCall("call-message-cursor", "Cursor-visible reply.")],
           __openclaw: { seq: 2 },
         },
-        {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-cursor",
-          content: { ok: true, messageId: "cursor" },
-          __openclaw: { seq: 3 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "NO_REPLY" }],
-          __openclaw: { seq: 4 },
-        },
+        messageToolResult("call-message-cursor", "cursor", 3),
+        assistantTextMessage("NO_REPLY", 4),
       ],
       limit: 1,
     });
@@ -219,18 +211,7 @@ describe("SessionHistorySseState", () => {
 
   test("does not coerce partial cursor values", () => {
     const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "first" }],
-          __openclaw: { seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "second" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
+      rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
       cursor: "seq:2next",
     });
 
@@ -238,69 +219,28 @@ describe("SessionHistorySseState", () => {
   });
 
   test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "send both here" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
-    });
+    const state = newState([userTextMessage("send both here", 1)]);
 
     state.appendInlineMessage({
       message: {
         role: "assistant",
         content: [
-          {
-            type: "toolCall",
-            id: "call-message-first",
-            name: "message",
-            arguments: {
-              action: "send",
-              message: "First visible reply.",
-            },
-          },
-          {
-            type: "toolCall",
-            id: "call-message-second",
-            name: "message",
-            arguments: {
-              action: "send",
-              message: "Second visible reply.",
-            },
-          },
+          messageToolCall("call-message-first", "First visible reply."),
+          messageToolCall("call-message-second", "Second visible reply."),
         ],
       },
       messageSeq: 2,
     });
     state.appendInlineMessage({
-      message: {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-first",
-        content: { ok: true, messageId: "first" },
-      },
+      message: messageToolResult("call-message-first", "first"),
       messageSeq: 3,
     });
     state.appendInlineMessage({
-      message: {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-second",
-        content: { ok: true, messageId: "second" },
-      },
+      message: messageToolResult("call-message-second", "second"),
       messageSeq: 4,
     });
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
-      messageSeq: 5,
-    });
+    const appended = appendAssistantText(state, "NO_REPLY", 5);
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(
@@ -314,24 +254,9 @@ describe("SessionHistorySseState", () => {
   });
 
   test("does not emit a no-op hidden inline control reply", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "reply here" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
-    });
+    const state = newStateWithUserText("reply here");
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
-      messageSeq: 2,
-    });
+    const appended = appendAssistantText(state, "NO_REPLY", 2);
 
     expect(appended).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
@@ -340,16 +265,7 @@ describe("SessionHistorySseState", () => {
   test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
     const visibleText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: visibleText }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-    });
+    const state = newState([assistantTextMessage(visibleText, 2)]);
 
     const appended = state.appendInlineMessage({
       message: {
@@ -376,7 +292,7 @@ describe("SessionHistorySseState", () => {
       {
         role: "assistant",
         content: [
-          { type: "text", text: visibleText },
+          textContent(visibleText)[0],
           {
             type: "attachment",
             attachment: {
@@ -393,24 +309,9 @@ describe("SessionHistorySseState", () => {
   });
 
   test("requests refresh for non-monotonic carried inline sequence", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "current" }],
-          __openclaw: { seq: 5 },
-        },
-      ],
-    });
+    const state = newState([assistantTextMessage("current", 5)]);
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "rewound branch" }],
-      },
-      messageSeq: 3,
-    });
+    const appended = appendAssistantText(state, "rewound branch", 3);
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toHaveLength(1);
@@ -419,13 +320,7 @@ describe("SessionHistorySseState", () => {
 
   test("marks bounded tail snapshots as having older history", () => {
     const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "tail" }],
-          __openclaw: { seq: 99 },
-        },
-      ],
+      rawMessages: [assistantTextMessage("tail", 99)],
       limit: 1,
       rawTranscriptSeq: 99,
       totalRawMessages: 99,
@@ -441,25 +336,11 @@ describe("SessionHistorySseState", () => {
     const tailReadSpy = vi
       .spyOn(sessionUtils, "readRecentSessionMessagesWithStatsAsync")
       .mockResolvedValueOnce({
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "tail two" }],
-            __openclaw: { seq: 8 },
-          },
-        ],
+        messages: [assistantTextMessage("tail two", 8)],
         totalMessages: 8,
       });
     try {
-      const state = SessionHistorySseState.fromRawSnapshot({
-        target: { sessionId: "sess-main" },
-        rawMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "tail one" }],
-            __openclaw: { seq: 7 },
-          },
-        ],
+      const state = newState([assistantTextMessage("tail one", 7)], {
         rawTranscriptSeq: 7,
         totalRawMessages: 7,
         limit: 1,
@@ -528,21 +409,11 @@ describe("SessionHistorySseState", () => {
           ],
           __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "visible answer" }],
-          __openclaw: { seq: 2 },
-        },
+        assistantTextMessage("visible answer", 2),
       ],
     });
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible answer" }],
-        __openclaw: { seq: 2 },
-      },
-    ]);
+    expectOnlyAssistantText(snapshot, "visible answer", 2);
   });
 
   test("drops hidden runtime-context custom messages from projected history", () => {
@@ -555,21 +426,11 @@ describe("SessionHistorySseState", () => {
           display: false,
           __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "visible answer" }],
-          __openclaw: { seq: 2 },
-        },
+        assistantTextMessage("visible answer", 2),
       ],
     });
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible answer" }],
-        __openclaw: { seq: 2 },
-      },
-    ]);
+    expectOnlyAssistantText(snapshot, "visible answer", 2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
@@ -597,21 +458,11 @@ describe("SessionHistorySseState", () => {
           },
           __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "clean child result" }],
-          __openclaw: { seq: 2 },
-        },
+        assistantTextMessage("clean child result", 2),
       ],
     });
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "clean child result" }],
-        __openclaw: { seq: 2 },
-      },
-    ]);
+    expectOnlyAssistantText(snapshot, "clean child result", 2);
   });
 
   test("hides heartbeat prompt and ok acknowledgements from visible history", () => {
@@ -622,45 +473,22 @@ describe("SessionHistorySseState", () => {
           content: `${HEARTBEAT_PROMPT}\nWhen reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.`,
           __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "HEARTBEAT_OK" }],
-          __openclaw: { seq: 2 },
-        },
+        assistantTextMessage("HEARTBEAT_OK", 2),
         {
           role: "user",
           content: HEARTBEAT_PROMPT,
           __openclaw: { seq: 3 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Disk usage crossed 95 percent." }],
-          __openclaw: { seq: 4 },
-        },
+        assistantTextMessage("Disk usage crossed 95 percent.", 4),
       ],
     });
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Disk usage crossed 95 percent." }],
-        __openclaw: { seq: 4 },
-      },
-    ]);
+    expectOnlyAssistantText(snapshot, "Disk usage crossed 95 percent.", 4);
     expect(snapshot.rawTranscriptSeq).toBe(4);
   });
 
   test("does not append heartbeat or internal-only SSE messages", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "already visible" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
-    });
+    const state = newState([assistantTextMessage("already visible", 1)]);
 
     expect(
       state.appendInlineMessage({
@@ -670,14 +498,7 @@ describe("SessionHistorySseState", () => {
         },
       }),
     ).toBeNull();
-    expect(
-      state.appendInlineMessage({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "HEARTBEAT_OK" }],
-        },
-      }),
-    ).toBeNull();
+    expect(appendAssistantText(state, "HEARTBEAT_OK")).toBeNull();
     expect(
       state.appendInlineMessage({
         message: {

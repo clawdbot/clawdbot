@@ -6,6 +6,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import {
+  hasInboundMetadataSentinel,
+  stripInboundMetadata,
+} from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import {
   getChannelPlugin,
@@ -96,20 +100,35 @@ function normalizeEscapedLineBreaksForVisibleText(text: string): string {
   return text.replace(/\\r\\n|\\n|\\r/g, "\n");
 }
 
+type VisibleTextSuppressionReason = "internal_runtime_context_echo" | "inbound_metadata_echo";
+
 function sanitizeUserVisibleToolTextResult(
   text: string,
   bootPrompt: string | undefined,
-): { text: string; suppressed: boolean } {
+): {
+  text: string;
+  suppressionReason?: VisibleTextSuppressionReason;
+} {
   const normalized = normalizeEscapedLineBreaksForVisibleText(text);
   const strippedReasoning = stripFormattedReasoningMessage(normalized);
   const strippedInternal = stripInternalRuntimeContext(strippedReasoning);
   const strippedBoot = stripBootEchoFromOutboundText(strippedInternal, bootPrompt);
+  const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
+    ? stripInboundMetadata(strippedBoot)
+    : strippedBoot;
+  const suppressionReason =
+    strippedBoot.trim().length === 0 &&
+    strippedReasoning.trim().length > 0 &&
+    (strippedInternal !== strippedReasoning || strippedBoot !== strippedInternal)
+      ? "internal_runtime_context_echo"
+      : strippedInbound.trim().length === 0 &&
+          strippedBoot.trim().length > 0 &&
+          strippedInbound !== strippedBoot
+        ? "inbound_metadata_echo"
+        : undefined;
   return {
-    text: strippedBoot,
-    suppressed:
-      strippedBoot.trim().length === 0 &&
-      strippedReasoning.trim().length > 0 &&
-      (strippedInternal !== strippedReasoning || strippedBoot !== strippedInternal),
+    text: strippedInbound,
+    ...(suppressionReason ? { suppressionReason } : {}),
   };
 }
 
@@ -117,54 +136,54 @@ function sanitizeStringParam(
   params: Record<string, unknown>,
   field: string,
   bootPrompt: string | undefined,
-): boolean {
+): VisibleTextSuppressionReason | undefined {
   if (typeof params[field] !== "string") {
-    return false;
+    return undefined;
   }
   const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt);
   params[field] = sanitized.text;
-  return sanitized.suppressed;
+  return sanitized.suppressionReason;
 }
 
 function sanitizeStringArrayParam(
   params: Record<string, unknown>,
   field: string,
   bootPrompt: string | undefined,
-): boolean {
+): VisibleTextSuppressionReason | undefined {
   const value = params[field];
   if (typeof value === "string") {
     const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt);
     params[field] = sanitized.text;
-    return sanitized.suppressed;
+    return sanitized.suppressionReason;
   }
   if (!Array.isArray(value)) {
-    return false;
+    return undefined;
   }
-  let suppressed = false;
+  let suppressionReason: VisibleTextSuppressionReason | undefined;
   params[field] = value.map((entry) => {
     if (typeof entry !== "string") {
       return entry;
     }
     const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt);
-    suppressed ||= sanitized.suppressed;
+    suppressionReason ??= sanitized.suppressionReason;
     return sanitized.text;
   });
-  return suppressed;
+  return suppressionReason;
 }
 
 function sanitizePresentationTextFieldsResult(
   value: unknown,
   bootPrompt: string | undefined,
-): { value: unknown; suppressed: boolean } {
+): { value: unknown; suppressionReason?: VisibleTextSuppressionReason } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { value, suppressed: false };
+    return { value };
   }
-  let suppressed = false;
+  let suppressionReason: VisibleTextSuppressionReason | undefined;
   const presentation = { ...(value as Record<string, unknown>) };
   if (typeof presentation.title === "string") {
     const sanitized = sanitizeUserVisibleToolTextResult(presentation.title, bootPrompt);
     presentation.title = sanitized.text;
-    suppressed ||= sanitized.suppressed;
+    suppressionReason ??= sanitized.suppressionReason;
   }
   if (Array.isArray(presentation.blocks)) {
     presentation.blocks = presentation.blocks.map((block) => {
@@ -176,7 +195,7 @@ function sanitizePresentationTextFieldsResult(
         if (typeof sanitizedBlock[field] === "string") {
           const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
           sanitizedBlock[field] = sanitized.text;
-          suppressed ||= sanitized.suppressed;
+          suppressionReason ??= sanitized.suppressionReason;
         }
       }
       if (Array.isArray(sanitizedBlock.buttons)) {
@@ -188,7 +207,7 @@ function sanitizePresentationTextFieldsResult(
           if (typeof sanitizedButton.label === "string") {
             const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.label, bootPrompt);
             sanitizedButton.label = sanitized.text;
-            suppressed ||= sanitized.suppressed;
+            suppressionReason ??= sanitized.suppressionReason;
           }
           if (typeof sanitizedButton.url === "string") {
             const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.url, bootPrompt);
@@ -197,7 +216,7 @@ function sanitizePresentationTextFieldsResult(
             } else {
               delete sanitizedButton.url;
             }
-            suppressed ||= sanitized.suppressed;
+            suppressionReason ??= sanitized.suppressionReason;
           }
           for (const webAppField of ["webApp", "web_app"]) {
             const webApp = sanitizedButton[webAppField];
@@ -215,7 +234,7 @@ function sanitizePresentationTextFieldsResult(
             } else {
               delete sanitizedButton[webAppField];
             }
-            suppressed ||= sanitized.suppressed;
+            suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedButton;
         });
@@ -229,7 +248,7 @@ function sanitizePresentationTextFieldsResult(
           if (typeof sanitizedOption.label === "string") {
             const sanitized = sanitizeUserVisibleToolTextResult(sanitizedOption.label, bootPrompt);
             sanitizedOption.label = sanitized.text;
-            suppressed ||= sanitized.suppressed;
+            suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedOption;
         });
@@ -237,7 +256,7 @@ function sanitizePresentationTextFieldsResult(
       return sanitizedBlock;
     });
   }
-  return { value: presentation, suppressed };
+  return { value: presentation, ...(suppressionReason ? { suppressionReason } : {}) };
 }
 
 function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
@@ -1150,7 +1169,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       //    that paraphrase out the wrapper markers but reproduce a
       //    substantial chunk of the boot prompt content. Refs #53732.
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
-      let suppressedVisiblePayload = false;
+      let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
       parseJsonMessageParam(params, "presentation");
       parseInteractiveParam(params);
       for (const field of [
@@ -1162,42 +1181,45 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         "quoteText",
         "quote_text",
       ]) {
-        suppressedVisiblePayload =
-          sanitizeStringParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
+        const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
+        suppressedVisiblePayloadReason ??= suppressionReason;
       }
       for (const field of ["pollQuestion", "poll_question"]) {
-        suppressedVisiblePayload =
-          sanitizeStringParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
+        const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
+        suppressedVisiblePayloadReason ??= suppressionReason;
       }
       for (const field of ["pollOption", "poll_option"]) {
-        suppressedVisiblePayload =
-          sanitizeStringArrayParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
+        const suppressionReason = sanitizeStringArrayParam(params, field, bootPromptForSession);
+        suppressedVisiblePayloadReason ??= suppressionReason;
       }
       const sanitizedPresentation = sanitizePresentationTextFieldsResult(
         params.presentation,
         bootPromptForSession,
       );
       params.presentation = sanitizedPresentation.value;
-      suppressedVisiblePayload ||= sanitizedPresentation.suppressed;
+      suppressedVisiblePayloadReason ??= sanitizedPresentation.suppressionReason;
       const sanitizedInteractive = sanitizePresentationTextFieldsResult(
         params.interactive,
         bootPromptForSession,
       );
       params.interactive = sanitizedInteractive.value;
-      suppressedVisiblePayload ||= sanitizedInteractive.suppressed;
+      suppressedVisiblePayloadReason ??= sanitizedInteractive.suppressionReason;
 
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
       if (
-        suppressedVisiblePayload &&
+        suppressedVisiblePayloadReason &&
         action === "send" &&
         !hasSanitizedSendPayloadContent(params)
       ) {
         return jsonResult({
           status: "suppressed",
-          reason: "internal_runtime_context_echo",
-          message: "Suppressed outbound message text because it matched internal runtime context.",
+          reason: suppressedVisiblePayloadReason,
+          message:
+            suppressedVisiblePayloadReason === "inbound_metadata_echo"
+              ? "Suppressed outbound message text because it matched inbound runtime metadata."
+              : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
       const requireExplicitTarget = options?.requireExplicitTarget === true;

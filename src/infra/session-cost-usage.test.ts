@@ -2523,20 +2523,26 @@ example
       "utf-8",
     );
 
-    await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 })).resolves.toEqual({
-      sessionId: undefined,
-      points: [],
-    });
-    await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: -1 })).resolves.toEqual({
-      sessionId: undefined,
-      points: [],
-    });
-    await expect(
-      loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.NaN }),
-    ).resolves.toEqual({ sessionId: undefined, points: [] });
-    await expect(
-      loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.POSITIVE_INFINITY }),
-    ).resolves.toEqual({ sessionId: undefined, points: [] });
+    const createReadStream = vi.spyOn(nodeFs, "createReadStream");
+    try {
+      await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 })).resolves.toEqual({
+        sessionId: undefined,
+        points: [],
+      });
+      await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: -1 })).resolves.toEqual({
+        sessionId: undefined,
+        points: [],
+      });
+      await expect(
+        loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.NaN }),
+      ).resolves.toEqual({ sessionId: undefined, points: [] });
+      await expect(
+        loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.POSITIVE_INFINITY }),
+      ).resolves.toEqual({ sessionId: undefined, points: [] });
+      expect(createReadStream).not.toHaveBeenCalled();
+    } finally {
+      createReadStream.mockRestore();
+    }
   });
 
   it("returns empty logs for zero, negative, and non-finite limits", async () => {

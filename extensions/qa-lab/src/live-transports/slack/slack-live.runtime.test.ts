@@ -256,6 +256,20 @@ describe("Slack live QA runtime helpers", () => {
     ).toBe(3_500);
   });
 
+  it("resolves Slack readiness timeout from the shared transport env", () => {
+    expect(testing.resolveSlackQaReadyTimeoutMs({})).toBe(45_000);
+    expect(
+      testing.resolveSlackQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      testing.resolveSlackQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(45_000);
+  });
+
   it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {
     const call = vi.fn(async () => ({ decision: "allow-once" }));
 

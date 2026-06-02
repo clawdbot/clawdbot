@@ -387,7 +387,7 @@ actor TalkModeRuntime {
             let response = try await GatewayConnection.shared.chatSend(
                 sessionKey: sessionKey,
                 message: prompt,
-                thinking: "low",
+                thinking: nil,
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }

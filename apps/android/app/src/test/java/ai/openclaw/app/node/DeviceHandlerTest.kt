@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -320,10 +321,123 @@ class DeviceHandlerTest {
     system["securityPatchLevel"]?.jsonPrimitive?.content
   }
 
+  @Test
+  fun handleDeviceApps_filtersAndLimitsVisibleApps() {
+    val handler =
+      DeviceHandler.forTesting(
+        appContext = appContext(),
+        appSource =
+          FakeDeviceAppSource(
+            listOf(
+              DeviceAppEntry(
+                label = "Calendar",
+                packageName = "com.google.android.calendar",
+                system = false,
+                enabled = true,
+                launchable = true,
+              ),
+              DeviceAppEntry(
+                label = "Android System",
+                packageName = "android",
+                system = true,
+                enabled = true,
+                launchable = false,
+              ),
+              DeviceAppEntry(
+                label = "Disabled App",
+                packageName = "com.example.disabled",
+                system = false,
+                enabled = false,
+                launchable = true,
+              ),
+              DeviceAppEntry(
+                label = "Gmail",
+                packageName = "com.google.android.gm",
+                system = false,
+                enabled = true,
+                launchable = true,
+              ),
+            ),
+          ),
+      )
+
+    val result = handler.handleDeviceApps("""{"query":"google","limit":1}""")
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    assertEquals("1", payload.getValue("count").jsonPrimitive.content)
+    assertEquals("2", payload.getValue("totalMatched").jsonPrimitive.content)
+    assertTrue(payload.getValue("truncated").jsonPrimitive.boolean)
+    assertEquals("launcher", payload.getValue("visibility").jsonPrimitive.content)
+    val apps = payload.getValue("apps").jsonArray
+    assertEquals(1, apps.size)
+    val app = apps.first().jsonObject
+    assertEquals("Calendar", app.getValue("label").jsonPrimitive.content)
+    assertEquals("com.google.android.calendar", app.getValue("packageName").jsonPrimitive.content)
+    assertTrue(!app.getValue("system").jsonPrimitive.boolean)
+    assertTrue(app.getValue("enabled").jsonPrimitive.boolean)
+    assertTrue(app.getValue("launchable").jsonPrimitive.boolean)
+  }
+
+  @Test
+  fun handleDeviceApps_canIncludeSystemAndNonLaunchableApps() {
+    val source =
+      FakeDeviceAppSource(
+        listOf(
+          DeviceAppEntry(
+            label = "Android System",
+            packageName = "android",
+            system = true,
+            enabled = true,
+            launchable = false,
+          ),
+        ),
+      )
+    val handler = DeviceHandler.forTesting(appContext = appContext(), appSource = source)
+
+    val result = handler.handleDeviceApps("""{"includeSystem":true,"includeNonLaunchable":true}""")
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    assertEquals("android-visible", payload.getValue("visibility").jsonPrimitive.content)
+    assertTrue(payload.getValue("includeSystem").jsonPrimitive.boolean)
+    val app =
+      payload
+        .getValue("apps")
+        .jsonArray
+        .first()
+        .jsonObject
+    assertEquals("android", app.getValue("packageName").jsonPrimitive.content)
+    assertTrue(app.getValue("system").jsonPrimitive.boolean)
+    assertTrue(!app.getValue("launchable").jsonPrimitive.boolean)
+    assertTrue(source.includeNonLaunchableRequests.single())
+  }
+
+  @Test
+  fun isSystemDeviceApp_treatsUpdatedBuiltInsAsSystemApps() {
+    val appInfo =
+      ApplicationInfo().apply {
+        flags = ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+      }
+
+    assertTrue(isSystemDeviceApp(appInfo))
+  }
+
   private fun appContext(): Context = RuntimeEnvironment.getApplication()
 
   private fun parsePayload(payloadJson: String?): JsonObject {
     val jsonString = payloadJson ?: error("expected payload")
     return Json.parseToJsonElement(jsonString).jsonObject
+  }
+}
+
+private class FakeDeviceAppSource(
+  private val apps: List<DeviceAppEntry>,
+) : DeviceAppSource {
+  val includeNonLaunchableRequests = mutableListOf<Boolean>()
+
+  override fun listApps(includeNonLaunchable: Boolean): List<DeviceAppEntry> {
+    includeNonLaunchableRequests += includeNonLaunchable
+    return apps
   }
 }

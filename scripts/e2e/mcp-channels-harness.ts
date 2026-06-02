@@ -2,7 +2,6 @@
 // The mounted test harness imports packaged dist modules so bridge assertions run
 // against the OpenClaw npm tarball installed in the functional image.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,7 +13,9 @@ import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
 import { readStringValue } from "../../dist/normalization-core/string-coerce.js";
 import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
+import { createMcpClientTempState, type McpClientTempState } from "./mcp-client-temp-state.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
+import { resolveGatewaySuccessPayload } from "./lib/gateway-frame-payload.mjs";
 import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
@@ -43,6 +44,7 @@ export type GatewayRpcClient = {
 
 export type McpClientHandle = {
   client: Client;
+  cleanup(): void;
   transport: StdioClientTransport;
   rawMessages: unknown[];
 };
@@ -189,7 +191,7 @@ async function connectGatewayOnce(params: {
     }
     pending.delete(typed.id);
     if (typed.ok === true) {
-      match.resolve(typed.payload ?? typed.result);
+      match.resolve(resolveGatewaySuccessPayload(typed));
       return;
     }
     match.reject(
@@ -310,11 +312,11 @@ function isRetryableGatewayConnectError(error: Error): boolean {
 export async function connectMcpClient(params: {
   gatewayUrl: string;
   gatewayToken: string;
+  tempState?: McpClientTempState;
 }): Promise<McpClientHandle> {
-  const tokenDir = "/tmp/openclaw-mcp-client";
-  const tokenFile = `${tokenDir}/gateway.token`;
-  mkdirSync(tokenDir, { recursive: true });
-  writeFileSync(tokenFile, `${params.gatewayToken}\n`, { encoding: "utf8", mode: 0o600 });
+  const ownsTempState = !params.tempState;
+  const tempState =
+    params.tempState ?? createMcpClientTempState({ gatewayToken: params.gatewayToken });
   const transport = new StdioClientTransport({
     command: "node",
     args: [
@@ -324,7 +326,7 @@ export async function connectMcpClient(params: {
       "--url",
       params.gatewayUrl,
       "--token-file",
-      tokenFile,
+      tempState.tokenFile,
       "--claude-channel-mode",
       "on",
     ],
@@ -332,7 +334,7 @@ export async function connectMcpClient(params: {
     env: {
       ...process.env,
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-mcp-client",
+      OPENCLAW_STATE_DIR: tempState.stateDir,
     },
     stderr: "pipe",
   });
@@ -345,8 +347,21 @@ export async function connectMcpClient(params: {
   });
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
-  await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);
-  return { client, transport, rawMessages };
+  try {
+    await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);
+    return {
+      client,
+      cleanup: ownsTempState ? tempState.cleanup : () => {},
+      transport,
+      rawMessages,
+    };
+  } catch (error) {
+    await Promise.allSettled([client.close(), transport.close()]);
+    if (ownsTempState) {
+      tempState.cleanup();
+    }
+    throw error;
+  }
 }
 
 export async function maybeApprovePendingBridgePairing(

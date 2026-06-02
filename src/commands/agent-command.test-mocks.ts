@@ -181,6 +181,7 @@ vi.mock("../agents/model-selection.js", () => {
       },
     ),
     buildConfiguredModelCatalog: vi.fn(() => []),
+    buildModelAliasIndex: vi.fn(() => new Map()),
     isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),
     modelKey,
@@ -194,6 +195,18 @@ vi.mock("../agents/model-selection.js", () => {
     ),
     resolveDefaultModelForAgent: vi.fn(({ cfg }: { cfg?: ConfigWithModels }) =>
       resolveDefaultRef(cfg),
+    ),
+    resolveModelRefFromString: vi.fn(
+      ({
+        raw,
+        defaultProvider,
+      }: {
+        raw: string;
+        defaultProvider?: string;
+      }) => {
+        const ref = parseModelRef(raw, defaultProvider ?? "openai");
+        return ref ? { ref, source: "parsed" } : null;
+      },
     ),
     resolveThinkingDefault: vi.fn(
       ({

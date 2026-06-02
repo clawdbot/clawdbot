@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -93,11 +94,17 @@ export async function runManagedCommand({
   try {
     return await new Promise((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (status) => {
+      child.once("close", (status, signal) => {
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
-        resolve(managedChild.receivedSignal ? signalExitCode(managedChild.receivedSignal) : (status ?? 1));
+        resolve(
+          managedChild.receivedSignal
+            ? signalExitCode(managedChild.receivedSignal)
+            : signal
+              ? signalExitCode(signal)
+              : (status ?? 1),
+        );
       });
     });
   } finally {
@@ -108,8 +115,8 @@ export async function runManagedCommand({
 /**
  * @param {{
  *   child: import("node:child_process").ChildProcess;
- *   forceKillTimer: NodeJS.Timeout | null;
- *   receivedSignal: NodeJS.Signals | null;
+ *   forceKillTimer: ReturnType<typeof setTimeout> | null;
+ *   receivedSignal: string | null;
  * }} managedChild
  */
 function addManagedChild(managedChild) {
@@ -120,8 +127,8 @@ function addManagedChild(managedChild) {
 /**
  * @param {{
  *   child: import("node:child_process").ChildProcess;
- *   forceKillTimer: NodeJS.Timeout | null;
- *   receivedSignal: NodeJS.Signals | null;
+ *   forceKillTimer: ReturnType<typeof setTimeout> | null;
+ *   receivedSignal: string | null;
  * }} managedChild
  */
 function removeManagedChild(managedChild) {
@@ -256,7 +263,7 @@ function signalNumberFor(signal) {
     case "SIGTERM":
       return 15;
     default:
-      return 0;
+      return osConstants.signals?.[signal] ?? 0;
   }
 }
 

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { testing as voiceCallCliTesting } from "../../extensions/voice-call/src/cli.ts";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../src/infra/session-cost-usage.ts";
 import {
@@ -13,6 +14,15 @@ import {
   recordDiagnosticPhase,
   resetDiagnosticPhasesForTest,
 } from "../../src/logging/diagnostic-phase.ts";
+
+export async function withProofTempRoot(callback) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-"));
+  try {
+    return await callback(root);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+}
 
 async function main() {
   resetDiagnosticPhasesForTest();
@@ -40,77 +50,80 @@ async function main() {
   assert.equal(zeroPhases.length, 0);
   console.log("getRecentDiagnosticPhases(0).length =", zeroPhases.length);
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-"));
-  const sessionFile = path.join(root, "s.jsonl");
-  fs.writeFileSync(
-    sessionFile,
-    [
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        message: { role: "user", content: "a" },
-      }),
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-01-01T00:01:00.000Z",
-        message: {
-          role: "assistant",
-          content: "b",
-          provider: "openai",
-          model: "gpt-5.5",
-          usage: {
-            input: 1,
-            output: 2,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 3,
-            cost: { total: 0.001 },
+  await withProofTempRoot(async (root) => {
+    const sessionFile = path.join(root, "s.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: { role: "user", content: "a" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            content: "b",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { total: 0.001 },
+            },
           },
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-01-01T00:02:00.000Z",
-        message: {
-          role: "assistant",
-          content: "c",
-          provider: "openai",
-          model: "gpt-5.5",
-          usage: {
-            input: 3,
-            output: 4,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 7,
-            cost: { total: 0.002 },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-01-01T00:02:00.000Z",
+          message: {
+            role: "assistant",
+            content: "c",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 3,
+              output: 4,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 7,
+              cost: { total: 0.002 },
+            },
           },
-        },
-      }),
-    ].join("\n"),
-  );
+        }),
+      ].join("\n"),
+    );
 
-  const logs = await loadSessionLogs({ sessionFile, limit: 0 });
-  const series = await loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 });
-  const positiveLogs = await loadSessionLogs({ sessionFile, limit: 10 });
-  const positiveSeries = await loadSessionUsageTimeSeries({ sessionFile, maxPoints: 10 });
-  assert.equal(logs?.length, 0);
-  assert.equal(series.points.length, 0);
-  assert.equal(positiveLogs?.length, 3);
-  assert.equal(positiveSeries.points.length, 2);
-  console.log("loadSessionLogs({ limit: 0 }).length =", logs?.length);
-  console.log(
-    "loadSessionUsageTimeSeries({ maxPoints: 0 }).points.length =",
-    series?.points.length,
-  );
+    const logs = await loadSessionLogs({ sessionFile, limit: 0 });
+    const series = await loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 });
+    const positiveLogs = await loadSessionLogs({ sessionFile, limit: 10 });
+    const positiveSeries = await loadSessionUsageTimeSeries({ sessionFile, maxPoints: 10 });
+    assert.equal(logs?.length, 0);
+    assert.equal(series.points.length, 0);
+    assert.equal(positiveLogs?.length, 3);
+    assert.equal(positiveSeries.points.length, 2);
+    console.log("loadSessionLogs({ limit: 0 }).length =", logs?.length);
+    console.log(
+      "loadSessionUsageTimeSeries({ maxPoints: 0 }).points.length =",
+      series?.points.length,
+    );
 
-  try {
-    voiceCallCliTesting.parseVoiceCallIntOption("nope", "--port", { min: 1 });
-    assert.fail("expected invalid voicecall --port value to throw");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    assert.equal(message, "Invalid numeric value for --port: nope");
-    console.log("parseVoiceCallIntOption('nope', '--port') error:", message);
-  }
+    try {
+      voiceCallCliTesting.parseVoiceCallIntOption("nope", "--port", { min: 1 });
+      assert.fail("expected invalid voicecall --port value to throw");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      assert.equal(message, "Invalid numeric value for --port: nope");
+      console.log("parseVoiceCallIntOption('nope', '--port') error:", message);
+    }
+  });
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

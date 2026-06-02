@@ -88,11 +88,48 @@ function runSpawnCall(spawnCall, label) {
     return;
   }
 
+  let forwardedSignal = null;
+  let forceKillTimer = null;
+  // Keep UI dev children in the foreground process group for native TTY
+  // resize/job-control behavior. Forward direct wrapper shutdown signals.
+  const forwardedSignals = ["SIGTERM", "SIGHUP"];
+  const signalHandlers = new Map(
+    forwardedSignals.map((signal) => [
+      signal,
+      () => {
+        forwardedSignal ??= signal;
+        child.kill(signal);
+        forceKillTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+      },
+    ]),
+  );
+  const cleanupSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.off(signal, handler);
+    }
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+    }
+  };
+  for (const [signal, handler] of signalHandlers) {
+    process.on(signal, handler);
+  }
+
   child.on("error", (err) => {
+    cleanupSignalHandlers();
     console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
   });
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
+    cleanupSignalHandlers();
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
     if (code !== 0) {
       process.exit(code ?? 1);
     }
@@ -118,7 +155,8 @@ function runSpawnCallSync(spawnCall, label) {
     return;
   }
   if (result.signal) {
-    process.exit(1);
+    process.kill(process.pid, result.signal);
+    return;
   }
   if ((result.status ?? 1) !== 0) {
     process.exit(result.status ?? 1);

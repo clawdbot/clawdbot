@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 function runPtyProbe(
   logPath: string,
@@ -103,4 +104,87 @@ describe("run-with-pty", () => {
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  posixIt("escalates forwarded termination signals for PTY commands that ignore them", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
+    const logPath = path.join(tempRoot, "pty.log");
+    const child = spawn(
+      process.execPath,
+      [
+        scriptPath,
+        logPath,
+        process.execPath,
+        "-e",
+        "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);",
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_E2E_PTY_FORCE_KILL_MS: "25",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    try {
+      await waitFor(() => stdout.includes("ready"));
+      child.kill("SIGTERM");
+      const result = await waitForClose(child, 5_000);
+      const log = await readFile(logPath, "utf8");
+
+      expect(result).toEqual({ code: 143, signal: null });
+      expect(stderr).toBe("");
+      expect(log).toContain("ready");
+    } finally {
+      if (child.pid && isProcessAlive(child.pid)) {
+        child.kill("SIGKILL");
+      }
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
+
+async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+}
+
+async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs: number) {
+  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("timed out waiting for PTY wrapper close"));
+      }, timeoutMs);
+      child.once("close", (code, signal) => {
+        clearTimeout(timer);
+        resolve({ code, signal });
+      });
+    },
+  );
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

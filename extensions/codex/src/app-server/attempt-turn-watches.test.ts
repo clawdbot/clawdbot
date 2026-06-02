@@ -9,6 +9,8 @@ describe("Codex app-server attempt turn watches", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -86,6 +88,28 @@ describe("Codex app-server attempt turn watches", () => {
         idleMs: 10,
         timeoutMs: 10,
         lastActivityReason: "turn:start",
+      },
+    ]);
+    expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");
+  });
+
+  it("prefers completion idle timeout when completion and progress watches are due together", () => {
+    const harness = createController();
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("request:item/tool/call:response", {
+      arm: true,
+      attemptProgress: true,
+      attemptTimeoutMs: 10,
+    });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "completion",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "request:item/tool/call:response",
       },
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");

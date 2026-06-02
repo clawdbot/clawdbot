@@ -113,6 +113,48 @@ async function setGatewayModelCatalogForTest(
   await resetGatewayModelCatalogCacheForTest();
 }
 
+const baseImageAttachment = () => ({
+  mimeType: "image/png",
+  fileName: "tiny.png",
+  content: BASE_IMAGE_PNG,
+});
+
+async function runAgentImageRequest(params: {
+  idempotencyKey: string;
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+  failureMessage: string;
+}) {
+  await setTestSessionStore({
+    agentId: params.agentId,
+    entries: {
+      main: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  const res = await rpcReq(ws, "agent", {
+    message: "what is in the image?",
+    sessionKey: params.sessionKey ?? "main",
+    attachments: [baseImageAttachment()],
+    idempotencyKey: params.idempotencyKey,
+  });
+  expect(res.ok, `${params.failureMessage}: ${JSON.stringify(res)}`).toBe(true);
+
+  return await waitForAgentCommandCall(params.idempotencyKey);
+}
+
+function expectBaseImageForwarded(images: unknown) {
+  const forwarded = images as Array<Record<string, unknown>> | undefined;
+  expect(forwarded, "agent command should include one forwarded image attachment").toHaveLength(1);
+  expect(forwarded?.[0]?.type).toBe("image");
+  expect(forwarded?.[0]?.mimeType).toBe("image/png");
+  expect(forwarded?.[0]?.data).toBe(BASE_IMAGE_PNG);
+}
+
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
   label: string;
@@ -430,41 +472,17 @@ describe("gateway server agent", () => {
   test("agent forwards image attachments as images[]", async () => {
     testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
     await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
-    await setTestSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main-images",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "what is in the image?",
-      sessionKey: "main",
-      attachments: [
-        {
-          mimeType: "image/png",
-          fileName: "tiny.png",
-          content: BASE_IMAGE_PNG,
-        },
-      ],
+    const call = await runAgentImageRequest({
       idempotencyKey: "idem-agent-attachments",
+      sessionId: "sess-main-images",
+      failureMessage: "agent RPC failed before forwarding image attachment",
     });
-    expect(
-      res.ok,
-      `agent RPC failed before forwarding image attachment: ${JSON.stringify(res)}`,
-    ).toBe(true);
 
-    const call = await waitForAgentCommandCall("idem-agent-attachments");
     expect(call.sessionKey).toBe("agent:main:main");
     expectChannels(call, "webchat");
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
-    const images = call.images as Array<Record<string, unknown>> | undefined;
-    expect(images, "agent command should include one forwarded image attachment").toHaveLength(1);
-    expect(images?.[0]?.type).toBe("image");
-    expect(images?.[0]?.mimeType).toBe("image/png");
-    expect(images?.[0]?.data).toBe(BASE_IMAGE_PNG);
+    expectBaseImageForwarded(call.images);
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
@@ -477,40 +495,16 @@ describe("gateway server agent", () => {
     };
     await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
 
-    await setTestSessionStore({
+    const call = await runAgentImageRequest({
       agentId: "vision",
-      entries: {
-        main: {
-          sessionId: "sess-vision-fresh-image",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-
-    const res = await rpcReq(ws, "agent", {
-      message: "what is in the image?",
       sessionKey: "agent:vision:main",
-      attachments: [
-        {
-          mimeType: "image/png",
-          fileName: "tiny.png",
-          content: BASE_IMAGE_PNG,
-        },
-      ],
       idempotencyKey: "idem-agent-vision-first-image",
+      sessionId: "sess-vision-fresh-image",
+      failureMessage: "agent RPC should accept image using per-agent vision model",
     });
-    expect(
-      res.ok,
-      `agent RPC should accept image using per-agent vision model: ${JSON.stringify(res)}`,
-    ).toBe(true);
 
-    const call = await waitForAgentCommandCall("idem-agent-vision-first-image");
     expect(call.sessionKey).toBe("agent:vision:main");
-    const images = call.images as Array<Record<string, unknown>> | undefined;
-    expect(images).toHaveLength(1);
-    expect(images?.[0]?.type).toBe("image");
-    expect(images?.[0]?.mimeType).toBe("image/png");
-    expect(images?.[0]?.data).toBe(BASE_IMAGE_PNG);
+    expectBaseImageForwarded(call.images);
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {

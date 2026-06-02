@@ -4,17 +4,39 @@ set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/lib/docker-e2e-logs.sh
 
-OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
+KITCHEN_SINK_SWEEP_SOURCE_ONLY="${KITCHEN_SINK_SWEEP_SOURCE_ONLY:-0}"
+if [[ -z "${OPENCLAW_ENTRY:-}" && "$KITCHEN_SINK_SWEEP_SOURCE_ONLY" != "1" ]]; then
+  OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
+fi
 export OPENCLAW_ENTRY
+KITCHEN_SINK_CREATED_TMP_DIR=0
 if [[ -z "${KITCHEN_SINK_TMP_DIR:-}" ]]; then
   KITCHEN_SINK_TMP_DIR="$(mktemp -d "/tmp/openclaw-kitchen-sink.XXXXXX")"
+  KITCHEN_SINK_CREATED_TMP_DIR=1
 else
   mkdir -p "$KITCHEN_SINK_TMP_DIR"
 fi
 export KITCHEN_SINK_TMP_DIR
 KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"
+KITCHEN_SINK_CLAWHUB_FIXTURE_DIR=""
+KITCHEN_SINK_CLAWHUB_PID_FILE=""
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+cleanup_kitchen_sink_sweep() {
+  if [[ -n "${KITCHEN_SINK_CLAWHUB_PID_FILE:-}" && -f "$KITCHEN_SINK_CLAWHUB_PID_FILE" ]]; then
+    openclaw_e2e_stop_process "$(cat "$KITCHEN_SINK_CLAWHUB_PID_FILE" 2>/dev/null || true)"
+  fi
+  if [[ -n "${KITCHEN_SINK_CLAWHUB_FIXTURE_DIR:-}" ]]; then
+    rm -rf "$KITCHEN_SINK_CLAWHUB_FIXTURE_DIR"
+  fi
+  if [[ "${KITCHEN_SINK_CREATED_TMP_DIR:-0}" = "1" ]]; then
+    rm -rf "$KITCHEN_SINK_TMP_DIR"
+  fi
+}
+
+if [[ "$KITCHEN_SINK_SWEEP_SOURCE_ONLY" != "1" ]]; then
+  trap cleanup_kitchen_sink_sweep EXIT
+  openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+fi
 
 run_kitchen_sink_openclaw_logged() {
   local label="$1"
@@ -53,12 +75,13 @@ start_kitchen_sink_clawhub_fixture_server() {
   node scripts/e2e/lib/clawhub-fixture-server.cjs kitchen-sink-plugin "$server_port_file" >"$server_log" 2>&1 &
   local server_pid="$!"
   echo "$server_pid" >"$server_pid_file"
+  KITCHEN_SINK_CLAWHUB_FIXTURE_DIR="$fixture_dir"
+  KITCHEN_SINK_CLAWHUB_PID_FILE="$server_pid_file"
 
   local wait_attempts="${OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS:-600}"
   for _ in $(seq 1 "$wait_attempts"); do
     if [[ -s "$server_port_file" ]]; then
       export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
-      trap 'if [[ -f "'"$server_pid_file"'" ]]; then kill "$(cat "'"$server_pid_file"'")" 2>/dev/null || true; fi' EXIT
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
@@ -131,51 +154,57 @@ run_failure_scenario() {
   assert_kitchen_sink_removed
 }
 
-if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
-  if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
-    export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
-  else
-    if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
-      echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
+run_kitchen_sink_sweep_main() {
+  if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
+    if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
+      export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
+    else
+      if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
+        echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
+      fi
+      unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+      clawhub_fixture_dir="$(mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX")"
+      start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
     fi
-    unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
-    clawhub_fixture_dir="$(mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX")"
-    start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
   fi
-fi
 
-scenario_count=0
-while IFS='|' read -r label spec plugin_id source expectation surface_mode personality preinstall_spec; do
-  if [ -z "${label:-}" ] || [[ "$label" == \#* ]]; then
-    continue
-  fi
-  scenario_count=$((scenario_count + 1))
-  export KITCHEN_SINK_LABEL="$label"
-  export KITCHEN_SINK_SPEC="$spec"
-  export KITCHEN_SINK_ID="$plugin_id"
-  export KITCHEN_SINK_SOURCE="$source"
-  export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
-  export KITCHEN_SINK_PERSONALITY="${personality:-}"
-  export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
-  export KITCHEN_SINK_PREINSTALL_SPEC="${preinstall_spec:-}"
-  case "$expectation" in
-  success)
-    run_success_scenario
-    ;;
-  failure)
-    run_failure_scenario
-    ;;
-  *)
-    echo "Unknown kitchen-sink expectation for ${label}: ${expectation}" >&2
+  scenario_count=0
+  while IFS='|' read -r label spec plugin_id source expectation surface_mode personality preinstall_spec; do
+    if [ -z "${label:-}" ] || [[ "$label" == \#* ]]; then
+      continue
+    fi
+    scenario_count=$((scenario_count + 1))
+    export KITCHEN_SINK_LABEL="$label"
+    export KITCHEN_SINK_SPEC="$spec"
+    export KITCHEN_SINK_ID="$plugin_id"
+    export KITCHEN_SINK_SOURCE="$source"
+    export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
+    export KITCHEN_SINK_PERSONALITY="${personality:-}"
+    export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
+    export KITCHEN_SINK_PREINSTALL_SPEC="${preinstall_spec:-}"
+    case "$expectation" in
+    success)
+      run_success_scenario
+      ;;
+    failure)
+      run_failure_scenario
+      ;;
+    *)
+      echo "Unknown kitchen-sink expectation for ${label}: ${expectation}" >&2
+      exit 1
+      ;;
+    esac
+  done <<<"$KITCHEN_SINK_SCENARIOS"
+
+  if [ "$scenario_count" -eq 0 ]; then
+    echo "No kitchen-sink plugin scenarios configured." >&2
     exit 1
-    ;;
-  esac
-done <<<"$KITCHEN_SINK_SCENARIOS"
+  fi
 
-if [ "$scenario_count" -eq 0 ]; then
-  echo "No kitchen-sink plugin scenarios configured." >&2
-  exit 1
+  scan_logs_for_unexpected_errors
+  echo "kitchen-sink plugin Docker E2E passed (${scenario_count} scenario(s))"
+}
+
+if [[ "$KITCHEN_SINK_SWEEP_SOURCE_ONLY" != "1" ]]; then
+  run_kitchen_sink_sweep_main
 fi
-
-scan_logs_for_unexpected_errors
-echo "kitchen-sink plugin Docker E2E passed (${scenario_count} scenario(s))"

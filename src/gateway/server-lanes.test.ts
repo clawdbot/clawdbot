@@ -4,19 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
+import { createDeferred } from "./test-helpers.deferred.js";
 
 describe("applyGatewayLaneConcurrency", () => {
   afterEach(() => {
@@ -28,8 +16,8 @@ describe("applyGatewayLaneConcurrency", () => {
 
     let activeRuns = 0;
     let peakActiveRuns = 0;
-    const allRunsStarted = createDeferred<void>();
-    const releaseRuns = createDeferred<void>();
+    const allRunsStarted = createDeferred();
+    const releaseRuns = createDeferred();
 
     const run = async () => {
       activeRuns += 1;
@@ -66,8 +54,8 @@ describe("applyGatewayLaneConcurrency", () => {
 
     let activeRuns = 0;
     let peakActiveRuns = 0;
-    const bothRunsStarted = createDeferred<void>();
-    const releaseRuns = createDeferred<void>();
+    const bothRunsStarted = createDeferred();
+    const releaseRuns = createDeferred();
 
     const run = async () => {
       activeRuns += 1;
@@ -104,7 +92,7 @@ describe("applyGatewayLaneConcurrency", () => {
     applyGatewayLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
 
     let startedRuns = 0;
-    const releaseRuns = createDeferred<void>();
+    const releaseRuns = createDeferred();
     const run = async () => {
       startedRuns += 1;
       await releaseRuns.promise;

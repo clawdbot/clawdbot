@@ -1,9 +1,19 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
+import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
   macosUpdateScript,
   windowsUpdateScript,
 } from "../../scripts/e2e/parallels/npm-update-scripts.ts";
+import {
+  freshLaneTimeoutMs,
+  NpmUpdateSmoke,
+  spawnLoggedCommand,
+} from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -15,14 +25,93 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
+const tempDirs: string[] = [];
+
+function makeTempDir(): string {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-parallels-npm-update-"));
+  tempDirs.push(root);
+  return root;
+}
+
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!pidIsAlive(pid)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+  throw new Error(`timeout waiting for pid ${pid} to exit`);
+}
+
+function decodePowerShellFromArgs(args: string[]): string {
+  const encoded = args[args.indexOf("-EncodedCommand") + 1];
+  return encoded ? Buffer.from(encoded, "base64").toString("utf16le") : "";
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
 
 describe("parallels npm update smoke", () => {
-  it("does not leave guard/server children attached to the wrapper", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it("stops the host artifact server when the wrapper fails mid-run", async () => {
+    let stopCalls = 0;
+    const server: HostServer = {
+      hostIp: "127.0.0.1",
+      port: 48123,
+      stop: async () => {
+        stopCalls += 1;
+      },
+      urlFor: (filePath) => `http://127.0.0.1:48123/${path.basename(filePath)}`,
+    };
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
 
-    expect(script).toContain("spawnLogged");
-    expect(script).toContain('child.on("close"');
-    expect(script).toContain("await this.server?.stop()");
+    class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
+      protected override async makeRunTempDir(prefix: string): Promise<string> {
+        void prefix;
+        return makeTempDir();
+      }
+
+      protected override async runSteps(): Promise<void> {
+        this.server = server;
+        throw new Error("forced wrapper failure");
+      }
+    }
+
+    try {
+      const smoke = new FailingNpmUpdateSmoke({
+        ...TEST_AUTH,
+        json: false,
+        packageSpec: "openclaw@latest",
+        platforms: new Set<Platform>(["linux"]),
+        provider: "openai",
+        updateTarget: "local-main",
+      });
+
+      await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+
+    expect(stopCalls).toBe(1);
   });
 
   it("has a one-command beta validation mode with fresh target coverage", () => {
@@ -77,17 +166,83 @@ describe("parallels npm update smoke", () => {
     expect(updateBlock).not.toContain("log += text");
   });
 
-  it("streams fresh lane logs instead of retaining them in memory", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-    const spawnLoggedBlock = script.slice(
-      script.indexOf("  private spawnLogged"),
-      script.indexOf("  private async monitorJobs"),
+  it("streams fresh lane logs instead of retaining them in memory", async () => {
+    const root = makeTempDir();
+    const logPath = path.join(root, "fresh.log");
+    const output: string[] = [];
+
+    const code = await spawnLoggedCommand(
+      process.execPath,
+      ["-e", "process.stdout.write('fresh-out'); process.stderr.write('fresh-err');"],
+      logPath,
+      {},
+      (text) => output.push(text),
+      { timeoutMs: 1000 },
     );
 
-    expect(spawnLoggedBlock).toContain('writeFileSync(logPath, "", "utf8")');
-    expect(spawnLoggedBlock).toContain("appendFileSync(logPath, text");
-    expect(spawnLoggedBlock).not.toContain("let log");
-    expect(spawnLoggedBlock).not.toContain("log += text");
+    expect(code).toBe(0);
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("fresh-out");
+    expect(log).toContain("fresh-err");
+    expect(output.join("")).toContain("fresh-out");
+    expect(output.join("")).toContain("fresh-err");
+  });
+
+  it("sets platform-aware fresh lane timeouts", () => {
+    const previous = process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
+    try {
+      delete process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
+      expect(freshLaneTimeoutMs("macos")).toBe(75 * 60 * 1000);
+      expect(freshLaneTimeoutMs("linux")).toBe(75 * 60 * 1000);
+      expect(freshLaneTimeoutMs("windows")).toBe(90 * 60 * 1000);
+
+      process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S = "3";
+      expect(freshLaneTimeoutMs("macos")).toBe(3000);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
+      } else {
+        process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S = previous;
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
+    const root = makeTempDir();
+    const logPath = path.join(root, "fresh.log");
+    const scriptPath = path.join(root, "hung-fresh-lane.mjs");
+    const descendantPidPath = path.join(root, "descendant.pid");
+    const descendantScript = [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    writeFileSync(
+      scriptPath,
+      [
+        "import { spawn } from 'node:child_process';",
+        `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+          descendantScript,
+        )}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const code = await spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+      timeoutKillGraceMs: 25,
+      timeoutLabel: "fresh lane test",
+      timeoutMs: 250,
+    });
+
+    expect(code).toBe(124);
+    expect(readFileSync(logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
+    expect(existsSync(descendantPidPath)).toBe(true);
+    const descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+    await waitForDead(descendantPid, 2000);
   });
 
   it("runs Windows updates through a detached done-file runner", () => {
@@ -99,6 +254,106 @@ describe("parallels npm update smoke", () => {
     expect(transports).toContain("__OPENCLAW_BACKGROUND_EXIT__");
     expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
     expect(transports).toContain("${options.label} timed out");
+  });
+
+  it("cleans timed-out Windows background work and reads bounded log chunks", async () => {
+    const decodedCommands: string[] = [];
+    const fakeRun: typeof hostCommandRun = (_command, args) => {
+      const decoded = decodePowerShellFromArgs(args);
+      decodedCommands.push(decoded);
+      if (decoded.includes("Start-Process")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        label: "windows background timeout",
+        logChunkBytes: 64,
+        pollIntervalMs: 1,
+        runCommand: fakeRun,
+        script: "Start-Sleep -Seconds 60",
+        timeoutMs: 5,
+        vmName: "Windows Test",
+      }),
+    ).rejects.toThrow("windows background timeout timed out");
+
+    const commands = decodedCommands.join("\n---\n");
+    expect(commands).toContain("$pidPath");
+    expect(commands).toContain("Start-Process -FilePath powershell.exe");
+    expect(commands).toContain("-PassThru");
+    expect(commands).toContain("[System.IO.File]::Open($logPath");
+    expect(commands).toContain("[Math]::Min($length - $offset, 64)");
+    expect(commands).toContain("Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)");
+    expect(commands).toContain(
+      'Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId"',
+    );
+    expect(commands).toContain(
+      "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
+    );
+    expect(commands).not.toContain("ReadAllBytes");
+  });
+
+  it("drains completed Windows background logs before cleanup", async () => {
+    const decodedCommands: string[] = [];
+    const output: string[] = [];
+    let pollCount = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args) => {
+      const decoded = decodePowerShellFromArgs(args);
+      decodedCommands.push(decoded);
+      if (decoded.includes("Start-Process")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (decoded.includes("__OPENCLAW_LOG_LENGTH__")) {
+        pollCount += 1;
+        return {
+          status: 0,
+          stderr: "",
+          stdout:
+            pollCount === 1
+              ? [
+                  "__OPENCLAW_LOG_LENGTH__:128",
+                  "__OPENCLAW_LOG_OFFSET__:64",
+                  "first chunk",
+                  "__OPENCLAW_BACKGROUND_EXIT__:0",
+                  "__OPENCLAW_BACKGROUND_DONE__",
+                  "",
+                ].join("\n")
+              : [
+                  "__OPENCLAW_LOG_LENGTH__:128",
+                  "__OPENCLAW_LOG_OFFSET__:128",
+                  "second chunk",
+                  "__OPENCLAW_BACKGROUND_EXIT__:0",
+                  "__OPENCLAW_BACKGROUND_DONE__",
+                  "",
+                ].join("\n"),
+        };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        append: (chunk) => output.push(String(chunk)),
+        completedLogDrainGraceMs: 1000,
+        label: "windows background drain",
+        logChunkBytes: 64,
+        pollIntervalMs: 5000,
+        runCommand: fakeRun,
+        script: "Write-Output done",
+        timeoutMs: 20,
+        vmName: "Windows Test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(pollCount).toBe(2);
+    expect(output.join("")).toContain("first chunk");
+    expect(output.join("")).toContain("second chunk");
+    expect(decodedCommands.join("\n")).not.toContain("Stop-OpenClawBackgroundProcessTree");
+    expect(decodedCommands.join("\n")).toContain(
+      "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
+    );
   });
 
   it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {

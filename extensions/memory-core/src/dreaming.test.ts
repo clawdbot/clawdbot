@@ -1682,7 +1682,8 @@ describe("gateway startup reconciliation", () => {
 
       await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
       expect(harness.addCalls).toHaveLength(0);
-      expectLogContains(logger.warn, "cron service unavailable");
+      expectLogNotContains(logger.warn, "cron service unavailable");
+      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
 
       cronAvailable = true;
       await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
@@ -1697,6 +1698,58 @@ describe("gateway startup reconciliation", () => {
       expect(payload.lightContext).toBe(true);
     } finally {
       vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("keeps startup cron retry warnings quiet until the retry window is exhausted", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => undefined,
+      });
+
+      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
+
+      await vi.advanceTimersByTimeAsync(
+        constants.STARTUP_CRON_RETRY_DELAY_MS * (constants.STARTUP_CRON_RETRY_MAX_ATTEMPTS - 1),
+      );
+      expectLogNotContains(logger.warn, "cron service unavailable");
+
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+
+      expectLogContains(logger.warn, "cron service unavailable");
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await triggerGatewayStop(onMock);
       clearInternalHooks();
     }
   });
@@ -1825,6 +1878,67 @@ describe("gateway startup reconciliation", () => {
       expect(harness.addCalls).toHaveLength(0);
     } finally {
       vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("does not recreate startup cron from stale enabled config after live memory-core config is removed", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const runtimeCurrentConfig = vi.fn(
+      () =>
+        ({
+          plugins: {
+            entries: {},
+          },
+        }) as OpenClawConfig,
+    );
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {
+        config: {
+          current: runtimeCurrentConfig,
+        },
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      let cronAvailable = false;
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => (cronAvailable ? harness.cron : undefined),
+      });
+
+      cronAvailable = true;
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+
+      expect(runtimeCurrentConfig).toHaveBeenCalled();
+      expect(harness.addCalls).toHaveLength(0);
+      expectLogNotContains(logger.warn, "cron service unavailable");
+    } finally {
+      vi.useRealTimers();
+      await triggerGatewayStop(onMock).catch(() => undefined);
       clearInternalHooks();
     }
   });

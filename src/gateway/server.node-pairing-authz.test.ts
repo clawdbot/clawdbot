@@ -145,6 +145,65 @@ async function expectRePairingRequest(params: {
   }
 }
 
+async function expectRpcNodePairingApprovalRejected(params: {
+  started: Awaited<ReturnType<typeof startServerWithClient>>;
+  operatorScopes: string[];
+  operatorName: string;
+  nodeId: string;
+  expectedMessage: string;
+}): Promise<void> {
+  const ws = await openTrackedWs(params.started.port);
+  try {
+    await connectOk(ws, {
+      token: "secret",
+      scopes: params.operatorScopes,
+      deviceIdentityPath: `${await makeNodePairingStateDir()}/${params.operatorName}.json`,
+    });
+    const request = await requestNodePairing({
+      nodeId: params.nodeId,
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["system.run"],
+    });
+
+    const approve = await rpcReq(ws, "node.pair.approve", {
+      requestId: request.request.requestId,
+    });
+
+    expect(approve.ok).toBe(false);
+    expect(approve.error?.message).toContain(params.expectedMessage);
+    await expect(getPairedNode(params.nodeId)).resolves.toBeNull();
+  } finally {
+    ws.close();
+  }
+}
+
+function describeWithGatewayServer(
+  name: string,
+  defineTests: (getStarted: () => Awaited<ReturnType<typeof startServerWithClient>>) => void,
+): void {
+  describe(name, () => {
+    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
+
+    beforeAll(async () => {
+      started = await startServerWithClient("secret");
+    });
+
+    afterAll(async () => {
+      started?.ws.close();
+      await started?.server.close();
+      started?.envSnapshot.restore();
+    });
+
+    defineTests(() => {
+      if (!started) {
+        throw new Error("gateway test server was not started");
+      }
+      return started;
+    });
+  });
+}
+
 describe("gateway node pairing authorization", () => {
   beforeAll(async () => {
     await tempDirs.setup();
@@ -231,90 +290,32 @@ describe("gateway node pairing authorization", () => {
     });
   });
 
-  describe("rpc approval scopes", () => {
-    let started: Awaited<ReturnType<typeof startServerWithClient>>;
-
-    beforeAll(async () => {
-      started = await startServerWithClient("secret");
-    });
-
-    afterAll(async () => {
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    });
-
+  describeWithGatewayServer("rpc approval scopes", (getStarted) => {
     test("rejects system.run node pairing approval without admin scope through rpc", async () => {
-      const ws = await openTrackedWs(started.port);
-      try {
-        await connectOk(ws, {
-          token: "secret",
-          scopes: ["operator.pairing"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-pairing.json`,
-        });
-        const request = await requestNodePairing({
-          nodeId: "node-rpc-approve-reject-admin",
-          platform: "macos",
-          deviceFamily: "Mac",
-          commands: ["system.run"],
-        });
-
-        const approve = await rpcReq(ws, "node.pair.approve", {
-          requestId: request.request.requestId,
-        });
-
-        expect(approve.ok).toBe(false);
-        expect(approve.error?.message).toContain("missing scope: operator.admin");
-        await expect(getPairedNode("node-rpc-approve-reject-admin")).resolves.toBeNull();
-      } finally {
-        ws.close();
-      }
+      await expectRpcNodePairingApprovalRejected({
+        started: getStarted(),
+        operatorScopes: ["operator.pairing"],
+        operatorName: "operator-pairing",
+        nodeId: "node-rpc-approve-reject-admin",
+        expectedMessage: "missing scope: operator.admin",
+      });
     });
 
     test("rejects node pairing approval without pairing scope through rpc", async () => {
-      const ws = await openTrackedWs(started.port);
-      try {
-        await connectOk(ws, {
-          token: "secret",
-          scopes: ["operator.write"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-write.json`,
-        });
-        const request = await requestNodePairing({
-          nodeId: "node-rpc-approve-reject-pairing",
-          platform: "macos",
-          deviceFamily: "Mac",
-          commands: ["system.run"],
-        });
-
-        const approve = await rpcReq(ws, "node.pair.approve", {
-          requestId: request.request.requestId,
-        });
-
-        expect(approve.ok).toBe(false);
-        expect(approve.error?.message).toContain("operator.pairing");
-        await expect(getPairedNode("node-rpc-approve-reject-pairing")).resolves.toBeNull();
-      } finally {
-        ws.close();
-      }
+      await expectRpcNodePairingApprovalRejected({
+        started: getStarted(),
+        operatorScopes: ["operator.write"],
+        operatorName: "operator-write",
+        nodeId: "node-rpc-approve-reject-pairing",
+        expectedMessage: "operator.pairing",
+      });
     });
   });
 
-  describe("paired node reconnects", () => {
-    let started: Awaited<ReturnType<typeof startServerWithClient>>;
-
-    beforeAll(async () => {
-      started = await startServerWithClient("secret");
-    });
-
-    afterAll(async () => {
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    });
-
+  describeWithGatewayServer("paired node reconnects", (getStarted) => {
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
       await expectRePairingRequest({
-        started,
+        started: getStarted(),
         pairedName: "node-command-pin",
         initialCommands: ["screen.snapshot"],
         reconnectCommands: ["screen.snapshot", "system.run"],
@@ -325,7 +326,7 @@ describe("gateway node pairing authorization", () => {
 
     test("requests re-pairing when a commandless paired node reconnects with system.run", async () => {
       await expectRePairingRequest({
-        started,
+        started: getStarted(),
         pairedName: "node-command-empty",
         reconnectCommands: ["screen.snapshot", "system.run"],
         approvalScopes: ["operator.pairing"],

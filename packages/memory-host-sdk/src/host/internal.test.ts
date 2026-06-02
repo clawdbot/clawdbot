@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -161,6 +162,38 @@ describe("memory host SDK package internals", () => {
     expect(imageEntry.modality).toBe("image");
     expect(imageEntry.mimeType).toBe("image/png");
     expect(imageEntry.contentText).toBe("Image file: diagram.png");
+  });
+
+  it("retries transient markdown reads while building file entries", async () => {
+    const tmpDir = getTmpDir();
+    const notePath = path.join(tmpDir, "note.md");
+    fsSync.writeFileSync(notePath, "hello", "utf-8");
+
+    const realOpen = fs.open;
+    let attempts = 0;
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+        const [target, flags, mode] = args;
+        if (typeof target === "string" && path.resolve(target) === notePath && attempts++ === 0) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, open",
+          ) as NodeJS.ErrnoException;
+          err.code = "UNKNOWN";
+          err.errno = -11;
+          throw err;
+        }
+        return await realOpen(target, flags, mode);
+      });
+
+    try {
+      const entry = expectFileEntry(await buildFileEntry(notePath, tmpDir));
+      expect(entry.path).toBe("note.md");
+      expect(entry.kind).toBe("markdown");
+      expect(attempts).toBe(2);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("builds multimodal chunks lazily and rejects changed files", async () => {

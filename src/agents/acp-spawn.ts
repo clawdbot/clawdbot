@@ -1008,7 +1008,6 @@ function resolveAcpSpawnRuntimeOptions(params: {
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
-    includeAgentPrimary: false,
   });
   const targetAgentConfig = resolveAgentConfig(params.cfg, policyAgentId);
   const thinkingPlan = resolveSubagentThinkingOverride({

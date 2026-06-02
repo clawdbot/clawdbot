@@ -17,8 +17,8 @@ import type { CodexDynamicToolCallResponse } from "./protocol.js";
 
 describe("dynamic tool execution helpers", () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {

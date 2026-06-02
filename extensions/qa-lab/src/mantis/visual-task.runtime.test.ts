@@ -25,11 +25,15 @@ describe("mantis visual task runtime", () => {
   let repoRoot: string;
 
   beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-visual-task-"));
   });
 
   afterEach(async () => {
     await fs.rm(repoRoot, { force: true, recursive: true });
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("records a visible browser task and keeps screenshot/video artifacts", async () => {

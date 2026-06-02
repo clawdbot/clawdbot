@@ -44,6 +44,7 @@ beforeEach(() => {
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(
         createOpenRouterWrapper(streamFn, thinkingLevel, params.context.extraParams),
+        params.context.extraParams,
       );
     },
   });
@@ -157,6 +158,59 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
     expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
     expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
+  });
+
+  it("uses configured long retention for OpenRouter Anthropic cache markers", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: { cacheRetention: "long" },
+              },
+            },
+          },
+        },
+      },
+      payload: {
+        messages: [{ role: "system", content: "cache me" }],
+      },
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "cache me", cache_control: { type: "ephemeral", ttl: "1h" } },
+        ],
+      },
+    ]);
+  });
+
+  it("uses configured none retention for OpenRouter Anthropic cache markers", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: { cacheRetention: "none" },
+              },
+            },
+          },
+        },
+      },
+      payload: {
+        messages: [{ role: "system", content: "do not cache me" }],
+      },
+    });
+
+    expect(payload.messages).toEqual([{ role: "system", content: "do not cache me" }]);
   });
 
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {

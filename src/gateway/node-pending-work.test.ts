@@ -73,11 +73,16 @@ describe("node pending work", () => {
   });
 
   it("prunes the state entry when all items expire naturally via drain", () => {
-    enqueueNodePendingWork({ nodeId: "node-6", type: "location.request", expiresInMs: 5_000 });
+    const queued = enqueueNodePendingWork({
+      nodeId: "node-6",
+      type: "location.request",
+      expiresInMs: 5_000,
+    });
     expect(getNodePendingWorkStateCountForTests()).toBe(1);
 
-    // Drain well after the item has expired (Date.now() + 60s > enqueue time + 5s)
-    drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+    const drained = drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+
+    expect(drained.revision).toBeGreaterThan(queued.revision);
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 

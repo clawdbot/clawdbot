@@ -1590,6 +1590,38 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini");
   });
 
+  it("omits configured fallbacks for a session-selected model", () => {
+    const text = buildStatusMessage({
+      configuredDefaultModelLabel: "google/gemini-3-flash-preview",
+      agent: {
+        model: {
+          primary: "google/gemini-3-flash-preview",
+          fallbacks: [
+            "google/gemini-3.1-flash-lite",
+            "google/gemini-2.5-flash",
+            "google/gemini-3.1-pro-preview",
+          ],
+        },
+      },
+      sessionEntry: {
+        sessionId: "fb-session-selected",
+        updatedAt: 0,
+        modelProvider: "google",
+        model: "gemini-3.1-flash-lite",
+        modelOverride: "gemini-3.1-flash-lite",
+        modelOverrideSource: "user",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Session selected: google/gemini-3.1-flash-lite");
+    expect(normalized).not.toContain("Fallbacks:");
+  });
+
   it("omits configured fallbacks line when no fallbacks provided", () => {
     const text = buildStatusMessage({
       agent: {

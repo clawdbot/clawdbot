@@ -64,6 +64,7 @@ describe("native PDF provider API calls", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
+    vi.unstubAllEnvs();
   });
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
@@ -97,6 +98,21 @@ describe("native PDF provider API calls", () => {
     expect(body.messages[0].content[0].type).toBe("document");
     expect(body.messages[0].content[0].source.media_type).toBe("application/pdf");
     expect(body.messages[0].content[1].type).toBe("text");
+  });
+
+  it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        content: [{ type: "text", text: "Analysis of PDF" }],
+      }),
+    });
+
+    await pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams());
+
+    const [url] = firstFetchCall(fetchMock) as [string];
+    expect(url).toBe("https://anthropic-pdf-proxy.example/v1/messages");
   });
 
   it("anthropicAnalyzePdf throws on API error", async () => {

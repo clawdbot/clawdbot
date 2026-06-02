@@ -283,6 +283,7 @@ export type GatewayBrowserClientOptions = {
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayRequestTiming) => void;
+  onConnectTiming?: (timing: GatewayConnectTiming) => void;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -295,6 +296,39 @@ export type GatewayRequestTiming = {
   startedAtMs: number;
   endedAtMs: number;
   errorCode?: string;
+};
+
+export type GatewayConnectTimingPhase =
+  | "socket-open"
+  | "challenge"
+  | "fallback"
+  | "device-identity-ready"
+  | "connect-plan-ready"
+  | "request-sent"
+  | "hello"
+  | "failed";
+
+export type GatewayConnectTiming = {
+  generation: number;
+  phase: GatewayConnectTimingPhase;
+  durationMs: number;
+  phaseDurationMs: number;
+  hasChallenge: boolean;
+  usedFallback: boolean;
+  secureContext?: boolean;
+  hasDeviceIdentity?: boolean;
+  hasDevice?: boolean;
+  hasAuthToken?: boolean;
+  hasDeviceToken?: boolean;
+  hasPassword?: boolean;
+  errorCode?: string;
+};
+
+type ConnectTimingState = {
+  startedAtMs: number;
+  lastAtMs: number;
+  hasChallenge: boolean;
+  usedFallback: boolean;
 };
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
@@ -450,6 +484,7 @@ export class GatewayBrowserClient {
   private deviceTokenRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private eventListeners = new Set<GatewayEventListener>();
+  private connectTiming = new Map<number, ConnectTimingState>();
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -467,6 +502,7 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingStartupReconnectDelayMs = null;
+    this.connectTiming.clear();
     this.flushPending(new Error("gateway client stopped"));
   }
 
@@ -500,6 +536,7 @@ export class GatewayBrowserClient {
     }
     const generation = ++this.connectGeneration;
     this.ws = ws;
+    this.startConnectTiming(generation);
     ws.addEventListener("open", () => this.queueConnect(ws, generation));
     ws.addEventListener("message", (ev) => {
       if (!this.isActiveSocket(ws, generation)) {
@@ -514,6 +551,9 @@ export class GatewayBrowserClient {
       const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
+      this.emitConnectTiming(generation, "failed", {
+        errorCode: connectError?.code ?? "SOCKET_CLOSED",
+      });
       this.ws = null;
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
@@ -569,6 +609,57 @@ export class GatewayBrowserClient {
       : Date.now();
   }
 
+  private startConnectTiming(generation: number): void {
+    const now = this.nowMs();
+    this.connectTiming.set(generation, {
+      startedAtMs: now,
+      lastAtMs: now,
+      hasChallenge: false,
+      usedFallback: false,
+    });
+  }
+
+  private updateConnectTimingState(
+    generation: number,
+    updates: Partial<Pick<ConnectTimingState, "hasChallenge" | "usedFallback">>,
+  ): void {
+    const state = this.connectTiming.get(generation);
+    if (!state) {
+      return;
+    }
+    Object.assign(state, updates);
+  }
+
+  private emitConnectTiming(
+    generation: number,
+    phase: GatewayConnectTimingPhase,
+    payload: Partial<GatewayConnectTiming> = {},
+  ): void {
+    const state = this.connectTiming.get(generation);
+    if (!state) {
+      return;
+    }
+    const endedAtMs = this.nowMs();
+    try {
+      this.opts.onConnectTiming?.({
+        generation,
+        phase,
+        durationMs: Math.max(0, endedAtMs - state.startedAtMs),
+        phaseDurationMs: Math.max(0, endedAtMs - state.lastAtMs),
+        hasChallenge: state.hasChallenge,
+        usedFallback: state.usedFallback,
+        ...payload,
+      });
+    } catch (err) {
+      console.error("[gateway] connect timing handler error:", err);
+    } finally {
+      state.lastAtMs = endedAtMs;
+      if (phase === "hello" || phase === "failed") {
+        this.connectTiming.delete(generation);
+      }
+    }
+  }
+
   private emitRequestTiming(id: string, pending: Pending, ok: boolean, errorCode?: string): void {
     const endedAtMs = this.nowMs();
     try {
@@ -584,6 +675,19 @@ export class GatewayBrowserClient {
     } catch (err) {
       console.error("[gateway] request timing handler error:", err);
     }
+  }
+
+  private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
+    return {
+      secureContext: Boolean(plan.deviceIdentity),
+      hasDeviceIdentity: Boolean(plan.deviceIdentity),
+      hasDevice: Boolean(plan.device),
+      hasAuthToken: Boolean(plan.selectedAuth.authToken),
+      hasDeviceToken: Boolean(
+        plan.selectedAuth.authDeviceToken ?? plan.selectedAuth.resolvedDeviceToken,
+      ),
+      hasPassword: Boolean(plan.selectedAuth.authPassword),
+    };
   }
 
   private buildConnectClient(): GatewayConnectClientInfo {
@@ -611,7 +715,10 @@ export class GatewayBrowserClient {
     };
   }
 
-  private async buildConnectPlan(connectNonce: string | null): Promise<ConnectPlan> {
+  private async buildConnectPlan(
+    connectNonce: string | null,
+    generation: number,
+  ): Promise<ConnectPlan> {
     const role = CONTROL_UI_OPERATOR_ROLE;
     const client = this.buildConnectClient();
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
@@ -630,12 +737,32 @@ export class GatewayBrowserClient {
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
+      this.emitConnectTiming(generation, "device-identity-ready", {
+        secureContext: true,
+        hasDeviceIdentity: true,
+      });
       selectedAuth = this.selectConnectAuth({
         role,
         deviceId: deviceIdentity.deviceId,
       });
     }
     const scopes = resolveControlUiConnectScopes(selectedAuth);
+    const device = await buildGatewayConnectDevice({
+      deviceIdentity,
+      client,
+      role,
+      scopes,
+      authToken: selectedAuth.authToken,
+      connectNonce,
+    });
+    this.emitConnectTiming(generation, "connect-plan-ready", {
+      secureContext: isSecureContext,
+      hasDeviceIdentity: Boolean(deviceIdentity),
+      hasDevice: Boolean(device),
+      hasAuthToken: Boolean(selectedAuth.authToken),
+      hasDeviceToken: Boolean(selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken),
+      hasPassword: Boolean(selectedAuth.authPassword),
+    });
 
     return {
       role,
@@ -645,14 +772,7 @@ export class GatewayBrowserClient {
       selectedAuth,
       auth: buildGatewayConnectAuth(selectedAuth),
       deviceIdentity,
-      device: await buildGatewayConnectDevice({
-        deviceIdentity,
-        client,
-        role,
-        scopes,
-        authToken: selectedAuth.authToken,
-        connectNonce,
-      }),
+      device,
     };
   }
 
@@ -677,6 +797,7 @@ export class GatewayBrowserClient {
       });
     }
     this.backoffMs = 800;
+    this.emitConnectTiming(generation, "hello", this.connectPlanTimingPayload(plan));
     this.opts.onHello?.(hello);
   }
 
@@ -720,6 +841,10 @@ export class GatewayBrowserClient {
     } else {
       this.pendingConnectError = undefined;
     }
+    this.emitConnectTiming(generation, "failed", {
+      ...this.connectPlanTimingPayload(plan),
+      errorCode: err instanceof GatewayRequestError ? err.gatewayCode : "CLIENT_CONNECT_ERROR",
+    });
     const usedStoredDeviceToken =
       Boolean(plan.selectedAuth.storedToken) &&
       (plan.selectedAuth.resolvedDeviceToken === plan.selectedAuth.storedToken ||
@@ -756,13 +881,14 @@ export class GatewayBrowserClient {
     this.connectSent = true;
     this.clearConnectTimer();
 
-    const plan = await this.buildConnectPlan(this.connectNonce);
+    const plan = await this.buildConnectPlan(this.connectNonce, generation);
     if (!this.isActiveSocket(ws, generation) || ws.readyState !== WebSocket.OPEN) {
       return;
     }
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
+    this.emitConnectTiming(generation, "request-sent", this.connectPlanTimingPayload(plan));
     void this.requestOnSocket<GatewayHelloOk>(ws, "connect", this.buildConnectParams(plan))
       .then((hello) => this.handleConnectHello(hello, plan, ws, generation))
       .catch((err: unknown) => this.handleConnectFailure(err, plan, ws, generation));
@@ -784,6 +910,8 @@ export class GatewayBrowserClient {
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
         if (nonce) {
           this.connectNonce = nonce;
+          this.updateConnectTimingState(generation, { hasChallenge: true });
+          this.emitConnectTiming(generation, "challenge");
           void this.sendConnect(ws, generation);
         }
         return;
@@ -904,8 +1032,11 @@ export class GatewayBrowserClient {
     this.connectNonce = null;
     this.connectSent = false;
     this.clearConnectTimer();
+    this.emitConnectTiming(generation, "socket-open");
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
+      this.updateConnectTimingState(generation, { usedFallback: true });
+      this.emitConnectTiming(generation, "fallback");
       void this.sendConnect(ws, generation);
     }, 750);
   }

@@ -93,11 +93,13 @@ describe("vitest process group helpers", () => {
       },
     };
     const kill = vi.fn();
+    const onSignal = vi.fn();
     const teardown = installVitestProcessGroupCleanup({
       child: { pid: 4200 },
       processObject: fakeProcess as unknown as NodeJS.Process,
       platform: "darwin",
       kill,
+      onSignal,
     });
 
     expectListenerCount(listeners, "SIGINT", 1);
@@ -105,6 +107,7 @@ describe("vitest process group helpers", () => {
     expectListenerCount(listeners, "exit", 1);
 
     getListenerSet(listeners, "SIGTERM").values().next().value();
+    expect(onSignal).toHaveBeenCalledWith("SIGTERM");
     expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
 
     teardown();

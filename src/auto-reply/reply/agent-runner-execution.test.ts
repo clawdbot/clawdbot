@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { MissingProviderAuthError } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -5596,6 +5599,25 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces gateway reauth guidance from typed OAuth refresh failures", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "openai",
+        message: "invalid_grant",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
+      );
+    }
+  });
+
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
@@ -5632,6 +5654,47 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).toBe(
         "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
+    }
+  });
+
+  it("surfaces typed missing API-key auth guidance without parsing the message", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new MissingProviderAuthError("openai", {
+        mode: "api-key",
+        source: "env: OPENAI_API_KEY",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.',
+      );
+    }
+  });
+
+  it("formats auth-profile failover copy from typed FailoverError metadata", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("Auth profile failover exhausted for provider openai", {
+        reason: "auth",
+        provider: "openai",
+        authProfileFailure: { allInCooldown: true },
+        cause: new Error("invalid_grant"),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Couldn't sign in to openai.");
+      expect(result.payload.text).toContain("openclaw configure");
+      expect(result.payload.text).toContain("(invalid_grant)");
+      expect(result.payload.text).not.toContain("Auth profile failover exhausted");
     }
   });
 

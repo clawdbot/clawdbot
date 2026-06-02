@@ -11,9 +11,10 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
@@ -1540,7 +1541,9 @@ function isWindowsRemoteTarget(commandArgs) {
 }
 
 function isNativeWindowsRemoteTarget(commandArgs) {
-  return isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2";
+  return (
+    isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2"
+  );
 }
 
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
@@ -1553,14 +1556,14 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
 
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
-    '$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR',
-    'if ($openclawModulesDir) {',
+    "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
+    "if ($openclawModulesDir) {",
     'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
     '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
     '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
     'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
     'if (-not (Test-Path $openclawWorkspaceModules)) { cmd /c mklink /J "$openclawWorkspaceModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link workspace node_modules" } }',
-    '}',
+    "}",
   ].join("; ");
 }
 
@@ -1641,22 +1644,47 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
     `node_version=${shellQuote(nodeVersion)};`,
     'arch="$(uname -m)";',
     'case "$arch" in arm64) node_arch=arm64 ;; x86_64) node_arch=x64 ;; *) echo "unsupported macOS arch: $arch" >&2; return 2 ;; esac;',
+    'macos_locale="${OPENCLAW_CRABBOX_MACOS_LOCALE:-en_US.UTF-8}";',
+    'case "${LANG:-}" in C.UTF-8|C.utf8|c.UTF-8|c.utf8) export LANG="$macos_locale" ;; esac;',
+    'case "${LC_ALL:-}" in C.UTF-8|C.utf8|c.UTF-8|c.utf8) export LC_ALL="$macos_locale" ;; esac;',
+    'case "${LC_CTYPE:-}" in C.UTF-8|C.utf8|c.UTF-8|c.utf8) export LC_CTYPE="$macos_locale" ;; esac;',
     'if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;',
     'if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR" 2>/dev/null || export TMPDIR="/tmp"; fi;',
     'if [ ! -d "$TMPDIR" ]; then echo "usable TMPDIR not found: $TMPDIR" >&2; return 1; fi;',
     'node_dir="$tool_root/node-v${node_version}-darwin-${node_arch}";',
+    'ready_marker="$node_dir/.openclaw-crabbox-node-ready";',
     'export PATH="$node_dir/bin:$PATH";',
-    'if [ ! -x "$node_dir/bin/node" ]; then',
-    'tmp_dir="$(mktemp -d)" || return 1;',
+    'if [ ! -x "$node_dir/bin/node" ] || [ ! -f "$ready_marker" ]; then',
+    'mkdir -p "$tool_root" || { status=$?; return "$status"; };',
+    'install_lock="$tool_root/.node-${node_version}-${node_arch}.lock";',
+    "lock_acquired=0;",
+    'lock_deadline=$((SECONDS + 300));',
+    "while true; do",
+    'if mkdir "$install_lock" 2>/dev/null; then lock_acquired=1; printf "%s\\n" "$$" >"$install_lock/pid" || { status=$?; rm -rf "$install_lock"; return "$status"; }; break; fi;',
+    'if [ -x "$node_dir/bin/node" ] && [ -f "$ready_marker" ]; then break; fi;',
+    'if [ "$SECONDS" -ge "$lock_deadline" ]; then',
+    'lock_pid="$(cat "$install_lock/pid" 2>/dev/null || true)";',
+    'if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then echo "timed out waiting for active macOS Node toolchain install lock: $install_lock pid=$lock_pid" >&2; return 1; fi;',
+    'echo "reclaiming stale macOS Node toolchain install lock: $install_lock" >&2;',
+    'rm -rf "$install_lock" || return 1;',
+    'lock_deadline=$((SECONDS + 300));',
+    "fi;",
+    "sleep 1;",
+    "done;",
+    "release_install_lock() { if [ \"$lock_acquired\" = \"1\" ]; then rm -rf \"$install_lock\" 2>/dev/null || true; fi; };",
+    'if [ ! -x "$node_dir/bin/node" ] || [ ! -f "$ready_marker" ]; then',
+    'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
     'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
     'base_url="https://nodejs.org/dist/v${node_version}";',
-    'mkdir -p "$tool_root" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
-    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
-    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
-    '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
-    'rm -rf "$node_dir" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
-    'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$node_dir" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'touch "$ready_marker" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
     'rm -rf "$tmp_dir";',
+    "fi;",
+    "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
     "openclaw_crabbox_env() {",
@@ -1894,38 +1922,108 @@ function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
   return isSparseCheckout() || isChangedGateCommand(runCommandArgs(commandArgs));
 }
 
+function defaultFullCheckoutSyncRoot() {
+  const home = homedir();
+  if (home) {
+    return resolve(home, ".cache", "openclaw", "crabbox-sync");
+  }
+  return resolve(tmpdir(), "openclaw-crabbox-sync");
+}
+
+function fullCheckoutSyncRoot() {
+  const configured = process.env.OPENCLAW_CRABBOX_SYNC_TMPDIR?.trim();
+  const root = configured ? resolve(configured) : defaultFullCheckoutSyncRoot();
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
 function prepareFullCheckoutForSync(options = {}) {
-  const dir = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-sync-"));
+  const dir = mkdtempSync(resolve(fullCheckoutSyncRoot(), "openclaw-crabbox-sync-"));
   let active = false;
-  const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
-  if (add.status !== 0) {
-    rmSync(dir, { recursive: true, force: true });
-    throw new Error(`git worktree add failed: ${add.text}`);
-  }
-  active = true;
 
-  const disableSparse = gitOutput(["-C", dir, "sparse-checkout", "disable"]);
-  if (disableSparse.status !== 0) {
-    cleanupFullCheckout(dir, active);
-    throw new Error(`git sparse-checkout disable failed: ${disableSparse.text}`);
-  }
+  function create() {
+    const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
+    if (add.status !== 0) {
+      rmSync(dir, { recursive: true, force: true });
+      throw new Error(`git worktree add failed: ${add.text}`);
+    }
+    active = true;
 
-  if (options.changedGateBase) {
-    const reset = gitOutput(["-C", dir, "reset", "--mixed", "--quiet", options.changedGateBase]);
-    if (reset.status !== 0) {
+    const disableSparse = gitOutput(["-C", dir, "sparse-checkout", "disable"]);
+    if (disableSparse.status !== 0) {
       cleanupFullCheckout(dir, active);
-      throw new Error(`git reset for changed-gate sync failed: ${reset.text}`);
+      active = false;
+      throw new Error(`git sparse-checkout disable failed: ${disableSparse.text}`);
+    }
+
+    if (options.changedGateBase) {
+      const reset = gitOutput(["-C", dir, "reset", "--mixed", "--quiet", options.changedGateBase]);
+      if (reset.status !== 0) {
+        cleanupFullCheckout(dir, active);
+        active = false;
+        throw new Error(`git reset for changed-gate sync failed: ${reset.text}`);
+      }
     }
   }
+
+  create();
 
   return {
     dir,
     changedGateBase: options.changedGateBase ?? "",
+    restoreIfMissing() {
+      try {
+        if (statSync(dir).isDirectory()) {
+          return false;
+        }
+      } catch {
+        // Recreate below.
+      }
+
+      console.error(`[crabbox] temporary full checkout disappeared; recreating ${dir}`);
+      if (active) {
+        const remove = gitOutput(["worktree", "remove", "--force", dir]);
+        if (remove.status !== 0) {
+          console.error(`[crabbox] warning: git worktree remove failed for ${dir}: ${remove.text}`);
+        }
+        active = false;
+      }
+      rmSync(dir, { recursive: true, force: true });
+      create();
+      return true;
+    },
     cleanup() {
       cleanupFullCheckout(dir, active);
       active = false;
     },
   };
+}
+
+function startFullCheckoutKeepalive(checkout) {
+  const refresh = () => {
+    try {
+      checkout.restoreIfMissing();
+      const now = new Date();
+      utimesSync(checkout.dir, now, now);
+    } catch (error) {
+      console.error(
+        `[crabbox] warning: failed to refresh temporary full checkout ${checkout.dir}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+
+  refresh();
+  const intervalMs = Number.parseInt(
+    process.env.OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS ?? "5000",
+    10,
+  );
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    return () => {};
+  }
+
+  const interval = setInterval(refresh, intervalMs);
+  interval.unref?.();
+  return () => clearInterval(interval);
 }
 
 function cleanupFullCheckout(dir, active) {
@@ -1937,6 +2035,20 @@ function cleanupFullCheckout(dir, active) {
     console.error(`[crabbox] warning: git worktree remove failed for ${dir}: ${remove.text}`);
   }
   rmSync(dir, { recursive: true, force: true });
+}
+
+function assertFullCheckoutAvailableBeforeExit(dir) {
+  try {
+    if (statSync(dir).isDirectory()) {
+      return;
+    }
+  } catch {
+    // Report below.
+  }
+
+  console.error(
+    `[crabbox] temporary full checkout vanished before Crabbox finished syncing: ${dir}`,
+  );
 }
 
 const version = checkedOutput(binary, ["--version"]);
@@ -2096,6 +2208,8 @@ if (canonicalProvider === "blacksmith-testbox") {
 
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
+let fullCheckout = null;
+let stopFullCheckoutKeepalive = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
@@ -2106,6 +2220,7 @@ try {
     const runWords = runCommandArgs(normalizedArgs);
     const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
+    fullCheckout = checkout;
     childCwd = checkout.dir;
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;
@@ -2128,6 +2243,7 @@ function cleanupOnce() {
     return;
   }
   cleanupDone = true;
+  stopFullCheckoutKeepalive();
   scriptBootstrap.cleanup();
   preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
@@ -2191,6 +2307,9 @@ const childArgs =
         ),
         remoteChangedGateBase,
       );
+if (fullCheckout) {
+  stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+}
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
@@ -2216,6 +2335,9 @@ for (const signal of signalExitCodes.keys()) {
 process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
+  if (fullCheckout) {
+    assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
@@ -2225,6 +2347,9 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("error", (error) => {
+  if (fullCheckout) {
+    assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  }
   cleanupOnce();
   console.error(`[crabbox] failed to execute ${displayBinary}: ${error.message}`);
   process.exit(2);

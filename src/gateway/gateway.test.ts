@@ -47,6 +47,31 @@ async function createEmptyBundledPluginsDir(tempHome: string): Promise<string> {
   return bundledPluginsDir;
 }
 
+async function createGatewayConfigPath(tempHome: string): Promise<string> {
+  const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  return configPath;
+}
+
+async function removeGatewayTempHome(tempHome: string): Promise<void> {
+  await fs.rm(tempHome, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 50,
+  });
+}
+
+async function startLoopbackTokenGateway(token: string) {
+  const port = await getFreeGatewayPort();
+  const server = await startGatewayServer(port, {
+    bind: "loopback",
+    auth: { mode: "token", token },
+    controlUiEnabled: false,
+  });
+  return { port, server };
+}
+
 async function writeWorkspacePlugin(params: {
   workspaceDir: string;
   id: string;
@@ -130,24 +155,19 @@ async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: b
   return { envSnapshot, tempHome, workspaceDir };
 }
 
-describe("gateway e2e", () => {
-  beforeEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    clearGatewaySubagentRuntime();
-  });
+function resetGatewayTestState(): void {
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  clearSessionStoreCacheForTest();
+  resetAgentRunContextForTest();
+  clearAllBootstrapSnapshots();
+  clearGatewaySubagentRuntime();
+}
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    clearGatewaySubagentRuntime();
-  });
+describe("gateway e2e", () => {
+  beforeEach(resetGatewayTestState);
+
+  afterEach(resetGatewayTestState);
 
   beforeAll(async () => {
     ({ createConfigIO } = await import("../config/config.js"));
@@ -166,9 +186,7 @@ describe("gateway e2e", () => {
       const token = nextGatewayId("test-token");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-      const configDir = path.join(tempHome, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
+      const configPath = await createGatewayConfigPath(tempHome);
       const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
       const cfg = {
@@ -222,12 +240,7 @@ describe("gateway e2e", () => {
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "mock openai test complete" });
-        await fs.rm(tempHome, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 50,
-        });
+        await removeGatewayTempHome(tempHome);
         restore();
         envSnapshot.restore();
       }
@@ -264,9 +277,7 @@ module.exports = {
 `.trimStart(),
       });
 
-      const configDir = path.join(tempHome, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
+      const configPath = await createGatewayConfigPath(tempHome);
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
@@ -280,12 +291,7 @@ module.exports = {
       await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
       process.env.OPENCLAW_CONFIG_PATH = configPath;
 
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      const { port, server } = await startLoopbackTokenGateway(token);
 
       try {
         const beforeCount = await readCounterWithRetry(registerCountPath);
@@ -314,12 +320,7 @@ module.exports = {
         expect(afterCount).toBe(beforeCount);
       } finally {
         await server.close({ reason: "http tools workspace test complete" });
-        await fs.rm(tempHome, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 50,
-        });
+        await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }
     },
@@ -329,38 +330,14 @@ module.exports = {
     "runs wizard over ws and writes auth token config",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-      ]);
-
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-home-",
+        minimalGateway: true,
+      });
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
-      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+      const configPath = await createGatewayConfigPath(tempHome);
       process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
-      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
       clearRuntimeConfigSnapshot();
       clearConfigCache();
 
@@ -465,12 +442,7 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
-        await fs.rm(tempHome, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 50,
-        });
+        await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }
     },
@@ -497,7 +469,7 @@ module.exports = {
       ]);
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimal-gateway-home-"));
-      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
+      const configPath = await createGatewayConfigPath(tempHome);
       const bundledPluginsDir = path.join(tempHome, "openclaw-test-no-bundled-extensions");
       process.env.HOME = tempHome;
       process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
@@ -514,19 +486,13 @@ module.exports = {
 
       const token = nextGatewayId("minimal-token");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.mkdir(bundledPluginsDir, { recursive: true });
       await fs.writeFile(
         configPath,
         `${JSON.stringify({ gateway: { auth: { mode: "token", token } } }, null, 2)}\n`,
       );
 
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      const { server } = await startLoopbackTokenGateway(token);
 
       try {
         const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as {
@@ -536,12 +502,7 @@ module.exports = {
         expect(parsed.plugins?.entries?.discord).toBeUndefined();
       } finally {
         await server.close({ reason: "minimal gateway auto-enable verify" });
-        await fs.rm(tempHome, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 50,
-        });
+        await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }
     },

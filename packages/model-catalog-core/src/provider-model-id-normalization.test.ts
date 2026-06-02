@@ -34,6 +34,9 @@ describe("provider model id policy normalization", () => {
         "openrouter/google/gemini-3-pro-preview",
       ),
     ).toBe("openrouter/google/gemini-3.1-pro-preview");
+    expect(
+      normalizeConfiguredProviderCatalogModelId("openrouter", "openrouter/google/gemma-4-26b"),
+    ).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
   it("normalizes native Anthropic catalog refs without retaining the provider prefix", () => {

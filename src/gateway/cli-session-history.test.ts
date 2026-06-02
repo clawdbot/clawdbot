@@ -9,10 +9,12 @@ import {
   readClaudeCliSessionMessages,
   resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.js";
+import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
 
 const ORIGINAL_HOME = process.env.HOME;
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
+type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
 
 function requireFallbackSeed(
   seed: ReturnType<typeof readClaudeCliFallbackSeed>,
@@ -25,20 +27,37 @@ function requireFallbackSeed(
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expectRecordFields(value, "fields", expected);
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected record");
-  }
-  return value as Record<string, unknown>;
+  return requireRecord(value, "record");
+}
+
+function expectCliSessionMarker(message: unknown, sessionId: string): void {
+  expectFields(readRecord(message)["__openclaw"], { cliSessionId: sessionId });
+}
+
+function augmentBoundClaudeHistory(params: {
+  homeDir: string;
+  sessionId: string;
+  provider: AugmentCliHistoryParams["provider"];
+  localMessages?: AugmentCliHistoryParams["localMessages"];
+}) {
+  return augmentChatHistoryWithCliSessionImports({
+    entry: {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: params.sessionId,
+        },
+      },
+    },
+    provider: params.provider,
+    localMessages: params.localMessages ?? [],
+    homeDir: params.homeDir,
+  });
 }
 
 function createClaudeHistoryLines(sessionId: string) {
@@ -316,40 +335,24 @@ describe("cli session history", () => {
 
   it("augments chat history when a session has a claude-cli binding", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "openclaw-session",
-          updatedAt: Date.now(),
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId,
-            },
-          },
-        },
-        provider: "claude-cli",
-        localMessages: [],
+      const messages = augmentBoundClaudeHistory({
         homeDir,
+        sessionId,
+        provider: "claude-cli",
       });
       expect(messages).toHaveLength(3);
       expectFields(messages[0], {
         role: "user",
       });
-      expectFields(readRecord(messages[0])["__openclaw"], { cliSessionId: sessionId });
+      expectCliSessionMarker(messages[0], sessionId);
     });
   });
 
   it("augments anthropic-routed chat history when a Claude CLI binding has local messages", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "openclaw-session",
-          updatedAt: Date.now(),
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId,
-            },
-          },
-        },
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
         provider: "anthropic",
         localMessages: [
           {
@@ -358,7 +361,6 @@ describe("cli session history", () => {
             timestamp: Date.parse("2026-03-26T16:29:57.000Z"),
           },
         ],
-        homeDir,
       });
 
       expect(messages).toHaveLength(4);
@@ -391,19 +393,11 @@ describe("cli session history", () => {
           timestamp: Date.parse("2026-03-26T16:29:57.000Z"),
         },
       ];
-      const messages = augmentChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "openclaw-session",
-          updatedAt: Date.now(),
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId,
-            },
-          },
-        },
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
         provider: "openai",
         localMessages,
-        homeDir,
       });
 
       expect(messages).toBe(localMessages);
@@ -428,7 +422,7 @@ describe("cli session history", () => {
       expectFields(messages[1], {
         role: "assistant",
       });
-      expectFields(readRecord(messages[1])["__openclaw"], { cliSessionId: sessionId });
+      expectCliSessionMarker(messages[1], sessionId);
     });
   });
 
@@ -448,7 +442,7 @@ describe("cli session history", () => {
       expectFields(messages[0], {
         role: "user",
       });
-      expectFields(readRecord(messages[0])["__openclaw"], { cliSessionId: sessionId });
+      expectCliSessionMarker(messages[0], sessionId);
     });
   });
 });

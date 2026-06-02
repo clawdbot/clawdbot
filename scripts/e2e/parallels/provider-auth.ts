@@ -1,9 +1,17 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parsePositiveInt, readPositiveIntEnv } from "./env-limits.ts";
 import { die, run } from "./host-command.ts";
 import type { Mode, Platform, Provider, ProviderAuth } from "./types.ts";
+
+type ResolveLatestVersionDeps = {
+  createTempDir?: typeof mkdtempSync;
+  removeDir?: typeof rmSync;
+  runCommand?: typeof run;
+  tempDir?: typeof tmpdir;
+  writeFile?: typeof writeFileSync;
+};
 
 export function parseBoolEnv(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test(value ?? "");
@@ -192,21 +200,26 @@ export function parsePlatformList(value: string): Set<Platform> {
   return result;
 }
 
-export function resolveLatestVersion(versionOverride = ""): string {
+export function resolveLatestVersion(
+  versionOverride = "",
+  deps: ResolveLatestVersionDeps = {},
+): string {
   if (versionOverride) {
     return versionOverride;
   }
-  return run(
-    "npm",
-    [
-      "view",
-      "openclaw",
-      "version",
-      "--userconfig",
-      mkdtempSync(path.join(tmpdir(), "openclaw-npm-")),
-    ],
-    {
+  const createTempDir = deps.createTempDir ?? mkdtempSync;
+  const removeDir = deps.removeDir ?? rmSync;
+  const runCommand = deps.runCommand ?? run;
+  const resolveTempDir = deps.tempDir ?? tmpdir;
+  const writeFile = deps.writeFile ?? writeFileSync;
+  const userConfigDir = createTempDir(path.join(resolveTempDir(), "openclaw-npm-"));
+  const userConfigPath = path.join(userConfigDir, "npmrc");
+  try {
+    writeFile(userConfigPath, "", "utf8");
+    return runCommand("npm", ["view", "openclaw", "version", "--userconfig", userConfigPath], {
       quiet: true,
-    },
-  ).stdout.trim();
+    }).stdout.trim();
+  } finally {
+    removeDir(userConfigDir, { force: true, recursive: true });
+  }
 }

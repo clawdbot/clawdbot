@@ -117,15 +117,25 @@ export function createMemoryTool(params: {
   };
 }
 
-export function buildMemorySearchUnavailableResult(error: string | undefined) {
+export function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  overrides?: {
+    warning?: string;
+    action?: string;
+  },
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning = isQuotaError
-    ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const warning =
+    overrides?.warning ??
+    (isQuotaError
+      ? "Memory search is unavailable because the embedding provider quota is exhausted."
+      : "Memory search is unavailable due to an embedding/provider error.");
+  const action =
+    overrides?.action ??
+    (isQuotaError
+      ? "Top up or switch embedding provider, then retry memory_search."
+      : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

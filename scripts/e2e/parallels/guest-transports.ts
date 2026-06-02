@@ -12,8 +12,12 @@ export interface GuestExecOptions {
 export interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
+  completedLogDrainGraceMs?: number;
   label: string;
+  logChunkBytes?: number;
   onLaunchRetry?: (message: string) => void;
+  pollIntervalMs?: number;
+  runCommand?: typeof run;
   script: string;
   timeoutMs: number;
   vmName: string;
@@ -52,6 +56,13 @@ export async function runWindowsBackgroundPowerShell(
   options: WindowsBackgroundPowerShellOptions,
 ): Promise<void> {
   const append = options.append;
+  const completedLogDrainGraceMs = Math.max(
+    1,
+    Math.floor(options.completedLogDrainGraceMs ?? 30_000),
+  );
+  const logChunkBytes = Math.max(1, Math.floor(options.logChunkBytes ?? 1024 * 1024));
+  const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
+  const runCommand = options.runCommand ?? run;
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
   const nonce = `${safeLabel}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
   const fileBase = `openclaw-parallels-${nonce}`;
@@ -59,7 +70,8 @@ export async function runWindowsBackgroundPowerShell(
 $scriptPath = "$base.ps1"
 $logPath = "$base.log"
 $donePath = "$base.done"
-$exitPath = "$base.exit"`;
+$exitPath = "$base.exit"
+$pidPath = "$base.pid"`;
   const payload = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${pathsScript}
@@ -74,7 +86,7 @@ ${options.script}
 } finally {
   Set-Content -Path $donePath -Value 'done' -Encoding UTF8
 }`;
-  const writeScript = run(
+  const writeScript = runCommand(
     "prlctl",
     [
       "exec",
@@ -86,7 +98,7 @@ ${options.script}
       "Bypass",
       "-EncodedCommand",
       encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
 if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`),
     ],
@@ -99,81 +111,102 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
     );
   }
 
-  const deadline = Date.now() + options.timeoutMs;
-  let launched = false;
-  let lastLaunchStatus = 0;
-  for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
-    options.beforeLaunchAttempt?.();
-    const launch = run(
-      "prlctl",
-      [
-        "exec",
-        options.vmName,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${pathsScript}
-Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+  let doneSeen = false;
+  try {
+    const deadline = Date.now() + options.timeoutMs;
+    let launched = false;
+    let lastLaunchStatus = 0;
+    for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
+      options.beforeLaunchAttempt?.();
+      const launch = runCommand(
+        "prlctl",
+        [
+          "exec",
+          options.vmName,
+          "--current-user",
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+$process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru
+Set-Content -Path $pidPath -Value $process.Id -Encoding UTF8
 'started'`),
-      ],
-      { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
-    );
-    appendOutput(append, launch);
-    if (launch.status === 0 && launch.stdout.includes("started")) {
-      launched = true;
-      break;
-    }
-    lastLaunchStatus = launch.status;
-    if (launch.status === 0 || launch.status === 124) {
-      const materialized = waitForWindowsBackgroundMaterialized({
-        append,
-        deadline,
-        pathsScript,
-        vmName: options.vmName,
-      });
-      if (materialized) {
+        ],
+        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
+      );
+      appendOutput(append, launch);
+      if (launch.status === 0 && launch.stdout.includes("started")) {
         launched = true;
         break;
       }
-      options.onLaunchRetry?.(
-        `${options.label} launch retry ${attempt}: background log/done file did not materialize`,
+      lastLaunchStatus = launch.status;
+      if (launch.status === 0 || launch.status === 124) {
+        const materialized = waitForWindowsBackgroundMaterialized({
+          append,
+          deadline,
+          pathsScript,
+          runCommand,
+          vmName: options.vmName,
+        });
+        if (materialized) {
+          launched = true;
+          break;
+        }
+        options.onLaunchRetry?.(
+          `${options.label} launch retry ${attempt}: background log/done file did not materialize`,
+        );
+        continue;
+      }
+      if (launch.stdout.includes("restoring") || launch.stderr.includes("restoring")) {
+        options.onLaunchRetry?.(`${options.label} launch retry ${attempt}: VM is still restoring`);
+        await sleep(5_000);
+        continue;
+      }
+      throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
+    }
+    if (!launched) {
+      throw new Error(
+        `${options.label} background launch failed with exit code ${lastLaunchStatus}`,
       );
-      continue;
     }
-    if (launch.stdout.includes("restoring") || launch.stderr.includes("restoring")) {
-      options.onLaunchRetry?.(`${options.label} launch retry ${attempt}: VM is still restoring`);
-      await sleep(5_000);
-      continue;
-    }
-    throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
-  }
-  if (!launched) {
-    throw new Error(`${options.label} background launch failed with exit code ${lastLaunchStatus}`);
-  }
 
-  let lastLogOffset = 0;
-  while (Date.now() < deadline) {
-    const poll = run(
-      "prlctl",
-      [
-        "exec",
-        options.vmName,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${pathsScript}
+    let lastLogOffset = 0;
+    let completedLogDrainDeadline = 0;
+    const activeDeadline = () => (doneSeen ? completedLogDrainDeadline : deadline);
+    while (Date.now() < activeDeadline()) {
+      const poll = runCommand(
+        "prlctl",
+        [
+          "exec",
+          options.vmName,
+          "--current-user",
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
 $offset = ${lastLogOffset}
 if (Test-Path $logPath) {
-  $bytes = [System.IO.File]::ReadAllBytes($logPath)
-  if ($bytes.Length -gt $offset) {
-    "__OPENCLAW_LOG_OFFSET__:$($bytes.Length)"
-    [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
+  $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+  try {
+    $length = $stream.Length
+    "__OPENCLAW_LOG_LENGTH__:$length"
+    if ($length -gt $offset) {
+      [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
+      $count = [int][Math]::Min($length - $offset, ${logChunkBytes})
+      $buffer = New-Object byte[] $count
+      $read = $stream.Read($buffer, 0, $count)
+      if ($read -gt 0) {
+        $nextOffset = $offset + $read
+        "__OPENCLAW_LOG_OFFSET__:$nextOffset"
+        [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+      }
+    }
+  } finally {
+    $stream.Dispose()
   }
 }
 if (Test-Path $donePath) {
@@ -183,37 +216,53 @@ if (Test-Path $donePath) {
   if ($backgroundExit -ne '0') { exit 23 }
   exit 0
 }`),
-      ],
-      { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
-    );
-    appendOutput(append, poll);
-    const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
-    if (offsetMatch) {
-      lastLogOffset = Number(offsetMatch[1]);
-    }
-    if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
-      const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
-      const backgroundExit = exitMatch?.[1] ?? "0";
-      if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
-        throw new Error(`${options.label} failed`);
+        ],
+        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
+      );
+      appendOutput(append, poll);
+      const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
+      if (offsetMatch) {
+        lastLogOffset = Number(offsetMatch[1]);
       }
-      cleanupWindowsBackground(options.vmName, pathsScript);
-      return;
+      const lengthMatch = poll.stdout.match(/__OPENCLAW_LOG_LENGTH__:(\d+)/);
+      const logLength = lengthMatch ? Number(lengthMatch[1]) : lastLogOffset;
+      if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+        doneSeen = true;
+        completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
+        if (lastLogOffset < logLength) {
+          await sleep(Math.min(pollIntervalMs, 100));
+          continue;
+        }
+        const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
+        const backgroundExit = exitMatch?.[1] ?? "0";
+        if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
+          throw new Error(`${options.label} failed`);
+        }
+        return;
+      }
+      await sleep(pollIntervalMs);
     }
-    await sleep(5_000);
+    if (doneSeen) {
+      throw new Error(`${options.label} completed but log drain timed out`);
+    }
+    throw new Error(`${options.label} timed out`);
+  } finally {
+    cleanupWindowsBackground(options.vmName, pathsScript, runCommand, {
+      stopProcessTree: !doneSeen,
+    });
   }
-  throw new Error(`${options.label} timed out`);
 }
 
 function waitForWindowsBackgroundMaterialized(params: {
   append?: (chunk: string | Uint8Array) => void;
   deadline: number;
   pathsScript: string;
+  runCommand: typeof run;
   vmName: string;
 }): boolean {
   const materializeDeadline = Math.min(Date.now() + 45_000, params.deadline);
   while (Date.now() < materializeDeadline) {
-    const result = run(
+    const result = params.runCommand(
       "prlctl",
       [
         "exec",
@@ -239,8 +288,28 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
   return false;
 }
 
-function cleanupWindowsBackground(vmName: string, pathsScript: string): void {
-  run(
+function cleanupWindowsBackground(
+  vmName: string,
+  pathsScript: string,
+  runCommand: typeof run,
+  options: { stopProcessTree: boolean },
+): void {
+  const stopProcessTree = options.stopProcessTree
+    ? `function Stop-OpenClawBackgroundProcessTree([int]$ProcessId) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-OpenClawBackgroundProcessTree ([int]$_.ProcessId)
+  }
+  Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $pidPath) {
+  $backgroundPid = (Get-Content -Path $pidPath -Raw).Trim()
+  if ($backgroundPid) {
+    Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)
+  }
+}
+`
+    : "";
+  runCommand(
     "prlctl",
     [
       "exec",
@@ -252,7 +321,8 @@ function cleanupWindowsBackground(vmName: string, pathsScript: string): void {
       "Bypass",
       "-EncodedCommand",
       encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue`),
+${stopProcessTree}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue`),
     ],
     { check: false, quiet: true, timeoutMs: 30_000 },
   );

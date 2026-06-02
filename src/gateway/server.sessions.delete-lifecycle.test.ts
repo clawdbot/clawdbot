@@ -6,7 +6,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -22,7 +22,12 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const {
+  createConfiguredGlobalAgentSessionStore,
+  createSessionStoreDir,
+  openClient,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -32,6 +37,41 @@ function expectObject(value: unknown) {
   if (!value || typeof value !== "object") {
     throw new Error("expected object");
   }
+}
+
+type SessionDeleteRequest = {
+  key: string;
+  agentId?: string;
+  deleteTranscript?: boolean;
+  emitLifecycleHooks?: boolean;
+};
+
+async function expectSessionDeleteSucceeds(request: SessionDeleteRequest) {
+  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>(
+    "sessions.delete",
+    request,
+  );
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  return deleted;
+}
+
+async function seedSubagentWorkerSession() {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-subagent", "hello");
+  await writeSessionStore({
+    entries: {
+      "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
+    },
+  });
+}
+
+function expectThreadBindingsUnbound(targetSessionKey: string) {
+  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+    targetSessionKey,
+    reason: "session-delete",
+  });
 }
 
 test("sessions.delete rejects main and aborts active runs", async () => {
@@ -52,11 +92,9 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   const mainDelete = await directSessionReq("sessions.delete", { key: "main" });
   expect(mainDelete.ok).toBe(false);
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "discord:group:dev",
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
   expectActiveRunCleanup(
     "agent:main:discord:group:dev",
     ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
@@ -145,69 +183,22 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
 });
 
 test("sessions.delete scopes selected global deletes to the requested agent", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  await writeSessionStore({
-    entries: {},
-    storePath: path.join(dir, "prime-sessions.json"),
-  });
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
-    "utf-8",
-  );
-  await fs.writeFile(
-    workStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
-    "utf-8",
-  );
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required");
-  }
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-        session: { scope: "global", store: storeTemplate },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
-  );
-  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "global",
     agentId: "work",
     deleteTranscript: false,
   });
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
-  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as {
+  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
     global?: { sessionId?: string };
   };
-  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as {
+  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
     global?: { sessionId?: string };
   };
   expect(mainStore.global?.sessionId).toBe("sess-main-global");
   expect(workStore.global).toBeUndefined();
-  testState.sessionStorePath = undefined;
-  testState.sessionConfig = undefined;
-  await fs.writeFile(configPath, "{}\n", "utf-8");
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
@@ -232,11 +223,9 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
       lastActivityAt: Date.now(),
     },
   });
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "discord:group:dev",
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
   const closeSessionCall = (
     acpManagerMocks.closeSession.mock.calls as unknown as Array<
@@ -304,11 +293,9 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
     meta: acpMeta("agent:main:acp-child"),
   });
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "acp-parent",
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
 
   // Deleting the parent must also close its spawned ACP child, not just its own
   // runtime, otherwise the child's claude-agent-acp process is orphaned (#68916).
@@ -344,11 +331,9 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     },
   });
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "discord:group:delete",
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
 
@@ -390,19 +375,11 @@ test("sessions.delete does not emit lifecycle events when nothing was deleted", 
 });
 
 test("sessions.delete emits subagent targetKind for subagent sessions", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
-  await writeSessionStore({
-    entries: {
-      "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
-    },
-  });
+  await seedSubagentWorkerSession();
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "agent:main:subagent:worker",
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
     | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
@@ -411,44 +388,22 @@ test("sessions.delete emits subagent targetKind for subagent sessions", async ()
   expect(event?.targetKind).toBe("subagent");
   expect(event?.reason).toBe("session-delete");
   expect(event?.outcome).toBe("deleted");
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
-    targetSessionKey: "agent:main:subagent:worker",
-    reason: "session-delete",
-  });
+  expectThreadBindingsUnbound("agent:main:subagent:worker");
 });
 
 test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
-  await writeSessionStore({
-    entries: {
-      "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
-    },
-  });
+  await seedSubagentWorkerSession();
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+  await expectSessionDeleteSucceeds({
     key: "agent:main:subagent:worker",
     emitLifecycleHooks: false,
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
   expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
-    targetSessionKey: "agent:main:subagent:worker",
-    reason: "session-delete",
-  });
+  expectThreadBindingsUnbound("agent:main:subagent:worker");
 });
 
 test("sessions.delete directly unbinds thread bindings when hooks are unavailable", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
-  await writeSessionStore({
-    entries: {
-      "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
-    },
-  });
+  await seedSubagentWorkerSession();
   subagentLifecycleHookState.hasSubagentEndedHook = false;
 
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
@@ -456,11 +411,7 @@ test("sessions.delete directly unbinds thread bindings when hooks are unavailabl
   });
   expect(deleted.ok).toBe(true);
   expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
-    targetSessionKey: "agent:main:subagent:worker",
-    reason: "session-delete",
-  });
+  expectThreadBindingsUnbound("agent:main:subagent:worker");
 });
 
 test("sessions.delete returns unavailable when active run does not stop", async () => {

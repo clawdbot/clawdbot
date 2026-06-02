@@ -73,8 +73,41 @@ function main(argv = process.argv.slice(2)) {
     },
     stdio: "inherit",
   });
+  let forwardedSignal = null;
+  let forceKillTimer = null;
+  // Keep the child in the foreground process group so TTY signals such as
+  // Ctrl-C, Ctrl-Z, and window resizes stay native. Forward direct wrapper
+  // shutdown signals that would otherwise only kill this small parent process.
+  const forwardedSignals = ["SIGTERM", "SIGHUP"];
+
+  const cleanupSignalHandlers = () => {
+    for (const signal of forwardedSignals) {
+      process.off(signal, signalHandlers.get(signal));
+    }
+  };
+  const signalHandlers = new Map(
+    forwardedSignals.map((signal) => [
+      signal,
+      () => {
+        forwardedSignal ??= signal;
+        child.kill(signal);
+        forceKillTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+      },
+    ]),
+  );
+  for (const [signal, handler] of signalHandlers) {
+    process.on(signal, handler);
+  }
 
   child.on("exit", (code, signal) => {
+    cleanupSignalHandlers();
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+    }
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -83,6 +116,10 @@ function main(argv = process.argv.slice(2)) {
   });
 
   child.on("error", (error) => {
+    cleanupSignalHandlers();
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+    }
     console.error(error);
     process.exit(1);
   });

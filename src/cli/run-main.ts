@@ -751,11 +751,14 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+    const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
+      ...(suppressStartupProgress ? { enabled: false } : {}),
     });
     let startupProgressStopped = false;
     const stopStartupProgress = () => {
@@ -823,7 +826,6 @@ export async function runCli(argv: string[] = process.argv) {
         process.exit(1);
       });
 
-      const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.

@@ -998,11 +998,15 @@ describe("web auto-reply connection", () => {
         const firstPattern = escapeRegExp(firstTimestamp);
         const secondPattern = escapeRegExp(secondTimestamp);
         expect(firstArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\+1: \\[openclaw\\] first`,
+          ),
         );
         expect(firstArgs.Body).not.toContain("second");
         expect(secondArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\+1: \\[openclaw\\] second`,
+          ),
         );
         expect(secondArgs.Body).not.toContain("first");
         expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);

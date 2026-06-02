@@ -20,7 +20,7 @@ import {
   parseAgentSessionKey,
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { GatewaySessionRow, GatewaySessionsDefaults } from "../types.ts";
+import type { AgentsListResult, GatewaySessionRow, GatewaySessionsDefaults } from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -323,6 +323,22 @@ function isRetryableStartupUnavailable(err: unknown, method: string): err is Gat
   return typeof detailMethod !== "string" || detailMethod === method;
 }
 
+function isUnknownGatewayMethodError(err: unknown, method: string): err is GatewayRequestError {
+  return (
+    err instanceof GatewayRequestError &&
+    err.gatewayCode === "INVALID_REQUEST" &&
+    err.message.includes(`unknown method: ${method}`)
+  );
+}
+
+function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
+  const methods = state.hello?.features?.methods;
+  if (!Array.isArray(methods)) {
+    return null;
+  }
+  return methods.includes(method);
+}
+
 function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
   const retryAfterMs =
     typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
@@ -351,10 +367,16 @@ export type ChatState = {
   chatStreamStartedAt: number | null;
   lastError: string | null;
   chatError?: string | null;
+  agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: ChatAgentsListSnapshot | null;
+  agentsSelectedId?: string | null;
   hello?: GatewayHelloOk | null;
+};
+
+type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
+  agents?: Array<{ id: string }>;
 };
 
 export type ChatHistoryResult = {
@@ -363,6 +385,7 @@ export type ChatHistoryResult = {
   thinkingLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
+  agentsList?: AgentsListResult;
 };
 
 export type ChatEventPayload = {
@@ -506,6 +529,10 @@ type InFlightChatHistoryRequest = {
   promise: Promise<ChatHistoryResult | undefined>;
 };
 
+type LoadChatHistoryOptions = {
+  startup?: boolean;
+};
+
 const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
 
 function recordChatHistoryTiming(
@@ -528,7 +555,10 @@ function recordChatHistoryTiming(
   );
 }
 
-export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResult | undefined> {
+export async function loadChatHistory(
+  state: ChatState,
+  opts: LoadChatHistoryOptions = {},
+): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
     return undefined;
   }
@@ -536,7 +566,10 @@ export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResu
   const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
     ? resolveSelectedAgentId(state)
     : undefined;
-  const requestKey = `${sessionKey}\0${requestAgentId ?? ""}`;
+  const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
+  const method =
+    opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
+  const requestKey = `${method}\0${sessionKey}\0${requestAgentId ?? ""}`;
   const inFlight = inFlightChatHistoryRequests.get(state);
   if (
     inFlight?.key === requestKey &&
@@ -545,13 +578,17 @@ export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResu
   ) {
     return inFlight.promise;
   }
-  const promise = loadChatHistoryUncached(state, state.client, sessionKey, requestAgentId).finally(
-    () => {
-      if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
-        inFlightChatHistoryRequests.delete(state);
-      }
-    },
-  );
+  const promise = loadChatHistoryUncached(
+    state,
+    state.client,
+    sessionKey,
+    requestAgentId,
+    method,
+  ).finally(() => {
+    if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
+      inFlightChatHistoryRequests.delete(state);
+    }
+  });
   inFlightChatHistoryRequests.set(state, {
     client: state.client,
     key: requestKey,
@@ -561,11 +598,31 @@ export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResu
   return promise;
 }
 
+function applyChatStartupAgentsList(state: ChatState, agentsList: AgentsListResult | undefined) {
+  if (!agentsList) {
+    return;
+  }
+  state.agentsList = agentsList;
+  state.agentsError = null;
+  const selectedId =
+    typeof state.agentsSelectedId === "string" && state.agentsSelectedId.trim()
+      ? normalizeAgentId(state.agentsSelectedId)
+      : undefined;
+  if (selectedId && agentsList.agents.some((entry) => normalizeAgentId(entry.id) === selectedId)) {
+    return;
+  }
+  state.agentsSelectedId =
+    typeof agentsList.defaultId === "string" && agentsList.defaultId.trim()
+      ? agentsList.defaultId
+      : (agentsList.agents[0]?.id ?? null);
+}
+
 async function loadChatHistoryUncached(
   state: ChatState,
   client: NonNullable<ChatState["client"]>,
   sessionKey: string,
   requestAgentId: string | undefined,
+  method: "chat.history" | "chat.startup",
 ): Promise<ChatHistoryResult | undefined> {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
@@ -575,6 +632,7 @@ async function loadChatHistoryUncached(
   recordChatHistoryTiming(state, "start", startedAtMs, {
     requestSessionKey: sessionKey,
     requestAgentId,
+    method,
     previousRunId,
   });
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -585,7 +643,7 @@ async function loadChatHistoryUncached(
     let res: ChatHistoryResult;
     for (;;) {
       try {
-        res = await client.request<ChatHistoryResult>("chat.history", {
+        res = await client.request<ChatHistoryResult>(method, {
           sessionKey,
           ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
@@ -603,7 +661,15 @@ async function loadChatHistoryUncached(
         }
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
-        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
+        if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
+          res = await client.request<ChatHistoryResult>("chat.history", {
+            sessionKey,
+            ...(requestAgentId ? { agentId: requestAgentId } : {}),
+            limit: CHAT_HISTORY_REQUEST_LIMIT,
+          });
+          break;
+        }
+        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, method)) {
           await sleep(resolveStartupRetryDelayMs(err));
           if (!state.client || !state.connected) {
             return undefined;
@@ -623,6 +689,7 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
+    applyChatStartupAgentsList(state, res.agentsList);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const lateOptimisticTail = collectLateOptimisticTailMessages(
       previousMessages,

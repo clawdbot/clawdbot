@@ -997,7 +997,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
     if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
-      return modelConfig.fallbacks;
+      return sessionHasPersistedModelSelection ? undefined : modelConfig.fallbacks;
     }
     return undefined;
   })();

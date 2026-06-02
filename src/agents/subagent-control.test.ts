@@ -1372,9 +1372,7 @@ describe("steerControlledSubagentRun", () => {
     });
 
     setSubagentControlDepsForTest({
-      callGateway: async <T = Record<string, unknown>>(
-        request: CallGatewayOptions,
-      ) => {
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
         }
@@ -1418,5 +1416,68 @@ describe("steerControlledSubagentRun", () => {
       label: "yielded steer task",
       text: "steered yielded steer task.",
     });
+  });
+
+  it("rotates the child session when restarting a previously active session", async () => {
+    const childSessionKey = "agent:main:subagent:active-steer-worker";
+    const storePath = writeSessionStoreFixture("steer-restart-session", {
+      [childSessionKey]: {
+        sessionId: "old-child-session",
+        updatedAt: Date.now(),
+      },
+    });
+    const agentCalls: CallGatewayOptions[] = [];
+    addSubagentRunForTests({
+      runId: "run-active-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "active steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          agentCalls.push(request);
+          return { runId: "run-active-steer-restarted" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(storePath),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-active-steer",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "active steer task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "updated direction",
+    });
+
+    expect(result.status).toBe("accepted");
+    expect(result.sessionId).toBeTypeOf("string");
+    expect(result.sessionId).not.toBe("old-child-session");
+    const agentParams = agentCalls[0]?.params as { sessionId?: string } | undefined;
+    expect(agentParams?.sessionId).toBe(result.sessionId);
   });
 });

@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
+import { resolveGatewaySuccessPayload } from "../gateway-frame-payload.mjs";
 import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
 import { readPositiveIntEnv } from "./limits.mjs";
@@ -85,7 +86,7 @@ async function connectGateway() {
     }
     pending.delete(frame.id);
     if (frame.ok === true) {
-      match.resolve(frame.payload ?? frame.result);
+      match.resolve(resolveGatewaySuccessPayload(frame));
       return;
     }
     match.reject(new Error(frame.error?.message ?? "gateway request failed"));

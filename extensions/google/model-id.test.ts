@@ -40,4 +40,9 @@ describe("google model id helpers", () => {
     expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
     expect(normalizeGoogleModelId("gemini-3.1-flash-lite-preview")).toBe("gemini-3.1-flash-lite");
   });
+
+  it("maps the old Gemma 4 26B shorthand to Google's canonical API id", () => {
+    expect(normalizeGoogleModelId("gemma-4-26b")).toBe("gemma-4-26b-a4b-it");
+    expect(normalizeGoogleModelId("google/gemma-4-26b")).toBe("google/gemma-4-26b-a4b-it");
+  });
 });

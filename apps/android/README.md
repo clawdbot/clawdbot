@@ -218,6 +218,7 @@ Current OpenClaw Android implication:
 - Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
   - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - Installed-app listing is user controlled. `device.apps` is advertised only after the user enables **Settings > Phone Capabilities > Installed Apps**. The command defaults to launcher-visible apps and does not require `QUERY_ALL_PACKAGES`.
   - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
 
 Policy links:

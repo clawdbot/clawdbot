@@ -132,7 +132,12 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type {
+  DispatcherOutcomeCountsView,
+  ReplyDispatchKind,
+  ReplyDispatcher,
+} from "./reply-dispatcher.types.js";
+import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -774,13 +779,13 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
-function getDispatcherFinalOutcomeCounts(dispatcher: ReplyDispatcher): {
+export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
   cancelled: number;
   failed: number;
 } {
   return {
     cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
-    failed: dispatcher.getFailedCounts().final,
+    failed: readDispatcherFailedCounts(dispatcher).final,
   };
 }
 
@@ -903,7 +908,7 @@ function createAbortAwareDispatcher(params: {
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
-    getFailedCounts: () => params.dispatcher.getFailedCounts(),
+    getFailedCounts: () => readDispatcherFailedCounts(params.dispatcher),
     markComplete: () => {
       if (!params.isAborted()) {
         params.dispatcher.markComplete();

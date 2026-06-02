@@ -11,6 +11,7 @@ const XAI_BASE_URL = "https://api.x.ai/v1";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const GOOGLE_VERTEX_BASE_URL = "https://aiplatform.googleapis.com";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -180,6 +181,16 @@ function normalizeTransport(params: {
     return {
       api: "google-generative-ai",
       baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
+    };
+  }
+  if (
+    params.provider === "google-vertex" &&
+    params.context.api == null &&
+    params.context.baseUrl === GOOGLE_VERTEX_BASE_URL
+  ) {
+    return {
+      api: "google-vertex",
+      baseUrl: GOOGLE_VERTEX_BASE_URL,
     };
   }
   if (isNativeOpenAiTransport) {

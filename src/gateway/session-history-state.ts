@@ -205,25 +205,13 @@ export class SessionHistorySseState {
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
-    const rawSnapshot = {
+    const snapshot = this.buildSnapshot({
       rawMessages: params.initialRawMessages,
       ...(typeof params.rawTranscriptSeq === "number"
         ? { rawTranscriptSeq: params.rawTranscriptSeq }
         : {}),
       ...(typeof params.totalRawMessages === "number"
         ? { totalRawMessages: params.totalRawMessages }
-        : {}),
-    };
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: rawSnapshot.rawMessages,
-      maxChars: this.maxChars,
-      limit: this.limit,
-      cursor: this.cursor,
-      ...(typeof rawSnapshot.rawTranscriptSeq === "number"
-        ? { rawTranscriptSeq: rawSnapshot.rawTranscriptSeq }
-        : {}),
-      ...(typeof rawSnapshot.totalRawMessages === "number"
-        ? { totalRawMessages: rawSnapshot.totalRawMessages }
         : {}),
     });
     this.sentHistory = snapshot.history;
@@ -323,7 +311,14 @@ export class SessionHistorySseState {
 
   async refreshAsync(): Promise<PaginatedSessionHistory> {
     const rawSnapshot = await this.readRawSnapshotAsync();
-    const snapshot = buildSessionHistorySnapshot({
+    const snapshot = this.buildSnapshot(rawSnapshot);
+    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.sentHistory = snapshot.history;
+    return snapshot.history;
+  }
+
+  private buildSnapshot(rawSnapshot: SessionHistoryRawSnapshot): SessionHistorySnapshot {
+    return buildSessionHistorySnapshot({
       rawMessages: rawSnapshot.rawMessages,
       maxChars: this.maxChars,
       limit: this.limit,
@@ -335,9 +330,6 @@ export class SessionHistorySseState {
         ? { totalRawMessages: rawSnapshot.totalRawMessages }
         : {}),
     });
-    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
-    this.sentHistory = snapshot.history;
-    return snapshot.history;
   }
 
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {

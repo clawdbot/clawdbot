@@ -1,4 +1,8 @@
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import {
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
 export function testLiveUsage() {
   return [
@@ -96,6 +100,14 @@ export function buildTestLivePnpmArgs(args) {
   ];
 }
 
+export function buildTestLiveSpawnParams(env, platform = process.platform) {
+  return {
+    detached: shouldUseDetachedVitestProcessGroup(platform),
+    env,
+    stdio: ["inherit", "pipe", "pipe"],
+  };
+}
+
 export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   const args = parseTestLiveArgs(argv);
   if (args.help) {
@@ -109,10 +121,21 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let lastOutputAt = startedAt;
 
   const child = spawnPnpmRunner({
-    stdio: ["inherit", "pipe", "pipe"],
     pnpmArgs: buildTestLivePnpmArgs(args),
-    env,
+    ...buildTestLiveSpawnParams(env),
   });
+  let forwardedSignal = null;
+  const teardownChildCleanup = installVitestProcessGroupCleanup({
+    child,
+    onSignal: (signal) => {
+      forwardedSignal ??= signal;
+    },
+  });
+
+  const teardown = () => {
+    clearInterval(heartbeat);
+    teardownChildCleanup();
+  };
 
   const noteOutput = () => {
     lastOutputAt = Date.now();
@@ -143,10 +166,14 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   heartbeat.unref?.();
 
   child.on("exit", (code, signal) => {
-    clearInterval(heartbeat);
+    teardown();
     if (signal) {
       process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
       process.kill(process.pid, signal);
+      return;
+    }
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
       return;
     }
     if ((code ?? 1) !== 0) {
@@ -156,7 +183,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   });
 
   child.on("error", (error) => {
-    clearInterval(heartbeat);
+    teardown();
     console.error(error);
     process.exit(1);
   });

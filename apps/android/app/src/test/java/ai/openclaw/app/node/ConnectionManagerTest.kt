@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
+import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
@@ -476,6 +477,15 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildNodeConnectOptions_advertisesDeviceAppsOnlyWhenUserOptedIn() {
+    val disabled = newManager(installedAppsSharingEnabled = false).buildNodeConnectOptions()
+    val enabled = newManager(installedAppsSharingEnabled = true).buildNodeConnectOptions()
+
+    assertFalse(disabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
+    assertTrue(enabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
+  }
+
+  @Test
   fun buildNodeConnectOptions_omitsVoiceWakeWithoutMicrophonePermission() {
     val options =
       newManager(
@@ -546,6 +556,7 @@ class ConnectionManagerTest {
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
     hasRecordAudioPermission: Boolean = false,
+    installedAppsSharingEnabled: Boolean = false,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
     val prefs =
@@ -567,6 +578,7 @@ class ConnectionManagerTest {
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
       hasRecordAudioPermission = { hasRecordAudioPermission },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled },
       manualTls = { false },
     )
   }

@@ -5,24 +5,12 @@ import {
 } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTotalQueueSize, resetCommandQueueStateForTest } from "../process/command-queue.js";
+import { createDeferred } from "./test-helpers.deferred.js";
 
 async function flushMicrotasks(count = 10): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     await Promise.resolve();
   }
-}
-
-function createDeferred<T = void>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 describe("gateway restart deferral", () => {

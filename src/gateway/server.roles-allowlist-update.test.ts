@@ -40,6 +40,7 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
+type PollWaitOptions = { timeout: number; interval: number };
 
 let ws: WebSocket;
 let port: number;
@@ -210,6 +211,33 @@ async function findConnectedNodeByDisplayName(displayName: string) {
   );
 }
 
+async function findConnectedNodeIdByDisplayName(displayName: string) {
+  const node = await findConnectedNodeByDisplayName(displayName);
+  return requireNodeId(node?.nodeId, displayName);
+}
+
+async function expectConnectedCommands(
+  displayName: string,
+  commands: string[],
+  opts: PollWaitOptions = FAST_WAIT_OPTS,
+) {
+  await expect
+    .poll(async () => {
+      const node = await findConnectedNodeByDisplayName(displayName);
+      return node?.commands?.toSorted() ?? [];
+    }, opts)
+    .toEqual(commands);
+}
+
+async function expectConnectedNodeCount(count: number) {
+  await expect
+    .poll(async () => {
+      const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(ws, "node.list", {});
+      return countConnectedNodes(listRes.payload?.nodes);
+    }, FAST_WAIT_OPTS)
+    .toBe(count);
+}
+
 async function expectPendingPairingCommands(nodeId: string, commands: string[]) {
   const pairingList = await rpcReq<{
     pending?: Array<{ nodeId?: string; commands?: string[] }>;
@@ -226,6 +254,80 @@ async function getPendingNodePairing(nodeId: string) {
   }>(ws, "node.pair.list", {});
   expect(pairingList.ok).toBe(true);
   return (pairingList.payload?.pending ?? []).find((entry) => entry.nodeId === nodeId);
+}
+
+async function approvePendingNodePairing(nodeId: string, commands: string[]) {
+  const pending = await getPendingNodePairing(nodeId);
+  expect(pending?.commands).toEqual(commands);
+  const approveRes = await rpcReq(ws, "node.pair.approve", { requestId: pending?.requestId });
+  expect(approveRes.ok).toBe(true);
+  return pending;
+}
+
+async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
+  return rpcReq(ws, "node.invoke", {
+    nodeId,
+    command: "canvas.snapshot",
+    params: { format: "png" },
+    idempotencyKey,
+  });
+}
+
+async function expectCanvasSnapshotDenied(nodeId: string, idempotencyKey: string) {
+  const res = await invokeCanvasSnapshot(nodeId, idempotencyKey);
+  expect(res.ok).toBe(false);
+  expect(res.error?.message ?? "").toContain("node command not allowed");
+}
+
+function createInvokeCapture() {
+  let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
+  const pendingPayloads: Array<{ id?: string; nodeId?: string }> = [];
+  return {
+    waitForInvoke: () => {
+      const pending = pendingPayloads.shift();
+      if (pending) {
+        return Promise.resolve(pending);
+      }
+      if (resolveInvoke) {
+        throw new Error("already waiting for a node invoke request");
+      }
+      return new Promise<{ id?: string; nodeId?: string }>((resolve) => {
+        resolveInvoke = resolve;
+      });
+    },
+    onEvent: (evt: { event?: string; payload?: unknown }) => {
+      if (evt.event === "node.invoke.request") {
+        const payload = evt.payload as { id?: string; nodeId?: string };
+        if (resolveInvoke) {
+          const resolve = resolveInvoke;
+          resolveInvoke = null;
+          resolve(payload);
+          return;
+        }
+        pendingPayloads.push(payload);
+      }
+    },
+  };
+}
+
+async function respondToInvoke(
+  client: GatewayClient,
+  payload: { id?: string; nodeId?: string },
+  fallbackNodeId: string,
+  payloadJSON: string | null = JSON.stringify({ ok: true }),
+) {
+  await client.request("node.invoke.result", {
+    id: payload.id ?? "",
+    nodeId: payload.nodeId ?? fallbackNodeId,
+    ok: true,
+    payloadJSON,
+  });
+}
+
+function createDeviceIdentityForTest(prefix: string) {
+  return loadOrCreateDeviceIdentity(
+    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`),
+  );
 }
 
 describe("gateway role enforcement", () => {
@@ -364,6 +466,7 @@ describe("gateway node command allowlist", () => {
     let systemClient: GatewayClient | undefined;
     let emptyClient: GatewayClient | undefined;
     let allowedClient: GatewayClient | undefined;
+    const invokeCapture = createInvokeCapture();
 
     try {
       const systemDeviceIdentity = loadOrCreateDeviceIdentity(
@@ -414,23 +517,13 @@ describe("gateway node command allowlist", () => {
       await emptyClient.stopAndWait();
       await waitForConnectedCount(0);
 
-      let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
-      const waitForInvoke = () =>
-        new Promise<{ id?: string; nodeId?: string }>((resolve) => {
-          resolveInvoke = resolve;
-        });
       allowedClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",
         displayName: "node-allowed",
         deviceIdentity: allowedDeviceIdentity,
-        onEvent: (evt) => {
-          if (evt.event === "node.invoke.request") {
-            const payload = evt.payload as { id?: string; nodeId?: string };
-            resolveInvoke?.(payload);
-          }
-        },
+        onEvent: invokeCapture.onEvent,
       });
       const allowedNodeId = await getConnectedNodeId();
 
@@ -440,7 +533,7 @@ describe("gateway node command allowlist", () => {
         params: { format: "png" },
         idempotencyKey: "allowlist-3",
       });
-      const payload = await waitForInvoke();
+      const payload = await invokeCapture.waitForInvoke();
       const requestId = payload?.id ?? "";
       const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
       await allowedClient.request("node.invoke.result", {
@@ -458,7 +551,7 @@ describe("gateway node command allowlist", () => {
         params: { format: "png" },
         idempotencyKey: "allowlist-null-payloadjson",
       });
-      const payloadNull = await waitForInvoke();
+      const payloadNull = await invokeCapture.waitForInvoke();
       const requestIdNull = payloadNull?.id ?? "";
       const nodeIdNull = payloadNull?.nodeId ?? "node-allowed";
       await allowedClient.request("node.invoke.result", {
@@ -490,26 +583,12 @@ describe("gateway node command allowlist", () => {
         displayName,
       });
 
-      await expect
-        .poll(async () => {
-          const node = await findConnectedNodeByDisplayName(displayName);
-          return node?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual([]);
+      await expectConnectedCommands(displayName, []);
 
-      const node = await findConnectedNodeByDisplayName(displayName);
-      const nodeId = requireNodeId(node?.nodeId, displayName);
+      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
-
-      const canvasRes = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "pending-node-canvas",
-      });
-      expect(canvasRes.ok).toBe(false);
-      expect(canvasRes.error?.message ?? "").toContain("node command not allowed");
+      await expectCanvasSnapshotDenied(nodeId, "pending-node-canvas");
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -518,11 +597,7 @@ describe("gateway node command allowlist", () => {
   test("refreshes live commands when pending node pairing is approved", async () => {
     const displayName = "node-approve-live-commands";
     let nodeClient: GatewayClient | undefined;
-    let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
-    const waitForInvoke = () =>
-      new Promise<{ id?: string; nodeId?: string }>((resolve) => {
-        resolveInvoke = resolve;
-      });
+    const invokeCapture = createInvokeCapture();
 
     try {
       nodeClient = await connectNodeClientWithPairing({
@@ -532,51 +607,22 @@ describe("gateway node command allowlist", () => {
         deviceFamily: "Mac",
         instanceId: displayName,
         displayName,
-        onEvent: (evt) => {
-          if (evt.event === "node.invoke.request") {
-            resolveInvoke?.(evt.payload as { id?: string; nodeId?: string });
-          }
-        },
+        onEvent: invokeCapture.onEvent,
       });
 
-      await expect
-        .poll(async () => {
-          const node = await findConnectedNodeByDisplayName(displayName);
-          return node?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual([]);
+      await expectConnectedCommands(displayName, []);
 
-      const node = await findConnectedNodeByDisplayName(displayName);
-      const nodeId = requireNodeId(node?.nodeId, displayName);
-      const pairingList = await rpcReq<{
-        pending?: Array<{ requestId?: string; nodeId?: string; commands?: string[] }>;
-      }>(ws, "node.pair.list", {});
-      const pending = (pairingList.payload?.pending ?? []).find((entry) => entry.nodeId === nodeId);
-      expect(pending?.commands).toEqual(["canvas.snapshot"]);
+      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
-      const approveRes = await rpcReq(ws, "node.pair.approve", { requestId: pending?.requestId });
-      expect(approveRes.ok).toBe(true);
+      await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
 
-      await expect
-        .poll(async () => {
-          const refreshed = await findConnectedNodeByDisplayName(displayName);
-          return refreshed?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual(["canvas.snapshot"]);
-
-      const invokeResP = rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "approved-live-node-command",
+      await expectConnectedCommands(displayName, ["canvas.snapshot"], {
+        timeout: 2_000,
+        interval: 10,
       });
-      const payload = await waitForInvoke();
-      await nodeClient.request("node.invoke.result", {
-        id: payload.id ?? "",
-        nodeId: payload.nodeId ?? nodeId,
-        ok: true,
-        payloadJSON: JSON.stringify({ ok: true }),
-      });
+
+      const invokeResP = invokeCanvasSnapshot(nodeId, "approved-live-node-command");
+      await respondToInvoke(nodeClient, await invokeCapture.waitForInvoke(), nodeId);
       const invokeRes = await invokeResP;
       expect(invokeRes.ok).toBe(true);
     } finally {
@@ -590,12 +636,7 @@ describe("gateway node command allowlist", () => {
     let configPath: string | undefined;
 
     try {
-      const deviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(
-          os.tmpdir(),
-          `openclaw-node-current-allowlist-${Date.now()}-${Math.random()}.json`,
-        ),
-      );
+      const deviceIdentity = createDeviceIdentityForTest("openclaw-node-current-allowlist");
       nodeClient = await connectNodeClientWithPairing({
         port,
         commands: ["canvas.snapshot"],
@@ -606,17 +647,9 @@ describe("gateway node command allowlist", () => {
         deviceIdentity,
       });
 
-      await expect
-        .poll(async () => {
-          const node = await findConnectedNodeByDisplayName(displayName);
-          return node?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual([]);
+      await expectConnectedCommands(displayName, []);
 
-      const node = await findConnectedNodeByDisplayName(displayName);
-      const nodeId = requireNodeId(node?.nodeId, displayName);
-      const pending = await getPendingNodePairing(nodeId);
-      expect(pending?.commands).toEqual(["canvas.snapshot"]);
+      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       configPath = getGatewayTestConfigPath();
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -625,24 +658,11 @@ describe("gateway node command allowlist", () => {
         JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
       );
 
-      const approveRes = await rpcReq(ws, "node.pair.approve", { requestId: pending?.requestId });
-      expect(approveRes.ok).toBe(true);
+      await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
 
-      await expect
-        .poll(async () => {
-          const refreshed = await findConnectedNodeByDisplayName(displayName);
-          return refreshed?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual([]);
+      await expectConnectedCommands(displayName, []);
 
-      const invokeRes = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "stale-allowlist-canvas-snapshot",
-      });
-      expect(invokeRes.ok).toBe(false);
-      expect(invokeRes.error?.message ?? "").toContain("node command not allowed");
+      await expectCanvasSnapshotDenied(nodeId, "stale-allowlist-canvas-snapshot");
     } finally {
       if (configPath) {
         await fs.writeFile(configPath, "{}\n");
@@ -652,11 +672,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("records only allowlisted commands in pending node pairing requests", async () => {
-    const deviceIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-allowlisted-pending-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
-    );
-    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const deviceIdentity = createDeviceIdentityForTest("openclaw-allowlisted-pending");
     const displayName = "node-pending-allowlisted-only";
     let nodeClient: GatewayClient | undefined;
 
@@ -671,19 +687,7 @@ describe("gateway node command allowlist", () => {
         deviceIdentity,
       });
 
-      const listRes = await rpcReq<{
-        nodes?: Array<{
-          nodeId: string;
-          displayName?: string;
-          connected?: boolean;
-        }>;
-      }>(ws, "node.list", {});
-      const nodeId = requireNodeId(
-        (listRes.payload?.nodes ?? []).find(
-          (node) => node.connected && node.displayName === displayName,
-        )?.nodeId,
-        displayName,
-      );
+      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
     } finally {
@@ -692,11 +696,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("rejects reconnect metadata spoof for paired node devices", async () => {
-    const deviceIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-spoof-test-device-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
-    );
-    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const deviceIdentity = createDeviceIdentityForTest("openclaw-spoof-test-device");
 
     let iosClient: GatewayClient | undefined;
     try {
@@ -710,16 +710,7 @@ describe("gateway node command allowlist", () => {
         deviceIdentity,
       });
       await iosClient.stopAndWait();
-      await expect
-        .poll(async () => {
-          const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(
-            ws,
-            "node.list",
-            {},
-          );
-          return countConnectedNodes(listRes.payload?.nodes);
-        }, FAST_WAIT_OPTS)
-        .toBe(0);
+      await expectConnectedNodeCount(0);
 
       await expect(
         connectNodeClient({
@@ -738,11 +729,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("does not promote paired desktop client id changes into host command defaults", async () => {
-    const deviceIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-client-id-promotion-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
-    );
-    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const deviceIdentity = createDeviceIdentityForTest("openclaw-client-id-promotion");
     const displayName = "node-client-id-promotion";
 
     let macClient: GatewayClient | undefined;
@@ -771,12 +758,7 @@ describe("gateway node command allowlist", () => {
         displayName,
         deviceIdentity,
       });
-      await expect
-        .poll(async () => {
-          const node = await findConnectedNodeByDisplayName(displayName);
-          return node?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual([]);
+      await expectConnectedCommands(displayName, []);
       await spoofClient.stopAndWait();
 
       secondSpoofClient = await connectNodeClient({
@@ -789,12 +771,7 @@ describe("gateway node command allowlist", () => {
         displayName,
         deviceIdentity,
       });
-      await expect
-        .poll(async () => {
-          const node = await findConnectedNodeByDisplayName(displayName);
-          return node?.commands?.toSorted() ?? [];
-        }, FAST_WAIT_OPTS)
-        .toEqual([]);
+      await expectConnectedCommands(displayName, []);
     } finally {
       await secondSpoofClient?.stopAndWait();
       await spoofClient?.stopAndWait();
@@ -803,11 +780,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("allows canonical node-host reconnect for legacy pinned platform metadata", async () => {
-    const deviceIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-node-host-platform-upgrade-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
-    );
-    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const deviceIdentity = createDeviceIdentityForTest("openclaw-node-host-platform-upgrade");
     const displayName = "node-host-platform-upgrade";
 
     let legacyClient: GatewayClient | undefined;
@@ -823,16 +796,7 @@ describe("gateway node command allowlist", () => {
         deviceIdentity,
       });
       await legacyClient.stopAndWait();
-      await expect
-        .poll(async () => {
-          const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(
-            ws,
-            "node.list",
-            {},
-          );
-          return countConnectedNodes(listRes.payload?.nodes);
-        }, FAST_WAIT_OPTS)
-        .toBe(0);
+      await expectConnectedNodeCount(0);
 
       upgradedClient = await connectNodeClient({
         port,
@@ -862,11 +826,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("filters system.run for confusable iOS metadata at connect time", async () => {
-    const deviceIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-confusable-node-greek-omicron-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
-    );
-    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const deviceIdentity = createDeviceIdentityForTest("openclaw-confusable-node-greek-omicron");
     const displayName = "node-greek-omicron-family";
 
     let client: GatewayClient | undefined;
@@ -881,18 +841,12 @@ describe("gateway node command allowlist", () => {
         deviceIdentity,
       });
 
-      await expect
-        .poll(
-          async () => {
-            const node = await findConnectedNodeByDisplayName(displayName);
-            return node?.commands?.toSorted() ?? [];
-          },
-          { timeout: 2_000, interval: 10 },
-        )
-        .toEqual(["canvas.snapshot"]);
+      await expectConnectedCommands(displayName, ["canvas.snapshot"], {
+        timeout: 2_000,
+        interval: 10,
+      });
 
-      const node = await findConnectedNodeByDisplayName(displayName);
-      const nodeId = requireNodeId(node?.nodeId, displayName);
+      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       const systemRunRes = await rpcReq(ws, "node.invoke", {
         nodeId,

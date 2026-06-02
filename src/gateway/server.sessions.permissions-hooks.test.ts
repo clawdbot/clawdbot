@@ -2,19 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
-import {
-  connectOk,
-  rpcReq,
-  testState,
-  trackConnectChallengeNonce,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionHookMocks,
@@ -24,6 +17,19 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
+type PermissionClient = NonNullable<Parameters<typeof connectWebchatClient>[0]["client"]>;
+
+async function openPermissionClient(client: Pick<PermissionClient, "id" | "mode">) {
+  return await connectWebchatClient({
+    port: getHarness().port,
+    client: {
+      id: client.id,
+      version: "1.0.0",
+      platform: "test",
+      mode: client.mode,
+    },
+  });
+}
 
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -80,21 +86,9 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
     },
   });
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", resolve);
-  });
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    scopes: ["operator.admin"],
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+    mode: GATEWAY_CLIENT_MODES.UI,
   });
 
   const patched = await rpcReq(ws, "sessions.patch", {
@@ -177,21 +171,9 @@ test("session:patch hook does not fire for webchat clients", async () => {
 
   sessionHookMocks.triggerInternalHook.mockClear();
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", resolve);
-  });
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    scopes: ["operator.admin"],
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+    mode: GATEWAY_CLIENT_MODES.UI,
   });
 
   const patched = await rpcReq(ws, "sessions.patch", {
@@ -326,21 +308,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
     },
   });
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", resolve);
-  });
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    },
-    scopes: ["operator.admin"],
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
   });
 
   const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {

@@ -102,7 +102,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  const spin = allowSpinner ? spinner() : null;
+  const spin = allowSpinner ? spinner({ output: stream }) : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {

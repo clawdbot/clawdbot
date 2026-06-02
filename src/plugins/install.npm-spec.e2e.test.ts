@@ -862,15 +862,19 @@ describe("installPluginFromNpmSpec e2e", () => {
 
     expect(result.ok).toBe(false);
     const projectRoot = pluginNpmProjectRoot(npmRoot, blockedPlugin);
-    const rootManifest = JSON.parse(
-      await fs.readFile(path.join(projectRoot, "package.json"), "utf8"),
-    ) as {
-      dependencies?: Record<string, string>;
-      openclaw?: { managedPeerDependencies?: string[] };
-    };
-    expect(rootManifest.dependencies?.[blockedPlugin]).toBeUndefined();
-    expect(rootManifest.dependencies?.[runtimePeer]).toBeUndefined();
-    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain(runtimePeer);
+    try {
+      const rootManifest = JSON.parse(
+        await fs.readFile(path.join(projectRoot, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+        openclaw?: { managedPeerDependencies?: string[] };
+      };
+      expect(rootManifest.dependencies?.[blockedPlugin]).toBeUndefined();
+      expect(rootManifest.dependencies?.[runtimePeer]).toBeUndefined();
+      expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain(runtimePeer);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
     await expect(
       fs.lstat(path.join(projectRoot, "node_modules", blockedPlugin, "package.json")),
     ).rejects.toHaveProperty("code", "ENOENT");

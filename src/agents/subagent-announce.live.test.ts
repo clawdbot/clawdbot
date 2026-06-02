@@ -190,6 +190,7 @@ function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForReques
       endedReason: run.endedReason,
       pauseReason: run.pauseReason,
       outcome: run.outcome?.status,
+      outcomeError: run.outcome?.status === "error" ? run.outcome.error : undefined,
       delivery: run.delivery?.status,
       deliveryError: run.delivery?.lastError,
       suppressAnnounceReason: run.suppressAnnounceReason,

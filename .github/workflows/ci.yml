@@ -605,7 +605,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-build-all-v3-
 
+      - name: Restore dist build cache
+        id: dist_build_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_revision }}
+
       - name: Build dist
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
@@ -613,14 +625,6 @@ jobs:
       - name: Check Control UI i18n
         if: needs.preflight.outputs.run_control_ui_i18n == 'true'
         run: pnpm ui:i18n:check
-
-      - name: Cache dist build
-        uses: actions/cache@v5
-        with:
-          path: |
-            dist/
-            dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
@@ -750,6 +754,18 @@ jobs:
             fi
           done
           exit "$failures"
+
+      - name: Save dist build cache
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
 
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
@@ -1151,7 +1167,8 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |

@@ -47,6 +47,33 @@ export function resolveCodexDynamicToolsLoading(
     : (config.codexDynamicToolsLoading ?? "searchable");
 }
 
+function normalizeCodexModelId(modelId: string | undefined): string {
+  const normalized = modelId?.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.includes("/") ? normalized.split("/").at(-1)! : normalized;
+}
+
+export function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
+  return shouldDisableCodexToolSearchForModel(modelId);
+}
+
+export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
+  return normalizeCodexModelId(modelId) === "gpt-5.4-nano";
+}
+
+export function resolveCodexDynamicToolsLoadingForModel(
+  config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
+  modelId: string | undefined,
+  env: CodexDynamicToolProfileEnv = process.env,
+): CodexDynamicToolsLoading {
+  const loading = resolveCodexDynamicToolsLoading(config, env);
+  return loading === "searchable" && shouldUseDirectCodexDynamicToolsForModel(modelId)
+    ? "direct"
+    : loading;
+}
+
 export function filterCodexDynamicTools<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,

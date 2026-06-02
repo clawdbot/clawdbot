@@ -215,6 +215,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       agent: "codex",
       mode: "persistent",
       model: "gpt-5.4",
+      sessionOptions: { model: "gpt-5.4" },
     });
   });
 
@@ -619,7 +620,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
-  it("does not normalize model startup for non-Codex ACP agents", async () => {
+  it("passes model startup through sessionOptions for non-Codex ACP agents", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -648,6 +649,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       agent: "main",
       mode: "persistent",
       model: "openai/gpt-5.5",
+      sessionOptions: { model: "openai/gpt-5.5" },
     });
   });
 
@@ -694,6 +696,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       agent: "codex",
       mode: "persistent",
       model: "gpt-5.5",
+      sessionOptions: { model: "gpt-5.5" },
     });
   });
 
@@ -728,6 +731,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "persistent",
       model: "gpt-5.4/xhigh",
       thinking: "x-high",
+      sessionOptions: { model: "gpt-5.4/xhigh" },
     });
   });
 

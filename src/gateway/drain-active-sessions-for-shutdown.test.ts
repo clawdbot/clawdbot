@@ -62,6 +62,15 @@ const requireSessionEndHookEvent = (index: number): SessionEndHookEvent => {
   return call[0];
 };
 
+function trackSessionForShutdown(params: { sessionId: string; sessionKey?: string }): void {
+  emitGatewaySessionStartPluginHook({
+    cfg,
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    sessionId: params.sessionId,
+    storePath: "/tmp/store.json",
+  });
+}
+
 beforeEach(() => {
   clearActiveSessionsForShutdownTracker();
   runSessionEndMock.mockClear();
@@ -82,18 +91,8 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("fires session_end with reason=shutdown for every tracked session and clears them", async () => {
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:other",
-      sessionId: "sess-B",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
+    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
 
     const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
 
@@ -111,12 +110,7 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("propagates reason=restart when called for a restart shutdown", async () => {
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
 
     await drainActiveSessionsForShutdown({ reason: "restart" });
 
@@ -125,18 +119,8 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("does not double-fire for a session already finalized by reset/delete/compaction", async () => {
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:other",
-      sessionId: "sess-B",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
+    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
     // Simulate sess-A being finalized through the normal reset path before
     // the gateway is shut down: the matching `session_end` is fired with
     // reason="reset" and the tracker forgets it.
@@ -163,12 +147,7 @@ describe("drainActiveSessionsForShutdown", () => {
     runSessionEndMock.mockImplementationOnce(async () => {
       await handlerLatch;
     });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
 
     let drainSettled = false;
     const drainPromise = drainActiveSessionsForShutdown({ reason: "shutdown" }).then((value) => {
@@ -196,18 +175,8 @@ describe("drainActiveSessionsForShutdown", () => {
         await new Promise<void>(() => {});
       }
     });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:other",
-      sessionId: "sess-B",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
+    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
 
     const result = await drainActiveSessionsForShutdown({
       reason: "shutdown",
@@ -224,12 +193,7 @@ describe("drainActiveSessionsForShutdown", () => {
 
   it("still records the session as forgotten when no `session_end` plugins are registered", async () => {
     hasHooksMock.mockImplementation(() => false);
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
     // session_end fires while no plugin listens: hook is not run, but the
     // shutdown tracker must still forget the session so the later drain
     // does not pick it up.

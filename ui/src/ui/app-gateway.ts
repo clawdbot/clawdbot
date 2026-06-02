@@ -32,11 +32,14 @@ import {
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
-import { restoreChatComposerState } from "./chat/composer-persistence.ts";
+import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
+import {
+  recordControlUiConnectTiming,
+  recordControlUiRpcTiming,
+} from "./control-ui-performance.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
@@ -92,7 +95,7 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
-import type { ChatSessionRefreshTarget } from "./ui-types.ts";
+import type { ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
@@ -134,12 +137,20 @@ type GatewayHost = {
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   sessionsLoading?: boolean;
+  chatMessage: string;
+  chatQueue: ChatQueueItem[];
+  chatComposerProvisionalRestore?: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
+  controlUiBootstrapReady?: Promise<void> | null;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -600,25 +611,70 @@ function normalizeStartupRefreshError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function chatQueueMatches(left: ChatQueueItem[], right: ChatQueueItem[]): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((item, index) => item === right[index]);
+}
+
+function prepareHelloScopedComposerRestore(host: GatewayHost) {
+  const provisional = host.chatComposerProvisionalRestore;
+  host.chatComposerProvisionalRestore = null;
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const provisionalSessionKey = provisional
+    ? normalizeSessionKeyForDefaults(provisional.sessionKey, snapshot?.sessionDefaults ?? {})
+    : "";
+  if (!provisional || !areUiSessionKeysEquivalent(provisionalSessionKey, host.sessionKey)) {
+    return;
+  }
+  if (
+    host.chatMessage !== provisional.chatMessage ||
+    !chatQueueMatches(host.chatQueue, provisional.chatQueue)
+  ) {
+    return;
+  }
+  if (!loadChatComposerSnapshot(host, host.sessionKey)) {
+    return;
+  }
+  // The pre-hello restore used fallback agent scope for offline recovery.
+  // Once hello resolves the real scope, clear only an untouched provisional
+  // draft so the scoped restore can replace it without clobbering user edits.
+  host.chatMessage = "";
+  host.chatQueue = [];
+}
+
 async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
+  const agentsListBeforeStartup = host.agentsList;
   const initialRefresh = refreshBeforeAgents
-    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).catch(
-        (err: unknown) => {
-          initialRefreshError = normalizeStartupRefreshError(err);
-        },
-      )
+    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0], {
+        chatStartup: true,
+      }).catch((err: unknown) => {
+        initialRefreshError = normalizeStartupRefreshError(err);
+      })
     : Promise.resolve();
   let refreshAfterAgents = !refreshBeforeAgents;
   let agentsError: Error | undefined;
+  await initialRefresh;
+  if (refreshBeforeAgents && host.agentsList && host.agentsList !== agentsListBeforeStartup) {
+    if (initialRefreshError) {
+      throw initialRefreshError;
+    }
+    return;
+  }
   try {
     await loadAgents(host as unknown as AgentsState);
     refreshAfterAgents = fallbackUnconfiguredSessionSelection(host) || refreshAfterAgents;
   } catch (err: unknown) {
     agentsError = normalizeStartupRefreshError(err);
   }
-  await initialRefresh;
   if (refreshAfterAgents) {
     await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
   } else if (initialRefreshError) {
@@ -627,6 +683,25 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   if (agentsError) {
     throw agentsError;
   }
+}
+
+async function loadAgentsThenRefreshActiveTabAfterBootstrap(
+  host: GatewayHost,
+  client: GatewayBrowserClient,
+) {
+  await host.controlUiBootstrapReady?.catch(() => undefined);
+  if (host.client !== client) {
+    return;
+  }
+  await loadAgentsThenRefreshActiveTab(host);
+}
+
+function scheduleDeferredStartupWork(callback: () => void) {
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(callback);
+    return;
+  }
+  void Promise.resolve().then(callback);
 }
 
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
@@ -676,13 +751,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.chatError = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
         preserveCurrent: true,
       });
-      void loadControlUiBootstrapConfig(
-        host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
-        { applyIdentity: false },
-      );
       // Process any pending abort from before the disconnect.
       if (host.pendingAbort) {
         const abort = host.pendingAbort;
@@ -750,15 +822,24 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
-      void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      if (host.tab !== "chat") {
-        void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
-      }
-      void loadHealthState(host as unknown as HealthState);
-      void loadAgentsThenRefreshActiveTab(host);
-      // Re-run push reconciliation now that the gateway client is available.
-      void host.reconcileWebPushState?.();
-      void verifyPendingUpdateVersion(host, client);
+      void loadAgentsThenRefreshActiveTabAfterBootstrap(host, client);
+      scheduleDeferredStartupWork(() => {
+        if (host.client !== client) {
+          return;
+        }
+        void loadControlUiBootstrapConfig(
+          host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+          { applyIdentity: false },
+        );
+        void loadAssistantIdentity(host as unknown as AssistantIdentityState);
+        if (host.tab !== "chat") {
+          void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+        }
+        void loadHealthState(host as unknown as HealthState);
+        // Re-run push reconciliation now that the gateway client is available.
+        void host.reconcileWebPushState?.();
+        void verifyPendingUpdateVersion(host, client);
+      });
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {
@@ -805,6 +886,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       recordControlUiRpcTiming(host, timing);
+    },
+    onConnectTiming: (timing) => {
+      if (host.client !== client) {
+        return;
+      }
+      recordControlUiConnectTiming(host, timing);
     },
     onGap: ({ expected, received }) => {
       if (host.client !== client) {

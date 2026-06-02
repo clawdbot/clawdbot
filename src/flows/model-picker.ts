@@ -1219,11 +1219,24 @@ export async function promptModelAllowlist(params: {
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
+  const scopedConfiguredKeys =
+    preferredProvider && !allowedKeySet
+      ? existingKeys.filter((key) => {
+          if (!isVisibleModelRef(key)) {
+            return false;
+          }
+          const entry = splitModelKey(key);
+          return entry ? matchesPreferredProvider?.(entry.provider) === true : false;
+        })
+      : [];
 
   const scopeKeys = allowedKeySet
     ? allowedKeys
     : preferredProvider
-      ? filteredCatalog.map((entry) => modelKey(entry.provider, entry.id))
+      ? normalizeModelKeys([
+          ...filteredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+          ...scopedConfiguredKeys,
+        ])
       : undefined;
   const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null;
   const selectableInitialSeeds =

@@ -45,6 +45,8 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
 
 function isBareImportSpecifier(id: string): boolean {
   if (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
     id === "@openclaw/model-catalog-core/model-catalog-types" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id.startsWith("@openclaw/media-core/") ||

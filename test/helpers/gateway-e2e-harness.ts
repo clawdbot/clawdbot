@@ -205,24 +205,43 @@ export async function waitForNodeStatus(
   nodeId: string,
   timeoutMs = GATEWAY_NODE_STATUS_TIMEOUT_MS,
 ) {
-  const client = await connectStatusClient(
-    inst,
-    Math.min(GATEWAY_CONNECT_STATUS_TIMEOUT_MS, timeoutMs),
-  );
   const deadline = Date.now() + timeoutMs;
-  try {
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    let client: GatewayClient | undefined;
     while (Date.now() < deadline) {
-      const list = await client.request("node.list", {});
-      const match = list.nodes?.find((n) => n.nodeId === nodeId);
-      if (match?.connected && match?.paired) {
-        return;
+      try {
+        client = await connectStatusClient(
+          inst,
+          Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
       }
-      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
     }
-  } finally {
-    client.stop();
+    if (!client) {
+      break;
+    }
+    try {
+      while (Date.now() < deadline) {
+        const list = await client.request("node.list", {});
+        const match = list.nodes?.find((n) => n.nodeId === nodeId);
+        if (match?.connected && match?.paired) {
+          return;
+        }
+        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+      }
+    } catch (error) {
+      lastError = error;
+      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+    } finally {
+      client.stop();
+    }
   }
-  throw new Error(`timeout waiting for node status for ${nodeId}`);
+  const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
+  throw new Error(`timeout waiting for node status for ${nodeId}${suffix}`);
 }
 
 export async function waitForChatFinalEvent(params: {

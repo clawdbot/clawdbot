@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/codex-supervisor",
-  "version": "2026.6.1",
+  "version": "2026.6.2",
   "private": true,
   "description": "OpenClaw Codex app-server fleet supervision plugin.",
   "type": "module",

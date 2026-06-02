@@ -17,6 +17,7 @@ import {
   type AcpRuntimeStatus,
   type AcpRuntimeTurn,
   type AcpRuntimeTurnResult,
+  type SessionAgentOptions,
 } from "acpx/runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
@@ -49,6 +50,8 @@ type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
+type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
+type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
@@ -547,6 +550,16 @@ function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
     : override.model;
 }
 
+function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
+  const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
+  const model = input.model?.trim() || existingOptions?.model;
+  const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
+  return {
+    ...input,
+    ...(sessionOptions ? { sessionOptions } : {}),
+  } as AcpxDelegateEnsureInput;
+}
+
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -942,7 +955,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(input),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(input)),
           }),
       });
     }
@@ -962,7 +975,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(normalizedInput),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
           }),
         ),
     });

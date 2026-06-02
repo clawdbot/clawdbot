@@ -138,6 +138,7 @@ export function collectInstalledPackageErrors(params: {
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
+  errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -312,6 +313,34 @@ export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string):
   }
 
   return [];
+}
+
+export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+  const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
+  const errors: string[] = [];
+  const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];
+
+  if (!existsSync(pluginSdkDistRoot)) {
+    return [];
+  }
+
+  for (const entry of readdirSync(pluginSdkDistRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+
+    const relativePath = `dist/plugin-sdk/${entry.name}`;
+    const content = readFileSync(join(pluginSdkDistRoot, entry.name), "utf8");
+    for (const specifier of forbiddenPrivateWorkspaceSpecifiers) {
+      if (content.includes(`"${specifier}`) || content.includes(`'${specifier}`)) {
+        errors.push(
+          `installed package plugin SDK declaration '${relativePath}' references private workspace package ${specifier}.`,
+        );
+      }
+    }
+  }
+
+  return errors;
 }
 
 function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {

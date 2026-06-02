@@ -578,4 +578,51 @@ describe("compileMemoryWikiVault", () => {
       fs.readFile(path.join(rootDir, "concepts", "gamma.md"), "utf8"),
     ).resolves.not.toContain("### Referenced By");
   });
+
+  it("retries transient page reads during compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "alpha.md");
+
+    await fs.writeFile(
+      sourcePath,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    const realReadFile = fs.readFile;
+    let attempts = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
+        const [target, options] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === sourcePath &&
+          options === "utf8" &&
+          attempts++ === 0
+        ) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, read",
+          ) as NodeJS.ErrnoException;
+          err.code = "EDEADLK";
+          err.errno = -11;
+          throw err;
+        }
+        return await realReadFile(target, options as never);
+      });
+
+    try {
+      const result = await compileMemoryWikiVault(config);
+      expect(result.pageCounts.source).toBe(1);
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
 });

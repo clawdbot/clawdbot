@@ -1,22 +1,22 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.6.1",
+  "version": "2026.6.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/discord",
-      "version": "2026.6.1",
+      "version": "2026.6.2",
       "dependencies": {
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.48",
-        "libopus-wasm": "0.1.0",
+        "libopus-wasm": "0.2.0",
         "typebox": "1.1.39",
         "undici": "8.3.0",
         "ws": "8.21.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.1"
+        "openclaw": ">=2026.6.2"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -352,9 +352,9 @@
       ]
     },
     "node_modules/libopus-wasm": {
-      "version": "0.1.0",
-      "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.1.0.tgz",
-      "integrity": "sha512-/aurGcAVgy0GcBEUzFaX9pm9qv7zYcy8W5hBXFiK+cyqOXAX4lOS6rlFogkY9CcSIajhjnuXyixsbmziSHCDMQ==",
+      "version": "0.2.0",
+      "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.2.0.tgz",
+      "integrity": "sha512-x/2Gu1/C6L3IICY09zyfp984AWiOYjn53u4WfdY3yh+3KTzMN8Xkm77q3lenWMVIk5SnSzjGEkQT+VQMFHLBHQ==",
       "license": "MIT",
       "engines": {
         "node": ">=20"

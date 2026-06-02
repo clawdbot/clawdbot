@@ -85,6 +85,7 @@ class InvokeDispatcher(
   private val smsTelephonyAvailable: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
   private val photosAvailable: () -> Boolean,
+  private val installedAppsSharingEnabled: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
@@ -193,6 +194,7 @@ class InvokeDispatcher(
       OpenClawDeviceCommand.Info.rawValue -> deviceHandler.handleDeviceInfo(paramsJson)
       OpenClawDeviceCommand.Permissions.rawValue -> deviceHandler.handleDevicePermissions(paramsJson)
       OpenClawDeviceCommand.Health.rawValue -> deviceHandler.handleDeviceHealth(paramsJson)
+      OpenClawDeviceCommand.Apps.rawValue -> deviceHandler.handleDeviceApps(paramsJson)
 
       // Notifications command
       OpenClawNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
@@ -346,6 +348,15 @@ class InvokeDispatcher(
           GatewaySession.InvokeResult.error(
             code = "PHOTOS_UNAVAILABLE",
             message = "PHOTOS_UNAVAILABLE: photos not available on this build",
+          )
+        }
+      InvokeCommandAvailability.InstalledAppsSharingEnabled ->
+        if (installedAppsSharingEnabled()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "INSTALLED_APPS_SHARING_DISABLED",
+            message = "INSTALLED_APPS_SHARING_DISABLED: enable Installed Apps in Settings",
           )
         }
       InvokeCommandAvailability.DebugBuild ->

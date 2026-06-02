@@ -409,18 +409,17 @@ describe("check-extension-package-tsc-boundary", () => {
   }, 30_000);
 
   it("hard-kills timed out async node steps", async () => {
-    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    const processSignals: Array<[number, NodeJS.Signals | number | undefined]> = [];
     const child = new EventEmitter() as EventEmitter & {
       kill: (signal?: NodeJS.Signals | number) => boolean;
+      pid: number;
       stderr: ReturnType<typeof createMockPipe>;
       stdout: ReturnType<typeof createMockPipe>;
     };
+    child.pid = 1234;
     child.stdout = createMockPipe();
     child.stderr = createMockPipe();
-    child.kill = (signal) => {
-      signals.push(signal);
-      return true;
-    };
+    child.kill = () => true;
 
     const failure = await runNodeStepAsync(
       "hung-plugin",
@@ -432,6 +431,11 @@ describe("check-extension-package-tsc-boundary", () => {
           expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
           return child;
         },
+        killProcess(pid: number, signal?: NodeJS.Signals | number) {
+          processSignals.push([pid, signal]);
+          return true;
+        },
+        platform: "darwin",
       },
     ).then(
       () => {
@@ -440,7 +444,7 @@ describe("check-extension-package-tsc-boundary", () => {
       (error: unknown) => error,
     );
 
-    expect(signals).toEqual(["SIGKILL"]);
+    expect(processSignals).toEqual([[-1234, "SIGKILL"]]);
     expect(failure).toBeInstanceOf(Error);
     if (!(failure instanceof Error)) {
       throw new Error("expected timeout failure to reject with an Error");

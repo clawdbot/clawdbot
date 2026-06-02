@@ -7,6 +7,7 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -131,6 +132,7 @@ function buildPreparedContext(params?: {
   openClawHistoryPrompt?: string;
   provider?: string;
   model?: string;
+  allowEmptyAssistantReplyAsSilent?: boolean;
 }): PreparedCliRunContext {
   const provider = params?.provider ?? "codex-cli";
   const model = params?.model ?? "gpt-5.4";
@@ -156,6 +158,7 @@ function buildPreparedContext(params?: {
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
       lane: params?.lane,
+      allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -1709,6 +1712,41 @@ describe("runCliAgent reliability", () => {
     await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
       "CLI backend returned an empty response.",
     );
+    expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+  });
+
+  it("returns silent payload for empty CLI output when silence is allowed", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "   ",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        allowEmptyAssistantReplyAsSilent: true,
+      }),
+    );
+
+    expect(result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 

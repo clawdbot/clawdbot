@@ -17,9 +17,11 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
+import { formatAuthProfileFailureMessage } from "../../agents/auth-profiles/failure-copy.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
+  classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -38,9 +40,11 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { isFailoverError } from "../../agents/failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
@@ -632,6 +636,8 @@ type ExternalRunFailureReply = {
   isGenericRunnerFailure: boolean;
 };
 
+type ExternalRunFailureInput = string | { message: string; error?: unknown };
+
 function isNonDirectConversationContext(ctx: TemplateContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   return chatType === "group" || chatType === "channel";
@@ -732,10 +738,14 @@ function buildCliBackendTimeoutFailureText(message: string): string | null {
   );
 }
 
-function buildMissingApiKeyFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
-  const provider = providerMatch?.[1]?.trim().toLowerCase();
+function buildMissingApiKeyFailureText(input: { message: string; error?: unknown }): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(input.message);
+  const provider = isMissingProviderAuthError(input.error)
+    ? input.error.provider.trim().toLowerCase()
+    : normalizedMessage
+        .match(/No API key found for provider "([^"]+)"/u)?.[1]
+        ?.trim()
+        .toLowerCase();
   if (!provider) {
     return null;
   }
@@ -749,6 +759,18 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
   }
   return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
+function buildAuthProfileFailoverFailureText(error: unknown): string | null {
+  if (!isFailoverError(error) || !error.provider || !error.authProfileFailure) {
+    return null;
+  }
+  return formatAuthProfileFailureMessage({
+    reason: error.reason,
+    provider: error.provider,
+    allInCooldown: error.authProfileFailure.allInCooldown,
+    cause: error.cause,
+  });
 }
 
 function formatForwardedExternalRunFailureText(message: string): string {
@@ -768,10 +790,16 @@ function formatForwardedExternalRunFailureText(message: string): string {
 }
 
 function buildExternalRunFailureReply(
-  message: string,
+  input: ExternalRunFailureInput,
   options?: { includeDetails?: boolean; isHeartbeat?: boolean },
 ): ExternalRunFailureReply {
+  const message = typeof input === "string" ? input : input.message;
+  const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
+  if (authProfileFailoverFailure) {
+    return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
   const providerRequestError = classifyProviderRequestError(normalizedMessage);
   if (providerRequestError) {
     return {
@@ -779,11 +807,15 @@ function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
-  const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
+  const missingApiKeyFailure = buildMissingApiKeyFailureText({
+    message: normalizedMessage,
+    error,
+  });
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
     if (oauthRefreshFailure.reason) {
@@ -889,9 +921,12 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     });
   }
 
-  const externalRunFailureReply = buildExternalRunFailureReply(message, {
-    includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
-  });
+  const externalRunFailureReply = buildExternalRunFailureReply(
+    { message, error: params.err },
+    {
+      includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+    },
+  );
   if (externalRunFailureReply.isGenericRunnerFailure) {
     return undefined;
   }
@@ -2861,10 +2896,13 @@ export async function runAgentTurnWithFallback(params: {
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi
-          ? buildExternalRunFailureReply(message, {
-              includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
-              isHeartbeat: params.isHeartbeat,
-            })
+          ? buildExternalRunFailureReply(
+              { message, error: err },
+              {
+                includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+                isHeartbeat: params.isHeartbeat,
+              },
+            )
           : undefined;
       const genericFallbackText = params.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT

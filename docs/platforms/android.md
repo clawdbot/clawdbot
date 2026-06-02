@@ -219,8 +219,9 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Voice wake remains disabled in the Android UX/runtime.
-- Additional Android command families (availability depends on device + permissions):
+- Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
+  - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default.
   - `notifications.list`, `notifications.actions` (see [Notification forwarding](#notification-forwarding) below)
   - `photos.latest`
   - `contacts.search`, `contacts.add`

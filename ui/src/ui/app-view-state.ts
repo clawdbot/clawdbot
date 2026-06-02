@@ -11,6 +11,7 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -552,4 +553,4 @@ export type AppViewState = {
     handleWebPushSubscribe: () => Promise<void>;
     handleWebPushUnsubscribe: () => Promise<void>;
     handleWebPushTest: () => Promise<void>;
-  };
+  } & SkillWorkshopState;

@@ -145,6 +145,64 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
   },
 ];
 
+const NODE_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+  version: "1.0.0",
+  platform: "ios",
+  mode: GATEWAY_CLIENT_MODES.NODE,
+};
+
+const remoteUnauthModels = (): AgentCatalogFixtureEntry[] => [
+  { id: "remote-a", provider: "unauth-a", name: "Remote A" },
+  { id: "remote-b", provider: "unauth-b", name: "Remote B" },
+];
+
+const minimaxProviderConfig = () => ({
+  baseUrl: "https://minimax.example.com/v1",
+  models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+});
+
+type ConfiguredProviderModelFixture = {
+  provider: string;
+  modelId: string;
+  name: string;
+  alias: string;
+  contextWindow: number;
+};
+
+const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) => ({
+  agents: {
+    defaults: {
+      model: { primary: `${params.provider}/${params.modelId}` },
+      models: {
+        [`${params.provider}/${params.modelId}`]: { alias: params.alias },
+      },
+    },
+  },
+  models: {
+    providers: {
+      [params.provider]: {
+        baseUrl: `https://${params.provider}.example.com`,
+        models: [
+          {
+            id: params.modelId,
+            name: params.name,
+            contextWindow: params.contextWindow,
+          },
+        ],
+      },
+    },
+  },
+});
+
+const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture) => ({
+  id: params.modelId,
+  name: params.name,
+  alias: params.alias,
+  provider: params.provider,
+  contextWindow: params.contextWindow,
+});
+
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
     withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
@@ -227,6 +285,54 @@ describe("gateway server models + voicewake", () => {
     );
   };
 
+  type NodeGatewayEvent = {
+    type: "event";
+    event: string;
+    payload?: Record<string, unknown> | null;
+  };
+
+  const withConnectedNodeEvent = async <T>(
+    eventName: string,
+    run: (nodeWs: WebSocket, firstEvent: NodeGatewayEvent) => Promise<T>,
+  ): Promise<T> =>
+    withTempHome(async () => {
+      const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      trackConnectChallengeNonce(nodeWs);
+      try {
+        await new Promise<void>((resolve) => {
+          nodeWs.once("open", resolve);
+        });
+        const firstEventP = onceMessage<NodeGatewayEvent>(
+          nodeWs,
+          (o) => o.type === "event" && o.event === eventName,
+        );
+        await connectOk(nodeWs, {
+          role: "node",
+          client: NODE_CLIENT,
+        });
+        return await run(nodeWs, await firstEventP);
+      } finally {
+        nodeWs.close();
+      }
+    });
+
+  const expectSingleModel = (
+    models: ModelCatalogRpcEntry[],
+    expected: Partial<ModelCatalogRpcEntry> &
+      Pick<ModelCatalogRpcEntry, "id" | "name" | "provider">,
+  ) => {
+    expect(models).toHaveLength(1);
+    expect(models[0]?.id).toBe(expected.id);
+    expect(models[0]?.name).toBe(expected.name);
+    expect(models[0]?.provider).toBe(expected.provider);
+    if (expected.alias !== undefined) {
+      expect(models[0]?.alias).toBe(expected.alias);
+    }
+    if (expected.contextWindow !== undefined) {
+      expect(models[0]?.contextWindow).toBe(expected.contextWindow);
+    }
+  };
+
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 20_000 },
@@ -268,27 +374,7 @@ describe("gateway server models + voicewake", () => {
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
-    await withTempHome(async () => {
-      const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-      trackConnectChallengeNonce(nodeWs);
-      await new Promise<void>((resolve) => {
-        nodeWs.once("open", resolve);
-      });
-      const firstEventP = onceMessage(
-        nodeWs,
-        (o) => o.type === "event" && o.event === "voicewake.changed",
-      );
-      await connectOk(nodeWs, {
-        role: "node",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          version: "1.0.0",
-          platform: "ios",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-      });
-
-      const first = (await firstEventP) as { event?: string; payload?: unknown };
+    await withConnectedNodeEvent("voicewake.changed", async (nodeWs, first) => {
       expect(first.event).toBe("voicewake.changed");
       expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
         "openclaw",
@@ -311,8 +397,6 @@ describe("gateway server models + voicewake", () => {
         "openclaw",
         "computer",
       ]);
-
-      nodeWs.close();
     });
   });
 
@@ -423,28 +507,7 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("pushes voicewake.routing.changed to nodes on connect and on updates", async () => {
-    await withTempHome(async () => {
-      const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-      trackConnectChallengeNonce(nodeWs);
-      await new Promise<void>((resolve) => {
-        nodeWs.once("open", resolve);
-      });
-      const firstEventP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: Record<string, unknown> | null;
-      }>(nodeWs, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
-      await connectOk(nodeWs, {
-        role: "node",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          version: "1.0.0",
-          platform: "ios",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-      });
-
-      const first = await firstEventP;
+    await withConnectedNodeEvent("voicewake.routing.changed", async (nodeWs, first) => {
       expect(first.event).toBe("voicewake.routing.changed");
       expect(
         (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
@@ -469,8 +532,6 @@ describe("gateway server models + voicewake", () => {
       expect(
         (broadcast.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
       ).toEqual([{ trigger: "hello", target: { sessionKey: "agent:main:main" } }]);
-
-      nodeWs.close();
     });
   });
 
@@ -494,25 +555,19 @@ describe("gateway server models + voicewake", () => {
       {
         models: {
           providers: {
-            minimax: {
-              baseUrl: "https://minimax.example.com/v1",
-              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
-            },
+            minimax: minimaxProviderConfig(),
           },
         },
       },
       async () => {
-        await setAgentCatalog([
-          { id: "remote-a", provider: "unauth-a", name: "Remote A" },
-          { id: "remote-b", provider: "unauth-b", name: "Remote B" },
-        ]);
+        await setAgentCatalog(remoteUnauthModels());
         const res = await listModels();
         expect(res.ok).toBe(true);
-        const models = res.payload?.models ?? [];
-        expect(models).toHaveLength(1);
-        expect(models[0]?.id).toBe("MiniMax-M2.7-highspeed");
-        expect(models[0]?.name).toBe("MiniMax M2.7 Highspeed");
-        expect(models[0]?.provider).toBe("minimax");
+        expectSingleModel(res.payload?.models ?? [], {
+          id: "MiniMax-M2.7-highspeed",
+          name: "MiniMax M2.7 Highspeed",
+          provider: "minimax",
+        });
       },
     );
   });
@@ -546,18 +601,12 @@ describe("gateway server models + voicewake", () => {
               baseUrl: "https://zhipu.example.com/v1",
               models: [{ id: "glm-4.5-air", name: "GLM 4.5 Air", reasoning: true }],
             },
-            minimax: {
-              baseUrl: "https://minimax.example.com/v1",
-              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
-            },
+            minimax: minimaxProviderConfig(),
           },
         },
       },
       async () => {
-        await setAgentCatalog([
-          { id: "remote-a", provider: "unauth-a", name: "Remote A" },
-          { id: "remote-b", provider: "unauth-b", name: "Remote B" },
-        ]);
+        await setAgentCatalog(remoteUnauthModels());
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
         const models = res.payload?.models ?? [];
@@ -586,10 +635,7 @@ describe("gateway server models + voicewake", () => {
         },
         models: {
           providers: {
-            minimax: {
-              baseUrl: "https://minimax.example.com/v1",
-              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
-            },
+            minimax: minimaxProviderConfig(),
           },
         },
       },
@@ -667,86 +713,34 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("models.list applies configured metadata and alias to synthetic allowlist entries", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
-            models: {
-              "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
-            },
-          },
-        },
-        models: {
-          providers: {
-            nvidia: {
-              baseUrl: "https://nvidia.example.com",
-              models: [
-                {
-                  id: "moonshotai/kimi-k2.5",
-                  name: "Kimi K2.5 (Configured)",
-                  contextWindow: 32_000,
-                },
-              ],
-            },
-          },
-        },
+  test.each([
+    {
+      name: "applies configured metadata and alias to synthetic allowlist entries",
+      fixture: {
+        provider: "nvidia",
+        modelId: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5 (Configured)",
+        alias: "Kimi K2.5 (NVIDIA)",
+        contextWindow: 32_000,
       },
-      async () => {
-        await seedAgentModelCatalog();
-        const res = await listModels();
-        expect(res.ok).toBe(true);
-        const models = res.payload?.models ?? [];
-        expect(models).toHaveLength(1);
-        expect(models[0]?.id).toBe("moonshotai/kimi-k2.5");
-        expect(models[0]?.name).toBe("Kimi K2.5 (Configured)");
-        expect(models[0]?.alias).toBe("Kimi K2.5 (NVIDIA)");
-        expect(models[0]?.provider).toBe("nvidia");
-        expect(models[0]?.contextWindow).toBe(32_000);
+    },
+    {
+      name: "prefers configured provider metadata over discovered entries",
+      fixture: {
+        provider: "openai",
+        modelId: "gpt-test-z",
+        name: "Configured GPT Test Z",
+        alias: "GPT Test Z Alias",
+        contextWindow: 64_000,
       },
-    );
-  });
-
-  test("models.list prefers configured provider metadata over discovered entries", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-test-z" },
-            models: {
-              "openai/gpt-test-z": { alias: "GPT Test Z Alias" },
-            },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://openai.example.com",
-              models: [
-                {
-                  id: "gpt-test-z",
-                  name: "Configured GPT Test Z",
-                  contextWindow: 64_000,
-                },
-              ],
-            },
-          },
-        },
-      },
-      async () => {
-        await seedAgentModelCatalog();
-        const res = await listModels();
-        expect(res.ok).toBe(true);
-        const models = res.payload?.models ?? [];
-        expect(models).toHaveLength(1);
-        expect(models[0]?.id).toBe("gpt-test-z");
-        expect(models[0]?.name).toBe("Configured GPT Test Z");
-        expect(models[0]?.alias).toBe("GPT Test Z Alias");
-        expect(models[0]?.provider).toBe("openai");
-        expect(models[0]?.contextWindow).toBe(64_000);
-      },
-    );
+    },
+  ])("models.list $name", async ({ fixture }) => {
+    await withModelsConfig(configuredProviderModelConfig(fixture), async () => {
+      await seedAgentModelCatalog();
+      const res = await listModels();
+      expect(res.ok).toBe(true);
+      expectSingleModel(res.payload?.models ?? [], expectedConfiguredProviderModel(fixture));
+    });
   });
 
   test("models.list rejects unknown params", async () => {

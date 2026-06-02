@@ -7,6 +7,7 @@ import {
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
 } from "../../auth-profiles.js";
+import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -15,8 +16,8 @@ import {
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
 import {
-  formatMissingAuthError,
   getApiKeyForModel,
+  MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
 import {
@@ -324,22 +325,32 @@ export function createEmbeddedRunAuthController(params: {
   }): never => {
     const provider = params.getProvider();
     const modelId = params.getModelId();
-    const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
-    const message =
+    const messageForReason =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
-      fallbackMessage;
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
-      message,
+      message: messageForReason,
       profileIds: params.profileCandidates,
     });
+    const message =
+      failoverParams.message?.trim() ||
+      formatAuthProfileFailureMessage({
+        reason,
+        provider,
+        allInCooldown: failoverParams.allInCooldown,
+        cause: failoverParams.error,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      });
     if (params.fallbackConfigured) {
       throw new FailoverError(message, {
         reason,
         provider,
         model: modelId,
         status: resolveFailoverStatus(reason),
+        authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });
     }
@@ -368,7 +379,7 @@ export function createEmbeddedRunAuthController(params: {
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
         const runtimeModel = params.getRuntimeModel();
-        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
+        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
       }
       // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
       // key is available but the SDK default credential chain can resolve

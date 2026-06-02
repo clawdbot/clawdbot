@@ -142,6 +142,26 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.secretInputMode).toBe("ref");
   });
 
+  it("stores custom provider OpenAI Responses compatibility", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-5.4",
+        customCompatibility: "openai-responses",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.api).toBe("openai-responses");
+  });
+
   it("marks non-interactive custom provider models as image-capable when requested", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;

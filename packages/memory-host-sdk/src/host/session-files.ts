@@ -20,6 +20,7 @@ import {
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -565,7 +566,12 @@ export async function buildSessionEntry(
         messageTimestampsMs: [],
       };
     }
-    const raw = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    const raw = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read session transcript ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];

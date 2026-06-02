@@ -2,7 +2,9 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
+  SkillWorkshopMode,
   SkillWorkshopProposal,
+  SkillWorkshopStatusFilter,
 } from "../views/skill-workshop.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
@@ -84,6 +86,12 @@ export type SkillWorkshopState = {
   skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   skillWorkshopRevisionKey: string | null;
   skillWorkshopRevisionDraft: string;
+  skillWorkshopStatusFilter: SkillWorkshopStatusFilter;
+  skillWorkshopQuery: string;
+  skillWorkshopFilePreviewKey: string | null;
+  skillWorkshopFilePreviewQuery: string;
+  skillWorkshopQueueWidth: number;
+  skillWorkshopMode: SkillWorkshopMode;
 };
 
 function getErrorMessage(err: unknown): string {

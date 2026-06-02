@@ -18,6 +18,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { asRecord } from "./dreaming-shared.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -107,6 +108,28 @@ async function runMemorySearchToolWithDeadline<T>(params: {
       clearTimeout(timer);
     }
   }
+}
+
+const PAUSED_MEMORY_INDEX_WARNING =
+  "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.";
+const PAUSED_MEMORY_INDEX_ACTION =
+  "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
+
+function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
+  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  if (indexIdentity?.status !== "mismatched" && indexIdentity?.status !== "missing") {
+    return undefined;
+  }
+  return typeof indexIdentity.reason === "string" && indexIdentity.reason.trim()
+    ? indexIdentity.reason.trim()
+    : "memory index identity is missing or mismatched";
+}
+
+function buildPausedMemoryIndexUnavailableResult(reason: string) {
+  return buildMemorySearchUnavailableResult(reason, {
+    warning: PAUSED_MEMORY_INDEX_WARNING,
+    action: PAUSED_MEMORY_INDEX_ACTION,
+  });
 }
 
 function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
@@ -316,7 +339,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable; you must tell the user and include the warning/action guidance.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
@@ -400,6 +423,7 @@ export function createMemorySearchTool(options: {
             let model: string | undefined;
             let fallback: unknown;
             let searchMode: string | undefined;
+            let pausedIndexIdentityReason: string | undefined;
             let searchDebug:
               | {
                   backend: string;
@@ -447,9 +471,21 @@ export function createMemorySearchTool(options: {
                   activeMemory = refreshed;
                   rawResults = await activeMemory.manager.search(query, searchOptions);
                 }
+                const statusBeforeRetry = activeMemory.manager.status();
+                pausedIndexIdentityReason =
+                  resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                if (pausedIndexIdentityReason) {
+                  return;
+                }
                 if (rawResults.length === 0 && activeMemory.manager.sync) {
                   await activeMemory.manager.sync({ reason: "search", force: true });
                   rawResults = await activeMemory.manager.search(query, searchOptions);
+                  pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                    activeMemory.manager.status(),
+                  );
+                  if (pausedIndexIdentityReason) {
+                    return;
+                  }
                 }
                 rawResults = await filterMemorySearchHitsBySessionVisibility({
                   cfg,
@@ -500,6 +536,11 @@ export function createMemorySearchTool(options: {
                   hits: rawResults.length,
                 };
               });
+              if (pausedIndexIdentityReason) {
+                return jsonResult(
+                  buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
+                );
+              }
             }
             const supplementResults = shouldQuerySupplements
               ? await runUnavailablePhase(

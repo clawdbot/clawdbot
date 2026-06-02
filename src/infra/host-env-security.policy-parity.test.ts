@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -14,23 +15,37 @@ function parseSwiftStringArray(source: string, marker: string): string[] {
   return Array.from(match[1].matchAll(/"([^"]+)"/g), (m) => m[1]);
 }
 
+function readRepoFile(repoRoot: string, relativePath: string): string {
+  try {
+    return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  // Sparse worktrees may omit app sources, but the tracked blob is still the parity source.
+  return execFileSync("git", ["show", `HEAD:${relativePath}`], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+}
+
 describe("host env security policy parity", () => {
   it("keeps generated macOS host env policy in sync with shared JSON policy", () => {
     const repoRoot = process.cwd();
     const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
-    const generatedSwiftPath = path.join(
-      repoRoot,
-      "apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift",
-    );
-    const sanitizerSwiftPath = path.join(
-      repoRoot,
-      "apps/macos/Sources/OpenClaw/HostEnvSanitizer.swift",
-    );
 
     const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
     const policy = loadHostEnvSecurityPolicy(rawPolicy);
-    const generatedSource = fs.readFileSync(generatedSwiftPath, "utf8");
-    const sanitizerSource = fs.readFileSync(sanitizerSwiftPath, "utf8");
+    const generatedSource = readRepoFile(
+      repoRoot,
+      "apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift",
+    );
+    const sanitizerSource = readRepoFile(
+      repoRoot,
+      "apps/macos/Sources/OpenClaw/HostEnvSanitizer.swift",
+    );
 
     const swiftBlockedKeys = parseSwiftStringArray(generatedSource, "static let blockedKeys");
     const swiftBlockedInheritedKeys = parseSwiftStringArray(

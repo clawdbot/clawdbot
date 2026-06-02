@@ -534,9 +534,20 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
-function resolveAnthropicMessagesUrl(baseUrl?: string): string {
-  const normalized = (baseUrl?.trim() || "https://api.anthropic.com").replace(/\/+$/, "");
+const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+
+export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+  return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
+}
+
+export function resolveAnthropicMessagesUrl(baseUrl?: string): string {
+  const normalized = resolveAnthropicBaseUrl(baseUrl).replace(/\/+$/, "");
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
+}
+
+function withEffectiveAnthropicBaseUrl(model: AnthropicTransportModel): AnthropicTransportModel {
+  const baseUrl = resolveAnthropicBaseUrl(model.baseUrl);
+  return baseUrl === model.baseUrl ? model : { ...model, baseUrl };
 }
 
 function createAbortError(signal: AbortSignal): Error {
@@ -938,7 +949,7 @@ function resolveAnthropicTransportOptions(
 
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
-    const model = rawModel as AnthropicTransportModel;
+    const model = withEffectiveAnthropicBaseUrl(rawModel as AnthropicTransportModel);
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {

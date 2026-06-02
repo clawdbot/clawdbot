@@ -4,7 +4,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { materializeBundleMcpToolsForRun } from "../../dist/agents/agent-bundle-mcp-materialize.js";
 import {
@@ -15,6 +14,7 @@ import { applyFinalEffectiveToolPolicy } from "../../dist/agents/embedded-agent-
 import { splitSdkTools } from "../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
 import { getPluginToolMeta } from "../../dist/plugins/tools.js";
+import { createE2eStateDir } from "./lib/temp-state-dir.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -65,9 +65,9 @@ function applyPolicy(params: {
 }
 
 async function main() {
-  const stateDir =
-    process.env.OPENCLAW_STATE_DIR?.trim() ||
-    path.join(os.tmpdir(), `openclaw-agent-bundle-mcp-${process.pid}`);
+  const tempState = await createE2eStateDir("openclaw-agent-bundle-mcp-");
+  tempState.registerExitCleanup();
+  const stateDir = tempState.stateDir;
   const probeDir = path.join(stateDir, "agent-bundle-mcp-tools");
   const serverPath = path.join(probeDir, "probe-server.mjs");
   await fs.mkdir(probeDir, { recursive: true });

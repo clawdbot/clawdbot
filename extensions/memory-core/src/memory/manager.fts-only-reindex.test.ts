@@ -15,6 +15,7 @@ vi.mock("./embeddings.js", () => ({
     provider: null,
     providerUnavailableReason: "No embeddings provider available.",
   }),
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 

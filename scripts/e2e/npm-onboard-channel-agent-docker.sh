@@ -72,7 +72,8 @@ CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:?missing OPENCLAW_NPM_ONBOARD_CHANNEL}"
 PORT="18789"
 MOCK_PORT="44080"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
-MOCK_REQUEST_LOG="/tmp/openclaw-mock-openai-requests.jsonl"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
 
@@ -104,6 +105,7 @@ esac
 
 cleanup() {
   openclaw_e2e_stop_process "${mock_pid:-}"
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 

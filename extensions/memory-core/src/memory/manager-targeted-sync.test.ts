@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clearMemorySyncedSessionFiles,
+  markMemoryTargetSessionFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 
@@ -18,61 +19,48 @@ describe("memory targeted session sync", () => {
     expect(sessionsDirty).toBe(true);
   });
 
-  it("runs a full reindex after fallback activates during targeted sync", async () => {
-    const activateFallbackProvider = vi.fn(async () => true);
-    const runSafeReindex = vi.fn(async () => {});
-    const runUnsafeReindex = vi.fn(async () => {});
+  it("marks target sessions dirty while identity sync is paused", () => {
+    const targetSessionPath = "/tmp/paused-target.jsonl";
+    const sessionsDirtyFiles = new Set(["/tmp/other-dirty.jsonl"]);
 
-    await runMemoryTargetedSessionSync({
+    const sessionsDirty = markMemoryTargetSessionFilesDirty({
+      sessionsDirtyFiles,
+      targetSessionFiles: [targetSessionPath],
+    });
+
+    expect(sessionsDirty).toBe(true);
+    expect(sessionsDirtyFiles.has(targetSessionPath)).toBe(true);
+    expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
+  });
+
+  it("leaves targeted sessions dirty after fallback activates during targeted sync", async () => {
+    const activateFallbackProvider = vi.fn(async () => true);
+    const syncSessionFiles = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("embedding backend failed"))
+      .mockResolvedValueOnce(undefined);
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-fallback.jsonl", "/tmp/other-dirty.jsonl"]);
+
+    const result = await runMemoryTargetedSessionSync({
       hasSessionSource: true,
       targetSessionFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
       reason: "post-compaction",
       progress: undefined,
-      useUnsafeReindex: false,
-      sessionsDirtyFiles: new Set(),
-      syncSessionFiles: async () => {
-        throw new Error("embedding backend failed");
-      },
+      sessionsDirtyFiles,
+      syncSessionFiles,
       shouldFallbackOnError: () => true,
       activateFallbackProvider,
-      runSafeReindex,
-      runUnsafeReindex,
     });
 
     expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-    expect(runSafeReindex).toHaveBeenCalledWith({
-      reason: "post-compaction",
-      force: true,
+    expect(syncSessionFiles).toHaveBeenCalledTimes(1);
+    expect(syncSessionFiles).toHaveBeenCalledWith({
+      needsFullReindex: false,
+      targetSessionFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });
-    expect(runUnsafeReindex).not.toHaveBeenCalled();
-  });
-
-  it("uses the unsafe reindex path when enabled", async () => {
-    const runSafeReindex = vi.fn(async () => {});
-    const runUnsafeReindex = vi.fn(async () => {});
-
-    await runMemoryTargetedSessionSync({
-      hasSessionSource: true,
-      targetSessionFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
-      reason: "post-compaction",
-      progress: undefined,
-      useUnsafeReindex: true,
-      sessionsDirtyFiles: new Set(),
-      syncSessionFiles: async () => {
-        throw new Error("embedding backend failed");
-      },
-      shouldFallbackOnError: () => true,
-      activateFallbackProvider: async () => true,
-      runSafeReindex,
-      runUnsafeReindex,
-    });
-
-    expect(runUnsafeReindex).toHaveBeenCalledWith({
-      reason: "post-compaction",
-      force: true,
-      progress: undefined,
-    });
-    expect(runSafeReindex).not.toHaveBeenCalled();
+    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
+    expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
 });

@@ -527,6 +527,7 @@ export async function steerControlledSubagentRun(params: {
     typeof targetSession.entry?.sessionId === "string" && targetSession.entry.sessionId.trim()
       ? targetSession.entry.sessionId.trim()
       : undefined;
+  const restartSessionId = sessionId ? crypto.randomUUID() : undefined;
 
   if (sessionId) {
     const runtime = await resolveSubagentControlRuntime();
@@ -561,7 +562,7 @@ export async function steerControlledSubagentRun(params: {
       params: {
         message: params.message,
         sessionKey: params.entry.childSessionKey,
-        sessionId,
+        sessionId: restartSessionId,
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -580,7 +581,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error,
     };
   }
@@ -597,7 +598,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error: "failed to replace steered subagent run",
     };
   }
@@ -606,7 +607,7 @@ export async function steerControlledSubagentRun(params: {
     status: "accepted",
     runId,
     sessionKey: params.entry.childSessionKey,
-    sessionId,
+    sessionId: restartSessionId,
     mode: "restart",
     label: resolveSubagentLabel(params.entry),
     text: `steered ${resolveSubagentLabel(params.entry)}.`,

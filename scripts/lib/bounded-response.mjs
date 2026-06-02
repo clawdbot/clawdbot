@@ -6,6 +6,12 @@ function defaultTooLargeError(message) {
   return new Error(message);
 }
 
+function cancelReaderSoon(reader) {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
+}
+
 async function readResponseChunk(reader, label, signal, markCanceled) {
   if (!signal) {
     return await reader.read();
@@ -20,13 +26,13 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
   const abortPromise = new Promise((_resolve, reject) => {
     const onAbort = () => {
       markCanceled();
-      void reader.cancel().catch(() => undefined);
       reject(
         toLintErrorObject(
           signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
           "Non-Error rejection",
         ),
       );
+      cancelReaderSoon(reader);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -36,6 +42,28 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
     return await Promise.race([reader.read(), abortPromise]);
   } finally {
     removeAbortListener?.();
+  }
+}
+
+async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromise, markCanceled) {
+  const readPromise = readResponseChunk(reader, label, signal, markCanceled);
+  if (!timeoutPromise) {
+    return await readPromise;
+  }
+
+  let waitingForRead = true;
+  const timeoutReadPromise = timeoutPromise.catch((error) => {
+    if (waitingForRead) {
+      markCanceled();
+      cancelReaderSoon(reader);
+    }
+    throw toLintErrorObject(error, `${label} response body read timed out`);
+  });
+
+  try {
+    return await Promise.race([readPromise, timeoutReadPromise]);
+  } finally {
+    waitingForRead = false;
   }
 }
 
@@ -61,16 +89,15 @@ export async function readBoundedResponseText(response, label, maxBytes, options
 
   try {
     for (;;) {
-      const { done, value } = await (options.timeoutPromise
-        ? Promise.race([
-            readResponseChunk(reader, label, options.signal, () => {
-              canceled = true;
-            }),
-            options.timeoutPromise,
-          ])
-        : readResponseChunk(reader, label, options.signal, () => {
-            canceled = true;
-          }));
+      const { done, value } = await readResponseChunkWithTimeout(
+        reader,
+        label,
+        options.signal,
+        options.timeoutPromise,
+        () => {
+          canceled = true;
+        },
+      );
       if (done) {
         const tail = decoder.decode();
         if (tail) {

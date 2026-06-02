@@ -82,6 +82,10 @@ export function createCodexSteeringQueue(params: {
         batchedTexts.push({ text, resolve, reject });
         clearBatchTimer();
         const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
+        if (debounceMs === 0) {
+          void flushBatch().catch(() => undefined);
+          return;
+        }
         batchTimer = setTimeout(() => {
           batchTimer = undefined;
           void flushBatch().catch(() => undefined);

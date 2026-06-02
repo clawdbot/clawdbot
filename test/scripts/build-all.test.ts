@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
@@ -12,6 +12,7 @@ import {
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
   resolveBuildAllStepCacheState,
+  resolveBuildAllStepCacheStampState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
   restoreBuildAllStepCacheOutputs,
@@ -528,6 +529,24 @@ describe("resolveBuildAllStepCacheState", () => {
         stampedOutputs: ["dist/output.js"],
         stampPath: stale.stampPath,
       });
+    });
+  });
+
+  it("reuses the pre-run input signature when stamping successful cacheable steps", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+
+      try {
+        const stampState = resolveBuildAllStepCacheStampState(step, cacheState, { rootDir });
+        writeBuildAllStepCacheStamp(step, stampState, { rootDir });
+
+        expect(readSpy).not.toHaveBeenCalled();
+        expect(stampState.signature).toBe(cacheState.signature);
+        expect(stampState.relativeOutputFiles).toEqual(["dist/output.js"]);
+      } finally {
+        readSpy.mockRestore();
+      }
     });
   });
 

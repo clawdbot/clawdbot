@@ -99,6 +99,7 @@ const forwardSignal = (signal) => {
 };
 process.once("SIGINT", forwardSignal);
 process.once("SIGTERM", forwardSignal);
+process.once("SIGHUP", forwardSignal);
 child.on("exit", (code, signal) => {
   clearTimeout(timer);
   if (parentSignalTimer) {

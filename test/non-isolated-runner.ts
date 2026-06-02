@@ -14,6 +14,17 @@ type EvaluatedModules = {
 };
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
+const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
+const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
+const nativeTimerGlobals = {
+  setTimeout: globalThis.setTimeout,
+  clearTimeout: globalThis.clearTimeout,
+  setInterval: globalThis.setInterval,
+  clearInterval: globalThis.clearInterval,
+  setImmediate: globalThis.setImmediate,
+  clearImmediate: globalThis.clearImmediate,
+  Date: globalThis.Date,
+};
 
 function getSharedTestHome(): string | undefined {
   const globalState = globalThis as typeof globalThis & {
@@ -65,10 +76,135 @@ function restoreRealTimers(): void {
   }
 }
 
+function restoreNativeTimerGlobals(): void {
+  Object.assign(globalThis, nativeTimerGlobals);
+}
+
+function restoreMocksThenRealTimers(): void {
+  // A spy created while fake timers are active captures the fake timer as its
+  // "original" implementation. Restore spies first, then swap timers back.
+  vi.restoreAllMocks();
+  restoreRealTimers();
+  restoreNativeTimerGlobals();
+}
+
+type CleanupAction = () => void;
+
+type EmbeddedRunHandle = {
+  abort?: () => void;
+  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
+};
+
+type EmbeddedRunWaiter = {
+  timer?: NodeJS.Timeout;
+  resolve?: (ended: boolean) => void;
+};
+
+type EmbeddedRunStateForTest = {
+  activeRuns?: Map<unknown, EmbeddedRunHandle>;
+  snapshots?: Map<unknown, unknown>;
+  sessionIdsByKey?: Map<unknown, unknown>;
+  sessionIdsByFile?: Map<unknown, unknown>;
+  abandonedRunsBySessionId?: Map<unknown, unknown>;
+  abandonedRunSessionIdsByKey?: Map<unknown, unknown>;
+  abandonedRunSessionIdsByFile?: Map<unknown, unknown>;
+  waiters?: Map<unknown, Set<EmbeddedRunWaiter>>;
+  modelSwitchRequests?: Map<unknown, unknown>;
+};
+
+type ReplyRunWaiter = {
+  finish?: (ended: boolean) => void;
+};
+
+type ReplyRunOperation = {
+  abortForRestart?: () => void;
+};
+
+type ReplyRunStateForTest = {
+  activeRunsByKey?: Map<unknown, ReplyRunOperation>;
+  activeSessionIdsByKey?: Map<unknown, unknown>;
+  activeKeysBySessionId?: Map<unknown, unknown>;
+  waitKeysBySessionId?: Map<unknown, unknown>;
+  waitersByKey?: Map<unknown, Set<ReplyRunWaiter>>;
+};
+
+function runCleanupActions(actions: CleanupAction[]): unknown {
+  let firstError: unknown;
+  for (const action of actions) {
+    try {
+      action();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  return firstError;
+}
+
+function resetOpenClawGlobalRunState(): void {
+  const cleanupActions: CleanupAction[] = [];
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const embeddedRunState = globalStore[EMBEDDED_RUN_STATE] as EmbeddedRunStateForTest | undefined;
+  for (const handle of embeddedRunState?.activeRuns?.values() ?? []) {
+    cleanupActions.push(() => {
+      if (handle.cancel) {
+        handle.cancel("restart");
+        return;
+      }
+      handle.abort?.();
+    });
+  }
+  for (const waiters of embeddedRunState?.waiters?.values() ?? []) {
+    for (const waiter of waiters) {
+      cleanupActions.push(() => {
+        if (waiter.timer) {
+          clearTimeout(waiter.timer);
+        }
+        waiter.resolve?.(true);
+      });
+    }
+  }
+
+  const replyRunState = globalStore[REPLY_RUN_REGISTRY] as ReplyRunStateForTest | undefined;
+  for (const operation of replyRunState?.activeRunsByKey?.values() ?? []) {
+    cleanupActions.push(() => {
+      operation.abortForRestart?.();
+    });
+  }
+  for (const waiters of replyRunState?.waitersByKey?.values() ?? []) {
+    for (const waiter of waiters) {
+      cleanupActions.push(() => {
+        waiter.finish?.(false);
+      });
+    }
+  }
+
+  const cleanupError = runCleanupActions(cleanupActions);
+  if (cleanupError) {
+    throw cleanupError;
+  }
+
+  embeddedRunState?.activeRuns?.clear();
+  embeddedRunState?.snapshots?.clear();
+  embeddedRunState?.sessionIdsByKey?.clear();
+  embeddedRunState?.sessionIdsByFile?.clear();
+  embeddedRunState?.abandonedRunsBySessionId?.clear();
+  embeddedRunState?.abandonedRunSessionIdsByKey?.clear();
+  embeddedRunState?.abandonedRunSessionIdsByFile?.clear();
+  embeddedRunState?.waiters?.clear();
+  embeddedRunState?.modelSwitchRequests?.clear();
+
+  replyRunState?.activeRunsByKey?.clear();
+  replyRunState?.activeSessionIdsByKey?.clear();
+  replyRunState?.activeKeysBySessionId?.clear();
+  replyRunState?.waitKeysBySessionId?.clear();
+  replyRunState?.waitersByKey?.clear();
+}
+
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: { filepath: string }) {
     super.onCollectStart(file);
     restoreRealTimers();
+    restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
     const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
     if (orderLogPath) {
@@ -78,11 +214,13 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
 
   override async onBeforeRunTask(test: RunnerTask) {
     restoreRealTimers();
+    restoreNativeTimerGlobals();
     await super.onBeforeRunTask(test);
   }
 
   override onBeforeTryTask(test: RunnerTask) {
     restoreRealTimers();
+    restoreNativeTimerGlobals();
     super.onBeforeTryTask(test);
   }
 
@@ -100,13 +238,13 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
     // not carry file-scoped timers, stubs, spies, or stale module state
     // forward into the next file.
-    restoreRealTimers();
-    vi.restoreAllMocks();
+    restoreMocksThenRealTimers();
     vi.unstubAllGlobals();
     const testHome = getSharedTestHome();
     vi.unstubAllEnvs();
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
+    resetOpenClawGlobalRunState();
     vi.resetModules();
     this.moduleRunner?.mocker?.reset?.();
     resetEvaluatedModules(this.workerState.evaluatedModules as EvaluatedModules, true);

@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -179,5 +180,42 @@ describe("qa-otel-smoke receiver bounds", () => {
       stdio: "ignore",
     });
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("cleans Docker collector containers and temp config after readiness failures", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-"));
+    const collectorDir = path.join(tempRoot, "collector");
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      stdout: EventEmitter;
+    };
+    child.stderr = new EventEmitter();
+    child.stdout = new EventEmitter();
+    const stopDockerContainer = vi.fn(async () => {});
+
+    try {
+      await expect(
+        testing.startDockerOtelCollector(4317, {
+          mkdtemp: async () => {
+            mkdirSync(collectorDir);
+            return collectorDir;
+          },
+          randomUUID: () => "00000000-0000-4000-8000-000000000000",
+          reserveLocalPort: async () => 4318,
+          spawn: vi.fn(() => child) as never,
+          stopDockerContainer,
+          waitForLocalPort: async () => {
+            throw new Error("collector never became ready");
+          },
+        }),
+      ).rejects.toThrow("collector never became ready");
+
+      expect(stopDockerContainer).toHaveBeenCalledWith(
+        "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
+      );
+      expect(existsSync(collectorDir)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 });

@@ -1758,6 +1758,9 @@ describe("createImageGenerateTool", () => {
     const defaultLoadOptions = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
     expect(defaultLoadUrl).toBe("http://198.18.0.153/reference.png");
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -1782,6 +1785,9 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
     expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });

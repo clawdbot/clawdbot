@@ -31,4 +31,9 @@ describe("provider model id normalization", () => {
   it("does not rewrite stable GA flash-lite", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
   });
+
+  it("routes Gemma 4 26B shorthand to Google's canonical API id", () => {
+    expect(normalizeGooglePreviewModelId("gemma-4-26b")).toBe("gemma-4-26b-a4b-it");
+    expect(normalizeGooglePreviewModelId("google/gemma-4-26b")).toBe("google/gemma-4-26b-a4b-it");
+  });
 });

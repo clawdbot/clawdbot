@@ -762,7 +762,7 @@ describe("createOpenClawCodingTools", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
     expect(toolNameList(defaultTools)).toContain("exec");
     expect(toolNameList(defaultTools)).toContain("process");
-    expect(toolNameList(defaultTools)).not.toContain("apply_patch");
+    expect(toolNameList(defaultTools)).toContain("apply_patch");
 
     const openAiTools = createOpenClawCodingTools({
       config: testConfig,
@@ -830,7 +830,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("provides top-level object schemas for all tools", () => {
@@ -875,7 +875,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {

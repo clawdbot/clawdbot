@@ -57,6 +57,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
     assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
     assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
+    assertEquals("device.apps", OpenClawDeviceCommand.Apps.rawValue)
   }
 
   @Test

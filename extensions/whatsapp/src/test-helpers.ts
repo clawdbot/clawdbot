@@ -201,16 +201,29 @@ function resolveSenderLabelMock(sender?: TestInboundEnvelopeParams["sender"]) {
   return display || idPart || undefined;
 }
 
+function resolveDirectEnvelopeBodyLabelMock(from?: string) {
+  const label = sanitizeEnvelopeHeaderPart(from?.trim() || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  if (idMarkerIndex > 0) {
+    const displayLabel = label.slice(0, idMarkerIndex).trim();
+    return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  }
+  return label.includes(":") ? "(sender)" : label;
+}
+
 function formatInboundEnvelopeMock(params: TestInboundEnvelopeParams) {
   const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
   const isDirect = !chatType || chatType === "direct";
   const sender = params.senderLabel?.trim() || resolveSenderLabelMock(params.sender);
+  const directSender = resolveDirectEnvelopeBodyLabelMock(params.from);
   const body =
     isDirect && params.fromMe
       ? `(self): ${params.body}`
-      : !isDirect && sender
-        ? `${sanitizeEnvelopeHeaderPart(sender)}: ${params.body}`
-        : params.body;
+      : isDirect && directSender
+        ? `${directSender}: ${params.body}`
+        : !isDirect && sender
+          ? `${sanitizeEnvelopeHeaderPart(sender)}: ${params.body}`
+          : params.body;
   const parts = [sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel")];
   const from = params.from?.trim();
   if (from) {

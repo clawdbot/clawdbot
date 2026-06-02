@@ -1010,6 +1010,27 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
+  it("defaults baseUrl-only Google Vertex fallback models to native Vertex transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "google-vertex": {
+            baseUrl: "https://aiplatform.googleapis.com",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("google-vertex", "gemini-2.5-flash", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.provider).toBe("google-vertex");
+    expect(model.id).toBe("gemini-2.5-flash");
+    expect(model.api).toBe("google-vertex");
+    expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
+  });
+
   it("uses bundled static metadata for configured provider fallback token limits", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",

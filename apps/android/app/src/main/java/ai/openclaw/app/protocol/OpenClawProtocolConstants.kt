@@ -112,6 +112,7 @@ enum class OpenClawDeviceCommand(
   Info("device.info"),
   Permissions("device.permissions"),
   Health("device.health"),
+  Apps("device.apps"),
   ;
 
   companion object {

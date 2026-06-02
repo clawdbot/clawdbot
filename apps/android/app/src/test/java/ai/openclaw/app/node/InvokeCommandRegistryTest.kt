@@ -116,6 +116,15 @@ class InvokeCommandRegistryTest {
   }
 
   @Test
+  fun advertisedCommands_includesDeviceAppsOnlyWhenUserOptedIn() {
+    val disabled = InvokeCommandRegistry.advertisedCommands(defaultFlags(installedAppsSharingEnabled = false))
+    val enabled = InvokeCommandRegistry.advertisedCommands(defaultFlags(installedAppsSharingEnabled = true))
+
+    assertFalse(disabled.contains(OpenClawDeviceCommand.Apps.rawValue))
+    assertTrue(enabled.contains(OpenClawDeviceCommand.Apps.rawValue))
+  }
+
+  @Test
   fun advertisedCommands_includesFeatureCommandsWhenEnabled() {
     val commands =
       InvokeCommandRegistry.advertisedCommands(
@@ -151,6 +160,7 @@ class InvokeCommandRegistryTest {
           voiceWakeEnabled = false,
           motionActivityAvailable = true,
           motionPedometerAvailable = false,
+          installedAppsSharingEnabled = false,
           debugBuild = false,
         ),
       )
@@ -262,6 +272,7 @@ class InvokeCommandRegistryTest {
     voiceWakeEnabled: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
+    installedAppsSharingEnabled: Boolean = false,
     debugBuild: Boolean = false,
   ): NodeRuntimeFlags =
     NodeRuntimeFlags(
@@ -275,6 +286,7 @@ class InvokeCommandRegistryTest {
       voiceWakeEnabled = voiceWakeEnabled,
       motionActivityAvailable = motionActivityAvailable,
       motionPedometerAvailable = motionPedometerAvailable,
+      installedAppsSharingEnabled = installedAppsSharingEnabled,
       debugBuild = debugBuild,
     )
 

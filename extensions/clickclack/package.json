@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/clickclack",
-  "version": "2026.6.1",
+  "version": "2026.6.2",
   "private": true,
   "description": "OpenClaw ClickClack channel plugin",
   "type": "module",
@@ -18,7 +18,7 @@
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.1"
+    "openclaw": ">=2026.6.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {

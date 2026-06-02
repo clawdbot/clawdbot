@@ -325,14 +325,15 @@ describe("Dockerfile", () => {
     expect(workflow).toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
   });
 
-  it("keeps runtime workspace template smoke in full release validation", async () => {
+  it("keeps only the runtime-assets prune proof in full release validation", async () => {
     const workflow = await readFile(fullReleaseValidationWorkflowPath, "utf8");
 
-    expect(workflow).toContain("Build and smoke test final Docker runtime image");
-    expect(workflow).toContain('-t "${image_ref}"');
-    expect(workflow).toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
-    expect(workflow).toContain('grep -F "Missing workspace template:"');
-    expect(workflow).toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
+    expect(workflow).toContain("Verify Docker runtime-assets prune path");
+    expect(workflow).toContain("--target runtime-assets");
+    expect(workflow).not.toContain("Build and smoke test final Docker runtime image");
+    expect(workflow).not.toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
+    expect(workflow).not.toContain('grep -F "Missing workspace template:"');
+    expect(workflow).not.toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
     expect(workflow).not.toContain("scripts/docker/runtime-workspace-template-smoke.sh");
   });
 
