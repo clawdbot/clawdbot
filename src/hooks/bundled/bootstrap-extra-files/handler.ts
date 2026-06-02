@@ -17,13 +17,14 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
       config: context.cfg,
       workspaceDir: context.workspaceDir,
     });
-    // Truncated globs silently drop user-configured context, so surface them at
-    // warn level — every other diagnostic is routine skip noise kept at debug.
-    const truncated = diagnostics.filter((item) => item.reason === "glob-match-limit");
+    // A bounded glob traversal can leave configured context unscanned, so
+    // surface it at warn level — every other diagnostic is routine skip noise
+    // kept at debug.
+    const truncated = diagnostics.filter((item) => item.reason === "glob-traversal-limit");
     for (const item of truncated) {
       log.warn(`bootstrap context truncated: ${item.detail}`);
     }
-    const skipped = diagnostics.filter((item) => item.reason !== "glob-match-limit");
+    const skipped = diagnostics.filter((item) => item.reason !== "glob-traversal-limit");
     if (skipped.length > 0) {
       log.debug("skipped extra bootstrap candidates", {
         skipped: skipped.length,

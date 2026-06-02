@@ -138,19 +138,29 @@ describe("bootstrap-extra-files hook", () => {
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "SOUL.md"]);
   });
 
-  it("warns when a configured glob is truncated by the match limit", async () => {
+  it("warns when a configured glob is truncated by the traversal limit", async () => {
     loggerMocks.warn.mockClear();
     loggerMocks.debug.mockClear();
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-truncated-");
-    await Promise.all(
-      Array.from({ length: 140 }, async (_, index) => {
-        const packageDir = path.join(tempDir, "packages", `pkg-${index}`);
-        await fs.mkdir(packageDir, { recursive: true });
-        await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
-      }),
-    );
+    const lateDir = path.join(tempDir, "late");
+    await fs.mkdir(lateDir, { recursive: true });
+    await fs.writeFile(path.join(lateDir, "AGENTS.md"), "late agents", "utf-8");
 
-    const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
+    // Fill the root with >20,000 non-matching entries so the traversal limit
+    // fires before the late match is reached. Batched writes keep concurrent
+    // file descriptors well under the OS limit.
+    const noiseCount = 21_000;
+    const batchSize = 200;
+    for (let start = 0; start < noiseCount; start += batchSize) {
+      const end = Math.min(start + batchSize, noiseCount);
+      await Promise.all(
+        Array.from({ length: end - start }, (_, offset) =>
+          fs.writeFile(path.join(tempDir, `noise-${start + offset}.txt`), "x", "utf-8"),
+        ),
+      );
+    }
+
+    const cfg = createBootstrapExtraConfig(["**/AGENTS.md"]);
     const context = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,
@@ -164,10 +174,10 @@ describe("bootstrap-extra-files hook", () => {
     expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
     const [message] = loggerMocks.warn.mock.calls[0];
     expect(message).toContain("bootstrap context truncated");
-    expect(message).toContain("packages/*/AGENTS.md");
+    expect(message).toContain("**/AGENTS.md");
   });
 
-  it("does not warn when globs stay under the match limit", async () => {
+  it("does not warn when a glob stays within the traversal limit", async () => {
     loggerMocks.warn.mockClear();
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-under-limit-");
     const extraDir = path.join(tempDir, "packages", "core");

@@ -97,19 +97,25 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("caps expanded bootstrap glob matches", async () => {
-    const workspaceDir = await createWorkspaceDir("glob-match-limit");
+  it("returns every matching file without an artificial match cap", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-no-match-cap");
+    const fileCount = 140;
     await Promise.all(
-      Array.from({ length: 140 }, async (_, index) => {
+      Array.from({ length: fileCount }, async (_, index) => {
         const packageDir = path.join(workspaceDir, "packages", `pkg-${index}`);
         await fs.mkdir(packageDir, { recursive: true });
         await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
       }),
     );
 
-    const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/AGENTS.md"]);
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "packages/*/AGENTS.md",
+    ]);
 
-    expect(files).toHaveLength(128);
+    // All matches within the traversal bound are returned; downstream bootstrap
+    // character budgeting handles content limiting, not a glob match cap.
+    expect(files).toHaveLength(fileCount);
+    expect(diagnostics).toHaveLength(0);
   });
 
   it("stops on the traversal limit when matches appear late in a huge tree", async () => {
@@ -141,41 +147,17 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
 
     // The late match lives behind the traversal limit, so it must be dropped and
-    // the truncation reported even though almost nothing matched.
+    // the bounded traversal reported even though almost nothing matched.
     expect(files).toHaveLength(0);
     expect(diagnostics).toContainEqual(
       expect.objectContaining({
-        reason: "glob-match-limit",
+        reason: "glob-traversal-limit",
         path: "**/AGENTS.md",
       }),
     );
   });
 
-  it("emits a glob-match-limit diagnostic when match cap is hit", async () => {
-    const workspaceDir = await createWorkspaceDir("glob-match-limit-diagnostic");
-    await Promise.all(
-      Array.from({ length: 140 }, async (_, index) => {
-        const packageDir = path.join(workspaceDir, "packages", `pkg-${index}`);
-        await fs.mkdir(packageDir, { recursive: true });
-        await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
-      }),
-    );
-
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-      "packages/*/AGENTS.md",
-    ]);
-
-    expect(files).toHaveLength(128);
-    expect(diagnostics).toContainEqual(
-      expect.objectContaining({
-        reason: "glob-match-limit",
-        path: "packages/*/AGENTS.md",
-      }),
-    );
-    expect(diagnostics[0].detail).toContain("truncated");
-  });
-
-  it("does not emit glob-match-limit diagnostic when under cap", async () => {
+  it("does not emit a glob-traversal-limit diagnostic when traversal stays within bound", async () => {
     const workspaceDir = await createWorkspaceDir("glob-no-truncation");
     await Promise.all(
       Array.from({ length: 5 }, async (_, index) => {
@@ -190,7 +172,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
 
     expect(files).toHaveLength(5);
-    const truncationDiags = diagnostics.filter((d) => d.reason === "glob-match-limit");
+    const truncationDiags = diagnostics.filter((d) => d.reason === "glob-traversal-limit");
     expect(truncationDiags).toHaveLength(0);
   });
 
