@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-create-indicator",
+  "name": "VC Trader AI Create Indicator (Propose)",
+  "description": "Stages a new indicator proposal for human review. Calls back into propfirm_manager BFF at /api/v1/openclaw/stage with tool_name create_indicator. PROPOSE-only - it never creates the indicator directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "create_indicator"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

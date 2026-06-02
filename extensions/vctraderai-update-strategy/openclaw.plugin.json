@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-update-strategy",
+  "name": "VC Trader AI Update Strategy (Propose)",
+  "description": "Stages a strategy-update proposal for human review. Calls back into propfirm_manager BFF at /api/v1/openclaw/stage with tool_name update_strategy. PROPOSE-only - it never mutates the strategy directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "update_strategy"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

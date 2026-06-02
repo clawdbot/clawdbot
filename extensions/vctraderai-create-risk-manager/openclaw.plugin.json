@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-create-risk-manager",
+  "name": "VC Trader AI Create Risk Manager (Propose)",
+  "description": "Stages a new risk-manager proposal for human review. Calls back into propfirm_manager BFF at /api/v1/openclaw/stage with tool_name create_risk_manager. PROPOSE-only - it never creates the risk manager directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "create_risk_manager"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
