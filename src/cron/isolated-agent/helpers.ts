@@ -199,6 +199,17 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
   return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
 }
 
+function isOptionalSearchMissPayload(payload: DeliveryPayload | undefined): boolean {
+  if (payload?.isError !== true) {
+    return false;
+  }
+  const text = payload.text?.trim();
+  return (
+    text !== undefined &&
+    /(?:^|\s)search\s+"[^"]+"(?:\s+in\s+.*)?(?:\s+\([^)]*\))?\s+failed$/i.test(text)
+  );
+}
+
 /** Resolves the non-negative heartbeat ack length used for heartbeat-only filtering. */
 export function resolveHeartbeatAckMaxChars(_agentCfg?: { heartbeat?: object }) {
   return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
@@ -263,6 +274,12 @@ export function resolveCronPayloadOutcome(params: {
     !params.runLevelError &&
     lastErrorPayloadIndex > 0 &&
     params.payloads.slice(0, lastErrorPayloadIndex).some(isSuccessfulCronPayload);
+  const hasOnlyTrailingOptionalSearchMisses =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    hasSuccessfulPayloadBeforeLastError &&
+    errorPayloads.length > 0 &&
+    errorPayloads.every(isOptionalSearchMissPayload);
   const lastErrorPayload =
     lastErrorPayloadIndex >= 0 ? params.payloads[lastErrorPayloadIndex] : undefined;
   const hasRecoveringTerminalOutput =
@@ -299,7 +316,8 @@ export function resolveCronPayloadOutcome(params: {
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !hasOnlyTrailingOptionalSearchMisses;
   // Fatal structured errors own the final delivery payload unless later output
   // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
