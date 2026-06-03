@@ -99,7 +99,6 @@ const EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES = new Set([
   ".cache",
 ]);
 const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
-const EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT = 20_000;
 
 type WorkspaceFileSourceIdentity = readonly [
   canonicalPath: string,
@@ -295,8 +294,7 @@ export type ExtraBootstrapLoadDiagnosticCode =
   | "invalid-bootstrap-filename"
   | "missing"
   | "security"
-  | "io"
-  | "glob-traversal-limit";
+  | "io";
 
 export type ExtraBootstrapLoadDiagnostic = {
   path: string;
@@ -1474,7 +1472,6 @@ async function* walkWorkspaceFiles(
   strictRead: boolean,
   matcher: Minimatch,
   allowedIgnoredDirNames: ReadonlySet<string>,
-  signal?: { truncated: boolean },
 ): AsyncGenerator<string> {
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
   let visitedEntries = 0;
@@ -1503,12 +1500,6 @@ async function* walkWorkspaceFiles(
       if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
         await yieldImmediate();
       }
-      if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
-        if (signal) {
-          signal.truncated = true;
-        }
-        return;
-      }
       const childRelativePath = currentRelativeDir
         ? path.join(currentRelativeDir, entry.name)
         : entry.name;
@@ -1517,7 +1508,10 @@ async function* walkWorkspaceFiles(
         // Prune default-ignored dir names unless the pattern explicitly opts
         // into them (an explicit glob like `dist/**/AGENTS.md` must still be
         // honored even though `dist` is normally pruned).
-        if (EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(entry.name) && !allowedIgnoredDirNames.has(entry.name)) {
+        if (
+          EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(entry.name) &&
+          !allowedIgnoredDirNames.has(entry.name)
+        ) {
           continue;
         }
         // Descend only when the directory could still contain a match, so the
@@ -1534,24 +1528,20 @@ async function* walkWorkspaceFiles(
   }
 }
 
-type GlobResolution = { matches: string[]; truncated: boolean };
-
-// Always resolve globs with the traversal-counted walker. fs.glob would be
-// faster for simple patterns, but it only exposes matched paths — Node
-// traverses the directory tree internally, so a sparse pattern like
-// `**/AGENTS.md` across a huge workspace can block the event loop. The walker
-// counts every readdir entry it visits (visitedEntries), yields periodically,
-// and bounds total traversal at EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT, so the active
-// path can never stall. There is no match-count cap: every file matched within
-// the traversal bound is returned, and the downstream bootstrap character
-// budget handles content limiting.
+// Always resolve globs with the yielding walker. fs.glob would be faster for
+// simple patterns, but it only exposes matched paths — Node traverses the
+// directory tree internally, so a sparse pattern like `**/AGENTS.md` across a
+// huge workspace can block the event loop. The walker yields periodically while
+// it walks, so the active path can never stall. The walk always completes and
+// returns every file matched within the real tree; the downstream bootstrap
+// character budget handles content limiting.
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
   strictRead: boolean,
-): Promise<GlobResolution> {
+): Promise<string[]> {
   if (typeof path.matchesGlob !== "function") {
-    return { matches: [pattern], truncated: false };
+    return [pattern];
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
@@ -1561,7 +1551,6 @@ async function resolveExtraBootstrapPatternPaths(
     windowsPathsNoEscape: true,
   });
   const matches: string[] = [];
-  const walkSignal = { truncated: false };
   const allowedIgnoredDirNames = resolveAllowedIgnoredDirNames(normalizedPattern);
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
@@ -1569,15 +1558,14 @@ async function resolveExtraBootstrapPatternPaths(
     strictRead,
     matcher,
     allowedIgnoredDirNames,
-    walkSignal,
   )) {
     // The walker already applies the Minimatch matcher before yielding, so every
-    // candidate is a confirmed match. No match-count cap: traversal is the only
-    // bound (EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT), and the bootstrap character budget
-    // limits content downstream.
+    // candidate is a confirmed match. No cap of any kind: the walk always
+    // completes over the real tree so the configured glob is fully preserved,
+    // and the bootstrap character budget limits content downstream.
     matches.push(candidate);
   }
-  return { matches: matches.length > 0 ? matches : [pattern], truncated: walkSignal.truncated };
+  return matches.length > 0 ? matches : [pattern];
 }
 
 function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
@@ -1615,20 +1603,13 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const { matches, truncated } = await resolveExtraBootstrapPatternPaths(
+        const matches = await resolveExtraBootstrapPatternPaths(
           resolvedDir,
           pattern,
           options.strictPatternRead === true,
         );
         for (const match of matches) {
           resolvedPaths.add(match);
-        }
-        if (truncated) {
-          diagnostics.push({
-            path: pattern,
-            reason: "glob-traversal-limit",
-            detail: `bootstrap glob "${pattern}" stopped after scanning ${EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT} filesystem entries; matches found before the limit were kept, but files beyond it were not scanned and may be missing. Narrow the glob scope or split it into more specific patterns.`,
-          });
         }
       } else {
         resolvedPaths.add(pattern);

@@ -138,46 +138,7 @@ describe("bootstrap-extra-files hook", () => {
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "SOUL.md"]);
   });
 
-  it("warns when a configured glob is truncated by the traversal limit", async () => {
-    loggerMocks.warn.mockClear();
-    loggerMocks.debug.mockClear();
-    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-truncated-");
-    const lateDir = path.join(tempDir, "late");
-    await fs.mkdir(lateDir, { recursive: true });
-    await fs.writeFile(path.join(lateDir, "AGENTS.md"), "late agents", "utf-8");
-
-    // Fill the root with >20,000 non-matching entries so the traversal limit
-    // fires before the late match is reached. Batched writes keep concurrent
-    // file descriptors well under the OS limit.
-    const noiseCount = 21_000;
-    const batchSize = 200;
-    for (let start = 0; start < noiseCount; start += batchSize) {
-      const end = Math.min(start + batchSize, noiseCount);
-      await Promise.all(
-        Array.from({ length: end - start }, (_, offset) =>
-          fs.writeFile(path.join(tempDir, `noise-${start + offset}.txt`), "x", "utf-8"),
-        ),
-      );
-    }
-
-    const cfg = createBootstrapExtraConfig(["**/AGENTS.md"]);
-    const context = await createBootstrapContext({
-      workspaceDir: tempDir,
-      cfg,
-      sessionKey: "agent:main:main",
-      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
-    });
-
-    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
-    await handler(event);
-
-    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
-    const [message] = loggerMocks.warn.mock.calls[0];
-    expect(message).toContain("bootstrap context truncated");
-    expect(message).toContain("**/AGENTS.md");
-  });
-
-  it("does not warn when a glob stays within the traversal limit", async () => {
+  it("does not warn when resolving a configured glob", async () => {
     loggerMocks.warn.mockClear();
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-under-limit-");
     const extraDir = path.join(tempDir, "packages", "core");

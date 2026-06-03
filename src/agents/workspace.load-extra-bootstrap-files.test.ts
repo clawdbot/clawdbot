@@ -71,7 +71,8 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("skips bootstrap glob matches in ignored directories", async () => {    const workspaceDir = await createWorkspaceDir("glob-ignored-dirs");
+  it("skips bootstrap glob matches in ignored directories", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-ignored-dirs");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(path.join(workspaceDir, "node_modules", "pkg"), { recursive: true });
     await fs.mkdir(path.join(workspaceDir, ".git", "hooks"), { recursive: true });
@@ -149,62 +150,46 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("stops on the traversal limit when matches appear late in a huge tree", async () => {
-    // Regression: a sparse pattern can yield zero matches until very late, so a
-    // match-count cap alone never fires. The walker must bound on entries it
-    // visits (visitedEntries), not just yielded matches, or the event loop
-    // stalls scanning the whole tree. Fill the root with >20,000 non-matching
-    // entries so the visit limit fires while still iterating root, before the
-    // late-match subdir is ever popped off the traversal stack.
+  it("returns matches that appear late in a deep tree without truncation", async () => {
+    // Regression: a sparse pattern can yield zero matches until very late in a
+    // large tree. The walker yields periodically to avoid the fs.glob event-loop
+    // stall, but it must still walk the whole tree and return every real match —
+    // no hard traversal cutoff that silently drops late configured globs.
     const workspaceDir = await createWorkspaceDir("glob-sparse-late-match");
-    const lateDir = path.join(workspaceDir, "late");
+
+    // Build a modest deep tree with plenty of non-matching entries, then place
+    // the only AGENTS.md deep at the end so it is reached late in traversal.
+    const dirCount = 60;
+    const filesPerDir = 30;
+    await Promise.all(
+      Array.from({ length: dirCount }, async (_, dirIndex) => {
+        const branchDir = path.join(workspaceDir, `branch-${dirIndex}`, "nested");
+        await fs.mkdir(branchDir, { recursive: true });
+        await Promise.all(
+          Array.from({ length: filesPerDir }, (_, fileIndex) =>
+            fs.writeFile(path.join(branchDir, `noise-${fileIndex}.txt`), "x", "utf-8"),
+          ),
+        );
+      }),
+    );
+    const lateDir = path.join(workspaceDir, "zzz-late", "deep");
     await fs.mkdir(lateDir, { recursive: true });
     await fs.writeFile(path.join(lateDir, "AGENTS.md"), "late agents", "utf-8");
-
-    // Batched writes keep concurrent file descriptors well under the OS limit.
-    const noiseCount = 21_000;
-    const batchSize = 200;
-    for (let start = 0; start < noiseCount; start += batchSize) {
-      const end = Math.min(start + batchSize, noiseCount);
-      await Promise.all(
-        Array.from({ length: end - start }, (_, offset) =>
-          fs.writeFile(path.join(workspaceDir, `noise-${start + offset}.txt`), "x", "utf-8"),
-        ),
-      );
-    }
 
     const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
       "**/AGENTS.md",
     ]);
 
-    // The late match lives behind the traversal limit, so it must be dropped and
-    // the bounded traversal reported even though almost nothing matched.
-    expect(files).toHaveLength(0);
-    expect(diagnostics).toContainEqual(
-      expect.objectContaining({
-        reason: "glob-traversal-limit",
-        path: "**/AGENTS.md",
-      }),
-    );
-  });
-
-  it("does not emit a glob-traversal-limit diagnostic when traversal stays within bound", async () => {
-    const workspaceDir = await createWorkspaceDir("glob-no-truncation");
-    await Promise.all(
-      Array.from({ length: 5 }, async (_, index) => {
-        const packageDir = path.join(workspaceDir, "packages", `pkg-${index}`);
-        await fs.mkdir(packageDir, { recursive: true });
-        await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
-      }),
-    );
-
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-      "packages/*/AGENTS.md",
+    // The late match is still returned and no truncation diagnostic is emitted.
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(lateDir, "AGENTS.md"),
+        content: "late agents",
+        missing: false,
+      },
     ]);
-
-    expect(files).toHaveLength(5);
-    const truncationDiags = diagnostics.filter((d) => d.reason === "glob-traversal-limit");
-    expect(truncationDiags).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
   });
 
   it("loads literal bootstrap paths with square brackets", async () => {
