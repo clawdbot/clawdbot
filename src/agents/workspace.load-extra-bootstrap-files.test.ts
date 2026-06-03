@@ -71,8 +71,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("skips bootstrap glob matches in ignored directories", async () => {
-    const workspaceDir = await createWorkspaceDir("glob-ignored-dirs");
+  it("skips bootstrap glob matches in ignored directories", async () => {    const workspaceDir = await createWorkspaceDir("glob-ignored-dirs");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(path.join(workspaceDir, "node_modules", "pkg"), { recursive: true });
     await fs.mkdir(path.join(workspaceDir, ".git", "hooks"), { recursive: true });
@@ -95,6 +94,38 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         missing: false,
       },
     ]);
+  });
+
+  it("honors explicit globs rooted in an ignored directory", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-explicit-ignored-dir");
+    const distDir = path.join(workspaceDir, "dist", "nested");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(path.join(distDir, "AGENTS.md"), "dist agents", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["dist/**/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(distDir, "AGENTS.md"),
+        content: "dist agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("still prunes ignored directories for non-explicit globs", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-prune-non-explicit");
+    await fs.mkdir(path.join(workspaceDir, "node_modules", "pkg"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "node_modules", "pkg", "AGENTS.md"),
+      "deps",
+      "utf-8",
+    );
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["**/AGENTS.md"]);
+
+    expect(files).toHaveLength(0);
   });
 
   it("returns every matching file without an artificial match cap", async () => {
