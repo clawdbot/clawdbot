@@ -3,6 +3,10 @@ import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
@@ -451,6 +455,18 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
 }
 
 async function runPreparedChannelTurnCore<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: PreparedChannelTurn<TDispatchResult>,
+  options: { suppressObserveOnlyDispatch: boolean },
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  const trace = createDiagnosticTraceContextFromActiveScope();
+  return await runWithDiagnosticTraceContext(trace, () =>
+    runPreparedChannelTurnCoreInTrace(params, options),
+  );
+}
+
+async function runPreparedChannelTurnCoreInTrace<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
   params: PreparedChannelTurn<TDispatchResult>,

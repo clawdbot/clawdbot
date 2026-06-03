@@ -23,6 +23,13 @@ import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
+type BeforeToolCallPreparingTool = AnyAgentTool & {
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+};
 
 type ToolExecuteArgsCurrent = [
   string,
@@ -269,6 +276,32 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+async function prepareToolParamsBeforeHook(params: {
+  tool: AnyAgentTool;
+  rawParams: unknown;
+  toolCallId?: string;
+  hookContext?: HookContext;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const prepare = (params.tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
+  return prepare
+    ? await prepare(params.rawParams, {
+        ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+        ...(params.hookContext ? { hookContext: params.hookContext } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
+      })
+    : params.rawParams;
+}
+
+function finalizeToolParamsBeforeExecute(params: {
+  tool: AnyAgentTool;
+  executeParams: unknown;
+  preparedParams: unknown;
+}): unknown {
+  const finalize = (params.tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams;
+  return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
+}
+
 export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 export function findClientToolNameConflicts(params: {
@@ -331,8 +364,21 @@ export function toToolDefinitions(
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
-            const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-            const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+            const preparedParams = await prepareToolParamsBeforeHook({
+              tool,
+              rawParams: params,
+              ...(toolCallId ? { toolCallId } : {}),
+              ...(hookContext ? { hookContext } : {}),
+              ...(signal ? { signal } : {}),
+            });
+            const hookParams = normalizeCodeModeExecBeforeHookParams({
+              tool,
+              params: preparedParams,
+            });
+            const hookMetadata = getCodeModeExecBeforeHookMetadata({
+              tool,
+              params: preparedParams,
+            });
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
               params: hookParams,
@@ -351,9 +397,14 @@ export function toToolDefinitions(
             }
             executeParams = reconcileCodeModeExecBeforeHookParams({
               tool,
-              originalParams: params,
+              originalParams: preparedParams,
               hookParams,
               adjustedParams: hookOutcome.params,
+            });
+            executeParams = finalizeToolParamsBeforeExecute({
+              tool,
+              executeParams,
+              preparedParams,
             });
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }

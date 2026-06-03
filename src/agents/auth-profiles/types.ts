@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 export type OAuthProvider = string;
 
@@ -49,6 +50,7 @@ export type TokenCredential = {
 export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
+  oauthRef?: LegacyOAuthRef;
   clientId?: string;
   /**
    * OAuth refresh tokens are not portable by default. Provider-owned flows may

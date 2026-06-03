@@ -442,6 +442,25 @@ async function preparePackageSourceWorktree(ref) {
   return { selectedSha, sourceDir, trustedReason };
 }
 
+async function cleanupPackageSourceWorktree(
+  sourceDir,
+  { resolveError, runImpl = run, consoleError = console.error } = {},
+) {
+  try {
+    await runImpl("git", ["worktree", "remove", "--force", sourceDir]);
+  } catch (cleanupError) {
+    if (!resolveError) {
+      throw cleanupError;
+    }
+    const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    consoleError(
+      `warning: failed to remove temporary package source worktree ${sourceDir}: ${message}`,
+    );
+  }
+}
+
+export const cleanupPackageSourceWorktreeForTest = cleanupPackageSourceWorktree;
+
 async function installPackageSourceDeps(sourceDir) {
   await run(
     "pnpm",
@@ -1122,6 +1141,7 @@ async function resolveCandidate(options) {
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
   let artifactMetadata = {};
+  let resolveError;
 
   try {
     if (options.source === "ref") {
@@ -1198,9 +1218,12 @@ async function resolveCandidate(options) {
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
+  } catch (error) {
+    resolveError = error;
+    throw error;
   } finally {
     if (packageWorktreeDir) {
-      await run("git", ["worktree", "remove", "--force", packageWorktreeDir]).catch(() => {});
+      await cleanupPackageSourceWorktree(packageWorktreeDir, { resolveError });
     }
   }
 

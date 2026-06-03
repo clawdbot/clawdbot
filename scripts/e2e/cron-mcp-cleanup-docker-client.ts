@@ -7,12 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { GatewayRpcClient } from "./mcp-channels-harness.ts";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
 const execFileAsync = promisify(execFile);
-const PROBE_PID_WAIT_MS = readPositiveInt(
-  process.env.OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS,
-  120_000,
-);
+const PROBE_PID_WAIT_MS = readCronMcpCleanupProbePidWaitMs();
 type McpChannelsHarness = typeof import("./mcp-channels-harness.ts");
 let mcpChannelsHarness: McpChannelsHarness | undefined;
 
@@ -25,13 +23,8 @@ async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
   return mcpChannelsHarness;
 }
 
-function readPositiveInt(raw: string | undefined, fallback: number): number {
-  const text = (raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
-    return fallback;
-  }
-  const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+export function readCronMcpCleanupProbePidWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  return readPositiveIntEnv("OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS", 120_000, env);
 }
 
 async function readProbePid(pidPath: string): Promise<number | undefined> {

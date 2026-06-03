@@ -63,6 +63,7 @@ try {
     }),
   );
   if (extract.status !== 0) {
+    fs.rmSync(extractDir, { recursive: true, force: true });
     fail(`tar -xf failed for ${tarball}: ${extract.stderr || extract.status}`);
   }
 } catch (error) {

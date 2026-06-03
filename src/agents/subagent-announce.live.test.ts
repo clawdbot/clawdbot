@@ -332,7 +332,6 @@ describeLive("subagent announce live", () => {
               taskName: "issue_82913_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 180,
             })}.`,
             'Step 2: after spawn returns status="accepted", immediately call the bash tool with command exactly: sleep 35; printf ISSUE_82913_PARENT_TOOL_DONE.',
             "Do not call sessions_yield at any point in this scenario.",
@@ -524,7 +523,6 @@ describeLive("subagent announce live", () => {
               taskName: "steered_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 300,
             })}.`,
             'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
             `Step 3: reply exactly ${parentStartedToken}.`,
@@ -744,7 +742,6 @@ describeLive("subagent announce live", () => {
                   taskName: `gemini_stress_${childNumber}`,
                   cleanup: "keep",
                   context: "isolated",
-                  runTimeoutSeconds: 300,
                 },
               )}.`;
             }),

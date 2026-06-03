@@ -162,6 +162,7 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "currentInboundEventKind"
+  | "currentInboundAudio"
   | "currentInboundContext"
   | "abortSignal"
   | "deliveryCorrelations"
@@ -169,7 +170,11 @@ type FollowupRuntimeMetadata = Pick<
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
-  return item.currentInboundEventKind === "room_event" || Boolean(item.currentInboundContext);
+  return (
+    item.currentInboundEventKind === "room_event" ||
+    item.currentInboundAudio === true ||
+    Boolean(item.currentInboundContext)
+  );
 }
 
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
@@ -223,6 +228,7 @@ function collectRuntimeMetadata(
   const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: currentTurnSource?.currentInboundContext,
     abortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,

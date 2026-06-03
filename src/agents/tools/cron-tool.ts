@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
+import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
@@ -651,6 +652,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("job required");
           }
           const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
+          assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
           const job =
             normalizeCronJobCreate(canonicalJob, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
@@ -767,6 +769,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const canonicalPatch = canonicalizeCronToolObject(
             params.patch as Record<string, unknown>,
           );
+          assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
           const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");

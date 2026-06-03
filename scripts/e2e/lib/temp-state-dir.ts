@@ -24,8 +24,8 @@ export async function createE2eStateDir(prefix: string, env = process.env): Prom
 
   const cleanup = () => {
     if (created && !cleaned) {
-      cleaned = true;
       rmSync(stateDir, { force: true, recursive: true });
+      cleaned = true;
     }
   };
 

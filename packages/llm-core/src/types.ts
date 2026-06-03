@@ -402,6 +402,8 @@ export interface OpenAICompletionsCompat {
   cacheControlFormat?: "anthropic";
   /** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
   sendSessionAffinityHeaders?: boolean;
+  /** Whether the provider supports OpenAI-style `prompt_cache_key`. Default: false for third-party completions providers. */
+  supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
 }

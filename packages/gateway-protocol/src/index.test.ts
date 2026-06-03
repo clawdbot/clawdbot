@@ -5,6 +5,7 @@ import {
   formatValidationErrors,
   validateChatAbortParams,
   validateChatHistoryParams,
+  validateChatMetadataParams,
   validateChatSendParams,
   validateChatEvent,
   validateCommandsListParams,
@@ -102,6 +103,13 @@ describe("lazy protocol validators", () => {
         agentId: "work",
       }),
     ).toBe(true);
+  });
+
+  it("accepts selected-agent scope on chat metadata params", () => {
+    expect(validateChatMetadataParams({})).toBe(true);
+    expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
+    expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
+    expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {

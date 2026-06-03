@@ -2,7 +2,11 @@ import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
-import { renderUsage } from "./views/usage.ts";
+import type { LazyView } from "./lazy-view.ts";
+import { renderLazyView } from "./lazy-view.ts";
+import type { UsageColumnId } from "./views/usageTypes.ts";
+
+type UsageViewModule = typeof import("./views/usage.ts");
 
 type UsageCacheStatus = NonNullable<NonNullable<UsageState["usageResult"]>["cacheStatus"]>;
 
@@ -40,12 +44,12 @@ const debouncedLoadUsage = (state: UsageState) => {
   usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
 };
 
-export function renderUsageTab(state: AppViewState) {
+export function renderUsageTab(state: AppViewState, usageView: LazyView<UsageViewModule>) {
   if (state.tab !== "usage") {
     return nothing;
   }
 
-  return renderUsage({
+  return renderLazyView(usageView, ({ renderUsage }) => renderUsage({
     data: {
       loading: state.usageLoading,
       error: state.usageError,
@@ -79,7 +83,7 @@ export function renderUsageTab(state: AppViewState) {
       sessionSortDir: state.usageSessionSortDir,
       recentSessions: state.usageRecentSessions,
       sessionsTab: state.usageSessionsTab,
-      visibleColumns: state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
+      visibleColumns: state.usageVisibleColumns as UsageColumnId[],
       contextExpanded: state.usageContextExpanded,
       headerPinned: state.usageHeaderPinned,
     },
@@ -333,5 +337,5 @@ export function renderUsageTab(state: AppViewState) {
         },
       },
     },
-  });
+  }));
 }

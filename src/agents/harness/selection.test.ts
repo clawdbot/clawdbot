@@ -8,9 +8,9 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
-  maybeCompactAgentHarnessSession,
   resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
   runAgentHarnessAttempt,

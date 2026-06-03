@@ -128,6 +128,43 @@ export const icons = {
   `,
   check: html` <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg> `,
   play: html` <svg viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg> `,
+  archive: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="5" x="2" y="3" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="M10 12h4" />
+    </svg>
+  `,
+  archiveRestore: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="5" x="2" y="3" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="m9 15 3-3 3 3" />
+      <path d="M12 12v6" />
+    </svg>
+  `,
+  alertTriangle: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  `,
+  layoutComfortable: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+    </svg>
+  `,
+  layoutCompact: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="3" x="3" y="5" rx="1" />
+      <rect width="18" height="3" x="3" y="11" rx="1" />
+      <rect width="18" height="3" x="3" y="17" rx="1" />
+    </svg>
+  `,
   arrowDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 5v14" />

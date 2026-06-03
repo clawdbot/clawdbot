@@ -74,6 +74,10 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
+    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+      json: false,
+      deep: false,
+    });
   });
 
   it("forwards require-rpc to daemon status gathering", async () => {

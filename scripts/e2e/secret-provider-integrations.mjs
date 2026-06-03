@@ -203,19 +203,26 @@ function makeEnv(name) {
   return { root, home, stateDir, env };
 }
 
-async function cleanupEnv(root) {
+async function cleanupEnv(root, options = {}) {
   if (process.env.OPENCLAW_SECRET_PROOF_KEEP_TMP === "1") {
     console.log(`[keep] ${root}`);
     return;
   }
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  const attempts = options.attempts ?? 5;
+  const retryDelayMs = options.retryDelayMs ?? 250;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       fs.rmSync(root, { recursive: true, force: true });
       return;
-    } catch {
-      await delay(250);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await delay(retryDelayMs);
+      }
     }
   }
+  throw new Error(`failed to remove secret proof temp root ${root}`, { cause: lastError });
 }
 
 function runCommand(command, args, options = {}) {
@@ -1728,6 +1735,7 @@ async function main() {
 }
 
 export {
+  cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
   runCommand,

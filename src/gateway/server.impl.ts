@@ -622,6 +622,7 @@ export async function startGatewayServer(
         authOverride: opts.auth,
         tailscaleOverride: opts.tailscale,
         activateRuntimeSecrets,
+        log,
         measure: (name, run, measureOptions) => startupTrace.measure(name, run, measureOptions),
       }),
     { omitErrorMessage: true },

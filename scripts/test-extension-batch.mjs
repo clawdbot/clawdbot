@@ -5,6 +5,7 @@ import {
   listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
 } from "./lib/extension-test-plan.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
@@ -45,14 +46,10 @@ export function parseExtensionIds(rawArgs) {
   };
 }
 
-function parsePositiveInt(value) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
 export function resolveExtensionBatchParallelism(groupCount, env = process.env) {
-  const override = parsePositiveInt(env[PARALLEL_ENV_KEY]);
-  return Math.min(Math.max(1, override ?? 1), Math.max(1, groupCount));
+  const raw = env[PARALLEL_ENV_KEY]?.trim();
+  const override = raw ? parsePositiveInt(raw, PARALLEL_ENV_KEY) : 1;
+  return Math.min(Math.max(1, override), Math.max(1, groupCount));
 }
 
 function sanitizeCacheSegment(value) {

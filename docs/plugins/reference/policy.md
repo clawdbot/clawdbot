@@ -27,7 +27,7 @@ settings and governed workspace declarations. Policy currently covers channel
 conformance, governed tool metadata, MCP server posture, model-provider posture,
 private-network access posture, Gateway exposure posture, agent workspace/tool
 posture, configured global/per-agent tool posture, configured sandbox runtime
-posture, ingress/channel access posture, and OpenClaw config secret
+posture, ingress/channel access posture, data-handling posture, and OpenClaw config secret
 provider/auth profile posture.
 
 Policy stores authored requirements in `policy.jsonc`, observes existing
@@ -55,9 +55,16 @@ and require sandbox browser CDP source ranges.
 These checks observe config conformance only; they do not read runtime approval
 state, inspect live containers, or add runtime enforcement.
 
+Data-handling rules can require sensitive logging redaction, deny telemetry
+content capture, require session retention maintenance, and deny session
+transcript memory indexing. These checks observe config conformance only; they
+do not inspect raw logs, telemetry exports, transcripts, memory files, secrets,
+or personal data.
+
 Named policy scopes under `scopes.<scopeName>` can add stricter normal policy
 sections for the selector they list. `agentIds` supports `tools`,
-`agents.workspace`, and `sandbox`; `channelIds` supports `ingress.channels`.
+`agents.workspace`, `sandbox`, and `dataHandling.memory`; `channelIds` supports
+`ingress.channels`.
 Runtime agent ids that are not explicitly listed in `agents.list[]` are checked
 against inherited global/default posture rather than silently passing with no
 evidence. Every scope present in `policy.jsonc` must be valid and enforceable

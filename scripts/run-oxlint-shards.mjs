@@ -102,15 +102,11 @@ export function createWindowsExtensionShards({
 }
 
 export function resolveWindowsExtensionChunkSize(env = process.env) {
-  const rawValue = env.OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE;
-  if (rawValue === undefined) {
-    return DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE;
-  }
-
-  const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsedValue) && parsedValue > 0
-    ? parsedValue
-    : DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE;
+  return resolvePositiveEnvIntWithFallback(
+    env,
+    "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE",
+    DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE,
+  );
 }
 
 export function shouldRunOxlintShardsSerial({
@@ -505,22 +501,49 @@ export function resolveShardKillGraceMs(env) {
 
 function resolveNonNegativeEnvInt(env, key, defaultValue) {
   const rawValue = env[key];
-  if (rawValue === undefined) {
+  if (rawValue === undefined || rawValue === "") {
     return defaultValue;
   }
 
-  const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : defaultValue;
+  const text = String(rawValue).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${key} must be a non-negative integer; got: ${rawValue}`);
+  }
+  const parsedValue = Number(text);
+  if (!Number.isSafeInteger(parsedValue)) {
+    throw new Error(`${key} must be a non-negative integer; got: ${rawValue}`);
+  }
+  return parsedValue;
 }
 
 function resolvePositiveEnvInt(env, key) {
   const rawValue = env[key];
-  if (rawValue === undefined) {
+  if (rawValue === undefined || rawValue === "") {
     return null;
   }
 
-  const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null;
+  return parsePositiveEnvInt(rawValue, key);
+}
+
+function resolvePositiveEnvIntWithFallback(env, key, defaultValue) {
+  const rawValue = env[key];
+  if (rawValue === undefined || rawValue === "") {
+    return defaultValue;
+  }
+
+  return parsePositiveEnvInt(rawValue, key);
+}
+
+function parsePositiveEnvInt(rawValue, key) {
+  const text = String(rawValue).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${key} must be a positive integer; got: ${rawValue}`);
+  }
+  const parsedValue = Number(text);
+  if (!Number.isSafeInteger(parsedValue) || parsedValue <= 0) {
+    throw new Error(`${key} must be a positive integer; got: ${rawValue}`);
+  }
+  return parsedValue;
 }
 
 function signalChildProcess({ child, signal, useProcessGroup }) {

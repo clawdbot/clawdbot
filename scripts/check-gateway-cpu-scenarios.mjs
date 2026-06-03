@@ -182,23 +182,50 @@ function hasPrivateQaDist(repoRoot, fsImpl = fs) {
   });
 }
 
-function buildPrivateQaEnv(env) {
+function buildPrivateQaEnv(env, qaState) {
   return {
     ...env,
+    ...(qaState
+      ? {
+          HOME: qaState.home,
+          USERPROFILE: qaState.home,
+          OPENCLAW_HOME: qaState.home,
+          OPENCLAW_STATE_DIR: qaState.stateDir,
+          OPENCLAW_CONFIG_PATH: qaState.configPath,
+        }
+      : {}),
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD ?? "1",
+    OPENCLAW_TEST_DISABLE_UPDATE_CHECK: env.OPENCLAW_TEST_DISABLE_UPDATE_CHECK ?? "1",
+  };
+}
+
+function createQaState(outputDir) {
+  const root = path.join(outputDir, "qa-state-root");
+  const home = path.join(root, "home");
+  const stateDir = path.join(root, "state");
+  return {
+    configPath: path.join(stateDir, "openclaw.json"),
+    home,
+    root,
+    stateDir,
   };
 }
 
 async function runGatewayCpuScenarios(options, params = {}) {
   const repoRoot = params.cwd ?? process.cwd();
   const baseEnv = params.env ?? process.env;
-  const qaBuildEnv = buildPrivateQaEnv(baseEnv);
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
   const qaOutputDir = path.join(options.outputDir, "qa-suite");
+  const qaState = options.skipQa ? null : createQaState(options.outputDir);
+  if (qaState) {
+    fs.mkdirSync(qaState.home, { recursive: true });
+    fs.mkdirSync(qaState.stateDir, { recursive: true });
+  }
+  const qaBuildEnv = buildPrivateQaEnv(baseEnv, qaState);
   const qaOutputArg = toRepoRelativePath(repoRoot, qaOutputDir);
   const steps = [];
 
@@ -293,6 +320,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
       warmup: options.warmup,
       cpuCoreWarn: options.cpuCoreWarn,
       hotWallWarnMs: options.hotWallWarnMs,
+      qaStateDir: qaState?.stateDir ?? null,
     },
     steps,
     observations,

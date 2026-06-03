@@ -1,5 +1,6 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
@@ -51,6 +52,11 @@ const model = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 4096,
+} satisfies Model<"openai-completions">;
+
+const reasoningModel = {
+  ...model,
+  reasoning: true,
 } satisfies Model<"openai-completions">;
 
 const context = {
@@ -144,6 +150,150 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.stopReason).toBe("error");
     expect(capturedStop).toEqual(["STOP"]);
   });
+
+  it("keeps prompt cache keys when long retention is disabled", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        compat: {
+          supportsPromptCacheKey: true,
+          supportsLongCacheRetention: false,
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          capturedRetention = (payload as { prompt_cache_retention?: unknown })
+            .prompt_cache_retention;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBe("session-123");
+    expect(capturedRetention).toBeUndefined();
+  });
+
+  it("omits prompt cache retention when third-party models have not opted into cache keys", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(createModel(32_000), context, {
+      apiKey: "sk-test",
+      sessionId: "session-123",
+      cacheRetention: "long",
+      onPayload(payload) {
+        capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+        capturedRetention = (payload as { prompt_cache_retention?: unknown })
+          .prompt_cache_retention;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBeUndefined();
+    expect(capturedRetention).toBeUndefined();
+  });
+
+  it("keeps OpenAI long retention even when no cache key is available", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+      cacheRetention: "long",
+      onPayload(payload) {
+        capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+        capturedRetention = (payload as { prompt_cache_retention?: unknown })
+          .prompt_cache_retention;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBeUndefined();
+    expect(capturedRetention).toBe("24h");
+  });
+
+  it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      createModel(32_000),
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nDynamic suffix",
+    });
+  });
+
+  it("splits the cache boundary before applying Anthropic cache control for OpenRouter Anthropic models", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Dynamic suffix",
+        },
+      ],
+    });
+  });
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {
@@ -153,8 +303,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -171,8 +322,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -189,8 +341,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -207,8 +360,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -225,8 +379,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -264,8 +419,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -308,8 +464,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
     const visibleText = result.content
@@ -353,8 +510,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
     const visibleText = result.content
@@ -368,6 +526,46 @@ describe("openai-completions stop-reason tool-call guard", () => {
       thinking: "private reasoning",
       thinkingSignature: "reasoning_content",
     });
+  });
+
+  it("drops mirrored reasoning output when reasoning is disabled but keeps strict text partitioning", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "<think>private reasoning",
+            },
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_content: "private reasoning",
+            },
+          },
+        ],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+    const visibleText = result.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("");
+    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
 
   it("promotes silent tool_calls with finish_reason stop to toolUse", async () => {

@@ -1,7 +1,10 @@
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
@@ -12,6 +15,10 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { CliBackendConfig } from "../config/types.agent-defaults.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
+import {
+  canMaterializeGatewayAuthSecretRefsWithoutExec,
+  materializeGatewayAuthSecretRefs,
+} from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecApprovalsFile,
@@ -217,6 +224,31 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
 
 function normalizeSuppressionText(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+async function materializeAuditGatewayAuthRefs(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const materializeParams = {
+    cfg: params.cfg,
+    env: params.env,
+    mode: params.cfg.gateway?.auth?.mode,
+    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+  };
+  if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
+    return params.cfg;
+  }
+  try {
+    return await materializeGatewayAuthSecretRefs(materializeParams);
+  } catch {
+    return params.cfg;
+  }
+}
+
+function shouldMaterializeHooksGatewayAuthRefs(cfg: OpenClawConfig): boolean {
+  return cfg.hooks?.enabled === true && Boolean(normalizeOptionalString(cfg.hooks.token));
 }
 
 function findingMatchesSuppression(
@@ -1210,8 +1242,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
+  const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
+    ? await materializeAuditGatewayAuthRefs({
+        cfg,
+        env,
+      })
+    : cfg;
   findings.push(
-    ...auditNonDeep.collectHooksHardeningFindings(cfg, env, {
+    ...auditNonDeep.collectHooksHardeningFindings(hooksGatewayAuthCfg, env, {
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );

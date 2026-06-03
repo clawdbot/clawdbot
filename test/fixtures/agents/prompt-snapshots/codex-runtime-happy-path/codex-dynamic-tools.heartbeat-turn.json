@@ -1180,10 +1180,6 @@
           "enum": ["subagent"],
           "type": "string"
         },
-        "runTimeoutSeconds": {
-          "minimum": 0,
-          "type": "integer"
-        },
         "sandbox": {
           "enum": ["inherit", "require"],
           "type": "string"
@@ -1197,10 +1193,6 @@
         },
         "thinking": {
           "type": "string"
-        },
-        "timeoutSeconds": {
-          "minimum": 0,
-          "type": "integer"
         }
       },
       "required": ["task"],

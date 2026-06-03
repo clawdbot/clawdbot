@@ -207,6 +207,81 @@ describe("write-cli-startup-metadata", () => {
     expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
   });
 
+  it("renders independent startup help snapshots concurrently", async () => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-concurrency-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const started: string[] = [];
+    const unblockers = new Map<string, () => void>();
+    const expectedStarted = ["browser", "secrets", "nodes", "subcommands"];
+
+    mkdirSync(distDir, { recursive: true });
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const renderAfterUnblock = (label: string, output: string): (() => Promise<string>) => {
+      return async () => {
+        started.push(label);
+        await new Promise<void>((resolve) => {
+          unblockers.set(label, resolve);
+        });
+        return output;
+      };
+    };
+
+    const waitForAllStarted = async (): Promise<void> => {
+      const deadline = Date.now() + 1_000;
+      while (Date.now() < deadline) {
+        if (expectedStarted.every((label) => started.includes(label))) {
+          return;
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+      }
+      throw new Error(`startup help renderers did not start concurrently: ${started.join(", ")}`);
+    };
+
+    const writePromise = writeCliStartupMetadata({
+      distDir,
+      outputPath,
+      extensionsDir,
+      sourceRootDir: tempRoot,
+      renderBundledRootHelpText: async () => "Usage: openclaw\n",
+      renderSourceBrowserHelpText: renderAfterUnblock("browser", "Usage: openclaw browser\n"),
+      renderSourceSecretsHelpText: renderAfterUnblock("secrets", "Usage: openclaw secrets\n"),
+      renderSourceNodesHelpText: renderAfterUnblock("nodes", "Usage: openclaw nodes\n"),
+      renderSourceSubcommandHelpTextRecord: async () => {
+        started.push("subcommands");
+        await new Promise<void>((resolve) => {
+          unblockers.set("subcommands", resolve);
+        });
+        return {
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+        };
+      },
+    });
+
+    await waitForAllStarted();
+    for (const label of expectedStarted) {
+      unblockers.get(label)?.();
+    }
+    await writePromise;
+
+    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+      browserHelpText: string;
+      nodesHelpText: string;
+      secretsHelpText: string;
+    };
+    expect(written.browserHelpText).toContain("openclaw browser");
+    expect(written.secretsHelpText).toContain("openclaw secrets");
+    expect(written.nodesHelpText).toContain("openclaw nodes");
+  });
+
   it("regenerates nodes help when bundled canvas CLI help sources change", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-signature-");
     const distDir = path.join(tempRoot, "dist");

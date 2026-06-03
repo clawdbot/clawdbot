@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
   ),
+  clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
   refreshActiveSecretsRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
@@ -55,6 +56,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     listProfilesForProvider: mocks.listProfilesForProvider,
     removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
     resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
+    clearRuntimeAuthProfileStoreSnapshots: mocks.clearRuntimeAuthProfileStoreSnapshots,
   };
 });
 
@@ -186,7 +188,7 @@ function firstEnsureAuthProfileStoreCall() {
 
 function firstBuildAuthHealthSummaryCall() {
   return mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
-    | [{ providers?: string[] }]
+    | [{ providers?: string[]; allowKeychainPrompt?: boolean }]
     | undefined;
 }
 
@@ -311,6 +313,38 @@ describe("models.authStatus", () => {
     expect(result.providers[0].profiles[0].type).toBe("oauth");
   });
 
+  it("forwards unresolved auth reason codes to status clients", async () => {
+    const profile = {
+      profileId: "openai-codex:default",
+      provider: "openai-codex",
+      type: "oauth",
+      status: "missing",
+      reasonCode: "unresolved_ref",
+      source: "store",
+      label: "openai-codex:default",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "openai-codex",
+          status: "missing",
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+
+    const [, payload] = firstRespondCall(opts) ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.status).toBe("missing");
+    expect(result.providers[0]?.profiles[0]?.reasonCode).toBe("unresolved_ref");
+  });
+
   it("serves cached response within TTL and marks it as cached", async () => {
     const opts1 = createOptions();
     await handler(opts1);
@@ -332,6 +366,31 @@ describe("models.authStatus", () => {
 
     await handler(createOptions({ refresh: true }));
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearRuntimeAuthProfileStoreSnapshots).toHaveBeenCalledTimes(1);
+    const clearOrder = mocks.clearRuntimeAuthProfileStoreSnapshots.mock.invocationCallOrder[0];
+    const refreshReadOrder = mocks.ensureAuthProfileStore.mock.invocationCallOrder.at(-1);
+    expect(clearOrder).toBeLessThan(refreshReadOrder ?? 0);
+  });
+
+  it("keeps refreshed secrets runtime snapshots on explicit refresh", async () => {
+    mocks.refreshActiveSecretsRuntimeSnapshot.mockResolvedValueOnce(true);
+
+    await handler(createOptions({ refresh: true }));
+
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps last-good secrets runtime snapshots when explicit refresh fails", async () => {
+    mocks.refreshActiveSecretsRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
+
+    await handler(createOptions({ refresh: true }));
+
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
   });
 
   it("invalidateModelAuthStatusCache() clears the cached response", async () => {
@@ -512,6 +571,12 @@ describe("models.authStatus", () => {
     await handler(createOptions());
     const call = firstBuildAuthHealthSummaryCall();
     expect(call?.[0]?.providers).toBeUndefined();
+  });
+
+  it("builds status health without allowing keychain prompts", async () => {
+    await handler(createOptions());
+    const call = firstBuildAuthHealthSummaryCall();
+    expect(call?.[0]?.allowKeychainPrompt).toBe(false);
   });
 
   it("still flags provider as missing when apiKey env SecretRef points at an unset env var", async () => {
@@ -869,7 +934,7 @@ describe("aggregateOAuthStatus", () => {
     expect(result.status).toBe("static");
   });
 
-  it("expired + missing both map to 'expired'", () => {
+  it("keeps missing distinct from expired", () => {
     const expiredResult = aggregateOAuthStatus(
       {
         provider: "openai",
@@ -888,7 +953,7 @@ describe("aggregateOAuthStatus", () => {
       },
       NOW,
     );
-    expect(missingResult.status).toBe("expired");
+    expect(missingResult.status).toBe("missing");
   });
 
   it("precedence: expired/missing > expiring > ok > static", () => {

@@ -26,15 +26,17 @@ type McpLoopbackScopeParams = {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
 };
 
-export function resolveMcpLoopbackScopedTools(
-  params: McpLoopbackScopeParams,
-): { agentId: string | undefined; tools: McpLoopbackTool[] } {
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
+  agentId: string | undefined;
+  tools: McpLoopbackTool[];
+} {
   const scoped = resolveGatewayScopedTools({
     ...params,
     surface: "loopback",
@@ -56,6 +58,7 @@ export class McpLoopbackToolCache {
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",
+      params.currentInboundAudio === true ? "audio" : "no-audio",
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",

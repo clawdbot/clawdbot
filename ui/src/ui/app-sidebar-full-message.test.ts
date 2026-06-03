@@ -9,6 +9,12 @@ describe("OpenClawApp full-message sidebar upgrade", () => {
     return document.createElement("openclaw-app") as import("./app.ts").OpenClawApp;
   }
 
+  it("defaults canvas embeds to strict sandbox before bootstrap config loads", async () => {
+    const app = await createApp();
+
+    expect(app.embedSandboxMode).toBe("strict");
+  });
+
   it("uses string content returned by chat.message.get", async () => {
     const content: SidebarContent = {
       kind: "markdown",

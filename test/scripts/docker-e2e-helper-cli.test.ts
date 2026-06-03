@@ -42,6 +42,16 @@ describe("Docker E2E helper CLIs", () => {
     );
   });
 
+  it("rejects malformed timings limits without a Node stack trace", () => {
+    const result = runHelper("scripts/docker-e2e-timings.mjs", "summary.json", "--limit=1e3");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--limit must be a positive integer");
+    expect(result.stderr).not.toContain("Error:");
+    expect(result.stderr).not.toContain("at file:");
+  });
+
   it("prints rerun help without detecting the GitHub repository", () => {
     const result = runHelper("scripts/docker-e2e-rerun.mjs", "--help");
 

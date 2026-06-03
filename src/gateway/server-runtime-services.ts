@@ -4,33 +4,22 @@ import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-r
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+import {
+  createNoopHeartbeatRunner,
+  type GatewayRuntimeServiceLogger,
+} from "./server-runtime-service-shared.js";
 export {
   startGatewayChannelHealthMonitor,
   startGatewayRuntimeServices,
   type GatewayChannelManager,
 } from "./server-runtime-startup-services.js";
 
-type GatewayRuntimeServiceLogger = {
-  child: (name: string) => {
-    info: (message: string) => void;
-    warn: (message: string) => void;
-    error: (message: string) => void;
-  };
-  error: (message: string) => void;
-};
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
 };
 export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
 >;
-
-function createNoopHeartbeatRunner(): HeartbeatRunner {
-  return {
-    stop: () => {},
-    updateConfig: (_cfg: OpenClawConfig) => {},
-  };
-}
 
 /** Starts cron without making gateway startup wait for cron initialization. */
 export function startGatewayCronWithLogging(params: {

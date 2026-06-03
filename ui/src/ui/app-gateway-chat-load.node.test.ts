@@ -274,7 +274,7 @@ describe("connectGateway chat load startup work", () => {
     await vi.waitFor(() =>
       expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
-    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
 
     agentsList.resolve();
@@ -304,21 +304,20 @@ describe("connectGateway chat load startup work", () => {
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for startup bootstrap before the first chat refresh", async () => {
+  it("does not let slow startup bootstrap block the first chat refresh", async () => {
     const bootstrap = createDeferred();
     const { host, client } = connectHost("chat");
     (host as typeof host & { controlUiBootstrapReady?: Promise<void> }).controlUiBootstrapReady =
       bootstrap.promise;
 
     client.emitHello();
-    await Promise.resolve();
 
-    expect(refreshActiveTabMock).not.toHaveBeenCalled();
-
-    bootstrap.resolve();
     await vi.waitFor(() =>
       expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
+    await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
+
+    bootstrap.resolve();
   });
 
   it("records connect timing through the Control UI performance buffer", () => {
@@ -347,7 +346,7 @@ describe("connectGateway chat load startup work", () => {
     await vi.waitFor(() =>
       expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
-    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
 
     await vi.waitFor(() =>
       expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, {
@@ -384,7 +383,7 @@ describe("connectGateway chat load startup work", () => {
     await vi.waitFor(() =>
       expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
-    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
 
     agentsList.resolve();

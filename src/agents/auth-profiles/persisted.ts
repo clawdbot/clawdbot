@@ -6,6 +6,7 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
   hasUsableOAuthCredential,
@@ -160,6 +161,9 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       type: "oauth",
       ...normalizeCommonCredentialFields(entry),
     };
+    if (isLegacyOAuthRef(entry.oauthRef)) {
+      normalized.oauthRef = entry.oauthRef;
+    }
     for (const field of [
       "access",
       "refresh",
@@ -251,10 +255,7 @@ function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
   return Object.keys(entries).length > 0 ? entries : null;
 }
 
-export function coercePersistedAuthProfileStore(
-  raw: unknown,
-  _options?: LoadPersistedAuthProfileStoreOptions,
-): AuthProfileStore | null {
+export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
   if (!isRecord(raw)) {
     return null;
   }
@@ -689,11 +690,11 @@ export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
 
 export function loadPersistedAuthProfileStore(
   agentDir?: string,
-  options?: LoadPersistedAuthProfileStoreOptions,
+  _options?: LoadPersistedAuthProfileStoreOptions,
 ): AuthProfileStore | null {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
-  const store = coercePersistedAuthProfileStore(raw, options);
+  const store = coercePersistedAuthProfileStore(raw);
   if (!store) {
     return null;
   }

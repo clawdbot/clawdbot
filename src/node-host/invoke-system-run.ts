@@ -870,6 +870,7 @@ async function executeSystemRunPhase(
           cwd: phase.cwd,
           env: phase.env,
           platform: process.platform,
+          commandText: phase.commandText,
           strictInlineEval: phase.strictInlineEval,
         })
       : [];

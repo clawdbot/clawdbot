@@ -1,12 +1,27 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
   checkUnusedFiles,
   compareUnusedFilesToAllowlist,
   KNIP_MAX_BUFFER_BYTES,
-  KNIP_TIMEOUT_MS,
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
 } from "../../scripts/check-deadcode-unused-files.mjs";
+
+class FakeKnipProcess extends EventEmitter {
+  readonly stderr = new EventEmitter();
+  readonly stdout = new EventEmitter();
+  pid = 12345;
+}
+
+function finishFakeProcess(
+  child: FakeKnipProcess,
+  status: number | null,
+  signal: NodeJS.Signals | null,
+): void {
+  child.emit("exit", status, signal);
+  child.emit("close", status, signal);
+}
 
 describe("check-deadcode-unused-files", () => {
   it("parses the compact Knip unused-file section", () => {
@@ -111,31 +126,33 @@ src/a.ts: src/a.ts
     });
   });
 
-  it("bounds Knip execution and reports spawn errors", () => {
+  it("runs Knip through a process-group-aware subprocess", async () => {
     const calls: unknown[] = [];
-    const timeoutError = Object.assign(new Error("spawnSync pnpm ETIMEDOUT"), {
-      code: "ETIMEDOUT",
+
+    const resultPromise = runKnipUnusedFiles({
+      spawnCommand(command: string, args: string[], options: unknown) {
+        calls.push({ args, command, options });
+        const child = new FakeKnipProcess();
+        queueMicrotask(() => {
+          child.stdout.emit("data", "partial stdout");
+          child.stderr.emit("data", "partial stderr");
+          finishFakeProcess(child, 0, null);
+        });
+        return child;
+      },
+      writeStatus: () => {},
     });
 
-    const result = runKnipUnusedFiles({
-      spawnSyncCommand(command: string, args: string[], options: unknown) {
-        calls.push({ args, command, options });
-        return {
-          error: timeoutError,
-          signal: "SIGTERM",
-          status: null,
-          stderr: "partial stderr",
-          stdout: "partial stdout",
-        };
-      },
-    });
+    const result = await resultPromise;
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       args: [
         "--config.minimum-release-age=0",
         "dlx",
+        "--package",
         "knip@6.8.0",
+        "knip",
         "--config",
         "config/knip.config.ts",
         "--production",
@@ -147,16 +164,132 @@ src/a.ts: src/a.ts
       ],
       command: "pnpm",
       options: {
-        killSignal: "SIGTERM",
-        maxBuffer: KNIP_MAX_BUFFER_BYTES,
-        timeout: KNIP_TIMEOUT_MS,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
       },
     });
     expect(result).toStrictEqual({
-      errorCode: "ETIMEDOUT",
-      errorMessage: "spawnSync pnpm ETIMEDOUT",
+      errorCode: undefined,
+      errorMessage: undefined,
       output: "partial stdoutpartial stderr",
-      signal: "SIGTERM",
+      signal: null,
+      status: 0,
+    });
+  });
+
+  it("emits heartbeat status and reports Knip timeouts", async () => {
+    const statuses: string[] = [];
+    const child = new FakeKnipProcess();
+    const originalKill = process.kill;
+    const kills: Array<NodeJS.Signals | number | undefined> = [];
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (Math.abs(pid) === child.pid) {
+        kills.push(signal);
+        finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
+        return true;
+      }
+      return originalKill(pid, signal as NodeJS.Signals);
+    }) as typeof process.kill;
+    try {
+      const result = await runKnipUnusedFiles({
+        heartbeatMs: 1,
+        killGraceMs: 50,
+        maxBufferBytes: KNIP_MAX_BUFFER_BYTES,
+        spawnCommand: () => child,
+        timeoutMs: 5,
+        writeStatus: (message: string) => statuses.push(message),
+      });
+
+      expect(statuses.some((message) => message.includes("still running"))).toBe(true);
+      expect(statuses.some((message) => message.includes("timed out"))).toBe(true);
+      expect(kills).toContain("SIGTERM");
+      expect(result).toStrictEqual({
+        errorCode: "ETIMEDOUT",
+        errorMessage: expect.stringContaining("Knip unused-file scan timed out"),
+        output: "",
+        signal: "SIGTERM",
+        status: null,
+      });
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it("keeps output delivered after process exit but before stdio close", async () => {
+    const child = new FakeKnipProcess();
+    const resultPromise = runKnipUnusedFiles({
+      spawnCommand: () => child,
+      writeStatus: () => {},
+    });
+
+    child.stdout.emit("data", "before-exit\n");
+    child.emit("exit", 0, null);
+    child.stdout.emit("data", "after-exit\n");
+    child.emit("close", 0, null);
+
+    await expect(resultPromise).resolves.toStrictEqual({
+      errorCode: undefined,
+      errorMessage: undefined,
+      output: "before-exit\nafter-exit\n",
+      signal: null,
+      status: 0,
+    });
+  });
+
+  it("bounds captured Knip output", async () => {
+    const child = new FakeKnipProcess();
+    const originalKill = process.kill;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (Math.abs(pid) === child.pid) {
+        finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
+        return true;
+      }
+      return originalKill(pid, signal as NodeJS.Signals);
+    }) as typeof process.kill;
+    try {
+      const resultPromise = runKnipUnusedFiles({
+        killGraceMs: 50,
+        maxBufferBytes: 4,
+        spawnCommand: () => child,
+        timeoutMs: 1000,
+        writeStatus: () => {},
+      });
+      child.stdout.emit("data", "too much output");
+
+      await expect(resultPromise).resolves.toStrictEqual({
+        errorCode: "ENOBUFS",
+        errorMessage: "Knip unused-file scan exceeded 4 output bytes",
+        output: "too ",
+        signal: "SIGTERM",
+        status: null,
+      });
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it("reports spawn errors", async () => {
+    const resultPromise = runKnipUnusedFiles({
+      spawnCommand: () => {
+        const child = new FakeKnipProcess();
+        queueMicrotask(() =>
+          child.emit(
+            "error",
+            Object.assign(new Error("spawn pnpm ENOENT"), {
+              code: "ENOENT",
+            }),
+          ),
+        );
+        return child;
+      },
+      writeStatus: () => {},
+    });
+
+    await expect(resultPromise).resolves.toStrictEqual({
+      errorCode: "ENOENT",
+      errorMessage: "spawn pnpm ENOENT",
+      output: "",
+      signal: null,
       status: null,
     });
   });

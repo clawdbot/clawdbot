@@ -576,6 +576,7 @@ export type ProviderNormalizeTransportContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   provider: string;
+  modelId?: string;
   api?: string | null;
   baseUrl?: string;
 };

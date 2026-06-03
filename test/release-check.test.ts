@@ -50,6 +50,27 @@ function makePackResult(filename: string, unpackedSize: number) {
   return { filename, unpackedSize };
 }
 
+function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    process.env[key] = value;
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
@@ -197,6 +218,26 @@ describe("runReleaseCheckCommand", () => {
         { maxBuffer: 1024, stdio: ["ignore", "pipe", "pipe"] },
       ),
     ).toThrow();
+  });
+
+  it("rejects malformed command limit environment values", () => {
+    withProcessEnv({ OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "1e3" }, () => {
+      expect(() =>
+        runReleaseCheckCommand(
+          { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+          { stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      ).toThrow("invalid OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS: 1e3");
+    });
+
+    withProcessEnv({ OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES: "16mb" }, () => {
+      expect(() =>
+        runReleaseCheckCommand(
+          { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+          { stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      ).toThrow("invalid OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES: 16mb");
+    });
   });
 });
 

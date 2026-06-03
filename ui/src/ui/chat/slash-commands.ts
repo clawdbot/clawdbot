@@ -504,6 +504,28 @@ function loadRemoteSlashCommands(
   return inFlight;
 }
 
+export function applyRemoteSlashCommandsResult(params: {
+  client: GatewayBrowserClient | null;
+  agentId?: string | null;
+  result: CommandsListResult | null | undefined;
+}): boolean {
+  if (!Array.isArray(params.result?.commands)) {
+    return false;
+  }
+  const agentId = params.agentId?.trim();
+  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
+  if (params.client) {
+    const cache = getRemoteSlashCommandCache(params.client);
+    cache.set(remoteSlashCommandCacheKey(agentId), {
+      commands,
+      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
+    });
+  }
+  refreshSeq += 1;
+  replaceSlashCommands(commands);
+  return true;
+}
+
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;

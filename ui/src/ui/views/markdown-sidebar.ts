@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -29,6 +30,18 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
     content?.kind === "markdown" && content.content.trim()
       ? toSanitizedMarkdownHtml(content.content)
       : "";
+  const canvasSandbox =
+    content?.kind === "canvas"
+      ? resolveSidebarCanvasSandbox(content, props.embedSandboxMode ?? "scripts")
+      : "";
+  const canvasSrc =
+    content?.kind === "canvas"
+      ? resolveCanvasIframeUrl(
+          content.entryUrl,
+          props.canvasPluginSurfaceUrl,
+          props.allowExternalEmbedUrls ?? false,
+        )
+      : null;
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
@@ -71,22 +84,20 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               ? html`
                   <div class="chat-tool-card__preview" data-kind="canvas">
                     <div class="chat-tool-card__preview-panel" data-side="front">
-                      <iframe
-                        class="chat-tool-card__preview-frame"
-                        title=${content.title?.trim() || "Render preview"}
-                        sandbox=${resolveSidebarCanvasSandbox(
-                          content,
-                          props.embedSandboxMode ?? "scripts",
-                        )}
-                        src=${resolveCanvasIframeUrl(
-                          content.entryUrl,
-                          props.canvasPluginSurfaceUrl,
-                          props.allowExternalEmbedUrls ?? false,
-                        ) ?? nothing}
-                        style=${content.preferredHeight
-                          ? `height:${content.preferredHeight}px`
-                          : ""}
-                      ></iframe>
+                      ${keyed(
+                        `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                        html`
+                          <iframe
+                            class="chat-tool-card__preview-frame"
+                            title=${content.title?.trim() || "Render preview"}
+                            sandbox=${canvasSandbox}
+                            src=${canvasSrc ?? nothing}
+                            style=${content.preferredHeight
+                              ? `height:${content.preferredHeight}px`
+                              : ""}
+                          ></iframe>
+                        `,
+                      )}
                     </div>
                     ${content.rawText?.trim()
                       ? html`

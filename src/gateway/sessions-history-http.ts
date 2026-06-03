@@ -1,6 +1,4 @@
-import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -30,6 +28,7 @@ import {
   resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
+import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
@@ -75,19 +74,6 @@ function resolveLimit(req: IncomingMessage): number | undefined {
     return 1;
   }
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
-}
-
-function canonicalizePath(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const resolved = path.resolve(trimmed);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
@@ -198,7 +184,7 @@ export async function handleSessionHistoryHttpRequest(
           entry.sessionFile,
           target.agentId,
         )
-          .map((candidate) => canonicalizePath(candidate))
+          .map((candidate) => resolveTranscriptPathForComparison(candidate))
           .filter((candidate): candidate is string => typeof candidate === "string"),
       )
     : new Set<string>();
@@ -306,7 +292,7 @@ export async function handleSessionHistoryHttpRequest(
     if (!entry?.sessionId) {
       return;
     }
-    const updatePath = canonicalizePath(update.sessionFile);
+    const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
     if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }

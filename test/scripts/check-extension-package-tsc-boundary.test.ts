@@ -13,6 +13,7 @@ import {
   formatStepFailure,
   installCanaryArtifactCleanup,
   isBoundaryCompileFresh,
+  resolveCompileConcurrency,
   resolveBoundaryCheckLockPath,
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
@@ -103,6 +104,17 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fs.existsSync(demoA.tsconfigPath)).toBe(false);
     expect(fs.existsSync(demoB.canaryPath)).toBe(false);
     expect(fs.existsSync(demoB.tsconfigPath)).toBe(false);
+  });
+
+  it("parses extension boundary compile concurrency strictly", () => {
+    expect(resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "4" }, 32)).toBe(4);
+    expect(resolveCompileConcurrency({}, 12)).toBe(6);
+    expect(resolveCompileConcurrency({}, 3)).toBe(1);
+    for (const value of ["4x", "0", "1e3"]) {
+      expect(() =>
+        resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
+      ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
+    }
   });
 
   it("blocks concurrent boundary checks in the same checkout", () => {

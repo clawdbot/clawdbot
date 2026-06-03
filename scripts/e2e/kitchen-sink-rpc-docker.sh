@@ -33,7 +33,8 @@ for env_name in \
   OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS \
   OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS \
   OPENCLAW_KITCHEN_SINK_RPC_CALL_MS \
-  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB; do
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB \
+  OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB; do
   env_value="${!env_name:-}"
   if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
     DOCKER_ENV_ARGS+=(-e "$env_name")

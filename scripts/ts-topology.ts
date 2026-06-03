@@ -8,6 +8,7 @@ import {
   createPluginSdkScope,
 } from "./lib/ts-topology/scope.js";
 import type { TopologyReportName, TopologyScope } from "./lib/ts-topology/types.js";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const VALID_REPORTS = new Set<TopologyReportName>([
   "public-surface-usage",
@@ -86,7 +87,7 @@ function parseArgs(argv: string[]): CliOptions {
         options.report = (value as TopologyReportName | undefined) ?? options.report;
         break;
       case "--limit":
-        options.limit = Math.max(1, Number.parseInt(value ?? "25", 10));
+        options.limit = parsePositiveInt(value, "--limit");
         break;
       case "--repo-root":
         options.repoRoot = path.resolve(value ?? options.repoRoot);

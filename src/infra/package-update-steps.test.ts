@@ -7,7 +7,11 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateStepResult,
 } from "./package-update-steps.js";
-import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global.js";
+import {
+  resolveNpmGlobalPrefixLayoutFromPrefix,
+  type CommandRunner,
+  type ResolvedGlobalInstallTarget,
+} from "./update-global.js";
 
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -526,10 +530,8 @@ describe("runGlobalPackageUpdateSteps", () => {
             if (!stagePrefix) {
               throw new Error("missing staged prefix");
             }
-            await writePackageRoot(
-              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-              "2.0.0",
-            );
+            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
             return {
               name,
               command: argv.join(" "),
@@ -685,10 +687,8 @@ describe("runGlobalPackageUpdateSteps", () => {
             if (!stagePrefix) {
               throw new Error("missing staged prefix");
             }
-            await writePackageRoot(
-              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-              "2.0.0",
-            );
+            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
             return {
               name,
               command: argv.join(" "),
@@ -702,6 +702,12 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         expect(result.failedStep).toBeNull();
         expect(result.afterVersion).toBe("2.0.0");
+        const swapStep = result.steps.find((step) => step.name === "global install swap");
+        expect(swapStep?.stdoutTail).toContain("preserved old package");
+        const delayedCleanupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
+          entry.startsWith(".openclaw-"),
+        );
+        expect(delayedCleanupDirs).toHaveLength(1);
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
         ).resolves.toContain('"version":"2.0.0"');

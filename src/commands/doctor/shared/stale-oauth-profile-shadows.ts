@@ -8,6 +8,10 @@ import {
 } from "../../../agents/agent-scope.js";
 import { AUTH_STORE_LOCK_OPTIONS } from "../../../agents/auth-profiles/constants.js";
 import {
+  isLegacyOAuthRef,
+  LEGACY_OAUTH_REF_PROVIDER,
+} from "../../../agents/auth-profiles/legacy-oauth-ref.js";
+import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -26,19 +30,6 @@ type StaleOAuthProfileShadow = {
   authPath: string;
   profileId: string;
 };
-
-const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
-const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
-
-function isLegacyOAuthRef(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.source === LEGACY_OAUTH_REF_SOURCE &&
-    value.provider === LEGACY_OAUTH_REF_PROVIDER &&
-    typeof value.id === "string" &&
-    /^[a-f0-9]{32}$/.test(value.id)
-  );
-}
 
 async function loadRawAuthProfileStore(authPath: string): Promise<Record<string, unknown> | null> {
   try {

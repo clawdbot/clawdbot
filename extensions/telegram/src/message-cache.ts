@@ -54,6 +54,13 @@ export type TelegramMessageCache = {
     before: number;
     after: number;
   }) => Promise<TelegramCachedMessageNode[]>;
+  latestMatchingAtOrBefore: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId?: string;
+    threadId?: number;
+    matches: (node: TelegramCachedMessageNode) => boolean;
+  }) => Promise<TelegramCachedMessageNode | null>;
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
@@ -712,6 +719,40 @@ export function createTelegramMessageCache(params?: {
         targetIndex + Math.max(0, after) + 1,
       );
     },
+    latestMatchingAtOrBefore: async ({ accountId, chatId, messageId, threadId, matches }) => {
+      if (!messageId) {
+        return null;
+      }
+      const targetId = parseSafeMessageId(messageId);
+      if (targetId === undefined) {
+        return null;
+      }
+      await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+      const prefix = telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId });
+      const normalizedThreadId = normalizeTelegramCacheThreadId(threadId);
+      if (threadId != null && normalizedThreadId === undefined) {
+        return null;
+      }
+      const normalizedThread =
+        normalizedThreadId !== undefined ? String(normalizedThreadId) : undefined;
+      let latest: TelegramCachedMessageNode | null = null;
+      for (const [key, entry] of messages) {
+        if (!key.startsWith(prefix)) {
+          continue;
+        }
+        if (normalizedThread !== undefined && entry.threadId !== normalizedThread) {
+          continue;
+        }
+        const entryId = parseSafeMessageId(entry.messageId);
+        if (entryId === undefined || entryId > targetId || !matches(entry)) {
+          continue;
+        }
+        if (!latest || compareCachedMessageNodes(entry, latest) > 0) {
+          latest = entry;
+        }
+      }
+      return latest;
+    },
   };
 }
 
@@ -789,25 +830,15 @@ async function resolveSessionBoundaryNode(params: {
   if (!params.messageId) {
     return undefined;
   }
-  const { messageId } = params;
-  const candidates = (
-    await params.cache.recentBefore({
+  return (
+    (await params.cache.latestMatchingAtOrBefore({
       accountId: params.accountId,
       chatId: params.chatId,
-      messageId,
+      messageId: params.messageId,
       ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-      limit: Number.MAX_SAFE_INTEGER,
-    })
-  ).filter(isSessionBoundaryCommandNode);
-  const current = await params.cache.get({
-    accountId: params.accountId,
-    chatId: params.chatId,
-    messageId,
-  });
-  if (current && isSessionBoundaryCommandNode(current)) {
-    candidates.push(current);
-  }
-  return candidates.toSorted(compareCachedMessageNodes).at(-1);
+      matches: isSessionBoundaryCommandNode,
+    })) ?? undefined
+  );
 }
 
 export async function buildTelegramReplyChain(params: {

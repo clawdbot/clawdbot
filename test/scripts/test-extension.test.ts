@@ -530,6 +530,16 @@ describe("scripts/test-extension.mjs", () => {
     }
   });
 
+  it("rejects malformed extension shard counts", () => {
+    expect(() =>
+      createExtensionTestShards({
+        cwd: process.cwd(),
+        extensionIds: ["matrix", "openai"],
+        shardCount: "2x",
+      }),
+    ).toThrow("shardCount must be a positive integer");
+  });
+
   it("runs extension batch config groups concurrently when requested", async () => {
     const started: string[] = [];
     const resolvers: Array<() => void> = [];
@@ -610,9 +620,15 @@ describe("scripts/test-extension.mjs", () => {
   it("keeps extension batch parallelism bounded by group count", () => {
     expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" })).toBe(2);
     expect(resolveExtensionBatchParallelism(1, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "4" })).toBe(1);
-    expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "nope" })).toBe(
-      1,
-    );
+    expect(resolveExtensionBatchParallelism(3, {})).toBe(1);
+  });
+
+  it("rejects malformed extension batch parallelism", () => {
+    for (const value of ["nope", "2x", "0"]) {
+      expect(() =>
+        resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: value }),
+      ).toThrow("OPENCLAW_EXTENSION_BATCH_PARALLEL must be a positive integer");
+    }
   });
 
   it("preserves positional Vitest args after the extension batch separator", () => {

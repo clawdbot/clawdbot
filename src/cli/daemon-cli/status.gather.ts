@@ -38,6 +38,11 @@ import {
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
+import {
+  detectPluginVersionDrift,
+  type PluginVersionDriftReport,
+} from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
@@ -323,6 +328,13 @@ export type DaemonStatus = {
     staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
+  /**
+   * Plugin version drift report. Surfaces active official external plugins
+   * whose installed version does not match the running gateway version, which
+   * can happen after `npm install -g openclaw@<v>` updates the gateway binary
+   * without a corresponding `openclaw plugins update`.
+   */
+  pluginVersionDrift?: PluginVersionDriftReport;
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -637,6 +649,30 @@ export async function gatherDaemonStatus(
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
+  // Plugin version drift detection.
+  // Compares active official external plugins against the *running* local
+  // gateway version reported by the probe handshake, falling back to the
+  // invoking CLI VERSION only when no gateway version is available. Reading
+  // records with the merged daemon environment inspects the managed service's
+  // profile/state dir, so remote/explicit URL probes need remote-owned
+  // diagnostics instead.
+  // Best-effort: unreadable install records omit this advisory report.
+  let pluginVersionDrift: PluginVersionDriftReport | undefined;
+  if (daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride) {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords({
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      });
+      pluginVersionDrift = detectPluginVersionDrift({
+        gatewayVersion: gatewayVersion ?? VERSION,
+        installRecords,
+        config: daemonCfg,
+      });
+    } catch {
+      pluginVersionDrift = undefined;
+    }
+  }
+
   return {
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
@@ -686,6 +722,7 @@ export async function gatherDaemonStatus(
         }
       : {}),
     extraServices,
+    ...(pluginVersionDrift ? { pluginVersionDrift } : {}),
   };
 }
 

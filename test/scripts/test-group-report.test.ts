@@ -319,6 +319,24 @@ describe("scripts/test-group-report arg parsing", () => {
       timeoutMs: 5000,
     });
   });
+
+  it("rejects malformed positive integer flags", () => {
+    for (const flag of [
+      "--limit",
+      "--top-files",
+      "--max-test-ms",
+      "--timeout-ms",
+      "--kill-grace-ms",
+      "--concurrency",
+    ]) {
+      expect(() => parseTestGroupReportArgs([flag, "20x"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+      expect(() => parseTestGroupReportArgs([flag, "0"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+    }
+  });
 });
 
 describe("scripts/test-group-report child process guard", () => {

@@ -458,8 +458,11 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../harness/selection.js", () => ({
+  vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+  }));
+
+  vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 

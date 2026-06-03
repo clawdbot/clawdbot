@@ -316,6 +316,19 @@ export type WorkboardTaskSummary = {
   error?: string;
 };
 
+export type WorkboardDependencyParent = {
+  id: string;
+  title: string;
+  status?: WorkboardStatus;
+  done: boolean;
+  missing: boolean;
+};
+
+export type WorkboardDependencyState = {
+  parents: WorkboardDependencyParent[];
+  blockedParents: WorkboardDependencyParent[];
+};
+
 export type WorkboardDispatchSummary = {
   started: number;
   failures: number;
@@ -336,6 +349,9 @@ export type WorkboardUiState = {
   lastDispatchSummary: WorkboardDispatchSummary | null;
   query: string;
   priorityFilter: "all" | WorkboardPriority;
+  agentFilter: string;
+  showArchived: boolean;
+  layout: "comfortable" | "compact";
   draftOpen: boolean;
   editingCardId: string | null;
   draftTitle: string;
@@ -380,6 +396,9 @@ function createDefaultState(): WorkboardUiState {
     lastDispatchSummary: null,
     query: "",
     priorityFilter: "all",
+    agentFilter: "all",
+    showArchived: false,
+    layout: "compact",
     draftOpen: false,
     editingCardId: null,
     draftTitle: "",
@@ -1128,6 +1147,38 @@ function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   state.cards = next.toSorted((left, right) => left.position - right.position);
 }
 
+function parentDependencyIds(card: WorkboardCard): string[] {
+  const ids: string[] = [];
+  for (const link of card.metadata?.links ?? []) {
+    const id = link.type === "parent" ? link.targetCardId?.trim() : "";
+    if (id && !ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+export function getWorkboardDependencyState(
+  card: WorkboardCard,
+  cards: readonly WorkboardCard[],
+): WorkboardDependencyState {
+  const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
+  const parents = parentDependencyIds(card).map((id) => {
+    const parent = cardsById.get(id);
+    return {
+      id,
+      title: parent?.title ?? id,
+      status: parent?.status,
+      done: parent?.status === "done",
+      missing: !parent,
+    };
+  });
+  return {
+    parents,
+    blockedParents: parents.filter((parent) => !parent.done),
+  };
+}
+
 function removeCardAndReferences(cards: readonly WorkboardCard[], cardId: string): WorkboardCard[] {
   const nextCards: WorkboardCard[] = [];
   for (const card of cards) {
@@ -1775,6 +1826,7 @@ export async function archiveWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   cardId: string;
+  archived?: boolean;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
@@ -1787,7 +1839,7 @@ export async function archiveWorkboardCard(params: {
   try {
     const payload = await params.client.request("workboard.cards.archive", {
       id: params.cardId,
-      archived: true,
+      archived: params.archived ?? true,
     });
     replaceCard(state, normalizeCardPayload(payload));
   } catch (error) {

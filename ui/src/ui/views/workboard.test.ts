@@ -206,7 +206,7 @@ describe("renderWorkboard", () => {
     const startButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
-    expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
     expect(startButtons.map((button) => button.title)).toEqual(["Run default agent"]);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
@@ -229,13 +229,89 @@ describe("renderWorkboard", () => {
     const detailStartButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-detail .workboard-card__start"),
     ];
-    expect(detailStartButtons.map((button) => button.textContent?.trim())).toEqual([
+    expect(detailStartButtons.map((button) => button.textContent?.replace(/\s+/g, ""))).toEqual([
       "Start",
-      "codex",
-      "claude",
-      "codex",
-      "claude",
+      "OpenAIRun",
+      "ClaudeRun",
+      "OpenAIOpen",
+      "ClaudeOpen",
     ]);
+  });
+
+  it("shows unfinished parent dependencies without blocking stale local starts", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "parent-1",
+        title: "Finish art pass",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "child-1",
+        title: "Ship game shell",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          links: [{ id: "link-1", type: "parent", targetCardId: "parent-1", createdAt: 1 }],
+        },
+      },
+    ];
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    } satisfies WorkboardRenderProps;
+
+    render(renderWorkboard(props), container);
+
+    const childCard = [...container.querySelectorAll<HTMLElement>(".workboard-card")].find((card) =>
+      card.textContent?.includes("Ship game shell"),
+    );
+    const start = childCard?.querySelector<HTMLButtonElement>(".workboard-card__start");
+    expect(childCard?.textContent).toContain("1 blocked");
+    expect(start?.disabled).toBe(false);
+    expect(start?.title).toBe("Run default agent");
+
+    childCard
+      ?.querySelector<HTMLButtonElement>('button[title="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    const detail = container.querySelector(".workboard-detail");
+    expect(detail?.textContent).toContain("Dependencies");
+    expect(detail?.textContent).toContain("Finish art pass");
+    expect(detail?.textContent).toContain("Todo");
+    const detailRunButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workboard-detail .workboard-card__start--autonomous",
+      ),
+    ];
+    const detailOpenButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workboard-detail .workboard-card__start--manual",
+      ),
+    ];
+    expect(detailRunButtons.length).toBeGreaterThan(0);
+    expect(detailRunButtons.every((button) => button.disabled)).toBe(false);
+    expect(detailOpenButtons.length).toBeGreaterThan(0);
+    expect(detailOpenButtons.every((button) => button.disabled)).toBe(false);
   });
 
   it("hides autonomous model override actions for non-admin operators", () => {
@@ -273,7 +349,7 @@ describe("renderWorkboard", () => {
     const startButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
-    expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
     expect(startButtons.map((button) => button.title)).toEqual(["Run default agent"]);
 
     container
@@ -295,10 +371,10 @@ describe("renderWorkboard", () => {
     const detailStartButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-detail .workboard-card__start"),
     ];
-    expect(detailStartButtons.map((button) => button.textContent?.trim())).toEqual([
+    expect(detailStartButtons.map((button) => button.textContent?.replace(/\s+/g, ""))).toEqual([
       "Start",
-      "codex",
-      "claude",
+      "OpenAIOpen",
+      "ClaudeOpen",
     ]);
   });
 
@@ -509,8 +585,159 @@ describe("renderWorkboard", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary"),
     ).toBeNull();
+    expect(container.querySelector<HTMLSelectElement>(".workboard-card__move-select")).toBeNull();
     expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
+  });
+
+  it("moves a card from the compact status control", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Keyboard move",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn(async () => ({
+      card: { ...state.cards[0], status: "blocked", position: 1000, updatedAt: 2 },
+    }));
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.value).toBe("todo");
+    expect(moveSelect?.tagName).toBe("SELECT");
+    expect(moveSelect?.getAttribute("aria-keyshortcuts")).toBe("ArrowLeft ArrowRight");
+    expect(moveSelect?.getAttribute("aria-label")).toBe("Status: Keyboard move");
+
+    moveSelect!.value = "blocked";
+    moveSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    render(renderWorkboard(props), container);
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: "card-1",
+      status: "blocked",
+      position: 1000,
+    });
+    const blockedColumn = [...container.querySelectorAll<HTMLElement>(".workboard-column")].find(
+      (column) => column.querySelector("h2")?.textContent === "Blocked",
+    );
+    expect(blockedColumn?.textContent).toContain("Keyboard move");
+    expect(state.cards[0]).toMatchObject({ status: "blocked", updatedAt: 2 });
+  });
+
+  it("moves a focused status control with keyboard arrows", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Keyboard arrow move",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn(async () => ({
+      card: { ...state.cards[0], status: "scheduled", position: 1000, updatedAt: 2 },
+    }));
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    const dispatched = moveSelect!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dispatched).toBe(false);
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: "card-1",
+      status: "scheduled",
+      position: 1000,
+    });
+    expect(state.cards[0]).toMatchObject({ status: "scheduled", updatedAt: 2 });
+  });
+
+  it("does not queue status-control moves while a card is busy", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.busyCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Busy move",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn();
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.disabled).toBe(true);
+
+    moveSelect!.value = "blocked";
+    moveSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    const dispatched = moveSelect!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+
+    expect(dispatched).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(state.cards[0]).toMatchObject({ status: "todo", updatedAt: 1 });
   });
 
   it("offers start controls when a linked session no longer exists", () => {
@@ -752,6 +979,26 @@ describe("renderWorkboard", () => {
     expect(container.textContent).not.toContain("Archived task");
 
     container
+      .querySelector<HTMLButtonElement>('button[title="Show archived cards"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+    expect(container.textContent).toContain("Archived task");
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Hide archived cards"]'),
+    ).not.toBeNull();
+
+    container
       .querySelector<HTMLButtonElement>('button[title="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
@@ -785,6 +1032,136 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Workspace: worktree /tmp/workboard proof",
     );
+  });
+
+  it("filters cards by linked agent", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Main work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "main",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-2",
+        title: "Ops work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "ops",
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const agentFilter = [...container.querySelectorAll<HTMLSelectElement>("select")].find(
+      (select) => select.title === "Filter by agent",
+    );
+    agentFilter!.value = "ops";
+    agentFilter!.dispatchEvent(new Event("change", { bubbles: true }));
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Main work");
+    expect(container.textContent).toContain("Ops work");
+    expect(container.textContent).toContain("Ops");
+  });
+
+  it("preflights model-specific starts for ACP runtime agents", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "ACP-backed work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "main",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [{ id: "main", name: "Main", agentRuntime: { id: "codex", source: "agent" } }],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const engineButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workboard-detail .workboard-card__start:not(.workboard-card__start--default)",
+      ),
+    ];
+    expect(engineButtons).toHaveLength(4);
+    expect(engineButtons.every((button) => button.disabled)).toBe(true);
+    expect(engineButtons[0]?.title).toContain("uses the codex ACP runtime");
   });
 
   it("does not render details for archived selected cards", () => {

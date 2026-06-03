@@ -201,15 +201,22 @@ export function acquireLocalHeavyCheckLockSync(params) {
   const timeoutMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS,
     DEFAULT_LOCK_TIMEOUT_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS",
   );
-  const pollMs = readPositiveInt(env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS);
+  const pollMs = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS,
+    DEFAULT_LOCK_POLL_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS",
+  );
   const progressMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS,
     DEFAULT_LOCK_PROGRESS_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS",
   );
   const staleLockMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS,
     DEFAULT_STALE_LOCK_MS,
+    "OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS",
   );
   const startedAt = Date.now();
   let waitLogBudget = 1;
@@ -374,9 +381,19 @@ function resolveHostResources(hostResources) {
   };
 }
 
-function readPositiveInt(rawValue, fallback) {
-  const parsed = Number.parseInt(rawValue ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveInt(rawValue, fallback, label) {
+  const text = rawValue?.trim();
+  if (!text) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${rawValue}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer; got: ${rawValue}`);
+  }
+  return parsed;
 }
 
 function writeOwnerFile(ownerPath, owner) {

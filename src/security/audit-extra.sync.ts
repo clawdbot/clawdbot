@@ -48,6 +48,10 @@ export type GatewayHttpNoAuthAuditOptions = {
 };
 
 type GatewayAuthSharedSecretLabel = "gateway auth token" | "gateway auth password";
+type GatewayAuthSharedSecretReuse = {
+  label: GatewayAuthSharedSecretLabel;
+  source: "config" | "override";
+};
 type ActiveGatewaySharedSecret = {
   label: GatewayAuthSharedSecretLabel;
   value?: string;
@@ -115,25 +119,36 @@ function findGatewayAuthLabelMatchingHooksToken(params: {
   )?.label;
 }
 
-function findHooksTokenGatewayAuthReuseLabel(params: {
+function findHooksTokenGatewayAuthReuse(params: {
   hooksToken: string;
   configGatewayAuth: ResolvedGatewayAuth;
   overrideGatewayAuth?: ResolvedGatewayAuth;
-}): GatewayAuthSharedSecretLabel | undefined {
+}): GatewayAuthSharedSecretReuse | undefined {
   const configReuseLabel = findGatewayAuthLabelMatchingHooksToken({
     hooksToken: params.hooksToken,
     auth: params.configGatewayAuth,
   });
   if (configReuseLabel) {
-    return configReuseLabel;
+    return { label: configReuseLabel, source: "config" };
   }
 
-  return params.overrideGatewayAuth
+  const overrideReuseLabel = params.overrideGatewayAuth
     ? findGatewayAuthLabelMatchingHooksToken({
         hooksToken: params.hooksToken,
         auth: params.overrideGatewayAuth,
       })
     : undefined;
+  if (!overrideReuseLabel) {
+    return undefined;
+  }
+  return { label: overrideReuseLabel, source: "override" };
+}
+
+function formatHooksTokenReuseRemediation(reuse: GatewayAuthSharedSecretReuse): string {
+  if (reuse.source === "override") {
+    return "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env.";
+  }
+  return `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`;
 }
 
 function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
@@ -610,19 +625,18 @@ export function collectHooksHardeningFindings(
         env,
       })
     : undefined;
-  const reusedGatewayAuthLabel = findHooksTokenGatewayAuthReuseLabel({
+  const reusedGatewayAuth = findHooksTokenGatewayAuthReuse({
     hooksToken: token,
     configGatewayAuth,
     overrideGatewayAuth,
   });
-  if (reusedGatewayAuthLabel) {
+  if (reusedGatewayAuth) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuthLabel)}`,
-      detail: formatHooksTokenReuseDetail(reusedGatewayAuthLabel),
-      remediation:
-        "Use a separate hooks.token dedicated to hook ingress and keep it distinct from Gateway token/password shared-secret auth.",
+      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuth.label)}`,
+      detail: formatHooksTokenReuseDetail(reusedGatewayAuth.label),
+      remediation: formatHooksTokenReuseRemediation(reusedGatewayAuth),
     });
   }
 

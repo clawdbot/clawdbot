@@ -1,4 +1,3 @@
-import { resetToolStream } from "../app-tool-stream.ts";
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -6,6 +5,18 @@ import {
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+import {
+  appendTerminalAssistantMessage,
+  clearToolStreamSegments,
+  currentLiveToolCallIds,
+  hasVisibleStreamParts,
+  historyReplacedVisibleStream,
+  materializeVisibleStreamState,
+  maybeResetToolStream,
+  persistedCurrentToolStreamIds,
+  prunePersistedToolStreamMessages,
+  visibleCurrentAssistantStreamTail,
+} from "../chat/stream-reconciliation.ts";
 import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
 import { formatConnectError } from "../connect-error.ts";
 import {
@@ -148,6 +159,10 @@ function isHeartbeatAckStream(text: string): boolean {
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
+function isHiddenAssistantStreamText(text: string): boolean {
+  return isSilentReplyStream(text) || isHeartbeatAckStream(text);
+}
+
 function shouldHideAssistantChatMessage(message: unknown): boolean {
   return isAssistantSilentReply(message) || isAssistantHeartbeatAckForDisplay(message);
 }
@@ -158,6 +173,22 @@ function shouldHideHistoryMessage(message: unknown): boolean {
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );
+}
+
+function materializeVisibleAssistantStreamMessages(
+  messages: unknown[],
+  state: ChatState,
+  opts: {
+    includeCurrent?: boolean;
+    requirePersistedTool?: boolean;
+    replacementMessages?: unknown[];
+  } = {},
+): unknown[] {
+  return materializeVisibleStreamState(messages, state, {
+    ...opts,
+    isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+    isHiddenStreamText: isHiddenAssistantStreamText,
+  });
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
@@ -331,7 +362,7 @@ function isUnknownGatewayMethodError(err: unknown, method: string): err is Gatew
   );
 }
 
-function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
+export function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
   const methods = state.hello?.features?.methods;
   if (!Array.isArray(methods)) {
     return null;
@@ -482,18 +513,6 @@ function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): b
     isSelectedGlobalEventSessionKey(state.sessionKey) &&
     chatEventAgentScopeMatches(state, payload)
   );
-}
-
-function maybeResetToolStream(state: ChatState) {
-  const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
-  if (
-    toolHost.toolStreamById instanceof Map &&
-    Array.isArray(toolHost.toolStreamOrder) &&
-    Array.isArray(toolHost.chatToolMessages) &&
-    Array.isArray(toolHost.chatStreamSegments)
-  ) {
-    resetToolStream(toolHost as Parameters<typeof resetToolStream>[0]);
-  }
 }
 
 function resolveDeltaChatStreamText(
@@ -709,18 +728,72 @@ async function loadChatHistoryUncached(
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
-      // Clear all streaming state — history includes tool results and text
-      // inline, so keeping streaming artifacts would cause duplicates.
-      maybeResetToolStream(state);
-      state.chatStream = null;
-      state.chatStreamStartedAt = null;
-      recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
-        requestSessionKey: sessionKey,
-        requestAgentId,
-        previousRunId,
-        messageCount: messages.length,
-        visibleMessageCount: visibleMessages.length,
-      });
+      const streamReconciliation = {
+        isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+        isHiddenStreamText: isHiddenAssistantStreamText,
+      };
+      const hasVisibleStream = hasVisibleStreamParts(state, streamReconciliation);
+      const historyReplacedStream = historyReplacedVisibleStream(
+        state.chatMessages,
+        state,
+        streamReconciliation,
+      );
+      const liveToolIds = currentLiveToolCallIds(state);
+      const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
+      const historyReplacedToolStream =
+        liveToolIds.length > 0 && liveToolIds.every((id) => persistedToolStreamIds.has(id));
+      const historyReplacedSomeToolStream = persistedToolStreamIds.size > 0;
+      const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
+      if (!hasVisibleStream || historyReplacedStream) {
+        if (liveToolStreamReplaced) {
+          // Clear all streaming state — history includes tool results and text
+          // inline, so keeping streaming artifacts would cause duplicates.
+          maybeResetToolStream(state);
+        } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+          clearToolStreamSegments(state);
+        }
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+        recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
+          requestSessionKey: sessionKey,
+          requestAgentId,
+          previousRunId,
+          messageCount: messages.length,
+          visibleMessageCount: visibleMessages.length,
+        });
+      } else if (!state.chatRunId) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+        maybeResetToolStream(state);
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+      } else if (historyReplacedToolStream) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+        state.chatStream = visibleCurrentAssistantStreamTail(
+          state,
+          streamReconciliation.isHiddenStreamText,
+        );
+        if (state.chatStream === null) {
+          state.chatStreamStartedAt = null;
+        }
+        maybeResetToolStream(state);
+      } else if (historyReplacedSomeToolStream) {
+        const visibleCurrentTail = visibleCurrentAssistantStreamTail(
+          state,
+          streamReconciliation.isHiddenStreamText,
+        );
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+          requirePersistedTool: true,
+        });
+        state.chatStream = visibleCurrentTail;
+        if (state.chatStream === null) {
+          state.chatStreamStartedAt = null;
+        }
+        prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+      }
     }
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,
@@ -949,9 +1022,18 @@ export async function sendChatMessage(
   try {
     const ack = await requestChatSend(state, { message: msg, attachments, runId });
     if (ack.status === "ok") {
-      state.chatRunId = null;
-      state.chatStream = null;
-      state.chatStreamStartedAt = null;
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "done",
+          sessionStatus: "done",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: true,
+        },
+      );
     } else {
       state.chatRunId = ack.runId;
     }
@@ -1130,48 +1212,45 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (
-      state.chatStream?.trim() &&
-      !isSilentReplyStream(state.chatStream) &&
-      !isHeartbeatAckStream(state.chatStream)
-    ) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
+    } else {
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        replacementMessages: [normalizedMessage],
+        includeCurrent: false,
+      });
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
-      const streamedText = state.chatStream ?? "";
-      if (
-        streamedText.trim() &&
-        !isSilentReplyStream(streamedText) &&
-        !isHeartbeatAckStream(streamedText)
-      ) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
-      }
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
-    const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
-    if (errorMessage) {
-      state.chatMessages = [...state.chatMessages, errorMessage];
+    const payloadMessage = hadActiveRunBeforeEvent
+      ? normalizeFinalAssistantMessage(payload.message)
+      : null;
+    const visiblePayloadMessage =
+      payloadMessage && !shouldHideAssistantChatMessage(payloadMessage) ? payloadMessage : null;
+    if (visiblePayloadMessage) {
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        replacementMessages: [visiblePayloadMessage],
+      });
+      state.chatMessages = appendTerminalAssistantMessage(
+        state.chatMessages,
+        visiblePayloadMessage,
+      );
+    } else {
+      const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
+      if (hadActiveRunBeforeEvent) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      }
+      if (errorMessage) {
+        state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, errorMessage);
+      }
     }
     reconcileTerminalRun("interrupted", "failed");
     setChatError(state, payload.errorMessage ?? "chat error");

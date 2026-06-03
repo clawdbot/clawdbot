@@ -3,6 +3,7 @@
 // Accepts scheduler summary.json or lane-timings.json so agents can see the
 // slowest lanes and phase critical path before deciding what to rerun.
 import fs from "node:fs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 function usage() {
   return "Usage: node scripts/docker-e2e-timings.mjs <summary.json|lane-timings.json> [--limit N]";
@@ -15,9 +16,9 @@ function parseArgs(argv) {
     if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else if (arg === "--limit") {
-      options.limit = Number(argv[(index += 1)] ?? "");
+      options.limit = parsePositiveInt(argv[(index += 1)], "--limit");
     } else if (arg?.startsWith("--limit=")) {
-      options.limit = Number(arg.slice("--limit=".length));
+      options.limit = parsePositiveInt(arg.slice("--limit=".length), "--limit");
     } else if (!options.file) {
       options.file = arg;
     } else {
@@ -27,7 +28,7 @@ function parseArgs(argv) {
   if (options.help) {
     return options;
   }
-  if (!options.file || !Number.isInteger(options.limit) || options.limit < 1) {
+  if (!options.file) {
     throw new Error(usage());
   }
   return options;

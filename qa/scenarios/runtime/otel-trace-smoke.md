@@ -38,7 +38,7 @@ docsRefs:
   - docs/concepts/qa-e2e-automation.md
 codeRefs:
   - extensions/diagnostics-otel/src/service.ts
-  - src/agents/harness/v2.ts
+  - src/agents/harness/lifecycle.ts
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow

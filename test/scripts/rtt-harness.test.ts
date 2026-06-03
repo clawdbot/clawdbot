@@ -210,6 +210,21 @@ describe("RTT harness", () => {
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
   });
 
+  it("keeps RTT Docker artifacts isolated by default", async () => {
+    const script = await fs.readFile(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(script).toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt/$RUN_ID}"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).not.toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt}"',
+    );
+  });
+
   it("keeps broker helper heartbeat handling aligned with QA leases", async () => {
     const script = await fs.readFile(CREDENTIAL_SCRIPT_PATH, "utf8");
 

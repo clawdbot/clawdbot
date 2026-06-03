@@ -23,6 +23,30 @@ MOCK_PORT="44180"
 CLICKCLACK_PORT="44181"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_RELEASE_USER_JOURNEY"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-user-journey.XXXXXX")"
+LOG_DIR="$scenario_tmp/logs"
+mkdir -p "$LOG_DIR"
+INSTALL_LOG="$LOG_DIR/install.log"
+ONBOARD_LOG="$LOG_DIR/onboard.log"
+OPENAI_LOG="$LOG_DIR/openai.log"
+AGENT_LOG="$LOG_DIR/agent.log"
+PLUGIN_A_INSTALL_LOG="$LOG_DIR/plugin-a-install.log"
+PLUGIN_A_CLI_LOG="$LOG_DIR/plugin-a-cli.log"
+PLUGIN_A_UNINSTALL_LOG="$LOG_DIR/plugin-a-uninstall.log"
+PLUGIN_B_INSTALL_LOG="$LOG_DIR/plugin-b-install.log"
+PLUGIN_B_CLI_LOG="$LOG_DIR/plugin-b-cli.log"
+PLUGIN_B_AFTER_RESTART_JSON="$LOG_DIR/plugin-b-after-restart.json"
+CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
+CLICKCLACK_OUTBOUND_JSON="$LOG_DIR/clickclack-outbound.json"
+CLICKCLACK_OUTBOUND_ERR="$LOG_DIR/clickclack-outbound.err"
+GATEWAY_1_LOG="$LOG_DIR/gateway-1.log"
+GATEWAY_2_LOG="$LOG_DIR/gateway-2.log"
+STATUS_JSON="$LOG_DIR/status.json"
+STATUS_ERR="$LOG_DIR/status.err"
+STATUS_AFTER_RESTART_JSON="$LOG_DIR/status-after-restart.json"
+STATUS_AFTER_RESTART_ERR="$LOG_DIR/status-after-restart.err"
+DOCTOR_LOG="$LOG_DIR/doctor.log"
+PLUGIN_A_INSTALL_PATH_FILE="$scenario_tmp/plugin-a-install-path.txt"
+PLUGIN_A_SOURCE_PATH_FILE="$scenario_tmp/plugin-a-source-path.txt"
 MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
 CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
@@ -43,24 +67,23 @@ dump_debug_logs() {
   local status="$1"
   echo "release user journey failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
-    /tmp/openclaw-release-user-journey-install.log \
-    /tmp/openclaw-release-user-journey-onboard.log \
-    /tmp/openclaw-release-user-journey-openai.log \
+    "$INSTALL_LOG" \
+    "$ONBOARD_LOG" \
+    "$OPENAI_LOG" \
     "$MOCK_REQUEST_LOG" \
-    /tmp/openclaw-release-user-journey-agent.log \
-    /tmp/openclaw-release-user-journey-plugin-a-install.log \
-    /tmp/openclaw-release-user-journey-plugin-a-cli.log \
-    /tmp/openclaw-release-user-journey-plugin-a-uninstall.log \
-    /tmp/openclaw-release-user-journey-plugin-b-install.log \
-    /tmp/openclaw-release-user-journey-plugin-b-cli.log \
-    /tmp/openclaw-release-user-journey-clickclack.log \
-    /tmp/openclaw-release-user-journey-clickclack-server.log \
-    /tmp/openclaw-release-user-journey-clickclack-outbound.json \
-    /tmp/openclaw-release-user-journey-clickclack-inbound.json \
-    /tmp/openclaw-release-user-journey-gateway-1.log \
-    /tmp/openclaw-release-user-journey-gateway-2.log \
-    /tmp/openclaw-release-user-journey-status.json \
-    /tmp/openclaw-release-user-journey-doctor.log \
+    "$AGENT_LOG" \
+    "$PLUGIN_A_INSTALL_LOG" \
+    "$PLUGIN_A_CLI_LOG" \
+    "$PLUGIN_A_UNINSTALL_LOG" \
+    "$PLUGIN_B_INSTALL_LOG" \
+    "$PLUGIN_B_CLI_LOG" \
+    "$CLICKCLACK_SERVER_LOG" \
+    "$CLICKCLACK_OUTBOUND_JSON" \
+    "$GATEWAY_1_LOG" \
+    "$GATEWAY_2_LOG" \
+    "$STATUS_JSON" \
+    "$STATUS_AFTER_RESTART_JSON" \
+    "$DOCTOR_LOG" \
     "$CLICKCLACK_STATE"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
@@ -114,19 +137,19 @@ fs.writeFileSync(
 NODE
 }
 
-openclaw_e2e_install_package /tmp/openclaw-release-user-journey-install.log
+openclaw_e2e_install_package "$INSTALL_LOG"
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 openclaw_e2e_enable_openclaw_cli_timeout
 
-mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-user-journey-openai.log)"
+mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$OPENAI_LOG")"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 CLICKCLACK_FIXTURE_PORT="$CLICKCLACK_PORT" \
 CLICKCLACK_FIXTURE_TOKEN="$CLICKCLACK_BOT_TOKEN" \
 CLICKCLACK_FIXTURE_STATE="$CLICKCLACK_STATE" \
-  node scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs >/tmp/openclaw-release-user-journey-clickclack-server.log 2>&1 &
+  node scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs >"$CLICKCLACK_SERVER_LOG" 2>&1 &
 clickclack_pid="$!"
 for _ in $(seq 1 100); do
   if openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200 >/dev/null 2>&1; then
@@ -149,7 +172,7 @@ openclaw onboard \
   --skip-ui \
   --skip-channels \
   --skip-skills \
-  --skip-health >/tmp/openclaw-release-user-journey-onboard.log 2>&1
+  --skip-health >"$ONBOARD_LOG" 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-onboard "$HOME"
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-mock-model "$MOCK_PORT"
 
@@ -159,26 +182,26 @@ openclaw agent --local \
   --session-id release-user-journey-agent \
   --message "Return marker $SUCCESS_MARKER" \
   --thinking off \
-  --json >/tmp/openclaw-release-user-journey-agent.log 2>&1
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" /tmp/openclaw-release-user-journey-agent.log "$MOCK_REQUEST_LOG"
+  --json >"$AGENT_LOG" 2>&1
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$AGENT_LOG" "$MOCK_REQUEST_LOG"
 
 echo "Installing first external plugin..."
-plugin_a_dir="$(mktemp -d "/tmp/openclaw-release-journey-plugin-a.XXXXXX")"
-plugin_a_install_path_file="/tmp/openclaw-release-user-journey-plugin-a-install-path.txt"
-plugin_a_source_path_file="/tmp/openclaw-release-user-journey-plugin-a-source-path.txt"
+plugin_a_dir="$(mktemp -d "$scenario_tmp/plugin-a.XXXXXX")"
+plugin_a_install_path_file="$PLUGIN_A_INSTALL_PATH_FILE"
+plugin_a_source_path_file="$PLUGIN_A_SOURCE_PATH_FILE"
 write_journey_plugin "$plugin_a_dir" journey-plugin-a 0.0.1 journey.a "Journey Plugin A" journey-a "journey-plugin-a:pong"
-openclaw plugins install "$plugin_a_dir" >/tmp/openclaw-release-user-journey-plugin-a-install.log 2>&1
+openclaw plugins install "$plugin_a_dir" >"$PLUGIN_A_INSTALL_LOG" 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs \
   remember-plugin-install-path \
   journey-plugin-a \
   "$plugin_a_install_path_file" \
   "$plugin_a_source_path_file" \
   "$plugin_a_dir"
-openclaw journey-a ping >/tmp/openclaw-release-user-journey-plugin-a-cli.log 2>&1
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains /tmp/openclaw-release-user-journey-plugin-a-cli.log "journey-plugin-a:pong"
+openclaw journey-a ping >"$PLUGIN_A_CLI_LOG" 2>&1
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains "$PLUGIN_A_CLI_LOG" "journey-plugin-a:pong"
 
 echo "Uninstalling first external plugin..."
-openclaw plugins uninstall journey-plugin-a --force >/tmp/openclaw-release-user-journey-plugin-a-uninstall.log 2>&1
+openclaw plugins uninstall journey-plugin-a --force >"$PLUGIN_A_UNINSTALL_LOG" 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs \
   assert-plugin-uninstalled \
   journey-plugin-a \
@@ -186,41 +209,41 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs \
   "$plugin_a_source_path_file"
 
 echo "Installing replacement external plugin..."
-plugin_b_dir="$(mktemp -d "/tmp/openclaw-release-journey-plugin-b.XXXXXX")"
+plugin_b_dir="$(mktemp -d "$scenario_tmp/plugin-b.XXXXXX")"
 write_journey_plugin "$plugin_b_dir" journey-plugin-b 0.0.1 journey.b "Journey Plugin B" journey-b "journey-plugin-b:pong"
-openclaw plugins install "$plugin_b_dir" >/tmp/openclaw-release-user-journey-plugin-b-install.log 2>&1
-openclaw journey-b ping >/tmp/openclaw-release-user-journey-plugin-b-cli.log 2>&1
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains /tmp/openclaw-release-user-journey-plugin-b-cli.log "journey-plugin-b:pong"
+openclaw plugins install "$plugin_b_dir" >"$PLUGIN_B_INSTALL_LOG" 2>&1
+openclaw journey-b ping >"$PLUGIN_B_CLI_LOG" 2>&1
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains "$PLUGIN_B_CLI_LOG" "journey-plugin-b:pong"
 
 echo "Configuring ClickClack..."
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "http://127.0.0.1:$CLICKCLACK_PORT"
-openclaw channels status --json >/tmp/openclaw-release-user-journey-status.json 2>/tmp/openclaw-release-user-journey-status.err
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack /tmp/openclaw-release-user-journey-status.json
+openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_JSON"
 
 echo "Sending ClickClack outbound message..."
 openclaw message send \
   --channel clickclack \
   --target channel:general \
   --message "release journey outbound" \
-  --json >/tmp/openclaw-release-user-journey-clickclack-outbound.json 2>/tmp/openclaw-release-user-journey-clickclack-outbound.err
+  --json >"$CLICKCLACK_OUTBOUND_JSON" 2>"$CLICKCLACK_OUTBOUND_ERR"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-clickclack-state outbound "$CLICKCLACK_STATE" "release journey outbound"
 
 echo "Starting Gateway for ClickClack inbound..."
-start_gateway /tmp/openclaw-release-user-journey-gateway-1.log
+start_gateway "$GATEWAY_1_LOG"
 node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-socket "http://127.0.0.1:$CLICKCLACK_PORT" 45
 node scripts/e2e/lib/release-user-journey/assertions.mjs post-clickclack-inbound "http://127.0.0.1:$CLICKCLACK_PORT" "Return marker $SUCCESS_MARKER"
 node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-reply "$CLICKCLACK_STATE" "$SUCCESS_MARKER" 45
 
 echo "Restarting Gateway and checking state survival..."
 stop_gateway
-start_gateway /tmp/openclaw-release-user-journey-gateway-2.log
-openclaw plugins inspect journey-plugin-b --runtime --json >/tmp/openclaw-release-user-journey-plugin-b-after-restart.json 2>&1
-openclaw channels status --json >/tmp/openclaw-release-user-journey-status-after-restart.json 2>/tmp/openclaw-release-user-journey-status-after-restart.err
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack /tmp/openclaw-release-user-journey-status-after-restart.json
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains /tmp/openclaw-release-user-journey-plugin-b-after-restart.json "journey-plugin-b"
+start_gateway "$GATEWAY_2_LOG"
+openclaw plugins inspect journey-plugin-b --runtime --json >"$PLUGIN_B_AFTER_RESTART_JSON" 2>&1
+openclaw channels status --json >"$STATUS_AFTER_RESTART_JSON" 2>"$STATUS_AFTER_RESTART_ERR"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_AFTER_RESTART_JSON"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains "$PLUGIN_B_AFTER_RESTART_JSON" "journey-plugin-b"
 stop_gateway
 
 echo "Running doctor at end of release journey..."
-openclaw doctor --repair --non-interactive >/tmp/openclaw-release-user-journey-doctor.log 2>&1
+openclaw doctor --repair --non-interactive >"$DOCTOR_LOG" 2>&1
 
 echo "Release user journey scenario passed."

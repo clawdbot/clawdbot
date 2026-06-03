@@ -294,7 +294,7 @@ async function readGatewayStartupConfig(params: {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
-      readConfigFileSnapshotWithPluginMetadata().catch(() => null),
+      readConfigFileSnapshotWithPluginMetadata({ recoverSuspicious: true }).catch(() => null),
     );
   const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};

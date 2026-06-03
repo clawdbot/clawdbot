@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -49,6 +49,29 @@ describe("E2E temp state dirs", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it.runIf(process.platform !== "win32")("retries generated state cleanup after a failed removal", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-e2e-temp-state-retry-"));
+    const lockedParent = path.join(root, "locked");
+    mkdirSync(lockedParent);
+
+    const state = await createE2eStateDir(`${path.relative(tmpdir(), lockedParent)}${path.sep}state-`, {
+      OPENCLAW_STATE_DIR: "",
+    });
+
+    try {
+      chmodSync(lockedParent, 0o500);
+      expect(() => state.cleanup()).toThrow();
+      expect(existsSync(state.stateDir)).toBe(true);
+    } finally {
+      chmodSync(lockedParent, 0o700);
+    }
+
+    state.cleanup();
+    expect(existsSync(state.stateDir)).toBe(false);
+
+    rmSync(root, { force: true, recursive: true });
   });
 
   it("cleans generated state dirs on termination signals", async () => {

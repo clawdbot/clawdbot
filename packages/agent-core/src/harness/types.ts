@@ -891,7 +891,7 @@ export interface AgentHarnessOptions<
   followUpMode?: QueueMode;
 }
 
-export type { AgentHarness } from "./agent-harness.js";
+export type { CoreAgentHarness as AgentHarness } from "./agent-harness.js";
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {

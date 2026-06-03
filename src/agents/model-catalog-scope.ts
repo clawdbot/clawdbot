@@ -22,6 +22,17 @@ function providerFromModelRef(value: string | undefined): string | undefined {
   return provider || undefined;
 }
 
+function providerConfigDeclaresModel(
+  providerConfig: { models?: readonly { id?: string }[] } | undefined,
+  model: string,
+): boolean {
+  const trimmedModel = model.trim();
+  return Boolean(
+    trimmedModel &&
+    providerConfig?.models?.some((candidate) => candidate.id?.trim() === trimmedModel),
+  );
+}
+
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -30,9 +41,12 @@ export function resolveModelCatalogScope(params: {
   const provider = params.provider.trim();
   const model = params.model.trim();
   const providerConfig = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
+  const modelRefs = providerConfigDeclaresModel(providerConfig, model)
+    ? [provider && model ? `${provider}/${model}` : model]
+    : [provider && model ? `${provider}/${model}` : model, model];
   return {
     providerRefs: dedupeCatalogScopeRefs([provider, providerConfig?.api]),
-    modelRefs: dedupeCatalogScopeRefs([provider && model ? `${provider}/${model}` : model, model]),
+    modelRefs: dedupeCatalogScopeRefs(modelRefs),
   };
 }
 

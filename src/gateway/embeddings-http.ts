@@ -54,6 +54,10 @@ const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 type EmbeddingProviderRequest = string;
+type MemorySearchEmbeddingConfig = Pick<
+  NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
+  "local" | "remote" | "outputDimensionality" | "inputType" | "queryInputType" | "documentInputType"
+>;
 
 function coerceRequest(value: unknown): EmbeddingsRequest {
   return value && typeof value === "object" ? (value as EmbeddingsRequest) : {};
@@ -94,20 +98,22 @@ function validateInputTexts(texts: string[]): string | undefined {
   return undefined;
 }
 
+function resolveEmbeddingProviderRemoteConfig(remote: MemorySearchEmbeddingConfig["remote"]) {
+  return remote
+    ? {
+        baseUrl: remote.baseUrl,
+        apiKey: remote.apiKey,
+        headers: remote.headers,
+      }
+    : undefined;
+}
+
 async function createConfiguredEmbeddingProvider(params: {
   cfg: OpenClawConfig;
   agentDir: string;
   provider: EmbeddingProviderRequest;
   model: string;
-  memorySearch?: Pick<
-    NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-    | "local"
-    | "remote"
-    | "outputDimensionality"
-    | "inputType"
-    | "queryInputType"
-    | "documentInputType"
-  >;
+  memorySearch?: MemorySearchEmbeddingConfig;
 }): Promise<MemoryEmbeddingProvider> {
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
@@ -117,13 +123,7 @@ async function createConfiguredEmbeddingProvider(params: {
       agentDir: params.agentDir,
       model: params.model || adapter.defaultModel || "",
       local: params.memorySearch?.local,
-      remote: params.memorySearch?.remote
-        ? {
-            baseUrl: params.memorySearch?.remote.baseUrl,
-            apiKey: params.memorySearch?.remote.apiKey,
-            headers: params.memorySearch?.remote.headers,
-          }
-        : undefined,
+      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
       outputDimensionality: params.memorySearch?.outputDimensionality,
     });
     return result.provider;
@@ -135,13 +135,7 @@ async function createConfiguredEmbeddingProvider(params: {
       provider: providerId,
       model: params.model || adapter.defaultModel || "",
       local: params.memorySearch?.local,
-      remote: params.memorySearch?.remote
-        ? {
-            baseUrl: params.memorySearch?.remote.baseUrl,
-            apiKey: params.memorySearch?.remote.apiKey,
-            headers: params.memorySearch?.remote.headers,
-          }
-        : undefined,
+      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
       dimensions: params.memorySearch?.outputDimensionality,
       inputType: params.memorySearch?.inputType,
       queryInputType: params.memorySearch?.queryInputType,

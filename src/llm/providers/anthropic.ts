@@ -5,7 +5,12 @@ import type {
   MessageCreateParamsStreaming,
   MessageParam,
   RawMessageStreamEvent,
+  TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -951,21 +956,10 @@ function buildParams(
       },
     ];
     if (context.systemPrompt) {
-      params.system.push({
-        type: "text",
-        text: sanitizeSurrogates(context.systemPrompt),
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
-      });
+      params.system.push(...buildSystemPromptBlocks(context.systemPrompt, cacheControl));
     }
   } else if (context.systemPrompt) {
-    // Add cache control to system prompt for non-OAuth tokens
-    params.system = [
-      {
-        type: "text",
-        text: sanitizeSurrogates(context.systemPrompt),
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
-      },
-    ];
+    params.system = buildSystemPromptBlocks(context.systemPrompt, cacheControl);
   }
 
   // Temperature is incompatible with extended thinking (adaptive or budget-based).
@@ -1218,6 +1212,41 @@ function convertMessages(
   }
 
   return params;
+}
+
+function buildSystemPromptBlocks(
+  systemPrompt: string,
+  cacheControl: CacheControlEphemeral | undefined,
+): TextBlockParam[] {
+  if (!cacheControl) {
+    return [
+      { type: "text", text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) },
+    ];
+  }
+
+  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  if (!split) {
+    return [
+      {
+        type: "text",
+        text: sanitizeSurrogates(systemPrompt),
+        cache_control: cacheControl,
+      },
+    ];
+  }
+
+  const blocks: TextBlockParam[] = [];
+  if (split.stablePrefix) {
+    blocks.push({
+      type: "text",
+      text: sanitizeSurrogates(split.stablePrefix),
+      cache_control: cacheControl,
+    });
+  }
+  if (split.dynamicSuffix) {
+    blocks.push({ type: "text", text: sanitizeSurrogates(split.dynamicSuffix) });
+  }
+  return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
 }
 
 function shouldUseFineGrainedToolStreamingBeta(

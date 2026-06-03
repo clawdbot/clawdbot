@@ -66,19 +66,80 @@ function main(argv = process.argv.slice(2)) {
   }
 
   const spawnCommand = resolveSpawnCommand(parsed.command, parsed.args);
+  const useChildProcessGroup = process.platform !== "win32" && !process.stdin.isTTY;
   const child = spawn(spawnCommand.command, spawnCommand.args, {
+    detached: useChildProcessGroup,
     env: {
       ...process.env,
       ...parsed.env,
     },
     stdio: "inherit",
   });
+  const forceKillDelayMs = Math.max(
+    1,
+    Number.parseInt(process.env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS ?? "5000", 10) || 5_000,
+  );
   let forwardedSignal = null;
   let forceKillTimer = null;
   // Keep the child in the foreground process group so TTY signals such as
   // Ctrl-C, Ctrl-Z, and window resizes stay native. Forward direct wrapper
   // shutdown signals that would otherwise only kill this small parent process.
-  const forwardedSignals = ["SIGTERM", "SIGHUP"];
+  const forwardedSignals = useChildProcessGroup
+    ? ["SIGTERM", "SIGHUP", "SIGINT"]
+    : ["SIGTERM", "SIGHUP"];
+  const signalChild = (signal) => {
+    if (useChildProcessGroup && typeof child.pid === "number") {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch (error) {
+        if (error?.code !== "ESRCH") {
+          child.kill(signal);
+          return;
+        }
+      }
+    }
+    child.kill(signal);
+  };
+  const childProcessGroupAlive = () => {
+    if (!useChildProcessGroup || typeof child.pid !== "number") {
+      return false;
+    }
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const exitWithForwardedSignal = () => {
+    if (!forwardedSignal) {
+      return;
+    }
+    const finish = () => {
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      process.kill(process.pid, forwardedSignal);
+    };
+    if (!childProcessGroupAlive()) {
+      finish();
+      return;
+    }
+    const deadline = Date.now() + forceKillDelayMs;
+    const drainTimer = setInterval(() => {
+      if (!childProcessGroupAlive()) {
+        clearInterval(drainTimer);
+        finish();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        clearInterval(drainTimer);
+        signalChild("SIGKILL");
+        finish();
+      }
+    }, 50);
+  };
 
   const cleanupSignalHandlers = () => {
     for (const signal of forwardedSignals) {
@@ -90,8 +151,8 @@ function main(argv = process.argv.slice(2)) {
       signal,
       () => {
         forwardedSignal ??= signal;
-        child.kill(signal);
-        forceKillTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+        signalChild(signal);
+        forceKillTimer ??= setTimeout(() => signalChild("SIGKILL"), forceKillDelayMs);
       },
     ]),
   );
@@ -101,12 +162,12 @@ function main(argv = process.argv.slice(2)) {
 
   child.on("exit", (code, signal) => {
     cleanupSignalHandlers();
+    if (forwardedSignal) {
+      exitWithForwardedSignal();
+      return;
+    }
     if (forceKillTimer) {
       clearTimeout(forceKillTimer);
-    }
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
-      return;
     }
     if (signal) {
       process.kill(process.pid, signal);

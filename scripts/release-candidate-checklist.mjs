@@ -12,6 +12,7 @@ const DEFAULT_RELEASE_PROFILE = "beta";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 
 function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.D-beta.N [options]
@@ -182,15 +183,43 @@ function readJson(path, label) {
   }
 }
 
-async function githubApi(path) {
-  const token = run("gh", ["auth", "token"], { capture: true }).trim();
-  const response = await fetch(`https://api.github.com/${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
+function githubApiTimeoutMs() {
+  const raw = process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_GITHUB_API_TIMEOUT_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive number");
+  }
+  return Math.trunc(value);
+}
+
+function githubApiTimedOut(error) {
+  return (
+    error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
+
+export async function githubApi(path, options = {}) {
+  const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
+  const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
+  let response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+  } catch (error) {
+    if (githubApiTimedOut(error)) {
+      throw new Error(`GitHub API ${path} timed out after ${timeoutMs}ms`, { cause: error });
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new Error(`GitHub API ${path} failed with ${response.status}: ${await response.text()}`);
   }

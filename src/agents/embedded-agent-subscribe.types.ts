@@ -15,6 +15,7 @@ import type {
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
 export type {
   BlockReplyChunking,
@@ -65,6 +66,17 @@ export type SubscribeEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
+  /** Gate final block delivery/lifecycle after the natural answer is known. */
+  onBeforeTerminalDelivery?: (event: {
+    messages: AgentMessage[];
+    willRetry: boolean;
+    lastAssistant?: AgentMessage;
+    assistantTexts: readonly string[];
+    hasAssistantVisibleText: boolean;
+    isError: boolean;
+    incompleteTerminalAssistant: boolean;
+    hadDeterministicSideEffect: boolean;
+  }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;

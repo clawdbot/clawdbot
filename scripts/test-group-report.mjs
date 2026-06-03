@@ -11,6 +11,7 @@ import {
   renderGroupedTestComparison,
   renderGroupedTestReport,
 } from "./lib/test-group-report.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
@@ -53,11 +54,6 @@ function usage() {
     "  pnpm test:perf:groups --full-suite --allow-failures",
     "  pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-first-fix.json",
   ].join("\n");
-}
-
-function parsePositiveInt(value, fallback) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function parseTestGroupReportArgs(argv) {
@@ -130,32 +126,32 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--limit") {
-      args.limit = parsePositiveInt(argv[index + 1], args.limit);
+      args.limit = parsePositiveInt(argv[index + 1], "--limit");
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = parsePositiveInt(argv[index + 1], args.maxTestMs);
+      args.maxTestMs = parsePositiveInt(argv[index + 1], "--max-test-ms");
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = parsePositiveInt(argv[index + 1], args.timeoutMs);
+      args.timeoutMs = parsePositiveInt(argv[index + 1], "--timeout-ms");
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = parsePositiveInt(argv[index + 1], args.killGraceMs);
+      args.killGraceMs = parsePositiveInt(argv[index + 1], "--kill-grace-ms");
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = parsePositiveInt(argv[index + 1], args.concurrency);
+      args.concurrency = parsePositiveInt(argv[index + 1], "--concurrency");
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = parsePositiveInt(argv[index + 1], args.topFiles);
+      args.topFiles = parsePositiveInt(argv[index + 1], "--top-files");
       index += 1;
       continue;
     }

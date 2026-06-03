@@ -166,7 +166,7 @@ describe("web auto-reply last-route", () => {
       SenderE164: "+1000",
       SenderId: "+1000",
       RawBody: "hello",
-      Body: expect.stringMatching(/^\[WhatsApp \+1000 .+\] \+1000: hello$/),
+      Body: expect.stringMatching(/^\[WhatsApp \+1000 .+\] \+1000: hello$/u),
       BodyForAgent: "hello",
       CommandBody: "hello",
       Timestamp: now,

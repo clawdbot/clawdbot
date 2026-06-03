@@ -1,0 +1,156 @@
+name: Blacksmith ARM Testbox
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"
+  PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
+
+jobs:
+  check-arm:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    permissions:
+      contents: read
+    name: "check-arm"
+    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
+    timeout-minutes: 120
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+      - name: Verify ARM runner
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runner_arch="$(uname -m)"
+          echo "check-arm runner architecture: ${runner_arch}"
+          case "$runner_arch" in
+            aarch64 | arm64)
+              ;;
+            *)
+              echo "check-arm requires an ARM64 runner; got ${runner_arch}" >&2
+              exit 1
+              ;;
+          esac
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          if [[ -z "$CHECKOUT_TOKEN" ]]; then
+            echo "checkout token is missing" >&2
+            exit 1
+          fi
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 5 attempts" >&2
+          exit 1
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+      - name: Prepare Testbox shell
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          timeout --signal=TERM --kill-after=10s 30s git \
+            -c protocol.version=2 \
+            fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+            "+refs/heads/main:refs/remotes/origin/main"
+
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          sudo ln -sf "$node_bin/node" /usr/local/bin/node
+          sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
+          sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
+          sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
+          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+          #!/usr/bin/env bash
+          exec /usr/local/bin/corepack pnpm "$@"
+          PNPM
+          sudo chmod 0755 /usr/local/bin/pnpm
+
+      - name: Hydrate Testbox provider env helper
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+          ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+        run: bash scripts/ci-hydrate-testbox-env.sh
+
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        if: success()
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

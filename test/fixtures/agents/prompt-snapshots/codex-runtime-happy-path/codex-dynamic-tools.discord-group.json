@@ -1144,10 +1144,6 @@
           "enum": ["subagent"],
           "type": "string"
         },
-        "runTimeoutSeconds": {
-          "minimum": 0,
-          "type": "integer"
-        },
         "sandbox": {
           "enum": ["inherit", "require"],
           "type": "string"
@@ -1165,10 +1161,6 @@
         "thread": {
           "description": "Bind spawn to new chat thread when supported. `thread=true` defaults mode=\"session\".",
           "type": "boolean"
-        },
-        "timeoutSeconds": {
-          "minimum": 0,
-          "type": "integer"
         }
       },
       "required": ["task"],

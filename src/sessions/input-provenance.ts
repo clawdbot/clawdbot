@@ -147,6 +147,10 @@ function removeFirstInterSessionPromptPrefix(text: string): string {
     .join("\n");
 }
 
+export function stripInterSessionPromptPrefixForDisplay(text: string): string {
+  return removeFirstInterSessionPromptPrefix(text);
+}
+
 export function annotateInterSessionPromptText(
   text: string,
   inputProvenance: InputProvenance | undefined,

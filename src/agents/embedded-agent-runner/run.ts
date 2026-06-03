@@ -209,6 +209,9 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
+const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
+  "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
+const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function isNoRealConversationCompactionNoop(params: {
@@ -265,6 +268,10 @@ function resolveAttemptDispatchApiKey(params: {
     return undefined;
   }
   return params.apiKeyInfo?.apiKey;
+}
+
+function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
+  return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
 }
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -1172,6 +1179,7 @@ export async function runEmbeddedAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
+      let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -1567,6 +1575,7 @@ export async function runEmbeddedAgent(
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
+            currentInboundAudio: params.currentInboundAudio,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
@@ -1674,6 +1683,8 @@ export async function runEmbeddedAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
+            beforeAgentFinalizeRevisionAttempts,
+            maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
@@ -3479,6 +3490,32 @@ export async function runEmbeddedAgent(
               successfulCronAdds: attempt.successfulCronAdds,
               acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
+          }
+
+          const beforeAgentFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
+          const shouldHonorBeforeAgentFinalizeRevision =
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !emptyAssistantReplyIsSilent;
+          if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
+            beforeAgentFinalizeRevisionAttempts += 1;
+            nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
+              beforeAgentFinalizeRevisionReason,
+            );
+            suppressNextUserMessagePersistence = true;
+            planningOnlyRetryInstruction = null;
+            reasoningOnlyRetryInstruction = null;
+            emptyResponseRetryInstruction = null;
+            compactionContinuationRetryInstruction = null;
+            log.warn(
+              `before_agent_finalize requested one more pass: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+            );
+            continue;
           }
 
           log.debug(

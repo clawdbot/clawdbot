@@ -241,7 +241,7 @@ async function validateSnapshot(
     shellArgs: opts.shellArgs,
     cwd: opts.cwd,
     env: buildTrustedSnapshotCaptureEnv(opts.env),
-    command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1; :`,
+    command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1`,
     timeoutMs: 2_000,
   });
   return result.status === 0;

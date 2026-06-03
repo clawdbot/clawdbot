@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
@@ -97,52 +97,61 @@ describe("local embedding worker failure detection", () => {
 
 describe("memory embedding timeout abort", () => {
   beforeEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("aborts the provider operation when the timeout fires", async () => {
     vi.useFakeTimers();
     let signalSeen: AbortSignal | undefined;
 
-    const result = expect(
-      runEmbeddingOperationWithTimeout({
-        timeoutMs: 1,
-        message: "memory embeddings query timed out after 0s",
-        run: async (signal) => {
-          signalSeen = signal;
-          return await new Promise<number[]>((resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
-              { once: true },
-            );
-          });
-        },
-      }),
-    ).rejects.toThrow("memory embeddings query timed out after 0s");
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 1,
+      message: "memory embeddings query timed out after 0s",
+      run: async (signal) => {
+        signalSeen = signal;
+        return await new Promise<number[]>((resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const rejection = expect(resultPromise).rejects.toThrow(
+      "memory embeddings query timed out after 0s",
+    );
     await vi.advanceTimersByTimeAsync(1);
-    await result;
+    await rejection;
 
     expect(signalSeen?.aborted).toBe(true);
   });
 
   it("keeps the timeout error when a provider abort listener rejects generically", async () => {
     vi.useFakeTimers();
-    const result = expect(
-      runEmbeddingOperationWithTimeout({
-        timeoutMs: 1,
-        message: "memory embeddings batch timed out after 0s",
-        run: async (signal) =>
-          await new Promise<number[]>((_resolve, reject) => {
-            signal.addEventListener("abort", () => reject(new Error("provider aborted")), {
-              once: true,
-            });
-          }),
-      }),
-    ).rejects.toThrow("memory embeddings batch timed out after 0s");
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 1,
+      message: "memory embeddings batch timed out after 0s",
+      run: async (signal) =>
+        await new Promise<number[]>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("provider aborted")), {
+            once: true,
+          });
+        }),
+    });
+
+    const rejection = expect(resultPromise).rejects.toThrow(
+      "memory embeddings batch timed out after 0s",
+    );
     await vi.advanceTimersByTimeAsync(1);
-    await result;
+    await rejection;
   });
 
   it("caps operation watchdog timers before scheduling", async () => {

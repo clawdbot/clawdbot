@@ -169,12 +169,6 @@ type LegacyDeliveryQueueFile = {
   status: "pending" | "failed";
 };
 
-class LegacyPluginStateSidecarConflictError extends Error {
-  constructor(readonly conflictedKeys: string[]) {
-    super("legacy plugin-state sidecar conflicts with shared state");
-  }
-}
-
 class LegacyTaskStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
     super("legacy task-state sidecar conflicts with shared state");
@@ -265,6 +259,11 @@ function legacyPluginStateRowsMatch(
     normalizeLegacySqliteInteger(existing.expires_at) ===
       normalizeLegacySqliteInteger(legacy.expires_at)
   );
+}
+
+function isLegacyPluginStateRowExpired(row: LegacyPluginStateSidecarRow, now: number): boolean {
+  const expiresAt = normalizeLegacySqliteInteger(row.expires_at);
+  return expiresAt !== null && expiresAt <= now;
 }
 
 function archiveLegacyPluginStateSidecar(params: {
@@ -374,6 +373,61 @@ function legacyInstalledPluginIndexMatches(
   );
 }
 
+function readInstallRecordField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): unknown {
+  return (record as Partial<Record<string, unknown>>)[key];
+}
+
+function readInstallRecordStringField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): string | undefined {
+  const value = readInstallRecordField(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function legacyInstallRecordHasCurrentResolvedIdentity(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  if (legacySpec) {
+    return currentResolvedSpec === legacySpec;
+  }
+  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
+  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+}
+
+function legacyInstallRecordCoveredByCurrent(
+  currentRecord: InstalledPluginIndex["installRecords"][string],
+  legacyRecord: InstalledPluginIndex["installRecords"][string],
+): boolean {
+  if (currentRecord.source !== legacyRecord.source) {
+    return false;
+  }
+  for (const key of Object.keys(legacyRecord).toSorted()) {
+    const currentValue = readInstallRecordField(currentRecord, key);
+    if (currentValue === readInstallRecordField(legacyRecord, key)) {
+      continue;
+    }
+    if (
+      key === "spec" &&
+      legacyInstallRecordHasCurrentResolvedIdentity({ currentRecord, legacyRecord })
+    ) {
+      continue;
+    }
+    if ((key === "resolvedAt" || key === "installedAt") && typeof currentValue === "string") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 function mergeLegacyInstalledPluginIndexRecords(
   current: InstalledPluginIndex,
   legacy: InstalledPluginIndex,
@@ -388,7 +442,7 @@ function mergeLegacyInstalledPluginIndexRecords(
       addedCount += 1;
       continue;
     }
-    if (JSON.stringify(currentRecord) !== JSON.stringify(legacyRecord)) {
+    if (!legacyInstallRecordCoveredByCurrent(currentRecord, legacyRecord)) {
       conflicts.push(pluginId);
     }
   }
@@ -1315,6 +1369,7 @@ async function migrateLegacyPluginStateSidecar(params: {
     const conflictedKeys: string[] = [];
     const rowsToInsert: LegacyPluginStateSidecarRow[] = [];
     let imported = 0;
+    let skippedExpired = 0;
     const now = Date.now();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -1339,16 +1394,22 @@ async function migrateLegacyPluginStateSidecar(params: {
               .where("namespace", "=", row.namespace)
               .where("entry_key", "=", row.entry_key),
           );
+          const legacyExpired = isLegacyPluginStateRowExpired(row, now);
           if (existing) {
             if (!legacyPluginStateRowsMatch(existing, row)) {
-              conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+              if (legacyExpired) {
+                skippedExpired += 1;
+              } else {
+                conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+              }
             }
             continue;
           }
+          if (legacyExpired) {
+            skippedExpired += 1;
+            continue;
+          }
           rowsToInsert.push(row);
-        }
-        if (conflictedKeys.length > 0) {
-          throw new LegacyPluginStateSidecarConflictError(conflictedKeys);
         }
         for (const row of rowsToInsert) {
           executeSqliteQuerySync(
@@ -1377,15 +1438,20 @@ async function migrateLegacyPluginStateSidecar(params: {
         `Migrated ${imported} plugin-state sidecar ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
       );
     }
-  } catch (err) {
-    if (err instanceof LegacyPluginStateSidecarConflictError) {
+    if (conflictedKeys.length > 0) {
       return {
         changes,
         warnings: [
-          `Left plugin-state sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
+          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${conflictedKeys[0]}`,
         ],
       };
     }
+    if (skippedExpired > 0) {
+      changes.push(
+        `Dropped ${skippedExpired} expired plugin-state sidecar ${skippedExpired === 1 ? "entry" : "entries"}`,
+      );
+    }
+  } catch (err) {
     return {
       changes,
       warnings: [`Failed migrating plugin-state sidecar ${sourcePath}: ${String(err)}`],

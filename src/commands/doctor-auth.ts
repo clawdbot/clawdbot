@@ -312,6 +312,7 @@ async function noteAuthProfileHealthForTarget(params: {
     store,
     cfg: params.cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    allowKeychainPrompt: params.allowKeychainPrompt,
   });
 
   const findIssues = () =>
@@ -367,6 +368,7 @@ async function noteAuthProfileHealthForTarget(params: {
       }),
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      allowKeychainPrompt: false,
     });
     issues = findIssues();
   }

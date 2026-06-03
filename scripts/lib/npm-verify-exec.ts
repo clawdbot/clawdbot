@@ -10,12 +10,18 @@ const DEFAULT_NPM_VERIFY_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 function positiveEnvInt(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = process.env[name]?.trim();
   if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function runNpmVerifyCommand(

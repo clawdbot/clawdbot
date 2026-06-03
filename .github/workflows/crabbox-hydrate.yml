@@ -120,6 +120,21 @@ jobs:
           append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
           append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
           append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+          reset_crabbox_pnpm_path() {
+            local path="$1"
+            if [ -z "$path" ]; then
+              return
+            fi
+            case "$path" in
+              /var/tmp/openclaw-pnpm-*) rm -rf "$path" ;;
+            esac
+          }
+          reset_crabbox_pnpm_path "${PNPM_CONFIG_MODULES_DIR:-}"
+          reset_crabbox_pnpm_path "${PNPM_CONFIG_STORE_DIR:-}"
+          reset_crabbox_pnpm_path "${PNPM_CONFIG_VIRTUAL_STORE_DIR:-}"
+          if [ -L node_modules ] && [ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
+            rm -f node_modules
+          fi
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             mkdir -p "$PNPM_CONFIG_MODULES_DIR"
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"

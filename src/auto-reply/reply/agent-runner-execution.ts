@@ -41,8 +41,8 @@ import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sani
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
@@ -106,6 +106,7 @@ import {
 } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   classifyProviderRequestError,
@@ -651,17 +652,12 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
-  suppressInNonDirect?: boolean;
   cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
-  if (
-    !params.suppressInNonDirect &&
-    !params.isGenericRunnerFailure &&
-    !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)
-  ) {
+  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
     return params.text;
   }
   // Match normal reply routing: default group/channel failures stay silent,
@@ -849,7 +845,11 @@ function buildExternalRunFailureReply(
 }
 
 function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
-  return markReplyPayloadForSourceSuppressionDelivery(payload);
+  const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
+  if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
+    marked.isError = true;
+  }
+  return marked;
 }
 
 export function buildKnownAgentRunFailureReplyPayload(params: {
@@ -903,7 +903,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: buildRateLimitCooldownMessage(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
-        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -915,7 +914,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: rateLimitOrOverloadedCopy,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
-        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -2200,6 +2198,7 @@ export async function runAgentTurnWithFallback(params: {
                     currentThreadTs:
                       cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
                     currentMessageId: cliCurrentMessageId,
+                    currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     disableTools: params.opts?.disableTools,
@@ -2229,6 +2228,7 @@ export async function runAgentTurnWithFallback(params: {
                 hasRepliedRef: params.opts?.hasRepliedRef,
                 provider,
                 runId,
+                promptCacheKey: params.opts?.promptCacheKey,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 model,
               });
@@ -2922,7 +2922,6 @@ export async function runAgentTurnWithFallback(params: {
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
-        suppressInNonDirect: Boolean(isRateLimit || rateLimitOrOverloadedCopy),
         cfg: params.followupRun.run.config,
       });
 
@@ -2991,7 +2990,6 @@ export async function runAgentTurnWithFallback(params: {
               text: formattedErrorCandidate,
               sessionCtx: params.sessionCtx,
               isGenericRunnerFailure: false,
-              suppressInNonDirect: true,
               cfg: params.followupRun.run.config,
             }),
             isError: true,

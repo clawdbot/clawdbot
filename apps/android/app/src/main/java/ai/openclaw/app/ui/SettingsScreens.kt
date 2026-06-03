@@ -1253,6 +1253,7 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   }
 }
 
+/** Applies query/system visibility rules while always preserving selected packages. */
 internal fun filterNotificationAppsForPicker(
   apps: List<InstalledApp>,
   selectedPackages: Set<String>,
@@ -1271,6 +1272,7 @@ internal fun filterNotificationAppsForPicker(
   }
 }
 
+/** Summarizes allowlist/blocklist mode with an empty-state warning when needed. */
 private fun notificationPackageSelectionSummary(
   mode: NotificationPackageFilterMode,
   selectedCount: Int,
@@ -1290,6 +1292,7 @@ private fun notificationPackageSelectionSummary(
       }
   }
 
+/** Builds compact two-letter app badges from package-picker labels. */
 private fun notificationAppBadge(label: String): String {
   val initials =
     label

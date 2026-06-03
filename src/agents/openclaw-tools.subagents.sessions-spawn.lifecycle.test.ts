@@ -92,7 +92,6 @@ async function executeSpawnAndExpectAccepted(params: {
 }) {
   const result = await params.tool.execute(params.callId, {
     task: "do thing",
-    runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.label ? { label: params.label } : {}),
     ...(params.expectsCompletionMessage === false ? { expectsCompletionMessage: false } : {}),
@@ -178,6 +177,13 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       messages: {
         queue: {
           debounceMs: 0,
+        },
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+          },
         },
       },
     });
@@ -288,10 +294,20 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     });
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
 
     const result = await tool.execute("call-start-timeout", {
       task: "do thing",
-      runTimeoutSeconds: 120,
     });
 
     expectAcceptedRunDetails(result.details);

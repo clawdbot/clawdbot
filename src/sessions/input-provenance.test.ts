@@ -3,6 +3,7 @@ import {
   annotateInterSessionPromptText,
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
+  stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
 
 describe("annotateInterSessionPromptText", () => {
@@ -64,6 +65,18 @@ describe("annotateInterSessionPromptText", () => {
         sourceChannel: "discord",
       }),
     ).toBe("hello");
+  });
+});
+
+describe("stripInterSessionPromptPrefixForDisplay", () => {
+  it("removes generated inter-session envelope text from display content", () => {
+    const marked = annotateInterSessionPromptText("forwarded report", {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:discord:source",
+      sourceTool: "sessions_send",
+    });
+
+    expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe("forwarded report");
   });
 });
 

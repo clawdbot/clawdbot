@@ -217,6 +217,75 @@ function runUiTask<Args extends unknown[]>(
   };
 }
 
+const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
+
+export function loadSkillWorkshopMode(): "board" | "today" {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY);
+    return raw === "board" ? "board" : "today";
+  } catch {
+    return "today";
+  }
+}
+
+function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): void {
+  if (state.skillWorkshopMode === mode) {
+    return;
+  }
+  state.skillWorkshopMode = mode;
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_MODE_KEY, mode);
+  } catch {
+    // Mode persistence is a convenience; the in-memory switch still works.
+  }
+}
+
+function renderSkillWorkshopHeaderControls(state: AppViewState) {
+  return html`
+    <div class="sw-header-controls">
+      <div
+        class="sw-mode-switch"
+        role="tablist"
+        aria-label="Workshop view"
+        data-mode=${state.skillWorkshopMode}
+      >
+        <button
+          type="button"
+          class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
+          role="tab"
+          aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
+          title="Board view"
+          @click=${() => setSkillWorkshopMode(state, "board")}
+        >
+          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+            <rect x="3" y="4" width="7" height="16" rx="1.5" />
+            <rect x="14" y="4" width="7" height="9" rx="1.5" />
+            <rect x="14" y="15" width="7" height="5" rx="1.5" />
+          </svg>
+          <span>Board</span>
+        </button>
+        <button
+          type="button"
+          class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
+          role="tab"
+          aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
+          title="Today view"
+          @click=${() => setSkillWorkshopMode(state, "today")}
+        >
+          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path
+              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
+            />
+          </svg>
+          <span>Today</span>
+        </button>
+        <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
+      </div>
+    </div>
+  `;
+}
+
 function renderSettingsSectionNav(state: AppViewState) {
   if (!isSettingsTab(state.tab)) {
     return nothing;
@@ -462,6 +531,7 @@ const lazySkillWorkshop = createLazyView(
   notifyLazyViewChanged,
 );
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazyUsage = createLazyView(() => import("./views/usage.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 type ChatWorkspaceFilesState = {
@@ -2246,6 +2316,9 @@ export function renderApp(state: AppViewState) {
                 <div class="page-sub">${subtitleForTab(state.tab)}</div>
               </div>
               <div class="page-meta">
+                ${state.tab === "skillWorkshop"
+                  ? renderSkillWorkshopHeaderControls(state)
+                  : nothing}
                 ${state.tab === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
@@ -2570,7 +2643,7 @@ export function renderApp(state: AppViewState) {
               });
             })
           : nothing}
-        ${renderUsageTab(state)}
+        ${renderUsageTab(state, lazyUsage)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
         ${state.tab === "cron"
           ? renderLazyView(lazyCron, (m) =>
@@ -3150,7 +3223,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onFilePreviewQueryChange: (query) => (state.skillWorkshopFilePreviewQuery = query),
                 onQueueWidthChange: (width) => (state.skillWorkshopQueueWidth = width),
-                onModeChange: (mode) => (state.skillWorkshopMode = mode),
+                onModeChange: (mode) => setSkillWorkshopMode(state, mode),
                 onSelect: (key) => {
                   state.skillWorkshopFilePreviewKey = null;
                   selectSkillWorkshopProposal(state, key);

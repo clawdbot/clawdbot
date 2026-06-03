@@ -3,6 +3,10 @@ import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
+  PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeAgentFinalizeResult,
+} from "../../plugins/hook-types.js";
+import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartResult,
@@ -54,6 +58,12 @@ export const mockedGlobalHookRunner = {
       _eventValue: { prompt: string; messages?: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
+  ),
+  runBeforeAgentFinalize: vi.fn(
+    async (
+      _eventValue: PluginHookBeforeAgentFinalizeEvent,
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeAgentFinalizeResult | undefined> => undefined,
   ),
   runBeforePromptBuild: vi.fn(
     async (
@@ -266,6 +276,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
   mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValue(undefined);
+  mockedGlobalHookRunner.runBeforeAgentFinalize.mockReset();
+  mockedGlobalHookRunner.runBeforeAgentFinalize.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforePromptBuild.mockReset();
   mockedGlobalHookRunner.runBeforePromptBuild.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforeModelResolve.mockReset();

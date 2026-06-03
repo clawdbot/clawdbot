@@ -426,6 +426,72 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.metadata coalesces configured models and text commands", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-main",
+              fallbacks: ["openai/gpt-fallback"],
+            },
+            models: {
+              "openai/gpt-main": {},
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "work",
+              model: {
+                primary: "minimax/MiniMax-M2.7-highspeed",
+              },
+            },
+          ],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [
+                { id: "gpt-main", name: "GPT Main" },
+                { id: "gpt-fallback", name: "GPT Fallback" },
+              ],
+            },
+            minimax: {
+              baseUrl: "https://minimax.example.com/v1",
+              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+            },
+          },
+        },
+      });
+      await connectOk(ws);
+
+      const metadata = await rpcReq<{
+        commands?: Array<{ name?: string; textAliases?: string[] }>;
+        models?: Array<{ id?: string; provider?: string }>;
+      }>(ws, "chat.metadata", { agentId: "work" });
+
+      expect(metadata.ok).toBe(true);
+      expect(metadata.payload?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "MiniMax-M2.7-highspeed",
+            provider: "minimax",
+          }),
+        ]),
+      );
+      expect(metadata.payload?.commands).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "model",
+            textAliases: expect.arrayContaining(["/model"]),
+          }),
+        ]),
+      );
+    });
+  });
+
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
@@ -938,6 +1004,17 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      const dispatchOptions = dispatchInboundMessageMock.mock.calls.map(([params]) => {
+        return (params as { replyOptions?: GetReplyOptions }).replyOptions;
+      });
+      expect(dispatchOptions[0]?.runId).toBe("idem-sequential-a");
+      expect(dispatchOptions[1]?.runId).toBe("idem-sequential-b");
+      expect(dispatchOptions[0]?.promptCacheKey).toEqual(
+        expect.stringMatching(/^openclaw-webchat-[a-f0-9]{32}$/u),
+      );
+      expect(dispatchOptions[1]?.promptCacheKey).toBe(dispatchOptions[0]?.promptCacheKey);
+      expect(dispatchOptions[0]?.promptCacheKey).not.toContain("main");
+      expect(dispatchOptions[0]?.promptCacheKey).not.toContain("sess-main");
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {
       dispatchInboundMessageMock.mockReset();

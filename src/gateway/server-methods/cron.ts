@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   isInvalidCronRunLogJobIdError,
@@ -364,6 +365,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
     let normalized: unknown;
     try {
+      assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
           sessionContext: { sessionKey },
@@ -441,7 +443,13 @@ export const cronHandlers: GatewayRequestHandlers = {
   "cron.update": async ({ params, respond, context }) => {
     let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
     try {
-      normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+      const rawPatch = (params as { patch?: unknown } | null)?.patch;
+      assertCronDeliveryInputNonBlankFields(
+        rawPatch && typeof rawPatch === "object"
+          ? (rawPatch as { delivery?: unknown }).delivery
+          : undefined,
+      );
+      normalizedPatch = normalizeCronJobPatch(rawPatch);
     } catch (err) {
       respond(
         false,

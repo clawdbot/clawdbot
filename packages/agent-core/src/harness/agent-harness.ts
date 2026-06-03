@@ -209,7 +209,7 @@ interface AgentHarnessTurnState<
   activeTools: TTool[];
 }
 
-export class AgentHarness<
+export class CoreAgentHarness<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
   TTool extends AgentTool = AgentTool,
@@ -1187,6 +1187,8 @@ export class AgentHarness<
     return () => handlers.delete(handler as AgentHarnessHandler);
   }
 }
+
+export { CoreAgentHarness as AgentHarness };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {

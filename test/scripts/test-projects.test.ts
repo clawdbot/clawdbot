@@ -267,6 +267,29 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
+    const targets = [
+      "scripts/check-no-raw-http2-imports.mjs",
+      "scripts/e2e/lib/clawhub-fixture-server.cjs",
+      "scripts/install.ps1",
+    ];
+
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: ["test/vitest/vitest.tooling.config.ts"],
+    });
+    expect(buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => targets)).toEqual(
+      [
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        },
+      ],
+    );
+  });
+
   it("routes Z.AI fallback repro script changes through its regression test", () => {
     expect(resolveChangedTestTargetPlan(["scripts/zai-fallback-repro.ts"])).toEqual({
       mode: "targets",
@@ -426,6 +449,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
     for (const workflowPath of [
       ".github/workflows/ci-check-testbox.yml",
+      ".github/workflows/ci-check-arm-testbox.yml",
       ".github/workflows/crabbox-hydrate.yml",
     ]) {
       expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
@@ -757,6 +781,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/kitchen-sink-rpc-docker.sh",
       "scripts/e2e/kitchen-sink-rpc-walk.mjs",
       "scripts/e2e/onboard-docker.sh",
+      "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
       "scripts/e2e/plugin-lifecycle-matrix-docker.sh",
       "scripts/e2e/release-media-memory-docker.sh",
     ];
@@ -771,8 +796,39 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/plugin-prerelease-test-plan.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
           "test/scripts/openclaw-test-state.test.ts",
+          "test/scripts/plugin-lifecycle-measure.test.ts",
           "test/scripts/docker-e2e-plan.test.ts",
           "test/scripts/release-media-memory-scenario.test.ts",
+        ],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed Parallels process helpers to their owner tooling tests", () => {
+    expect(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+        "scripts/e2e/parallels/filesystem.ts",
+        "scripts/e2e/parallels/guest-transports.ts",
+        "scripts/e2e/parallels/host-command.ts",
+        "scripts/e2e/parallels/host-server.ts",
+        "scripts/e2e/parallels/linux-smoke.ts",
+        "scripts/e2e/parallels/phase-runner.ts",
+        "scripts/e2e/parallels/macos-smoke.ts",
+        "scripts/e2e/parallels/npm-update-smoke.ts",
+        "scripts/e2e/parallels/npm-update-scripts.ts",
+        "scripts/e2e/parallels/smoke-common.ts",
+        "scripts/e2e/parallels/update-job-timeout.ts",
+        "scripts/e2e/parallels/windows-smoke.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "test/scripts/parallels-smoke-model.test.ts",
+          "test/scripts/parallels-npm-update-smoke.test.ts",
+          "test/scripts/parallels-update-job-timeout.test.ts",
         ],
         watchMode: false,
       },
@@ -1904,6 +1960,66 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toBe(3);
   });
 
+  it("rejects malformed parallel full-suite overrides", () => {
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "3x",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_TEST_PROJECTS_PARALLEL must be a positive integer; got: 3x");
+
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "0",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_TEST_PROJECTS_PARALLEL must be a positive integer; got: 0");
+  });
+
+  it("rejects malformed conservative worker budget values", () => {
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: "1e0",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_VITEST_MAX_WORKERS must be a positive integer; got: 1e0");
+
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_WORKERS: "1 worker",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_TEST_WORKERS must be a positive integer; got: 1 worker");
+  });
+
   it("keeps serial untargeted runs on aggregate shards", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
@@ -2251,6 +2367,29 @@ describe("scripts/test-projects full-suite sharding", () => {
 
       expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+    } finally {
+      if (previousLeafShards === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+      }
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+    }
+  });
+
+  it("rejects malformed full-suite expansion parallel overrides", () => {
+    const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6x";
+    try {
+      expect(() => buildFullSuiteVitestRunPlans([], process.cwd())).toThrow(
+        "OPENCLAW_TEST_PROJECTS_PARALLEL must be a positive integer; got: 6x",
+      );
     } finally {
       if (previousLeafShards === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;

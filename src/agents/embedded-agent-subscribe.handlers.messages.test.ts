@@ -34,6 +34,8 @@ function createMessageUpdateContext(
   } = {},
 ) {
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
+  const onPartialReply = params.onPartialReply as ((event: unknown) => void) | undefined;
   return {
     params: {
       runId: "run-1",
@@ -77,6 +79,17 @@ function createMessageUpdateContext(
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
+    emitAssistantStreamData: vi.fn(
+      (
+        data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0],
+        options?: { emitPartialReply?: boolean },
+      ) => {
+        onAgentEvent?.({ stream: "assistant", data });
+        if (options?.emitPartialReply === true && (params.shouldEmitPartialReplies ?? true)) {
+          onPartialReply?.(data);
+        }
+      },
+    ),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
 
@@ -95,6 +108,7 @@ function createMessageEndContext(
     state?: Record<string, unknown>;
   } = {},
 ) {
+  const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
   return {
     params: {
       runId: "run-1",
@@ -141,6 +155,11 @@ function createMessageEndContext(
     builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
+    emitAssistantStreamData: vi.fn(
+      (data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0]) => {
+        onAgentEvent?.({ stream: "assistant", data });
+      },
+    ),
     emitBlockReply: params.emitBlockReply ?? vi.fn(),
     consumeReplyDirectives: params.consumeReplyDirectives ?? vi.fn(() => ({ text: "Need send." })),
     emitReasoningStream: vi.fn(),

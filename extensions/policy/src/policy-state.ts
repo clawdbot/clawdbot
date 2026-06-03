@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import {
   asBoolean as readBoolean,
@@ -48,6 +49,7 @@ export type PolicyEvidence = {
   readonly ingress?: readonly PolicyIngressEvidence[];
   readonly gatewayExposure?: readonly PolicyGatewayExposureEvidence[];
   readonly agentWorkspace?: readonly PolicyAgentWorkspaceEvidence[];
+  readonly dataHandling?: readonly PolicyDataHandlingEvidence[];
   readonly secrets?: readonly PolicySecretEvidence[];
   readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
 };
@@ -206,6 +208,20 @@ export type PolicyAuthProfileEvidence = {
   readonly mode?: string;
 };
 
+export type PolicyDataHandlingEvidence = {
+  readonly id: string;
+  readonly kind:
+    | "memorySessionTranscriptIndexing"
+    | "sensitiveLoggingRedaction"
+    | "sessionRetentionMode"
+    | "telemetryContentCapture";
+  readonly source: string;
+  readonly scope: "global" | "agent";
+  readonly agentId?: string;
+  readonly value?: boolean | string;
+  readonly explicit?: boolean;
+};
+
 type SecretRefEvidence = {
   readonly source: "env" | "file" | "exec";
   readonly provider: string;
@@ -280,6 +296,7 @@ export function collectPolicyEvidence(
     readonly includeIngress?: boolean;
     readonly includeGatewayExposure?: boolean;
     readonly includeAgentWorkspace?: boolean;
+    readonly includeDataHandling?: boolean;
     readonly includeToolPosture?: boolean;
     readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
@@ -293,6 +310,7 @@ export function collectPolicyEvidence(
     readonly includeIngress?: boolean;
     readonly includeGatewayExposure?: boolean;
     readonly includeAgentWorkspace?: boolean;
+    readonly includeDataHandling?: boolean;
     readonly includeToolPosture?: boolean;
     readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
@@ -306,6 +324,7 @@ export function collectPolicyEvidence(
     readonly includeIngress?: boolean;
     readonly includeGatewayExposure?: boolean;
     readonly includeAgentWorkspace?: boolean;
+    readonly includeDataHandling?: boolean;
     readonly includeToolPosture?: boolean;
     readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
@@ -325,6 +344,7 @@ export function collectPolicyEvidence(
     ...(options.includeAgentWorkspace === false
       ? {}
       : { agentWorkspace: scanPolicyAgentWorkspace(cfg) }),
+    ...(options.includeDataHandling === false ? {} : { dataHandling: scanPolicyDataHandling(cfg) }),
     ...(options.includeToolPosture === false ? {} : { toolPosture: scanPolicyToolPosture(cfg) }),
     ...(options.includeSandboxPosture === false
       ? {}
@@ -793,6 +813,202 @@ export function scanPolicyAuthProfiles(
       }
       return entry;
     });
+}
+
+export function scanPolicyDataHandling(
+  cfg: Record<string, unknown>,
+): readonly PolicyDataHandlingEvidence[] {
+  const entries: PolicyDataHandlingEvidence[] = [];
+  const logging = isRecord(cfg.logging) ? cfg.logging : {};
+  entries.push({
+    id: "logging-redaction",
+    kind: "sensitiveLoggingRedaction",
+    source: "oc://openclaw.config/logging/redactSensitive",
+    scope: "global",
+    value: logging.redactSensitive !== "off",
+    explicit: logging.redactSensitive !== undefined,
+  });
+
+  const diagnostics = isRecord(cfg.diagnostics) ? cfg.diagnostics : {};
+  const otel = isRecord(diagnostics.otel) ? diagnostics.otel : {};
+  const otelEnabled = diagnostics.enabled !== false && otel.enabled === true;
+  const tracesEnabled = otelEnabled && otel.traces !== false;
+  const logsEnabled = otelEnabled && otel.logs === true;
+  const captureContent =
+    otelEnabled &&
+    telemetryContentCaptureEnabled(otel.captureContent, {
+      tracesEnabled,
+      logsEnabled,
+    });
+  entries.push({
+    id: "diagnostics-otel-content-capture",
+    kind: "telemetryContentCapture",
+    source: "oc://openclaw.config/diagnostics/otel/captureContent",
+    scope: "global",
+    value: captureContent,
+    explicit: otel.captureContent !== undefined,
+  });
+
+  const session = isRecord(cfg.session) ? cfg.session : {};
+  const maintenance = isRecord(session.maintenance) ? session.maintenance : {};
+  const retentionMode = typeof maintenance.mode === "string" ? maintenance.mode : "enforce";
+  entries.push({
+    id: "session-maintenance-mode",
+    kind: "sessionRetentionMode",
+    source: "oc://openclaw.config/session/maintenance/mode",
+    scope: "global",
+    value: retentionMode,
+    explicit: maintenance.mode !== undefined,
+  });
+
+  pushMemorySessionTranscriptIndexing(entries, cfg);
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source));
+}
+
+function telemetryContentCaptureEnabled(
+  value: unknown,
+  signals: { readonly tracesEnabled: boolean; readonly logsEnabled: boolean },
+): boolean {
+  if (value === true) {
+    return signals.tracesEnabled || signals.logsEnabled;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (!signals.tracesEnabled) {
+    return false;
+  }
+  if (value.enabled !== true) {
+    return false;
+  }
+  return (
+    value.inputMessages === true ||
+    value.outputMessages === true ||
+    value.toolInputs === true ||
+    value.toolOutputs === true ||
+    value.systemPrompt === true ||
+    value.toolDefinitions === true
+  );
+}
+
+function pushMemorySessionTranscriptIndexing(
+  entries: PolicyDataHandlingEvidence[],
+  cfg: Record<string, unknown>,
+): void {
+  const memory = isRecord(cfg.memory) ? cfg.memory : {};
+  const qmd = isRecord(memory.qmd) ? memory.qmd : {};
+  const qmdSessions = isRecord(qmd.sessions) ? qmd.sessions : {};
+  if (qmdSessions.enabled !== undefined) {
+    entries.push({
+      id: "memory-qmd-session-transcripts",
+      kind: "memorySessionTranscriptIndexing",
+      source: "oc://openclaw.config/memory/qmd/sessions/enabled",
+      scope: "global",
+      value: memory.backend === "qmd" && readBoolean(qmdSessions.enabled) === true,
+      explicit: true,
+    });
+  }
+
+  const agents = isRecord(cfg.agents) ? cfg.agents : {};
+  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
+  const defaultsMemorySearch = isRecord(defaults.memorySearch) ? defaults.memorySearch : {};
+  const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
+  if (defaultSessionMemory !== undefined) {
+    entries.push({
+      id: "agents-defaults-memory-session-transcripts",
+      kind: "memorySessionTranscriptIndexing",
+      source: "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+      scope: "global",
+      value: defaultSessionMemory,
+      explicit: true,
+    });
+  }
+
+  if (!Array.isArray(agents.list)) {
+    return;
+  }
+  agents.list.forEach((rawAgent, index) => {
+    if (!isRecord(rawAgent)) {
+      return;
+    }
+    const agentId =
+      readString(rawAgent.id) ??
+      readString(rawAgent.name) ??
+      readString(rawAgent.slug) ??
+      `agent-${index}`;
+    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
+    const agentSessionMemory =
+      memorySearch === undefined
+        ? defaultSessionMemory
+        : memorySearchSessionTranscriptIndexing(memorySearch, defaultsMemorySearch);
+    if (agentSessionMemory === undefined) {
+      return;
+    }
+    const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
+    entries.push({
+      id: `${agentId}-memory-session-transcripts`,
+      kind: "memorySessionTranscriptIndexing",
+      source: explicit
+        ? `oc://openclaw.config/agents/list/#${index}/memorySearch/experimental/sessionMemory`
+        : "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+      scope: "agent",
+      agentId: normalizeAgentId(agentId),
+      value: agentSessionMemory,
+      explicit,
+    });
+  });
+}
+
+function memorySearchSessionTranscriptIndexing(
+  memorySearch: unknown,
+  inheritedMemorySearch?: unknown,
+): boolean | undefined {
+  if (!isRecord(memorySearch)) {
+    return undefined;
+  }
+  const experimental = isRecord(memorySearch.experimental) ? memorySearch.experimental : {};
+  const inherited = isRecord(inheritedMemorySearch) ? inheritedMemorySearch : {};
+  const inheritedExperimental = isRecord(inherited.experimental) ? inherited.experimental : {};
+  const enabled = readBoolean(memorySearch.enabled) ?? readBoolean(inherited.enabled) ?? true;
+  const sessionMemory =
+    readBoolean(experimental.sessionMemory) ?? readBoolean(inheritedExperimental.sessionMemory);
+  const sourcesIncludeSessions =
+    memorySearchSourcesIncludeSessions(memorySearch) ??
+    memorySearchSourcesIncludeSessions(inherited) ??
+    false;
+  if (
+    sessionMemory === undefined &&
+    memorySearchSourcesIncludeSessions(memorySearch) === undefined &&
+    readBoolean(memorySearch.enabled) === undefined
+  ) {
+    return undefined;
+  }
+  if (!enabled) {
+    return false;
+  }
+  return sessionMemory === true && sourcesIncludeSessions;
+}
+
+function memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch: unknown): boolean {
+  if (!isRecord(memorySearch)) {
+    return false;
+  }
+  const experimental = isRecord(memorySearch.experimental) ? memorySearch.experimental : {};
+  return (
+    readBoolean(memorySearch.enabled) !== undefined ||
+    readBoolean(experimental.sessionMemory) !== undefined ||
+    memorySearchSourcesIncludeSessions(memorySearch) !== undefined
+  );
+}
+
+function memorySearchSourcesIncludeSessions(memorySearch: unknown): boolean | undefined {
+  if (!isRecord(memorySearch) || memorySearch.sources === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(memorySearch.sources)) {
+    return false;
+  }
+  return memorySearch.sources.includes("sessions");
 }
 
 function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {

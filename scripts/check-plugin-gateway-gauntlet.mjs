@@ -595,6 +595,24 @@ export function hasGauntletWorkRows(rows) {
   return rows.some((row) => row.phase !== "prebuild");
 }
 
+function isPluginOwnedCliAlias(alias) {
+  return alias.kind === "runtime-slash" && alias.cliCommand === alias.name;
+}
+
+function buildSlashHelpProbe(params) {
+  const command = params.alias.cliCommand ?? params.alias.name;
+  return {
+    cwd: params.repoRoot,
+    env: params.env,
+    logDir: path.join(params.outputDir, "logs", "slash-help"),
+    ...openclawCommand(params.repoRoot, [command, "--help"]),
+    label: `${params.plugin.id}-slash-${params.alias.name}`,
+    phase: "slash:help",
+    pluginId: params.plugin.id,
+    timeoutMs: params.commandTimeoutMs,
+  };
+}
+
 async function runPluginLifecycle(params) {
   for (const plugin of params.plugins) {
     const commands = [
@@ -603,13 +621,34 @@ async function runPluginLifecycle(params) {
         args: ["install", plugin.id],
       },
       { phase: "inspect", args: ["inspect", plugin.id, "--json"] },
+      ...(params.skipSlashHelp
+        ? []
+        : plugin.cliCommandAliases
+            .filter(isPluginOwnedCliAlias)
+            .map((alias) => ({ phase: `slash-help:${alias.name}`, alias }))),
       { phase: "disable", args: ["disable", plugin.id] },
       ...(plugin.hasRequiredConfigFields ? [] : [{ phase: "enable", args: ["enable", plugin.id] }]),
       { phase: "doctor", args: ["doctor"] },
       { phase: "uninstall", args: ["uninstall", plugin.id, "--force"] },
     ];
-    for (const { phase, args } of commands) {
+    for (const { phase, args, alias } of commands) {
       process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
+      if (alias) {
+        params.rows.push(
+          await runMeasuredCommand({
+            ...buildSlashHelpProbe({
+              repoRoot: params.repoRoot,
+              outputDir: params.outputDir,
+              env: params.env,
+              plugin,
+              alias,
+              commandTimeoutMs: params.commandTimeoutMs,
+            }),
+            label: `${plugin.id}-${phase}`,
+          }),
+        );
+        continue;
+      }
       params.rows.push(
         await runMeasuredCommand({
           cwd: params.repoRoot,
@@ -628,19 +667,21 @@ async function runPluginLifecycle(params) {
 
 async function runSlashHelpProbes(params) {
   for (const plugin of params.plugins) {
-    for (const alias of plugin.cliCommandAliases) {
-      const command = alias.cliCommand ?? alias.name;
+    const aliases = params.includePluginOwnedCliAliases
+      ? plugin.cliCommandAliases
+      : plugin.cliCommandAliases.filter((entry) => !isPluginOwnedCliAlias(entry));
+    for (const alias of aliases) {
       process.stderr.write(`[plugin-gauntlet] ${plugin.id} slash-help /${alias.name}\n`);
       params.rows.push(
         await runMeasuredCommand({
-          cwd: params.repoRoot,
-          env: params.env,
-          logDir: path.join(params.outputDir, "logs", "slash-help"),
-          ...openclawCommand(params.repoRoot, [command, "--help"]),
-          label: `${plugin.id}-slash-${alias.name}`,
-          phase: "slash:help",
-          pluginId: plugin.id,
-          timeoutMs: params.commandTimeoutMs,
+          ...buildSlashHelpProbe({
+            repoRoot: params.repoRoot,
+            outputDir: params.outputDir,
+            env: params.env,
+            plugin,
+            alias,
+            commandTimeoutMs: params.commandTimeoutMs,
+          }),
         }),
       );
     }
@@ -816,6 +857,7 @@ async function main() {
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
+        skipSlashHelp: options.skipSlashHelp,
       });
     }
     if (!prebuildFailed && !options.skipSlashHelp) {
@@ -826,6 +868,7 @@ async function main() {
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
+        includePluginOwnedCliAliases: options.skipLifecycle,
       });
     }
     const qaSummaries =

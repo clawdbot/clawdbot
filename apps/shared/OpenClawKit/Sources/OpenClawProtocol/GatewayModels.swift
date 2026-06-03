@@ -6896,6 +6896,20 @@ public struct ChatHistoryParams: Codable, Sendable {
     }
 }
 
+public struct ChatMetadataParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
 public struct ChatMessageGetParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?

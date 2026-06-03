@@ -14,11 +14,17 @@ const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
 function positiveEnvInt(name, env, fallback) {
   const raw = env[name]?.trim();
-  if (raw === undefined || raw === "" || !/^[0-9]+$/.test(raw)) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function resolveExtensionMemoryBuildTimeoutMs(env = process.env) {

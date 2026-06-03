@@ -32,6 +32,7 @@ import {
   resolveEnforceFinalTagWithResolver,
 } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -226,6 +227,7 @@ function buildEmbeddedContextFromTemplate(params: {
       config,
       hasRepliedRef: params.hasRepliedRef,
     }),
+    currentInboundAudio: hasInboundAudio(params.sessionCtx),
   };
 }
 
@@ -271,6 +273,7 @@ export function buildEmbeddedRunExecutionParams(params: {
   provider: string;
   model: string;
   runId: string;
+  promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
   const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
@@ -279,6 +282,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     provider: params.provider,
     model: params.model,
     runId: params.runId,
+    promptCacheKey: params.promptCacheKey,
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   });

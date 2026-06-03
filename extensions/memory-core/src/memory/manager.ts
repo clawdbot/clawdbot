@@ -118,6 +118,24 @@ export async function closeMemoryIndexManagersForAgent(params: {
   }
 }
 
+function resolveEffectiveMemorySearchSettings(
+  settings: ResolvedMemorySearchConfig,
+): ResolvedMemorySearchConfig {
+  if (settings.provider !== "none" || !settings.store.vector.enabled) {
+    return settings;
+  }
+  return {
+    ...settings,
+    store: {
+      ...settings.store,
+      vector: {
+        ...settings.store.vector,
+        enabled: false,
+      },
+    },
+  };
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
@@ -244,30 +262,31 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
   }) {
     super();
+    const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
-    this.settings = params.settings;
+    this.settings = effectiveSettings;
     this.provider = null;
-    this.requestedProvider = params.settings.provider;
+    this.requestedProvider = effectiveSettings.provider;
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
     if (params.providerResult) {
       this.applyProviderResult(params.providerResult);
     }
-    this.sources = new Set(params.settings.sources);
+    this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
     this.cache = {
-      enabled: params.settings.cache.enabled,
-      maxEntries: params.settings.cache.maxEntries,
+      enabled: effectiveSettings.cache.enabled,
+      maxEntries: effectiveSettings.cache.maxEntries,
     };
-    this.fts = { enabled: params.settings.query.hybrid.enabled, available: false };
+    this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
     this.ensureSchema();
     this.vector = {
-      enabled: params.settings.store.vector.enabled,
+      enabled: effectiveSettings.store.vector.enabled,
       available: null,
-      extensionPath: params.settings.store.vector.extensionPath,
+      extensionPath: effectiveSettings.store.vector.extensionPath,
     };
     const meta = this.readMeta();
     if (meta?.vectorDims) {
@@ -311,6 +330,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async ensureProviderInitialized(): Promise<void> {
     if (this.providerInitialized) {
+      return;
+    }
+    if (this.settings.provider === "none") {
+      this.applyProviderResult({
+        provider: null,
+        requestedProvider: "none",
+        providerUnavailableReason: "No embedding provider available (FTS-only mode)",
+      });
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
       return;
     }
     if (!this.providerInitPromise) {
@@ -392,11 +421,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
-    const provider = this.providerInitialized
-      ? this.provider
-        ? { id: this.provider.id, model: this.provider.model }
-        : null
-      : undefined;
+    const provider =
+      this.settings.provider === "none"
+        ? null
+        : this.providerInitialized
+          ? this.provider
+            ? { id: this.provider.id, model: this.provider.model }
+            : null
+          : undefined;
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,

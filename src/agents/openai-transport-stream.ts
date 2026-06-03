@@ -1807,8 +1807,15 @@ function resolveProviderTransportTurnState(
     transport: "stream" | "websocket";
   },
 ) {
+  const normalizedProvider = model.provider.trim().toLowerCase();
+  const allowRuntimePluginLoad =
+    normalizedProvider === "openai" ||
+    normalizedProvider === "azure-openai" ||
+    normalizedProvider === "azure-openai-responses";
   return resolveProviderTransportTurnStateWithPlugin({
     provider: model.provider,
+    modelId: model.id,
+    allowRuntimePluginLoad,
     context: {
       provider: model.provider,
       modelId: model.id,
@@ -2588,6 +2595,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
+        const emitReasoning = shouldEmitOpenAICompletionsReasoning(
+          model as OpenAIModeModel,
+          options as OpenAICompletionsOptions | undefined,
+        );
         const responseStream = (await client.chat.completions.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
@@ -2595,6 +2606,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
+          emitReasoning,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -2616,10 +2628,11 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; emitReasoning?: boolean },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
+  const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
@@ -2651,6 +2664,11 @@ async function processOpenAICompletionsStream(
   let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
+  let chunkPushedEvent = false;
+  const pushStreamEvent = (event: unknown) => {
+    chunkPushedEvent = true;
+    stream.push(event);
+  };
   const finishCurrentBlock = () => {
     if (!currentBlock) {
       return;
@@ -2691,13 +2709,13 @@ async function processOpenAICompletionsStream(
       currentBlock = {
         type: "thinking",
         thinking: "",
-        thinkingSignature: reasoningDelta.signature,
+        ...(reasoningDelta.signature ? { thinkingSignature: reasoningDelta.signature } : {}),
       };
       output.content.push(currentBlock);
-      stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
     }
     currentBlock.thinking += reasoningDelta.text;
-    stream.push({
+    pushStreamEvent({
       type: "thinking_delta",
       contentIndex: blockIndex(),
       delta: reasoningDelta.text,
@@ -2709,10 +2727,10 @@ async function processOpenAICompletionsStream(
       finishCurrentBlock();
       currentBlock = { type: "text", text: "" };
       output.content.push(currentBlock);
-      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
     currentBlock.text += text;
-    stream.push({
+    pushStreamEvent({
       type: "text_delta",
       contentIndex: blockIndex(),
       delta: text,
@@ -2734,7 +2752,7 @@ async function processOpenAICompletionsStream(
     for (const delta of bufferedDeltas) {
       if (delta.kind === "text") {
         appendTextDeltaInternal(delta.text);
-      } else {
+      } else if (emitReasoning) {
         appendThinkingDeltaInternal(delta);
       }
     }
@@ -2776,12 +2794,12 @@ async function processOpenAICompletionsStream(
     };
     currentBlock = block;
     output.content.push(block);
-    stream.push({
+    pushStreamEvent({
       type: "toolcall_start",
       contentIndex: output.content.indexOf(block),
       partial: output,
     });
-    stream.push({
+    pushStreamEvent({
       type: "toolcall_delta",
       contentIndex: output.content.indexOf(block),
       delta: toolCall.partialArgs,
@@ -2833,6 +2851,9 @@ async function processOpenAICompletionsStream(
       appendFilteredVisibleTextDelta(delta.text);
       return;
     }
+    if (!emitReasoning) {
+      return;
+    }
     if (currentBlock?.type === "toolCall") {
       queuePostToolCallDelta(delta);
     } else {
@@ -2844,6 +2865,19 @@ async function processOpenAICompletionsStream(
       appendFilteredVisibleTextDelta(delta.text);
     }
   };
+  const emitReasoningUsageActivity = (hasReasoningUsageActivity: boolean) => {
+    if (!hasReasoningUsageActivity || chunkPushedEvent || !emitReasoning) {
+      return;
+    }
+    const latestBlock = output.content[output.content.length - 1];
+    if (currentBlock?.type === "text" || currentBlock?.type === "toolCall") {
+      return;
+    }
+    if (latestBlock?.type === "text" || latestBlock?.type === "toolCall") {
+      return;
+    }
+    appendThinkingDelta({ signature: "", text: "" });
+  };
   const flushReasoningTagTextPartitionerAtEnd = () => {
     for (const delta of reasoningTagTextPartitioner.flush()) {
       appendPartitionedVisibleDelta(delta);
@@ -2852,23 +2886,28 @@ async function processOpenAICompletionsStream(
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
     throwIfModelStreamAborted(options?.signal);
+    chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
       await cooperativeScheduler.afterEvent();
       continue;
     }
     const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
+    let hasReasoningUsageActivity = false;
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
+      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
       continue;
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
     if (!chunk.usage && choiceUsage) {
       output.usage = parseTransportChunkUsage(choiceUsage, model);
+      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapStopReason(choice.finish_reason);
@@ -2884,6 +2923,7 @@ async function processOpenAICompletionsStream(
       choice.delta ??
       (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
     if (!choiceDelta) {
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
       continue;
     }
@@ -2914,13 +2954,16 @@ async function processOpenAICompletionsStream(
       }
     }
     for (const reasoningDelta of reasoningDeltas) {
+      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+        continue;
+      }
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
         continue;
       }
       if (reasoningDelta.kind === "text") {
         appendTextDelta(reasoningDelta.text);
-      } else {
+      } else if (emitReasoning) {
         appendThinkingDelta(reasoningDelta);
       }
     }
@@ -2949,7 +2992,7 @@ async function processOpenAICompletionsStream(
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           output.content.push(block);
-          stream.push({
+          pushStreamEvent({
             type: "toolcall_start",
             contentIndex: output.content.indexOf(block),
             partial: output,
@@ -2979,7 +3022,7 @@ async function processOpenAICompletionsStream(
           toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
           block.partialArgs += toolCall.function.arguments;
           block.arguments = parseStreamingJson(block.partialArgs);
-          stream.push({
+          pushStreamEvent({
             type: "toolcall_delta",
             contentIndex: output.content.indexOf(block),
             delta: toolCall.function.arguments,
@@ -2989,6 +3032,7 @@ async function processOpenAICompletionsStream(
       }
     }
     flushPendingPostToolCallDeltas();
+    emitReasoningUsageActivity(hasReasoningUsageActivity);
     await cooperativeScheduler.afterEvent();
   }
   flushReasoningTagTextPartitionerAtEnd();
@@ -3349,6 +3393,7 @@ function getCompat(model: OpenAIModeModel): {
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
   supportsPromptCacheKey: boolean;
+  supportsLongCacheRetention: boolean;
   requiresStringContent: boolean;
   strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
@@ -3381,6 +3426,7 @@ function getCompat(model: OpenAIModeModel): {
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
     supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
+    supportsLongCacheRetention: compat.supportsLongCacheRetention !== false,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
     visibleReasoningDetailTypes:
@@ -3418,6 +3464,27 @@ type OpenAIResponsesRequestParams = {
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+function shouldEmitOpenAICompletionsReasoning(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  if (!model.reasoning) {
+    return false;
+  }
+  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
+    return false;
+  }
+  return true;
+}
+
+function shouldEmitOpenAICompletionsReasoningForModel(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  return shouldEmitOpenAICompletionsReasoning(model, options);
 }
 
 function resolveOpenAICompletionsMaxTokens(
@@ -4014,7 +4081,7 @@ export function buildOpenAICompletionsParams(
     // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
     // the key reaches the wire but the retention preference is silently
     // dropped (issue #81281).
-    if (cacheRetention === "long") {
+    if (cacheRetention === "long" && compat.supportsLongCacheRetention) {
       params.prompt_cache_retention = "24h";
     }
   }
@@ -4174,6 +4241,15 @@ export function parseTransportChunkUsage(
   return usage;
 }
 
+function hasOpenAICompletionsReasoningUsageActivity(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+) {
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  return (
+    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
+  );
+}
+
 function mapStopReason(reason: string | null) {
   if (reason === null) {
     return { stopReason: "stop" };
@@ -4213,6 +4289,7 @@ export const testing = {
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
   processResponsesStream,
+  shouldEmitOpenAICompletionsReasoningForModel,
   formatModelTransportDebugBaseUrl,
   buildResponsesFailedNoDetailsObservation,
   buildOpenAIResponsesReasoningReplayMetadata,

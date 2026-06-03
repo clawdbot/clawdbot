@@ -155,6 +155,13 @@ type BeforeToolCallWrapperOptions = {
   approvalMode?: "request" | "report" | "defer";
   emitDiagnostics: boolean;
 };
+type BeforeToolCallPreparingTool = AnyAgentTool & {
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+};
 
 export type BeforeToolCallPolicyDiagnosticState = {
   hasBeforeToolCallHook: boolean;
@@ -1099,8 +1106,16 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-      const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+      const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
+      const preparedParams = prepare
+        ? await prepare(params, {
+            ...(toolCallId ? { toolCallId } : {}),
+            ...(ctx ? { hookContext: ctx } : {}),
+            ...(signal ? { signal } : {}),
+          })
+        : params;
+      const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
+      const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
       const outcome = await runBeforeToolCallHook({
         toolName,
         params: hookParams,
@@ -1149,12 +1164,17 @@ export function wrapToolWithBeforeToolCallHook(
         });
         return blockedResult;
       }
-      const executeParams = reconcileCodeModeExecBeforeHookParams({
+      let executeParams = reconcileCodeModeExecBeforeHookParams({
         tool,
-        originalParams: params,
+        originalParams: preparedParams,
         hookParams,
         adjustedParams: outcome.params,
       });
+      executeParams =
+        (tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams?.(
+          executeParams,
+          preparedParams,
+        ) ?? executeParams;
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const normalizedToolName = normalizeToolName(toolName || "tool");
       const trace = ctx?.trace

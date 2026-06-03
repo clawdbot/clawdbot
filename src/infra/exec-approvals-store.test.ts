@@ -801,6 +801,88 @@ describe("exec approvals store helpers", () => {
     });
   });
 
+  it("persists node command markers only for fully represented allow-always patterns", () => {
+    const dir = createHomeDir();
+    vi.spyOn(Date, "now").mockReturnValue(654_322);
+
+    const approvals = ensureExecApprovals();
+    const completePatterns = persistAllowAlwaysPatterns({
+      approvals,
+      agentId: "worker",
+      commandText: "/usr/bin/tool ok",
+      segments: [
+        {
+          raw: "/usr/bin/tool ok",
+          argv: ["/usr/bin/tool", "ok"],
+          resolution: {
+            execution: {
+              rawExecutable: "/usr/bin/tool",
+              resolvedPath: "/usr/bin/tool",
+              executableName: "tool",
+            },
+            policy: {
+              rawExecutable: "/usr/bin/tool",
+              resolvedPath: "/usr/bin/tool",
+              executableName: "tool",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(completePatterns).toEqual([{ pattern: "/usr/bin/tool" }]);
+    let allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist.map((entry) => entry.pattern)).toEqual([
+      "/usr/bin/tool",
+      expect.stringMatching(/^=node-command:[0-9a-f]{16}$/),
+    ]);
+    expect(allowlist.some((entry) => entry.lastUsedCommand === "/usr/bin/tool ok")).toBe(false);
+
+    const partialPatterns = persistAllowAlwaysPatterns({
+      approvals,
+      agentId: "worker",
+      commandText: "sh -c '/bin/echo ok && missingcmd'",
+      segments: [
+        {
+          raw: "sh -c '/bin/echo ok && missingcmd'",
+          argv: ["sh", "-c", "/bin/echo ok && missingcmd"],
+          resolution: {
+            execution: {
+              rawExecutable: "sh",
+              resolvedPath: "/bin/sh",
+              executableName: "sh",
+            },
+            policy: {
+              rawExecutable: "sh",
+              resolvedPath: "/bin/sh",
+              executableName: "sh",
+            },
+          },
+        },
+      ],
+    });
+
+    const echoPattern = partialPatterns[0]?.pattern;
+    expect(echoPattern).toMatch(/\/echo$/);
+    allowlist = allowlistEntries(dir, "worker");
+    expect(
+      allowlist.map((entry) => entry.pattern).filter((pattern) => pattern === echoPattern),
+    ).toHaveLength(1);
+    expect(
+      allowlist.some(
+        (entry) =>
+          typeof entry.pattern === "string" &&
+          entry.pattern.startsWith("=node-command:") &&
+          entry.lastUsedCommand === "sh -c '/bin/echo ok && missingcmd'",
+      ),
+    ).toBe(false);
+    expect(
+      allowlist.filter(
+        (entry) => typeof entry.pattern === "string" && entry.pattern.startsWith("=node-command:"),
+      ),
+    ).toHaveLength(1);
+  });
+
   it("returns null when approval socket credentials are missing", async () => {
     await expect(
       requestExecApprovalViaSocket({

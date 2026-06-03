@@ -19,7 +19,7 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
       requireRpc: opts.requireRpc,
       deep: opts.deep === true,
     });
-    printDaemonStatus(status, { json: opts.json });
+    printDaemonStatus(status, { json: opts.json, deep: opts.deep === true });
     if (opts.requireRpc && !status.rpc?.ok) {
       defaultRuntime.exit(1);
     }

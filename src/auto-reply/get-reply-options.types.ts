@@ -49,6 +49,8 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
+  /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
+  promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */

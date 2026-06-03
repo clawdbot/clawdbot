@@ -116,23 +116,36 @@ const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const DEFAULT_COMMAND_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS,
   10 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS",
 );
 const TELEGRAM_POLL_INTERVAL_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS,
   30_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS",
 );
 const TELEGRAM_POLL_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS,
   4 * 60 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS",
 );
 
-function readPositiveInt(raw: string | undefined, fallback: number): number {
+export function readPositiveInt(
+  raw: string | undefined,
+  fallback: number,
+  label = "value",
+): number {
   const text = (raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
 export function run(command: string, args: string[], input?: RunOptions): string {

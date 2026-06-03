@@ -100,6 +100,9 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   if (role !== "assistant") {
     return false;
   }
+  if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
+    return false;
+  }
 
   const content =
     typeof entry.content === "string" || Array.isArray(entry.content) ? entry.content : entry.text;

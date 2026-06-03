@@ -26,6 +26,7 @@ type ScopedToolsCall = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
@@ -512,6 +513,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
         "x-openclaw-current-message-id": "reply-message-1",
+        "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-source-reply-delivery-mode": "message_tool_only",
       }),
@@ -526,6 +528,7 @@ describe("mcp loopback server", () => {
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-message-1");
+    expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call.surface).toBe("loopback");
@@ -539,9 +542,13 @@ describe("mcp loopback server", () => {
     ]);
   });
 
-  it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
+  it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
     const { runtime } = await startLoopbackServerForTest();
-    const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
+    const sendToolsList = async (
+      inboundEventKind: string,
+      sourceReplyDeliveryMode?: string,
+      currentInboundAudio?: boolean,
+    ) =>
       await sendLoopbackToolsList({
         token: runtime?.ownerToken,
         headers: {
@@ -551,17 +558,20 @@ describe("mcp loopback server", () => {
           ...(sourceReplyDeliveryMode
             ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
             : {}),
+          ...(currentInboundAudio ? { "x-openclaw-current-inbound-audio": "true" } : {}),
         },
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
     expect((await sendToolsList("room_event")).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
+    expect((await sendToolsList("room_event", "message_tool_only", true)).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -916,6 +926,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-message-id"]).toBe(
       "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-inbound-audio"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",

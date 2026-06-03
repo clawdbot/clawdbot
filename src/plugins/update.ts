@@ -1,7 +1,9 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
@@ -19,6 +21,7 @@ import {
 import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "./clawhub.js";
@@ -44,10 +47,16 @@ import {
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import { checkMinHostVersion } from "./min-host-version.js";
+import {
+  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -208,6 +217,27 @@ function shouldBypassTrustedOfficialUnchangedNpmCheck(params: {
       resolvedVersion: params.metadata.version,
     }),
   );
+}
+
+function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): boolean {
+  const hostVersion = resolveCompatibilityHostVersion();
+  const installMetadata = metadata.packageOpenClaw?.install;
+  const minHostVersionCheck = checkMinHostVersion({
+    currentVersion: hostVersion,
+    minHostVersion: isRecord(installMetadata) ? installMetadata.minHostVersion : undefined,
+  });
+  if (!minHostVersionCheck.ok) {
+    return false;
+  }
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(metadata.packageOpenClaw);
+  if (!pluginApiRangeCheck.ok) {
+    return false;
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
+  if (!pluginApiRange) {
+    return true;
+  }
+  return satisfiesPluginApiRange(hostVersion, pluginApiRange);
 }
 
 function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
@@ -518,53 +548,6 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
     return false;
   }
   return (record.clawhubUrl ?? "").replace(/\/+$/, "") === "https://clawhub.ai";
-}
-
-export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): string | undefined {
-  if (params.record.source !== "npm") {
-    return undefined;
-  }
-  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
-  if (!entry) {
-    return undefined;
-  }
-  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.npmSpec;
-  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
-  if (!officialSpec || !officialPackageName) {
-    return undefined;
-  }
-  const recordedPackageNames = [
-    params.record.resolvedName,
-    resolveNpmSpecPackageName(params.record.spec),
-    resolveNpmSpecPackageName(params.record.resolvedSpec),
-  ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
-}
-
-export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): string | undefined {
-  if (params.record.source !== "clawhub") {
-    return undefined;
-  }
-  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
-  if (!entry) {
-    return undefined;
-  }
-  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.clawhubSpec;
-  const officialPackageName = resolveClawHubSpecPackageName(officialSpec);
-  if (!officialSpec || !officialPackageName) {
-    return undefined;
-  }
-  const recordedPackageNames = [
-    params.record.clawhubPackage,
-    resolveClawHubSpecPackageName(params.record.spec),
-  ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
 }
 
 function resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate(params: {
@@ -1238,6 +1221,7 @@ export async function updateNpmInstalledPlugins(params: {
             spec: effectiveSpec!,
             trustedSourceLinkedOfficialInstall,
           }) &&
+          isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
           !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
           shouldSkipUnchangedNpmInstall({
             currentVersion,

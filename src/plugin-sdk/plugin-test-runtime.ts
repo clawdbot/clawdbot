@@ -14,6 +14,9 @@ export {
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
 export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest } from "../infra/diagnostic-events.js";
+export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,

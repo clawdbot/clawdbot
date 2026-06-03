@@ -126,6 +126,8 @@ import {
   type ChatEvent,
   ChatEventSchema,
   ChatHistoryParamsSchema,
+  type ChatMetadataParams,
+  ChatMetadataParamsSchema,
   ChatMessageGetResultSchema,
   ChatMessageGetParamsSchema,
   type ChatInjectParams,
@@ -846,6 +848,7 @@ export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeS
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
+export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile<ChatAbortParams>(ChatAbortParamsSchema);
@@ -1115,6 +1118,7 @@ export {
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
   ChatHistoryParamsSchema,
+  ChatMetadataParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
   UpdateRunParamsSchema,
@@ -1223,6 +1227,7 @@ export type {
   ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
+  ChatMetadataParams,
   CommandsListParams,
   CommandsListResult,
   CommandEntry,

@@ -22,6 +22,22 @@ MOCK_PORT="44210"
 CLICKCLACK_PORT="44211"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_RELEASE_UPGRADE"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-upgrade-user-journey.XXXXXX")"
+LOG_DIR="$scenario_tmp/logs"
+mkdir -p "$LOG_DIR"
+BASELINE_INSTALL_LOG="$LOG_DIR/baseline-install.log"
+CANDIDATE_INSTALL_LOG="$LOG_DIR/candidate-install.log"
+ONBOARD_LOG="$LOG_DIR/onboard.log"
+OPENAI_LOG="$LOG_DIR/openai.log"
+PLUGIN_INSTALL_LOG="$LOG_DIR/plugin-install.log"
+PLUGIN_CLI_BEFORE_LOG="$LOG_DIR/plugin-cli-before.log"
+PLUGIN_CLI_AFTER_LOG="$LOG_DIR/plugin-cli-after.log"
+AGENT_LOG="$LOG_DIR/agent.log"
+STATUS_JSON="$LOG_DIR/status.json"
+STATUS_ERR="$LOG_DIR/status.err"
+CLICKCLACK_OUTBOUND_JSON="$LOG_DIR/clickclack-outbound.json"
+CLICKCLACK_OUTBOUND_ERR="$LOG_DIR/clickclack-outbound.err"
+CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
+GATEWAY_LOG="$LOG_DIR/gateway.log"
 MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
 CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
 BASELINE_SPEC="${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}"
@@ -47,19 +63,19 @@ dump_debug_logs() {
   local status="$1"
   echo "release upgrade user journey failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
-    /tmp/openclaw-release-upgrade-baseline-install.log \
-    /tmp/openclaw-release-upgrade-candidate-install.log \
-    /tmp/openclaw-release-upgrade-onboard.log \
-    /tmp/openclaw-release-upgrade-openai.log \
+    "$BASELINE_INSTALL_LOG" \
+    "$CANDIDATE_INSTALL_LOG" \
+    "$ONBOARD_LOG" \
+    "$OPENAI_LOG" \
     "$MOCK_REQUEST_LOG" \
-    /tmp/openclaw-release-upgrade-plugin-install.log \
-    /tmp/openclaw-release-upgrade-plugin-cli-before.log \
-    /tmp/openclaw-release-upgrade-plugin-cli-after.log \
-    /tmp/openclaw-release-upgrade-agent.log \
-    /tmp/openclaw-release-upgrade-status.json \
-    /tmp/openclaw-release-upgrade-clickclack-outbound.json \
-    /tmp/openclaw-release-upgrade-clickclack-server.log \
-    /tmp/openclaw-release-upgrade-gateway.log \
+    "$PLUGIN_INSTALL_LOG" \
+    "$PLUGIN_CLI_BEFORE_LOG" \
+    "$PLUGIN_CLI_AFTER_LOG" \
+    "$AGENT_LOG" \
+    "$STATUS_JSON" \
+    "$CLICKCLACK_OUTBOUND_JSON" \
+    "$CLICKCLACK_SERVER_LOG" \
+    "$GATEWAY_LOG" \
     "$CLICKCLACK_STATE"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
@@ -71,8 +87,8 @@ start_gateway() {
 }
 
 echo "Installing published baseline $BASELINE_SPEC..."
-if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1; then
-  cat /tmp/openclaw-release-upgrade-baseline-install.log >&2 || true
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g "$BASELINE_SPEC" --no-fund --no-audit >"$BASELINE_INSTALL_LOG" 2>&1; then
+  cat "$BASELINE_INSTALL_LOG" >&2 || true
   exit 1
 fi
 command -v openclaw >/dev/null
@@ -80,13 +96,13 @@ baseline_root="$(openclaw_e2e_package_root)"
 baseline_entry="$(openclaw_e2e_package_entrypoint "$baseline_root")"
 openclaw_e2e_enable_openclaw_cli_timeout
 
-mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-upgrade-openai.log)"
+mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$OPENAI_LOG")"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 CLICKCLACK_FIXTURE_PORT="$CLICKCLACK_PORT" \
 CLICKCLACK_FIXTURE_TOKEN="$CLICKCLACK_BOT_TOKEN" \
 CLICKCLACK_FIXTURE_STATE="$CLICKCLACK_STATE" \
-  node scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs >/tmp/openclaw-release-upgrade-clickclack-server.log 2>&1 &
+  node scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs >"$CLICKCLACK_SERVER_LOG" 2>&1 &
 clickclack_pid="$!"
 for _ in $(seq 1 100); do
   if openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200 >/dev/null 2>&1; then
@@ -108,10 +124,10 @@ openclaw_e2e_run_command node "$baseline_entry" onboard \
   --skip-ui \
   --skip-channels \
   --skip-skills \
-  --skip-health >/tmp/openclaw-release-upgrade-onboard.log 2>&1
+  --skip-health >"$ONBOARD_LOG" 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai "$MOCK_PORT"
 
-plugin_dir="$(mktemp -d "/tmp/openclaw-release-upgrade-plugin.XXXXXX")"
+plugin_dir="$(mktemp -d "$scenario_tmp/plugin.XXXXXX")"
 node scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs \
   "$plugin_dir" \
   release-upgrade-plugin \
@@ -120,12 +136,12 @@ node scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs \
   "Release Upgrade Plugin" \
   release-upgrade \
   "release-upgrade-plugin:pong"
-openclaw plugins install "$plugin_dir" >/tmp/openclaw-release-upgrade-plugin-install.log 2>&1
-openclaw release-upgrade ping >/tmp/openclaw-release-upgrade-plugin-cli-before.log 2>&1
-node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-upgrade-plugin-cli-before.log "release-upgrade-plugin:pong"
+openclaw plugins install "$plugin_dir" >"$PLUGIN_INSTALL_LOG" 2>&1
+openclaw release-upgrade ping >"$PLUGIN_CLI_BEFORE_LOG" 2>&1
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGIN_CLI_BEFORE_LOG" "release-upgrade-plugin:pong"
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "http://127.0.0.1:$CLICKCLACK_PORT"
 
-openclaw_e2e_install_package /tmp/openclaw-release-upgrade-candidate-install.log "candidate OpenClaw package"
+openclaw_e2e_install_package "$CANDIDATE_INSTALL_LOG" "candidate OpenClaw package"
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 openclaw_e2e_enable_openclaw_cli_timeout
@@ -136,22 +152,22 @@ openclaw agent --local \
   --session-id release-upgrade-user-journey-agent \
   --message "Return marker $SUCCESS_MARKER" \
   --thinking off \
-  --json >/tmp/openclaw-release-upgrade-agent.log 2>&1
-node scripts/e2e/lib/release-scenarios/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" /tmp/openclaw-release-upgrade-agent.log "$MOCK_REQUEST_LOG"
+  --json >"$AGENT_LOG" 2>&1
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$AGENT_LOG" "$MOCK_REQUEST_LOG"
 
-openclaw release-upgrade ping >/tmp/openclaw-release-upgrade-plugin-cli-after.log 2>&1
-node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-upgrade-plugin-cli-after.log "release-upgrade-plugin:pong"
+openclaw release-upgrade ping >"$PLUGIN_CLI_AFTER_LOG" 2>&1
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGIN_CLI_AFTER_LOG" "release-upgrade-plugin:pong"
 
-openclaw channels status --json >/tmp/openclaw-release-upgrade-status.json 2>/tmp/openclaw-release-upgrade-status.err
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack /tmp/openclaw-release-upgrade-status.json
+openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_JSON"
 openclaw message send \
   --channel clickclack \
   --target channel:general \
   --message "release upgrade outbound" \
-  --json >/tmp/openclaw-release-upgrade-clickclack-outbound.json 2>/tmp/openclaw-release-upgrade-clickclack-outbound.err
+  --json >"$CLICKCLACK_OUTBOUND_JSON" 2>"$CLICKCLACK_OUTBOUND_ERR"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-clickclack-state outbound "$CLICKCLACK_STATE" "release upgrade outbound"
 
-start_gateway /tmp/openclaw-release-upgrade-gateway.log
+start_gateway "$GATEWAY_LOG"
 node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-socket "http://127.0.0.1:$CLICKCLACK_PORT" 45
 node scripts/e2e/lib/release-user-journey/assertions.mjs post-clickclack-inbound "http://127.0.0.1:$CLICKCLACK_PORT" "Return marker $SUCCESS_MARKER"
 node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-reply "$CLICKCLACK_STATE" "$SUCCESS_MARKER" 45

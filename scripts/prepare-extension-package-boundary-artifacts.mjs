@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -12,6 +13,18 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
+const NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
+const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const ACTIVE_NODE_STEP_KILLERS = new Set();
+let nodeStepParentSignalForwardersInstalled = false;
+let exitingAfterParentSignal = false;
+let parentSignalExitCode = 1;
+let parentSignalExitTimer;
 
 function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
   const packageJson = JSON.parse(
@@ -245,12 +258,11 @@ export function parseMode(argv = process.argv.slice(2)) {
 }
 
 export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
-  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
+  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
+  if (!raw) {
     return 300_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim() ? parsed : 300_000;
+  return parsePositiveInt(raw, "OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS");
 }
 
 function collectNewestMtime(paths, params = {}) {
@@ -356,31 +368,100 @@ function abortSiblingSteps(abortController) {
   }
 }
 
+function signalNodeStep(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The child process group can already be gone by the time cleanup runs.
+    }
+  }
+  child.kill(signal);
+}
+
+function signalActiveNodeSteps(signal) {
+  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS) {
+    killNodeStep(signal);
+  }
+}
+
+function installNodeStepParentSignalForwarders() {
+  if (nodeStepParentSignalForwardersInstalled) {
+    return;
+  }
+  nodeStepParentSignalForwardersInstalled = true;
+  for (const signal of NODE_STEP_PARENT_SIGNALS) {
+    process.on(signal, () => {
+      const exitCode = NODE_STEP_PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1;
+      if (exitingAfterParentSignal) {
+        signalActiveNodeSteps("SIGKILL");
+        process.exit(exitCode);
+      }
+      exitingAfterParentSignal = true;
+      parentSignalExitCode = exitCode;
+      signalActiveNodeSteps(signal);
+      parentSignalExitTimer ??= setTimeout(
+        () => process.exit(parentSignalExitCode),
+        NODE_STEP_ABORT_KILL_GRACE_MS,
+      );
+    });
+  }
+  process.on("exit", () => {
+    signalActiveNodeSteps("SIGKILL");
+  });
+}
+
 export function runNodeStep(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
+  installNodeStepParentSignalForwarders();
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawnImpl(process.execPath, args, {
       cwd: repoRoot,
+      detached: process.platform !== "win32",
       env: params.env ? { ...process.env, ...params.env } : process.env,
-      signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
     let settled = false;
+    let canceled = false;
+    let killTimer;
     const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
+    const killNodeStep = (signal) => signalNodeStep(child, signal);
+    ACTIVE_NODE_STEP_KILLERS.add(killNodeStep);
+    const abortStep = () => {
+      if (settled || canceled) {
+        return;
+      }
+      canceled = true;
+      killNodeStep("SIGTERM");
+      killTimer = setTimeout(() => {
+        killTimer = undefined;
+        killNodeStep("SIGKILL");
+      }, NODE_STEP_ABORT_KILL_GRACE_MS);
+      killTimer.unref?.();
+    };
+    function cleanup() {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      ACTIVE_NODE_STEP_KILLERS.delete(killNodeStep);
+      abortController?.signal.removeEventListener("abort", abortStep);
+    }
     const timer = setTimeout(() => {
       if (settled) {
         return;
       }
       settled = true;
-      child.kill("SIGKILL");
+      killNodeStep("SIGKILL");
+      cleanup();
       stdoutWriter.flush();
       stderrWriter.flush();
       abortSiblingSteps(abortController);
       rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
+    abortController?.signal.addEventListener("abort", abortStep, { once: true });
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -394,14 +475,15 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      clearTimeout(timer);
       settled = true;
       stdoutWriter.flush();
       stderrWriter.flush();
-      if (error.name === "AbortError" && abortController?.signal.aborted) {
-        rejectPromise(new Error(`${label} canceled after sibling failure`));
+      if (exitingAfterParentSignal) {
+        killNodeStep("SIGKILL");
+        cleanup();
         return;
       }
+      cleanup();
       abortSiblingSteps(abortController);
       rejectPromise(new Error(`${label} failed to start: ${error.message}`));
     });
@@ -409,10 +491,21 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      clearTimeout(timer);
       settled = true;
       stdoutWriter.flush();
       stderrWriter.flush();
+      if (exitingAfterParentSignal) {
+        killNodeStep("SIGKILL");
+        cleanup();
+        return;
+      }
+      if (canceled) {
+        killNodeStep("SIGKILL");
+        cleanup();
+        rejectPromise(new Error(`${label} canceled after sibling failure`));
+        return;
+      }
+      cleanup();
       if (code === 0) {
         resolvePromise();
         return;

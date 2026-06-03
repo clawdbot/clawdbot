@@ -26,7 +26,7 @@ export type {
 } from "../config/types.base.js";
 export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
-type StreamingCompatEntry = {
+export type StreamingCompatEntry = {
   streaming?: unknown;
   streamMode?: unknown;
   chunkMode?: unknown;

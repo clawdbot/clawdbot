@@ -110,8 +110,8 @@ writes.
 ## Session maintenance
 
 OpenClaw automatically bounds session storage over time. By default, it runs
-in `warn` mode (reports what would be cleaned). Set `session.maintenance.mode`
-to `"enforce"` for automatic cleanup:
+in `enforce` mode and applies cleanup during maintenance. Set
+`session.maintenance.mode` to `"warn"` to report what would be cleaned without mutating the store/files:
 
 ```json5
 {

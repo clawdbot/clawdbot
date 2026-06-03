@@ -507,6 +507,48 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
+  it("rejects blank announce delivery fields before normalization", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank delivery target",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "   ",
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.to must be a non-empty string",
+    });
+  });
+
+  it("rejects blank failure destination fields before normalization", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank failure target",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123",
+          failureDestination: {
+            mode: "announce",
+            channel: "   ",
+          },
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.failureDestination.channel must be a non-empty string",
+    });
+  });
+
   it("rejects announce targets prefixed for a different explicit delivery channel", async () => {
     setRuntimeConfig(telegramSlackConfig());
 
@@ -600,6 +642,53 @@ describe("cron method validation", () => {
     const clearPatch = requireCronUpdatePatch(clearResult.context);
     const clearDelivery = requireRecord(clearPatch.delivery, "delivery");
     expect(clearDelivery.completionDestination).toBeNull();
+  });
+
+  it("rejects blank delivery target patches before normalization", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            to: "\t",
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.to must be a non-empty string",
+    });
+  });
+
+  it("rejects blank completion destination patches before normalization", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            completionDestination: {
+              mode: "webhook",
+              to: " ",
+            },
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.completionDestination.to must be a non-empty string",
+    });
   });
 
   it("accepts nullable delivery target clears on update", async () => {

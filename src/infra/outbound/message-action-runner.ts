@@ -129,6 +129,7 @@ export type RunMessageActionParams = {
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  inboundAudio?: boolean;
   abortSignal?: AbortSignal;
 };
 
@@ -1122,6 +1123,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
     sessionKey: input.sessionKey,
+    inboundAudio: input.inboundAudio,
     dryRun,
   });
   if (ttsPayload !== sendPayload.payload) {

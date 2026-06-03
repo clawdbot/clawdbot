@@ -153,6 +153,10 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_DISCORD_FETCH_TIMEOUT_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_DISCORD_FETCH_TIMEOUT_MS",
+  10_000,
+);
 export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
@@ -204,10 +208,13 @@ export function parseArgs(argv) {
   return parsed;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -1014,6 +1021,15 @@ async function runUpgradeLane(params) {
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
         });
+        const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
+        verifyWindowsPackagedUpgradeFallbackInstall({
+          installedVersion: fallbackInstalledVersion,
+          candidateVersion: params.build.candidateVersion,
+        });
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows fallback install verified candidate version ${fallbackInstalledVersion}\n`,
+        );
       });
     } else {
       verifyPackagedUpgradeUpdateResult(updateResult, {
@@ -1630,6 +1646,17 @@ export function shouldRunPackagedUpgradeStatusProbe({
   usedWindowsPackagedUpgradeFallback,
 } = {}) {
   return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
+}
+
+export function verifyWindowsPackagedUpgradeFallbackInstall({
+  installedVersion,
+  candidateVersion,
+}) {
+  if (installedVersion !== candidateVersion) {
+    throw new Error(
+      `Windows packaged upgrade fallback installed ${installedVersion || "unknown"}, expected ${candidateVersion}`,
+    );
+  }
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -2538,15 +2565,18 @@ export async function readBoundedCrossOsResponseText(
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
-    const response = await fetch(
-      `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-      {
-        headers: {
-          Authorization: `Bot ${params.token}`,
-        },
-      },
-    );
-    const text = await readBoundedCrossOsResponseText(response);
+    let response;
+    let text;
+    try {
+      response = await fetch(
+        `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
+        buildDiscordFetchInit(params.token),
+      );
+      text = await readBoundedCrossOsResponseText(response);
+    } catch {
+      await sleep(2_000);
+      continue;
+    }
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2559,20 +2589,30 @@ async function waitForDiscordMessage(params) {
   throw new Error(`Discord host-side visibility check timed out for ${params.needle}.`);
 }
 
+export function buildDiscordFetchInit(token, init = {}) {
+  return {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS),
+    headers: {
+      ...init.headers,
+      Authorization: `Bot ${token}`,
+    },
+  };
+}
+
 async function postDiscordMessage(params) {
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "POST",
       headers: {
-        Authorization: `Bot ${params.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         content: params.content,
         flags: 4096,
       }),
-    },
+    }),
   );
   const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
@@ -2591,12 +2631,9 @@ async function deleteDiscordMessage(params) {
   }
   await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bot ${params.token}`,
-      },
-    },
+    }),
   ).catch(() => undefined);
 }
 

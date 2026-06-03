@@ -66,6 +66,7 @@ let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js"
 let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
 let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
+let resolveProviderTransportTurnStateWithPlugin: typeof import("./provider-runtime.js").resolveProviderTransportTurnStateWithPlugin;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
 let createProviderEmbeddingProvider: typeof import("./provider-runtime.js").createProviderEmbeddingProvider;
@@ -329,6 +330,7 @@ describe("provider-runtime", () => {
       resolveProviderExtraParamsForTransport,
       resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
+      resolveProviderTransportTurnStateWithPlugin,
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
       createProviderEmbeddingProvider,
@@ -602,6 +604,62 @@ describe("provider-runtime", () => {
         provider: DEMO_PROVIDER_ID,
         allowRuntimePluginLoad: false,
         context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses loaded transport turn-state hooks without loading runtime plugins when requested", () => {
+    const resolveTransportTurnState = vi.fn(() => ({
+      headers: { "x-demo-turn": "turn-1" },
+    }));
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      resolveTransportTurnState,
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      resolveProviderTransportTurnStateWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        allowRuntimePluginLoad: false,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model: MODEL,
+          sessionId: "session-1",
+          turnId: "turn-1",
+          attempt: 1,
+          transport: "stream",
+        },
+      }),
+    ).toEqual({ headers: { "x-demo-turn": "turn-1" } });
+    expect(resolveTransportTurnState).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load runtime plugins for transport turn-state hooks when loading is disabled", () => {
+    expect(
+      resolveProviderTransportTurnStateWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        allowRuntimePluginLoad: false,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model: MODEL,
+          turnId: "turn-1",
+          attempt: 1,
+          transport: "stream",
+        },
       }),
     ).toBeUndefined();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
@@ -1662,6 +1720,78 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("does not broad-scan provider hooks for configured core transport providers", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      if (params.providerRefs?.includes("mock-openai")) {
+        return [];
+      }
+      throw new Error("unexpected broad provider hook scan");
+    });
+
+    expect(
+      normalizeProviderTransportWithPlugin({
+        provider: "mock-openai",
+        config: {
+          models: {
+            providers: {
+              "mock-openai": {
+                api: "openai-responses",
+                baseUrl: "http://127.0.0.1:64087/v1",
+                models: [{ id: "gpt-5.5" }],
+              },
+            },
+          },
+        } as never,
+        context: {
+          provider: "mock-openai",
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:64087/v1",
+        },
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
+  });
+
+  it("scopes resolved transport hook lookup to explicit custom provider models", () => {
+    const openaiPlugin: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      normalizeTransport: () => ({ api: "openai-responses" }),
+    };
+    resolvePluginProvidersMock.mockReturnValue([openaiPlugin]);
+
+    expect(
+      applyProviderResolvedTransportWithPlugin({
+        provider: "tui-pty-mock",
+        config: {
+          models: {
+            providers: {
+              "tui-pty-mock": {
+                api: "openai-responses",
+                baseUrl: "http://127.0.0.1:64087/v1",
+                models: [{ id: "gpt-5.5" }],
+              },
+            },
+          },
+        } as never,
+        context: createDemoResolvedModelContext({
+          provider: "tui-pty-mock",
+          modelId: "gpt-5.5",
+          model: {
+            ...MODEL,
+            provider: "tui-pty-mock",
+            id: "gpt-5.5",
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:64087/v1",
+          },
+        }),
+      }),
+    ).toBeUndefined();
+    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
+    expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
+  });
+
   it("invalidates cached runtime providers when config mutates in place", () => {
     const config = {
       plugins: {
@@ -2326,13 +2456,14 @@ describe("provider-runtime", () => {
 
     const plugin = resolveProviderRuntimePlugin({
       provider: "tui-pty-mock",
+      modelId: "gpt-5.5",
       config: {
         models: {
           providers: {
             "tui-pty-mock": {
               api: "openai-responses",
               baseUrl: "http://127.0.0.1:64087/v1",
-              models: [],
+              models: [{ id: "gpt-5.5" }],
             },
           },
         },
@@ -2341,6 +2472,7 @@ describe("provider-runtime", () => {
 
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
+    expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
   });
 
   it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {

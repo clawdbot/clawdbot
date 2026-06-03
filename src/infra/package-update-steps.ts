@@ -60,15 +60,18 @@ function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function removePathBestEffort(targetPath: string): Promise<void> {
-  await fs
-    .rm(targetPath, {
+async function removePathBestEffort(targetPath: string): Promise<boolean> {
+  try {
+    await fs.rm(targetPath, {
       recursive: true,
       force: true,
       maxRetries: process.platform === "win32" ? 5 : 2,
       retryDelay: 100,
-    })
-    .catch(() => undefined);
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readPackageVersionIfPresent(packageRoot: string | null): Promise<string | null> {
@@ -420,6 +423,7 @@ async function swapStagedNpmInstall(params: {
   const backupRoot = path.join(targetLayout.globalRoot, `.openclaw-${process.pid}-${Date.now()}`);
   let movedExisting = false;
   let movedStaged = false;
+  let removedBackup = true;
   try {
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     if (await pathExists(targetPackageRoot)) {
@@ -444,7 +448,7 @@ async function swapStagedNpmInstall(params: {
       });
     }
     if (movedExisting) {
-      await removePathBestEffort(backupRoot);
+      removedBackup = await removePathBestEffort(backupRoot);
     }
     return {
       name: "global install swap",
@@ -453,7 +457,9 @@ async function swapStagedNpmInstall(params: {
       durationMs: Date.now() - startedAt,
       exitCode: 0,
       stdoutTail: movedExisting
-        ? `replaced ${params.packageName}`
+        ? removedBackup
+          ? `replaced ${params.packageName}`
+          : `replaced ${params.packageName}; preserved old package at ${backupRoot} for delayed cleanup`
         : `installed ${params.packageName}`,
       stderrTail: null,
     };

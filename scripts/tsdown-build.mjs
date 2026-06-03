@@ -294,26 +294,34 @@ function findFatalUnresolvedImport(lines) {
   return null;
 }
 
-function parsePositiveInteger(value) {
+function parsePositiveIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
+  const text = value.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  return parsed;
 }
 
-function parseNonNegativeInteger(value) {
+function parseNonNegativeIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return null;
+  const text = value.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a non-negative integer`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a non-negative safe integer`);
+  }
+  return parsed;
 }
 
 function parseCgroupMemoryLimitBytes(value) {
@@ -582,9 +590,15 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   const stderr = params.stderr ?? process.stderr;
   const env = params.env ?? process.env;
   const scanner = params.scanner ?? createTsdownOutputScanner();
-  const timeoutMs = parsePositiveInteger(env.OPENCLAW_TSDOWN_TIMEOUT_MS);
+  const timeoutMs = parsePositiveIntegerEnv(
+    env.OPENCLAW_TSDOWN_TIMEOUT_MS,
+    "OPENCLAW_TSDOWN_TIMEOUT_MS",
+  );
   const heartbeatMs =
-    parseNonNegativeInteger(env.OPENCLAW_TSDOWN_HEARTBEAT_MS) ?? DEFAULT_HEARTBEAT_MS;
+    parseNonNegativeIntegerEnv(
+      env.OPENCLAW_TSDOWN_HEARTBEAT_MS,
+      "OPENCLAW_TSDOWN_HEARTBEAT_MS",
+    ) ?? DEFAULT_HEARTBEAT_MS;
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();

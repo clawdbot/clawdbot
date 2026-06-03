@@ -397,6 +397,25 @@ describe("local-heavy-check-runtime", () => {
     expect(fs.existsSync(worktreeLockDir)).toBe(false);
   });
 
+  it("rejects malformed heavy-check lock timing env values", () => {
+    const cwd = createTempDir("openclaw-local-heavy-check-malformed-env-");
+
+    expect(() =>
+      acquireLocalHeavyCheckLockSync({
+        cwd,
+        env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS: "10ms" }),
+        toolName: "oxlint",
+      }),
+    ).toThrow("OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS must be a positive integer; got: 10ms");
+    expect(() =>
+      acquireLocalHeavyCheckLockSync({
+        cwd,
+        env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "0" }),
+        toolName: "oxlint",
+      }),
+    ).toThrow("OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS must be a positive integer; got: 0");
+  });
+
   it("cleans up stale legacy test locks when acquiring the shared heavy-check lock", () => {
     const cwd = createTempDir("openclaw-local-heavy-check-legacy-");
     const commonDir = path.join(cwd, ".git");

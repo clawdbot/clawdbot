@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
@@ -412,15 +413,20 @@ function renderPreviewFrame(params: {
   height?: number;
   sandbox?: string;
 }) {
-  return html`
-    <iframe
-      class="chat-tool-card__preview-frame"
-      title=${params.title}
-      sandbox=${params.sandbox ?? ""}
-      src=${params.src ?? nothing}
-      style=${params.height ? `height:${params.height}px` : ""}
-    ></iframe>
-  `;
+  const sandbox = params.sandbox ?? "";
+  const src = params.src ?? "";
+  return keyed(
+    `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
+    html`
+      <iframe
+        class="chat-tool-card__preview-frame"
+        title=${params.title}
+        sandbox=${sandbox}
+        src=${src || nothing}
+        style=${params.height ? `height:${params.height}px` : ""}
+      ></iframe>
+    `,
+  );
 }
 
 export function renderToolPreview(

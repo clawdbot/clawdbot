@@ -54,6 +54,34 @@ describe("Codex app-server steering queue", () => {
     });
   });
 
+  it("batches queued steering after a nonzero debounce while the turn is active", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: new AbortController().signal,
+    });
+
+    const firstQueued = queue.queue("first", { debounceMs: 5 });
+    const secondQueued = queue.queue("second", { debounceMs: 5 });
+
+    expect(request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5);
+    await Promise.all([firstQueued, secondQueued]);
+
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [
+        { type: "text", text: "first", text_elements: [] },
+        { type: "text", text: "second", text_elements: [] },
+      ],
+    });
+  });
+
   it("rejects queued steering when the run aborts before debounce flush", async () => {
     const controller = new AbortController();
     const request = vi.fn(async () => ({ turnId: "turn-1" }));

@@ -1,11 +1,22 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
+  callGateway,
+  isGatewayCredentialsRequiredError,
+} from "../gateway/call.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
+import {
+  GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+  GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+  gatewayProbeResultSawGateway,
+} from "./gateway-health-auth-diagnostic.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
@@ -45,8 +56,7 @@ export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
   timeoutMs?: number;
-}): Promise<{ healthOk: boolean; status?: StatusSummary }> {
-  const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
+}): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
   const timeoutMs =
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
@@ -60,17 +70,6 @@ export async function checkGatewayHealth(params: {
     });
     healthOk = true;
     noteCliGatewayVersionSkew(status);
-  } catch (err) {
-    const message = String(err);
-    if (message.includes("gateway closed")) {
-      note("Gateway not running.", "Gateway");
-      note(gatewayDetails.message, "Gateway connection");
-    } else {
-      params.runtime.error(formatHealthCheckFailure(err));
-    }
-  }
-
-  if (healthOk) {
     try {
       const statusLocal = await callGateway({
         method: "channels.status",
@@ -94,9 +93,38 @@ export async function checkGatewayHealth(params: {
     } catch {
       // ignore: doctor already reported gateway health
     }
+    return { healthOk, authenticated: true, status };
+  } catch (err) {
+    if (isGatewayCredentialsRequiredError(err)) {
+      const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
+      const probe = await probeGatewayStatus({
+        url: probeDetails.url,
+        timeoutMs,
+        tlsFingerprint: probeDetails.tlsFingerprint,
+        preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
+        config: params.cfg,
+        json: true,
+      });
+      if (gatewayProbeResultSawGateway(probe)) {
+        note(
+          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+        );
+        healthOk = true;
+        return { healthOk, authenticated: false };
+      }
+    }
+    const message = String(err);
+    if (message.includes("gateway closed")) {
+      const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
+      note("Gateway not running.", "Gateway");
+      note(gatewayDetails.message, "Gateway connection");
+    } else {
+      params.runtime.error(formatHealthCheckFailure(err));
+    }
   }
 
-  return { healthOk, status };
+  return { healthOk, authenticated: false, status };
 }
 
 export async function probeGatewayMemoryStatus(params: {

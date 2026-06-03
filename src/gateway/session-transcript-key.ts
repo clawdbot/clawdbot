@@ -1,11 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   loadCombinedSessionStoreForGateway,
   resolveGatewaySessionStoreTarget,
@@ -14,19 +12,6 @@ import {
 
 const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
 const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
-
-function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const resolved = path.resolve(trimmed);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
 
 function sessionKeyMatchesTranscriptPath(params: {
   cfg: OpenClawConfig;

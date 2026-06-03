@@ -55,6 +55,7 @@ export function normalizeDiscoveredAgentModel<T>(value: T, agentDir: string): T 
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
+      modelId: model.id,
       context: {
         provider: model.provider,
         modelId: model.id,
@@ -65,6 +66,7 @@ export function normalizeDiscoveredAgentModel<T>(value: T, agentDir: string): T 
   const transportNormalized =
     applyProviderResolvedTransportWithPlugin({
       provider: model.provider,
+      modelId: model.id,
       context: {
         provider: model.provider,
         modelId: model.id,

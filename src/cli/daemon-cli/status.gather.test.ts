@@ -47,6 +47,13 @@ const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>
   }),
 );
 const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const loadInstalledPluginIndexInstallRecords = vi.fn<
+  (params?: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+    filePath?: string;
+  }) => Promise<Record<string, unknown>>
+>(async (_params?) => ({}));
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
@@ -196,6 +203,14 @@ vi.mock("./probe.js", () => ({
   probeGatewayStatus: (opts: unknown) => callGatewayStatusProbe(opts),
 }));
 
+vi.mock("../../plugins/installed-plugin-index-record-reader.js", () => ({
+  loadInstalledPluginIndexInstallRecords: (params?: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+    filePath?: string;
+  }) => loadInstalledPluginIndexInstallRecords(params),
+}));
+
 vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
@@ -230,6 +245,8 @@ describe("gatherDaemonStatus", () => {
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
+    loadInstalledPluginIndexInstallRecords.mockClear();
+    loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortConnections.mockClear();
@@ -396,6 +413,8 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.tlsFingerprint).toBeUndefined();
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
     expect(status.rpc?.url).toBe("wss://override.example:18790");
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(status.pluginVersionDrift).toBeUndefined();
   });
 
   it("uses fallback network details when interface discovery throws during status inspection", async () => {
@@ -587,7 +606,9 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.connections).toBeUndefined();
+    expect(status.pluginVersionDrift).toBeUndefined();
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {
@@ -899,5 +920,102 @@ describe("gatherDaemonStatus", () => {
       healthy: false,
       staleGatewayPids: [9000],
     });
+  });
+
+  it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {
+    // Gateway is still running an older version than the invoking CLI.
+    // An npm plugin pinned to the running gateway version must NOT be
+    // reported as drifted just because the CLI package is newer.
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:19001",
+      error: null,
+      server: { version: "2026.5.4", connId: "c1" },
+    } as never);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      whatsapp: {
+        source: "npm",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.4",
+      },
+    } as never);
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: true,
+    });
+
+    expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
+    expect(status.pluginVersionDrift?.drifts).toEqual([]);
+  });
+
+  it("flags drift against the running gateway version when an npm plugin lags behind it", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:19001",
+      error: null,
+      server: { version: "2026.5.4", connId: "c1" },
+    } as never);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      whatsapp: {
+        source: "npm",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.3",
+      },
+    } as never);
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: true,
+    });
+
+    expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
+    expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
+  });
+
+  it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: true,
+    });
+
+    // The mock daemon service command sets OPENCLAW_STATE_DIR=/tmp/openclaw-daemon,
+    // distinct from the CLI process OPENCLAW_STATE_DIR=/tmp/openclaw-cli. Drift
+    // detection must inspect the daemon profile's install records.
+    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        }),
+      }),
+    );
+  });
+
+  it("reads install records and computes drift outside deep mode", async () => {
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      whatsapp: {
+        source: "npm",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.3",
+      },
+    } as never);
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        }),
+      }),
+    );
+    expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 });

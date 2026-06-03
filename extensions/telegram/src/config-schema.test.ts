@@ -106,6 +106,22 @@ describe("telegram custom commands schema", () => {
     });
   });
 
+  it("accepts Telegram progress commentary config", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            progress: { commentary: true },
+          },
+        },
+      },
+    });
+  });
+
   it("rejects removed DM thread reply policy keys", () => {
     expectTelegramConfigIssue({ dm: { threadReplies: "off" } }, "");
     expectTelegramConfigIssue(

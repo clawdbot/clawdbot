@@ -5,6 +5,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
+import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
@@ -133,6 +134,29 @@ describe("config observe recovery", () => {
     auditPath: string,
   ): Promise<Record<string, unknown> | undefined> {
     return (await readObserveEvents(auditPath)).at(-1);
+  }
+
+  function createTestConfigIO(
+    home: string,
+    warn = vi.fn(),
+    options: { env?: NodeJS.ProcessEnv; observe?: boolean } = {},
+  ) {
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const error = vi.fn();
+    return {
+      configPath,
+      warn,
+      error,
+      io: createConfigIO({
+        fs,
+        json5: JSON5,
+        env: options.env ?? ({} as NodeJS.ProcessEnv),
+        homedir: () => home,
+        configPath,
+        logger: { warn, error },
+        ...(options.observe === false ? { observe: false } : {}),
+      }),
+    };
   }
 
   async function recoverClobberedUpdateChannel(params: {
@@ -365,6 +389,180 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
+    });
+  });
+
+  it("read snapshots auto-restore tiny valid clobbers before recording them observed", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      await seedConfigBackup(configPath, {
+        ...recoverableTelegramConfig,
+        channels: {
+          telegram: {
+            enabled: true,
+            dmPolicy: "pairing",
+            groupPolicy: "allowlist",
+            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
+          },
+        },
+      });
+      const clobbered = await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
+      expectWarnContaining(warn, "Config auto-restored from backup:");
+      const observeEvents = await readObserveEvents(auditPath);
+      expect(observeEvents).toHaveLength(1);
+      expect(observeEvents[0]?.restoredFromBackup).toBe(true);
+      expectSuspiciousMatching(observeEvents[0], /^size-drop-vs-last-good:/);
+      expectSuspiciousIncludes(observeEvents[0], "gateway-mode-missing-vs-last-good");
+      await expect(listClobberFiles(configPath)).resolves.toHaveLength(1);
+    });
+  });
+
+  it("loadConfig auto-restores tiny valid clobbers before using defaults", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+      });
+
+      const config = io.loadConfig();
+
+      expect(config.gateway?.mode).toBe("local");
+      expectWarnContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("loadConfig clears env vars from the discarded clobbered config before rereading backup", async () => {
+    await withSuiteHome(async (home) => {
+      const env = {} as NodeJS.ProcessEnv;
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { env });
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+        env: { vars: { OPENCLAW_CLOBBER_ONLY: "bad" } },
+      });
+
+      const config = io.loadConfig();
+
+      expect(config.gateway?.mode).toBe("local");
+      expect(env.OPENCLAW_CLOBBER_ONLY).toBeUndefined();
+    });
+  });
+
+  it("read snapshot recovery clears env vars from the discarded clobbered config", async () => {
+    await withSuiteHome(async (home) => {
+      const env = {} as NodeJS.ProcessEnv;
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { env });
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+        env: { vars: { OPENCLAW_CLOBBER_ONLY: "bad" } },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      expect(env.OPENCLAW_CLOBBER_ONLY).toBeUndefined();
+    });
+  });
+
+  it("does not auto-restore read snapshots when observation is disabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.mode).toBeUndefined();
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+      await expectPathMissing(auditPath);
+    });
+  });
+
+  it("does not auto-restore include-authored roots from stale full-file backups", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home);
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      const includedConfig = {
+        ...recoverableTelegramConfig,
+        channels: {
+          telegram: {
+            enabled: true,
+            dmPolicy: "pairing",
+            groupPolicy: "allowlist",
+            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
+          },
+        },
+      };
+      await seedConfigBackup(configPath, includedConfig);
+      await fsp.writeFile(
+        path.join(path.dirname(configPath), "base.json5"),
+        `${JSON.stringify(includedConfig, null, 2)}\n`,
+        "utf-8",
+      );
+      const includeRootRaw = `{\n  "$include": "./base.json5"\n}\n`;
+      await fsp.writeFile(configPath, includeRootRaw, "utf-8");
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(includeRootRaw);
+      const observe = await readLastObserveEvent(auditPath);
+      expect(observe?.restoredFromBackup).toBe(false);
+    });
+  });
+
+  it("does not auto-restore invalid backup candidates during opted-in reads", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home);
+      await seedConfigBackup(configPath, {
+        gateway: { mode: "local" },
+        agents: { defaults: { model: 123 } },
+      });
+      const clobbered = await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.mode).toBeUndefined();
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+      await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
+    });
+  });
+
+  it("validates backup candidates without leaking their env into live state", async () => {
+    await withSuiteHome(async (home) => {
+      const env = {} as NodeJS.ProcessEnv;
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { env });
+      await seedConfigBackup(configPath, {
+        gateway: { mode: "local" },
+        env: { vars: { OPENCLAW_BACKUP_ONLY: "stale" } },
+        agents: { defaults: { model: 123 } },
+      });
+      await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+      });
+
+      await io.readConfigFileSnapshot({ recoverSuspicious: true });
+
+      expect(env.OPENCLAW_BACKUP_ONLY).toBeUndefined();
     });
   });
 

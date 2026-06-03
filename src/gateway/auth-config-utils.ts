@@ -1,6 +1,6 @@
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
 import {
   assignResolvedGatewaySecretInput,
@@ -44,7 +44,10 @@ function shouldResolveGatewayAuthSecretRef(params: {
   if (params.mode === (isTokenPath ? "token" : "password")) {
     return true;
   }
-  if (params.mode === "token" || params.mode === "none" || params.mode === "trusted-proxy") {
+  if (params.mode === "trusted-proxy") {
+    return !isTokenPath;
+  }
+  if (params.mode === "token" || params.mode === "none") {
     return false;
   }
   if (params.mode === "password") {
@@ -75,6 +78,39 @@ function shouldResolveGatewayPasswordSecretRef(
     hasPasswordCandidate: params.hasPasswordCandidate,
     hasTokenCandidate: params.hasTokenCandidate,
   });
+}
+
+function hasActiveExecGatewayAuthSecretRef(params: {
+  cfg: OpenClawConfig;
+  path: GatewayAuthSecretInputPath;
+  shouldResolve: boolean;
+}): boolean {
+  if (!params.shouldResolve) {
+    return false;
+  }
+  const { ref } = resolveSecretInputRef({
+    value: readGatewaySecretInputValue(params.cfg, params.path),
+    defaults: params.cfg.secrets?.defaults,
+  });
+  return ref?.source === "exec";
+}
+
+/** Check whether active local Gateway auth refs can be read without invoking exec providers. */
+export function canMaterializeGatewayAuthSecretRefsWithoutExec(
+  params: GatewayAuthSecretRefResolutionParams,
+): boolean {
+  return !(
+    hasActiveExecGatewayAuthSecretRef({
+      cfg: params.cfg,
+      path: "gateway.auth.token",
+      shouldResolve: shouldResolveGatewayTokenSecretRef(params),
+    }) ||
+    hasActiveExecGatewayAuthSecretRef({
+      cfg: params.cfg,
+      path: "gateway.auth.password",
+      shouldResolve: shouldResolveGatewayPasswordSecretRef(params),
+    })
+  );
 }
 
 async function resolveGatewayAuthSecretRefValue(params: {

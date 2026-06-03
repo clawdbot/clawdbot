@@ -10,10 +10,22 @@ async function withPackageManagerRoot<T>(
 ): Promise<T> {
   return await withTempDir({ prefix: "openclaw-detect-pm-" }, async (root) => {
     for (const file of files) {
-      await fs.writeFile(path.join(root, file.path), file.content, "utf8");
+      const target = path.join(root, file.path);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, file.content, "utf8");
     }
     return await run(root);
   });
+}
+
+async function writePublishedOpenClawRoot(root: string): Promise<void> {
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+    "utf8",
+  );
+  await fs.writeFile(path.join(root, "npm-shrinkwrap.json"), "{}", "utf8");
 }
 
 describe("detectPackageManager", () => {
@@ -51,6 +63,84 @@ describe("detectPackageManager", () => {
   ])("falls back to lockfiles when $name", async ({ files, expected }) => {
     await withPackageManagerRoot(files, async (root) => {
       await expect(detectPackageManager(root)).resolves.toBe(expected);
+    });
+  });
+
+  it("uses npm-shrinkwrap as npm evidence for published npm package roots", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
+  it("keeps pnpm source roots when npm-shrinkwrap is present next to pnpm-lock", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
+        { path: "pnpm-lock.yaml", content: "lockfileVersion: '9.0'" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("pnpm");
+      },
+    );
+  });
+
+  it("keeps pnpm-owned direct package roots that ship npm-shrinkwrap", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-pnpm-direct-" }, async (base) => {
+      const nodeModulesRoot = path.join(base, "pnpm-global", "node_modules");
+      const packageRoot = path.join(nodeModulesRoot, "openclaw");
+      await writePublishedOpenClawRoot(packageRoot);
+      await fs.writeFile(path.join(nodeModulesRoot, ".modules.yaml"), "layoutVersion: 5", "utf8");
+
+      await expect(detectPackageManager(packageRoot)).resolves.toBe("pnpm");
+    });
+  });
+
+  it("keeps pnpm-owned virtual-store package roots that ship npm-shrinkwrap", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-pnpm-virtual-" }, async (base) => {
+      const nodeModulesRoot = path.join(base, "project", "node_modules");
+      const packageRoot = path.join(
+        nodeModulesRoot,
+        ".pnpm",
+        "openclaw@2026.5.27",
+        "node_modules",
+        "openclaw",
+      );
+      await writePublishedOpenClawRoot(packageRoot);
+      await fs.writeFile(path.join(nodeModulesRoot, ".modules.yaml"), "layoutVersion: 5", "utf8");
+
+      await expect(detectPackageManager(packageRoot)).resolves.toBe("pnpm");
+    });
+  });
+
+  it("keeps bun-owned global package roots that ship npm-shrinkwrap", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-bun-" }, async (base) => {
+      const oldBunInstall = process.env.BUN_INSTALL;
+      process.env.BUN_INSTALL = path.join(base, "bun-home");
+      try {
+        const packageRoot = path.join(
+          process.env.BUN_INSTALL,
+          "install",
+          "global",
+          "node_modules",
+          "openclaw",
+        );
+        await writePublishedOpenClawRoot(packageRoot);
+
+        await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
+      } finally {
+        if (oldBunInstall == null) {
+          delete process.env.BUN_INSTALL;
+        } else {
+          process.env.BUN_INSTALL = oldBunInstall;
+        }
+      }
     });
   });
 

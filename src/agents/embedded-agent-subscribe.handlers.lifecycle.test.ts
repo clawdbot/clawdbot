@@ -51,6 +51,11 @@ function createContext(
     },
     flushBlockReplyBuffer: vi.fn(),
     emitBlockReply,
+    emitAssistantStreamData: vi.fn(),
+    flushDeferredAssistantEvents: vi.fn(),
+    flushDeferredBlockReplies: vi.fn(),
+    clearDeferredAssistantEvents: vi.fn(),
+    clearDeferredBlockReplies: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedAgentSubscribeContext;

@@ -1,26 +1,14 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-
-type GatewayRuntimeServiceLogger = {
-  child: (name: string) => {
-    info: (message: string) => void;
-    warn: (message: string) => void;
-    error: (message: string) => void;
-  };
-  error: (message: string) => void;
-};
+import {
+  createNoopHeartbeatRunner,
+  type GatewayRuntimeServiceLogger,
+} from "./server-runtime-service-shared.js";
 
 export type GatewayChannelManager = Parameters<
   typeof startChannelHealthMonitor
 >[0]["channelManager"];
-
-function createNoopHeartbeatRunner() {
-  return {
-    stop: () => {},
-    updateConfig: (_cfg: OpenClawConfig) => {},
-  };
-}
 
 export function startGatewayChannelHealthMonitor(params: {
   cfg: OpenClawConfig;

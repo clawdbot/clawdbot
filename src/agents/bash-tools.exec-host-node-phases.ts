@@ -9,12 +9,16 @@ import {
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
   type ExecAsk,
+  type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
   commandRequiresSecurityAuditSuppressionApproval,
   evaluateShellAllowlist,
   hasDurableExecApproval,
+  hasNodeCommandAllowAlwaysMarker,
   resolveExecApprovalsFromFile,
+  resolveAllowAlwaysPatternCoverage,
+  type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
@@ -52,6 +56,7 @@ type PreparedNodeRun = {
   agentId: string | undefined;
   sessionKey: string | undefined;
   execPolicy?: PreparedRunExecPolicy;
+  allowAlwaysCoverage?: NodeAllowAlwaysCoverage;
 };
 
 type NodeApprovalAnalysis = {
@@ -96,6 +101,11 @@ type NodePolicyCommandEval = {
   allowlistEval: ReturnType<typeof evaluateShellAllowlist>;
 };
 
+type NodeAllowAlwaysCoverage = {
+  complete: boolean;
+  patterns: AllowAlwaysPattern[];
+};
+
 function hasExactCommandDurableApproval(params: {
   allowlist: readonly ExecAllowlistEntry[];
   commandText: string;
@@ -129,6 +139,66 @@ function extractPreparedNodeShellPayload(argv: readonly string[]): string | null
     return payload;
   }
   return null;
+}
+
+function buildNodeApprovalAnalysisEnv(env: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    // The gateway cannot see the node host PATH, so bare-name resolution must
+    // not fall back to the gateway process environment during the precheck.
+    PATH: "",
+    Path: "",
+  };
+}
+
+function hasNodeAllowAlwaysCommandApproval(params: {
+  allowlist: readonly ExecAllowlistEntry[];
+  commandText: string;
+  segments: readonly ExecCommandSegment[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  platform?: string | null;
+  strictInlineEval?: boolean;
+  nodeCoverage?: NodeAllowAlwaysCoverage;
+}): boolean {
+  const normalizedCommand = params.commandText.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  if (params.segments.length === 0) {
+    return false;
+  }
+  if (
+    !hasNodeCommandAllowAlwaysMarker({
+      allowlist: params.allowlist,
+      commandText: normalizedCommand,
+    })
+  ) {
+    return false;
+  }
+  const matchingEntries = new Set<string>();
+  for (const entry of params.allowlist) {
+    if (entry.source !== "allow-always") {
+      continue;
+    }
+    matchingEntries.add(`${entry.pattern}\x00${entry.argPattern ?? ""}`);
+  }
+  const coverage =
+    params.nodeCoverage ??
+    resolveAllowAlwaysPatternCoverage({
+      segments: [...params.segments],
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      strictInlineEval: params.strictInlineEval,
+    });
+  const expectedPatterns = coverage.patterns.map(
+    (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
+  );
+  if (!coverage.complete || expectedPatterns.length === 0) {
+    return false;
+  }
+  return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
 }
 
 export function shouldSkipNodeApprovalPrepare(params: {
@@ -314,6 +384,8 @@ export async function prepareNodeSystemRun(params: {
         command: params.target.argv,
         rawCommand: params.request.command,
         ...(params.request.workdir != null ? { cwd: params.request.workdir } : {}),
+        ...(params.target.env !== undefined ? { env: params.target.env } : {}),
+        ...(params.request.strictInlineEval === true ? { strictInlineEval: true } : {}),
         agentId: params.request.agentId,
         sessionKey: params.request.sessionKey,
       },
@@ -332,6 +404,7 @@ export async function prepareNodeSystemRun(params: {
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
     ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
+    allowAlwaysCoverage: prepared.allowAlwaysCoverage,
   };
 }
 
@@ -380,12 +453,13 @@ export async function analyzeNodeApprovalRequirement(params: {
 }): Promise<NodeApprovalAnalysis> {
   const approvalCommand = params.prepared.rawCommand;
   const approvalCwd = params.prepared.cwd ?? params.request.workdir;
+  const analysisEnv = buildNodeApprovalAnalysisEnv(params.target.env);
   const baseAllowlistEval = evaluateShellAllowlist({
     command: approvalCommand,
     allowlist: [],
     safeBins: new Set(),
     cwd: approvalCwd,
-    env: params.request.env,
+    env: analysisEnv,
     platform: params.target.platform,
     trustedSafeBinDirs: params.request.trustedSafeBinDirs,
   });
@@ -416,7 +490,7 @@ export async function analyzeNodeApprovalRequirement(params: {
         allowlist: [],
         safeBins: new Set(),
         cwd,
-        env: params.request.env,
+        env: analysisEnv,
         platform: params.target.platform,
         trustedSafeBinDirs: params.request.trustedSafeBinDirs,
       }),
@@ -467,7 +541,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       commandRequiresSecurityAuditSuppressionApproval({
         command: entry.command,
         cwd: entry.cwd,
-        env: params.request.env,
+        env: analysisEnv,
         segments: entry.allowlistEval.segments,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
@@ -503,7 +577,7 @@ export async function analyzeNodeApprovalRequirement(params: {
             allowlist: resolved.allowlist,
             safeBins: new Set(),
             cwd: entry.cwd,
-            env: params.request.env,
+            env: analysisEnv,
             platform: params.target.platform,
             trustedSafeBinDirs: params.request.trustedSafeBinDirs,
           });
@@ -514,6 +588,16 @@ export async function analyzeNodeApprovalRequirement(params: {
             exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
               allowlist: resolved.allowlist,
               commandText: entry.command,
+            }),
+            nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
+              allowlist: resolved.allowlist,
+              commandText: params.prepared.rawCommand,
+              segments: entry.allowlistEval.segments,
+              cwd: entry.cwd,
+              env: analysisEnv,
+              platform: params.target.platform,
+              strictInlineEval: params.request.strictInlineEval,
+              nodeCoverage: params.prepared.allowAlwaysCoverage,
             }),
             allowlistEval,
             durableApprovalSatisfied: hasDurableExecApproval({
@@ -526,8 +610,9 @@ export async function analyzeNodeApprovalRequirement(params: {
         });
         durableApprovalSatisfied = allowlistEvals.some(
           (entry) =>
-            entry.durableApprovalSatisfied &&
-            (entry.allowlistEligible || entry.exactDurableApprovalSatisfied),
+            (entry.durableApprovalSatisfied &&
+              (entry.allowlistEligible || entry.exactDurableApprovalSatisfied)) ||
+            entry.nodeCommandDurableApprovalSatisfied,
         );
         allowlistSatisfied = allowlistEvals.some(
           (entry) => entry.allowlistEligible && entry.allowlistEval.allowlistSatisfied,

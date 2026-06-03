@@ -86,7 +86,7 @@ function formatConnectionLine(
   return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
 }
 
-export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
+export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
     defaultRuntime.writeJson(sanitized);
@@ -449,6 +449,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     for (const hint of renderGatewayServiceCleanupHints()) {
       defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
+    }
+    spacer();
+  }
+
+  const drift = status.pluginVersionDrift;
+  if (drift && drift.drifts.length > 0) {
+    defaultRuntime.log(
+      warnText(
+        `Plugin version drift: ${drift.drifts.length} active official plugin${
+          drift.drifts.length === 1 ? "" : "s"
+        } not on gateway ${drift.gatewayVersion}`,
+      ),
+    );
+    if (opts.deep) {
+      for (const entry of drift.drifts) {
+        const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+        defaultRuntime.log(
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
+        );
+      }
+      defaultRuntime.log(
+        `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      );
+    } else {
+      defaultRuntime.log(
+        infoText(
+          `Run ${formatCliCommand("openclaw gateway status --deep")} for affected plugin ids and fix commands.`,
+        ),
+      );
     }
     spacer();
   }

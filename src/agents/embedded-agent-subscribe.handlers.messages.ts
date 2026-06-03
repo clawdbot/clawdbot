@@ -8,7 +8,6 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
@@ -784,19 +783,8 @@ export function handleMessageUpdate(
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        stream: "assistant",
-        data,
-      });
-      void ctx.params.onAgentEvent?.({
-        stream: "assistant",
-        data,
-      });
+      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
       ctx.state.emittedAssistantUpdate = true;
-      if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
-        void ctx.params.onPartialReply(data);
-      }
     }
   }
 
@@ -936,15 +924,7 @@ export function handleMessageEnd(
       mediaUrls,
       phase: assistantPhase,
     });
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "assistant",
-      data,
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    ctx.emitAssistantStreamData(data);
     ctx.state.emittedAssistantUpdate = true;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }

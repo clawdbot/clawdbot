@@ -703,6 +703,9 @@ export function buildGoogleGenerativeAiParams(
   if (typeof options?.maxTokens === "number") {
     generationConfig.maxOutputTokens = options.maxTokens;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    generationConfig.stopSequences = options.stop;
+  }
   const thinkingConfig = resolveGoogleThinkingConfig(model, options);
   if (thinkingConfig) {
     generationConfig.thinkingConfig = thinkingConfig;

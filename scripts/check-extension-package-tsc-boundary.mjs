@@ -13,6 +13,7 @@ import {
 import { createRequire } from "node:module";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
@@ -48,13 +49,15 @@ function parseMode(argv) {
   return mode;
 }
 
-function resolveCompileConcurrency() {
-  const raw = process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
-  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  if (Number.isInteger(parsed) && parsed > 0) {
-    return parsed;
+export function resolveCompileConcurrency(
+  env = process.env,
+  availableParallelism = os.availableParallelism(),
+) {
+  const raw = env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY?.trim();
+  if (raw) {
+    return parsePositiveInt(raw, "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY");
   }
-  return Math.max(1, Math.min(6, Math.floor(os.availableParallelism() / 2)));
+  return Math.max(1, Math.min(6, Math.floor(availableParallelism / 2)));
 }
 
 function readJsonFile(filePath) {

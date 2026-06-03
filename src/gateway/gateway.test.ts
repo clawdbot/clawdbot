@@ -68,6 +68,7 @@ async function startLoopbackTokenGateway(token: string) {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
+    deferStartupSidecars: true,
   });
   return { port, server };
 }
@@ -237,6 +238,13 @@ describe("gateway e2e", () => {
 
         expect(payload?.status).toBe("accepted");
         expect(typeof payload?.runId).toBe("string");
+
+        const abortPayload = await client.request(
+          "sessions.abort",
+          { runId: payload.runId },
+          { timeoutMs: 5_000 },
+        );
+        expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "mock openai test complete" });

@@ -180,6 +180,11 @@ export type GatewayTransportErrorJson = {
   };
 };
 
+export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
+};
+
 function firstGatewayErrorLine(message: string): string {
   return message.split("\n", 1)[0]?.trim() || message;
 }
@@ -1044,6 +1049,38 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
   });
+}
+
+export async function buildGatewayProbeConnectionDetails(
+  opts: Pick<
+    CallGatewayBaseOptions,
+    "config" | "configPath" | "password" | "tlsFingerprint" | "token" | "url"
+  > = {},
+): Promise<GatewayProbeConnectionDetails> {
+  const callOpts = {
+    ...opts,
+    method: "status",
+  } satisfies CallGatewayBaseOptions;
+  const context = await resolveGatewayCallContext(callOpts);
+  ensureRemoteModeUrlConfigured(context);
+  const connectionDetails = buildGatewayConnectionDetails({
+    config: context.config,
+    url: context.urlOverride,
+    urlSource: context.urlOverrideSource,
+    ...(opts.configPath ? { configPath: opts.configPath } : {}),
+  });
+  const tlsFingerprint = await resolveGatewayTlsFingerprint({
+    opts: callOpts,
+    context,
+    url: connectionDetails.url,
+  });
+  return {
+    ...connectionDetails,
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+    ...(context.config.gateway?.handshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
+      : {}),
+  };
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(

@@ -27,6 +27,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
@@ -126,6 +127,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  focusMode?: boolean;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
@@ -145,6 +147,7 @@ export type ChatProps = {
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
   onRefresh: () => void;
+  onToggleFocusMode?: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
@@ -234,6 +237,9 @@ const TALK_REASONING_OPTIONS: TalkSelectOption[] = [
   { label: "Medium", value: "medium" },
   { label: "High", value: "high" },
 ];
+const INITIAL_CHAT_HISTORY_RENDER_WINDOW = 30;
+const CHAT_HISTORY_RENDER_WINDOW_BATCH = 30;
+const CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX = 48;
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -251,64 +257,41 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
   );
 }
 
-function renderTalkSelect(params: {
+function renderNativeTalkSelect(params: {
   label: string;
   value: string;
   options: TalkSelectOption[];
   onSelect: (value: string) => void;
+  selectedLabel?: string;
 }) {
-  const selected = params.options.find((entry) => entry.value === params.value);
-  const selectedLabel = selected?.label ?? params.value;
+  const selectedLabel =
+    params.selectedLabel ?? params.options.find((entry) => entry.value === params.value)?.label;
   return html`
-    <label class="agent-chat__talk-field agent-chat__talk-field--select">
+    <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
       <span>${params.label}</span>
-      <details class="agent-chat__talk-select" data-talk-select=${params.label.toLowerCase()}>
-        <summary
-          class="agent-chat__talk-select-trigger"
-          aria-label=${params.label}
-          title=${selectedLabel}
-        >
-          <span class="agent-chat__talk-select-label">${selectedLabel}</span>
-          <span class="agent-chat__talk-select-icon" aria-hidden="true">
-            ${icons.chevronDown}
-          </span>
-        </summary>
-        <div class="agent-chat__talk-select-menu" role="listbox" aria-label=${params.label}>
-          ${repeat(
-            params.options,
-            (entry) => entry.value,
-            (entry) => {
-              const isSelected = entry.value === params.value;
-              return html`
-                <button
-                  class="agent-chat__talk-select-option ${isSelected
-                    ? "agent-chat__talk-select-option--selected"
-                    : ""}"
-                  data-talk-select-option=${entry.value}
-                  role="option"
-                  aria-selected=${isSelected ? "true" : "false"}
-                  type="button"
-                  @click=${(event: MouseEvent) => {
-                    (event.currentTarget as HTMLElement)
-                      .closest("details")
-                      ?.removeAttribute("open");
-                    if (!isSelected) {
-                      params.onSelect(entry.value);
-                    }
-                  }}
-                >
-                  <span>${entry.label}</span>
-                  ${isSelected
-                    ? html`<span class="agent-chat__talk-select-check" aria-hidden="true">
-                        ${icons.check}
-                      </span>`
-                    : nothing}
-                </button>
-              `;
-            },
-          )}
-        </div>
-      </details>
+      ${selectedLabel
+        ? html`<span class="agent-chat__talk-select-label">${selectedLabel}</span>`
+        : nothing}
+      <select
+        .value=${params.value}
+        @change=${(event: Event) =>
+          params.onSelect((event.currentTarget as HTMLSelectElement).value)}
+      >
+        ${repeat(
+          params.options,
+          (entry) => entry.value,
+          (entry) => html`
+            <option
+              value=${entry.value}
+              data-talk-select-option=${entry.value}
+              ?selected=${entry.value === params.value}
+              @click=${() => params.onSelect(entry.value)}
+            >
+              ${entry.label}
+            </option>
+          `,
+        )}
+      </select>
     </label>
   `;
 }
@@ -334,10 +317,17 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   const sensitivityOptions = isCustomSensitivity
     ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
     : TALK_SENSITIVITY_OPTIONS;
+  const sensitivityLabel =
+    sensitivityOptions.find((entry) => entry.value === sensitivityValue)?.label ?? "Custom";
+  const updateSensitivity = (value: string) => {
+    if (value !== "__custom") {
+      onChange({ vadThreshold: value });
+    }
+  };
   return html`
     <div class="agent-chat__talk-options" aria-label="Talk options">
       <div class="agent-chat__talk-options-primary">
-        ${renderTalkSelect({
+        ${renderNativeTalkSelect({
           label: "Voice",
           value: options.voice,
           options: TALK_VOICE_OPTIONS,
@@ -352,33 +342,30 @@ function renderRealtimeTalkOptions(props: ChatProps) {
             spellcheck="false"
           />
         </label>
-        ${renderTalkSelect({
+        ${renderNativeTalkSelect({
           label: "Sensitivity",
           value: sensitivityValue,
           options: sensitivityOptions,
-          onSelect: (vadThreshold) => {
-            if (vadThreshold !== "__custom") {
-              onChange({ vadThreshold });
-            }
-          },
+          selectedLabel: sensitivityLabel,
+          onSelect: updateSensitivity,
         })}
       </div>
       <details class="agent-chat__talk-options-advanced">
         <summary>Advanced</summary>
         <div class="agent-chat__talk-options-grid">
-          ${renderTalkSelect({
+          ${renderNativeTalkSelect({
             label: "Provider",
             value: options.provider,
             options: TALK_PROVIDER_OPTIONS,
             onSelect: (provider) => onChange({ provider }),
           })}
-          ${renderTalkSelect({
+          ${renderNativeTalkSelect({
             label: "Transport",
             value: options.transport,
             options: TALK_TRANSPORT_OPTIONS,
             onSelect: (transport) => onChange({ transport }),
           })}
-          ${renderTalkSelect({
+          ${renderNativeTalkSelect({
             label: "Reasoning",
             value: options.reasoningEffort,
             options: TALK_REASONING_OPTIONS,
@@ -469,6 +456,17 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  historyRenderSessionKey: string | null;
+  historyRenderMessagesRef: unknown[] | null;
+  historyRenderMessageCount: number;
+  historyRenderLimit: number;
+  historyRenderLastScrollTop: number | null;
+  historyRenderExpansionFrame: number | null;
+  historyRenderAnchorAdjustment: {
+    scrollHeight: number;
+    scrollTop: number;
+  } | null;
+  historyRenderAnchorFrame: number | null;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -483,6 +481,14 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    historyRenderSessionKey: null,
+    historyRenderMessagesRef: null,
+    historyRenderMessageCount: 0,
+    historyRenderLimit: 0,
+    historyRenderLastScrollTop: null,
+    historyRenderExpansionFrame: null,
+    historyRenderAnchorAdjustment: null,
+    historyRenderAnchorFrame: null,
   };
 }
 
@@ -542,7 +548,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery
+    previous.searchQuery === next.searchQuery &&
+    previous.historyRenderLimit === next.historyRenderLimit
   );
 }
 
@@ -586,6 +593,12 @@ function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string
  * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
+  if (vs.historyRenderExpansionFrame != null) {
+    cancelAnimationFrame(vs.historyRenderExpansionFrame);
+  }
+  if (vs.historyRenderAnchorFrame != null) {
+    cancelAnimationFrame(vs.historyRenderAnchorFrame);
+  }
   Object.assign(vs, createChatEphemeralState());
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
@@ -593,9 +606,149 @@ export function resetChatViewState() {
 
 export const cleanupChatModuleState = resetChatViewState;
 
+function resolveChatHistoryRenderCap(messageCount: number): number {
+  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
+}
+
+function shouldRenderFullChatHistoryWindow(messageCount: number): boolean {
+  return (
+    messageCount <= INITIAL_CHAT_HISTORY_RENDER_WINDOW ||
+    (vs.searchOpen && vs.searchQuery.trim().length > 0)
+  );
+}
+
+function resolveChatHistoryRenderWindow(props: ChatProps): number {
+  const messages = Array.isArray(props.messages) ? props.messages : [];
+  const cap = resolveChatHistoryRenderCap(messages.length);
+  const sessionChanged = vs.historyRenderSessionKey !== props.sessionKey;
+  const refChanged = vs.historyRenderMessagesRef !== messages;
+  const previousCount = vs.historyRenderMessageCount;
+  if (sessionChanged || (refChanged && previousCount === 0)) {
+    vs.historyRenderLastScrollTop = null;
+  }
+
+  if (cap === 0) {
+    vs.historyRenderSessionKey = props.sessionKey;
+    vs.historyRenderMessagesRef = messages;
+    vs.historyRenderMessageCount = messages.length;
+    vs.historyRenderLimit = 0;
+    vs.historyRenderLastScrollTop = null;
+    return 0;
+  }
+
+  if (shouldRenderFullChatHistoryWindow(messages.length)) {
+    vs.historyRenderSessionKey = props.sessionKey;
+    vs.historyRenderMessagesRef = messages;
+    vs.historyRenderMessageCount = messages.length;
+    vs.historyRenderLimit = cap;
+    return cap;
+  }
+
+  if (sessionChanged || (refChanged && previousCount === 0)) {
+    vs.historyRenderLimit = Math.min(INITIAL_CHAT_HISTORY_RENDER_WINDOW, cap);
+  } else if (refChanged) {
+    const grewBy = messages.length - previousCount;
+    if (vs.historyRenderLimit >= previousCount) {
+      vs.historyRenderLimit = cap;
+    } else if (grewBy > 0 && grewBy <= CHAT_HISTORY_RENDER_WINDOW_BATCH) {
+      vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + grewBy);
+    } else {
+      vs.historyRenderLimit = Math.min(
+        Math.max(vs.historyRenderLimit, INITIAL_CHAT_HISTORY_RENDER_WINDOW),
+        cap,
+      );
+    }
+  }
+
+  vs.historyRenderSessionKey = props.sessionKey;
+  vs.historyRenderMessagesRef = messages;
+  vs.historyRenderMessageCount = messages.length;
+  vs.historyRenderLimit = Math.min(Math.max(1, vs.historyRenderLimit), cap);
+  return vs.historyRenderLimit;
+}
+
+function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => void) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const scrollTop = Math.max(0, target.scrollTop);
+  const previousScrollTop = vs.historyRenderLastScrollTop;
+  vs.historyRenderLastScrollTop = scrollTop;
+  const distanceFromBottom = Math.max(0, target.scrollHeight - scrollTop - target.clientHeight);
+  const isTop = scrollTop <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
+  const isBottomAutoScroll =
+    scrollTop > 0 && distanceFromBottom <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
+  const isTopScrollUp =
+    isTop &&
+    (scrollTop === 0 ||
+      (!isBottomAutoScroll && (previousScrollTop == null || scrollTop < previousScrollTop)));
+  if (!isTopScrollUp) {
+    return;
+  }
+  const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
+  if (vs.historyRenderLimit >= cap) {
+    return;
+  }
+  vs.historyRenderAnchorAdjustment = {
+    scrollHeight: target.scrollHeight,
+    scrollTop,
+  };
+  scheduleChatHistoryRenderAnchorPreservation(target);
+  vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH);
+  requestUpdate();
+}
+
+function scheduleChatHistoryRenderAnchorPreservation(thread: HTMLElement) {
+  const adjustment = vs.historyRenderAnchorAdjustment;
+  if (!adjustment || vs.historyRenderAnchorFrame != null) {
+    return;
+  }
+  vs.historyRenderAnchorFrame = requestAnimationFrame(() => {
+    vs.historyRenderAnchorFrame = null;
+    vs.historyRenderAnchorAdjustment = null;
+    const heightDelta = thread.scrollHeight - adjustment.scrollHeight;
+    if (heightDelta <= 0) {
+      return;
+    }
+    thread.scrollTop = adjustment.scrollTop + heightDelta;
+  });
+}
+
+function scheduleChatHistoryRenderWindowFill(
+  thread: HTMLElement | null,
+  requestUpdate: () => void,
+  scrollToBottom: () => void,
+) {
+  if (!thread || vs.historyRenderExpansionFrame != null) {
+    return;
+  }
+  const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
+  if (vs.historyRenderLimit >= cap) {
+    return;
+  }
+  vs.historyRenderExpansionFrame = requestAnimationFrame(() => {
+    vs.historyRenderExpansionFrame = null;
+    const nextCap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
+    if (vs.historyRenderLimit >= nextCap) {
+      return;
+    }
+    const canScroll = thread.scrollHeight - thread.clientHeight > 1;
+    if (canScroll) {
+      return;
+    }
+    vs.historyRenderLimit = Math.min(
+      nextCap,
+      vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
+    );
+    requestUpdate();
+    scrollToBottom();
+  });
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
-  el.style.height = `${Math.min(Math.max(el.scrollHeight, 44), 150)}px`;
+  el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
 function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
@@ -1393,6 +1546,7 @@ export function renderChat(props: ChatProps) {
   const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(visibleDraft);
+  const composerControls = props.composerControls;
 
   const placeholder = props.connected
     ? hasAttachments
@@ -1404,6 +1558,7 @@ export function renderChat(props: ChatProps) {
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const displayStream = props.stream ?? null;
+  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
 
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
@@ -1419,6 +1574,10 @@ export function renderChat(props: ChatProps) {
       () => {},
     );
   };
+  const handleChatThreadScroll = (event: Event) => {
+    maybeExpandChatHistoryRenderWindow(event, requestUpdate);
+    props.onChatScroll?.(event);
+  };
 
   const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
@@ -1431,6 +1590,7 @@ export function renderChat(props: ChatProps) {
     showToolCalls: props.showToolCalls,
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
+    historyRenderLimit,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -1449,7 +1609,15 @@ export function renderChat(props: ChatProps) {
       class="chat-thread"
       role="log"
       aria-live="polite"
-      @scroll=${props.onChatScroll}
+      ${ref((element) => {
+        const threadElement = element instanceof HTMLElement ? element : null;
+        scheduleChatHistoryRenderWindowFill(
+          threadElement,
+          requestUpdate,
+          props.onScrollToBottom ?? (() => {}),
+        );
+      })}
+      @scroll=${handleChatThreadScroll}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
@@ -1814,6 +1982,19 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
+      ${props.focusMode && props.onToggleFocusMode
+        ? html`
+            <button
+              class="chat-focus-exit"
+              type="button"
+              @click=${props.onToggleFocusMode}
+              aria-label="Exit focus mode"
+              title="Exit focus mode"
+            >
+              ${icons.x}
+            </button>
+          `
+        : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div class="chat-workbench">
@@ -1976,7 +2157,7 @@ export function renderChat(props: ChatProps) {
                       : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                     <span class="agent-chat__control-label"
                       >${props.realtimeTalkActive
                         ? t("chat.composer.stopTalk")
@@ -2002,13 +2183,13 @@ export function renderChat(props: ChatProps) {
                   </button>
                 `
               : nothing}
-            ${props.composerControls
-              ? html`<div class="agent-chat__composer-controls">${props.composerControls}</div>`
-              : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
             ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
 
+          ${composerControls && composerControls !== nothing
+            ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
+            : nothing}
           ${renderChatRunControls({
             canAbort: showAbortableUi,
             connected: props.connected,

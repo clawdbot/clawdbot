@@ -48,6 +48,8 @@ export type FollowupRun = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   currentInboundEventKind?: InboundEventKind;
+  /** Whether the current inbound message contained audio for inbound-only TTS policy. */
+  currentInboundAudio?: boolean;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */

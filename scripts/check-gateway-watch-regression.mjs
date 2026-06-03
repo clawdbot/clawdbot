@@ -39,12 +39,14 @@ const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_CRON: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
   OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
   NODE_ENV: "test",
 };
 
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
+const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 
 export function appendBoundedWatchLog(current, chunk, maxChars = WATCH_LOG_CAPTURE_MAX_CHARS) {
   const next = `${current}${String(chunk)}`;
@@ -72,6 +74,18 @@ export function updateWatchBuildDetection(state, chunk) {
   };
 }
 
+export function readNonNegativeInteger(value, label) {
+  const raw = String(value).trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return parsed;
+}
+
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
@@ -90,31 +104,37 @@ export function parseArgs(argv) {
         options.outputDir = path.resolve(readValue());
         break;
       case "--window-ms":
-        options.windowMs = Number(readValue());
+        options.windowMs = readNonNegativeInteger(readValue(), "--window-ms");
         break;
       case "--ready-timeout-ms":
-        options.readyTimeoutMs = Number(readValue());
+        options.readyTimeoutMs = readNonNegativeInteger(readValue(), "--ready-timeout-ms");
         break;
       case "--ready-settle-ms":
-        options.readySettleMs = Number(readValue());
+        options.readySettleMs = readNonNegativeInteger(readValue(), "--ready-settle-ms");
         break;
       case "--sigkill-grace-ms":
-        options.sigkillGraceMs = Number(readValue());
+        options.sigkillGraceMs = readNonNegativeInteger(readValue(), "--sigkill-grace-ms");
         break;
       case "--sigkill-exit-grace-ms":
-        options.sigkillExitGraceMs = Number(readValue());
+        options.sigkillExitGraceMs = readNonNegativeInteger(readValue(), "--sigkill-exit-grace-ms");
         break;
       case "--cpu-warn-ms":
-        options.cpuWarnMs = Number(readValue());
+        options.cpuWarnMs = readNonNegativeInteger(readValue(), "--cpu-warn-ms");
         break;
       case "--cpu-fail-ms":
-        options.cpuFailMs = Number(readValue());
+        options.cpuFailMs = readNonNegativeInteger(readValue(), "--cpu-fail-ms");
         break;
       case "--dist-runtime-file-growth-max":
-        options.distRuntimeFileGrowthMax = Number(readValue());
+        options.distRuntimeFileGrowthMax = readNonNegativeInteger(
+          readValue(),
+          "--dist-runtime-file-growth-max",
+        );
         break;
       case "--dist-runtime-byte-growth-max":
-        options.distRuntimeByteGrowthMax = Number(readValue());
+        options.distRuntimeByteGrowthMax = readNonNegativeInteger(
+          readValue(),
+          "--dist-runtime-byte-growth-max",
+        );
         break;
       case "--skip-build":
         options.skipBuild = true;

@@ -18,6 +18,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
@@ -389,6 +390,10 @@ function extractAssistantToolCalls(
   });
 }
 
+function sanitizeTrajectoryExportValue<T>(value: T): T {
+  return redactSecrets(sanitizeDiagnosticPayload(value)) as T;
+}
+
 function buildTranscriptEvents(params: {
   entries: SessionEntry[];
   sessionId: string;
@@ -525,6 +530,15 @@ function trajectoryJsonlFile(
   return jsonlSupportBundleFile(pathName, lines);
 }
 
+function redactTrajectoryBundleFileContent(
+  file: DiagnosticSupportBundleFile,
+): DiagnosticSupportBundleFile {
+  return {
+    ...file,
+    content: redactToolPayloadText(file.content),
+  };
+}
+
 function buildTrajectoryExportRedaction(params: {
   workspaceDir: string;
 }): TrajectoryExportRedaction {
@@ -585,19 +599,55 @@ function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedact
   return next;
 }
 
+function uniqueRedactedObjectKey(key: string, usedKeys: Set<string>): string {
+  if (!usedKeys.has(key)) {
+    usedKeys.add(key);
+    return key;
+  }
+  let index = 2;
+  while (usedKeys.has(`${key}#${index}`)) {
+    index += 1;
+  }
+  const unique = `${key}#${index}`;
+  usedKeys.add(unique);
+  return unique;
+}
+
+function redactTrajectoryExportObjectKeys(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTrajectoryExportObjectKeys(entry, redaction));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const usedKeys = new Set<string>();
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
+    next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
+      entry,
+      redaction,
+    );
+  }
+  return next;
+}
+
+function redactTrajectoryExportValue(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  const redactedValue = sanitizeTrajectoryExportValue(redactLocalPathValues(value, redaction));
+  return redactTrajectoryExportObjectKeys(redactedValue, redaction);
+}
+
 function redactEventForExport(
   event: TrajectoryEvent,
   redaction: TrajectoryExportRedaction,
 ): TrajectoryEvent {
-  return {
-    ...event,
-    workspaceDir: event.workspaceDir
-      ? maybeRedactPathString(event.workspaceDir, redaction)
-      : undefined,
-    data: event.data
-      ? (redactLocalPathValues(event.data, redaction) as Record<string, unknown>)
-      : undefined,
-  };
+  return redactTrajectoryExportValue(event, redaction) as TrajectoryEvent;
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
@@ -967,19 +1017,25 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
   if (metadataCapture) {
     files.push(
-      jsonSupportBundleFile("metadata.json", redactLocalPathValues(metadataCapture, redaction)),
+      jsonSupportBundleFile(
+        "metadata.json",
+        redactTrajectoryExportValue(metadataCapture, redaction),
+      ),
     );
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
     files.push(
-      jsonSupportBundleFile("artifacts.json", redactLocalPathValues(artifactsCapture, redaction)),
+      jsonSupportBundleFile(
+        "artifacts.json",
+        redactTrajectoryExportValue(artifactsCapture, redaction),
+      ),
     );
     supplementalFiles.push("artifacts.json");
   }
   if (promptsCapture) {
     files.push(
-      jsonSupportBundleFile("prompts.json", redactLocalPathValues(promptsCapture, redaction)),
+      jsonSupportBundleFile("prompts.json", redactTrajectoryExportValue(promptsCapture, redaction)),
     );
     supplementalFiles.push("prompts.json");
   }
@@ -991,12 +1047,12 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   files.push(
     jsonSupportBundleFile(
       "session-branch.json",
-      redactLocalPathValues(
-        sanitizeDiagnosticPayload({
+      redactTrajectoryExportValue(
+        {
           header,
           leafId,
           entries: branchEntries,
-        }),
+        },
         redaction,
       ),
     ),
@@ -1005,7 +1061,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     files.push(
       textSupportBundleFile(
         "system-prompt.txt",
-        redactLocalPathValues(bundleRuntimeContext.systemPrompt, redaction) as string,
+        redactTrajectoryExportValue(bundleRuntimeContext.systemPrompt, redaction) as string,
       ),
     );
   }
@@ -1013,21 +1069,29 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     files.push(
       jsonSupportBundleFile(
         "tools.json",
-        redactLocalPathValues(bundleRuntimeContext.tools, redaction),
+        redactTrajectoryExportValue(bundleRuntimeContext.tools, redaction),
       ),
     );
   }
 
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
+  const redactedFiles = files.map(redactTrajectoryBundleFileContent);
+  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
   manifest.contents = contents;
+  const redactedManifest = redactTrajectoryExportValue(
+    manifest,
+    redaction,
+  ) as TrajectoryBundleManifest;
+  const manifestFile = redactTrajectoryBundleFileContent(
+    jsonSupportBundleFile("manifest.json", redactedManifest),
+  );
 
   await writeSupportBundleDirectory({
     outputDir: params.outputDir,
-    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
+    files: [manifestFile, ...redactedFiles],
   });
 
   return {
-    manifest,
+    manifest: redactedManifest,
     outputDir: params.outputDir,
     events,
     header,

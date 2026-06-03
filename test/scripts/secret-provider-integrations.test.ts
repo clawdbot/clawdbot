@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 const harnessPath = path.resolve("test/scripts/fixtures/secret-provider-integrations-harness.mjs");
@@ -196,6 +196,25 @@ describe("secret provider integration proof harness", () => {
       } else {
         process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
       }
+    }
+  });
+
+  it("fails when proof temp cleanup cannot remove the root", async () => {
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=cleanup-${Date.now()}`);
+    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("device busy");
+    });
+
+    try {
+      await expect(
+        proof.cleanupEnv("/tmp/openclaw-secret-provider-proof-stuck", {
+          attempts: 3,
+          retryDelayMs: 1,
+        }),
+      ).rejects.toThrow("failed to remove secret proof temp root");
+      expect(rmSync).toHaveBeenCalledTimes(3);
+    } finally {
+      rmSync.mockRestore();
     }
   });
 

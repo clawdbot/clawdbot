@@ -2307,6 +2307,82 @@ describe("run-node script", () => {
     });
   });
 
+  it("reports missing static runtime overlay asset outputs when runtime stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIFFS_PACKAGE,
+          DIFFS_VIEWER_RUNTIME_SOURCE,
+          DIST_DIFFS_VIEWER_RUNTIME,
+          DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_RUNTIME_DIFFS_VIEWER_RUNTIME));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("does not require static asset outputs when runtime static assets are disabled", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+          [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIFFS_PACKAGE,
+          DIFFS_VIEWER_RUNTIME_SOURCE,
+          DIST_RUNTIME_EXTENSION_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
   it("does not require static asset outputs when the declared source is absent", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

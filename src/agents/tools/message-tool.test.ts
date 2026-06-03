@@ -117,6 +117,7 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
+  inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
     currentChannelProvider?: string;
@@ -513,6 +514,23 @@ describe("message tool secret scoping", () => {
 
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+  });
+
+  it("passes current inbound audio to the outbound runner", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentInboundAudio: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "telegram",
+        agentSessionKey: "agent:main:telegram:direct:123456789",
+      },
+    });
+
+    expect(input?.inboundAudio).toBe(true);
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("adds a current-run idempotency key when the model omits one", async () => {

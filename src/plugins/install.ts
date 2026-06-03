@@ -108,6 +108,12 @@ const PLUGIN_ARCHIVE_ROOT_MARKERS = [
   ".cursor-plugin/plugin.json",
 ];
 const MANAGED_NPM_PACK_ARCHIVE_DIR = "_openclaw-pack-archives";
+const MANAGED_NPM_PROJECT_QUARANTINE_DIR = "_openclaw-quarantined-npm-projects";
+const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
+  "node_modules",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+] as const;
 
 export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_NPM_SPEC: "invalid_npm_spec",
@@ -395,6 +401,29 @@ function shouldResolveLatestCompatibleNpmVersion(spec: ParsedRegistryNpmSpec): b
   );
 }
 
+function shouldResolveCompatiblePrereleaseNpmVersion(params: {
+  spec: ParsedRegistryNpmSpec;
+  currentVersion: string;
+}): boolean {
+  if (!isPrereleaseSemverVersion(params.currentVersion)) {
+    return false;
+  }
+  if (params.spec.selectorKind === "none") {
+    return true;
+  }
+  return (
+    params.spec.selectorKind === "tag" && (params.spec.selector ?? "").toLowerCase() !== "latest"
+  );
+}
+
+function resolvePrereleaseChannel(version: string): string | null {
+  if (!isPrereleaseSemverVersion(version)) {
+    return null;
+  }
+  const match = /^\s*v?\d+\.\d+\.\d+-([0-9A-Za-z]+)(?:[.-]|$)/.exec(version);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
 function canResolveAroundCompatibilityError(error: PluginInstallFailureResult): boolean {
   return (
     error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION ||
@@ -423,10 +452,18 @@ async function resolveLatestCompatibleNpmResolution(params: {
   timeoutMs: number;
   logger: PluginInstallLogger;
 }): Promise<NpmSpecResolution | null> {
-  if (
-    !shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) ||
-    !params.currentResolution.version
-  ) {
+  if (!params.currentResolution.version) {
+    return null;
+  }
+  const currentVersion = params.currentResolution.version;
+  const allowPrereleaseCandidates = shouldResolveCompatiblePrereleaseNpmVersion({
+    spec: params.parsedSpec,
+    currentVersion,
+  });
+  const prereleaseChannel = allowPrereleaseCandidates
+    ? resolvePrereleaseChannel(currentVersion)
+    : null;
+  if (!shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) && !allowPrereleaseCandidates) {
     return null;
   }
 
@@ -438,9 +475,12 @@ async function resolveLatestCompatibleNpmResolution(params: {
     return null;
   }
 
-  const currentVersion = params.currentResolution.version;
   const candidates = versions
-    .filter((version) => !isPrereleaseSemverVersion(version))
+    .filter((version) =>
+      allowPrereleaseCandidates
+        ? resolvePrereleaseChannel(version) === prereleaseChannel
+        : !isPrereleaseSemverVersion(version),
+    )
     .filter((version) => compareNpmSemver(version, currentVersion) < 0)
     .toSorted(compareNpmSemver)
     .toReversed();
@@ -696,6 +736,11 @@ type ManagedNpmRootPreparedDependency = {
   cleanup?: () => Promise<void>;
 };
 
+type ManagedNpmProjectQuarantine = {
+  quarantineDir: string;
+  movedArtifactNames: string[];
+};
+
 type ManagedNpmRootPrepareDependencyResult =
   | ({ ok: true } & ManagedNpmRootPreparedDependency)
   | {
@@ -910,6 +955,48 @@ async function cleanupManagedNpmPluginInstallRollbackSnapshot(params: {
   }
 }
 
+function formatNpmCommandFailureOutput(result: { stdout: string; stderr: string }): string {
+  return result.stderr.trim() || result.stdout.trim();
+}
+
+function isManagedNpmProjectCorruptionInstallFailure(result: {
+  stdout: string;
+  stderr: string;
+}): boolean {
+  const output = `${result.stderr}\n${result.stdout}`;
+  return (
+    output.includes("ERR_INVALID_ARG_TYPE") &&
+    output.includes('"from" argument') &&
+    output.includes("Received undefined")
+  );
+}
+
+function formatManagedNpmProjectQuarantineArtifacts(artifactNames: string[]): string {
+  return artifactNames.length > 0 ? artifactNames.join(", ") : "no rebuild artifacts";
+}
+
+async function quarantineManagedNpmProjectRebuildArtifacts(params: {
+  npmRoot: string;
+}): Promise<ManagedNpmProjectQuarantine> {
+  await fs.mkdir(params.npmRoot, { recursive: true });
+  const quarantineParent = path.join(params.npmRoot, MANAGED_NPM_PROJECT_QUARANTINE_DIR);
+  await fs.mkdir(quarantineParent, { recursive: true });
+  const quarantineDir = await fs.mkdtemp(path.join(quarantineParent, "corrupt-"));
+  const movedArtifactNames: string[] = [];
+  for (const artifactName of MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS) {
+    const source = path.join(params.npmRoot, artifactName);
+    try {
+      await fs.rename(source, path.join(quarantineDir, artifactName));
+      movedArtifactNames.push(artifactName);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return { quarantineDir, movedArtifactNames };
+}
+
 function resolveInstalledNpmResolutionMismatch(params: {
   packageName: string;
   expected: NpmSpecResolution;
@@ -1094,7 +1181,7 @@ async function installPluginFromManagedNpmRoot(
         logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
       }
     }
-    const preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
+    let preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
     const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
       npmRoot,
@@ -1110,6 +1197,24 @@ async function installPluginFromManagedNpmRoot(
         logger,
         peerDependencySnapshot: rollbackPeerDependencySnapshot,
         snapshot: rollbackSnapshot,
+      });
+      await rollbackManagedNpmRootPreparedDependency({
+        packageName: params.packageName,
+        preparedDependency: prepared,
+        logger,
+      });
+      return failure;
+    };
+    const rollbackFailedManagedNpmInstallAfterQuarantine = async (
+      failure: Extract<InstallPluginResult, { ok: false }>,
+    ): Promise<Extract<InstallPluginResult, { ok: false }>> => {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: params.packageName,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        peerDependencySnapshot: rollbackPeerDependencySnapshot,
       });
       await rollbackManagedNpmRootPreparedDependency({
         packageName: params.packageName,
@@ -1194,10 +1299,42 @@ async function installPluginFromManagedNpmRoot(
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
+    if (install.code !== 0 && isManagedNpmProjectCorruptionInstallFailure(install)) {
+      const originalError = formatNpmCommandFailureOutput(install);
+      let quarantine: ManagedNpmProjectQuarantine;
+      try {
+        quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
+      } catch (error) {
+        return await rollbackFailedManagedNpmInstall({
+          ok: false,
+          error: `npm install failed with a managed npm project corruption signature, but OpenClaw could not quarantine ${npmRoot} for rebuild: ${String(error)}. Original npm error: ${originalError}`,
+        });
+      }
+      logger.warn?.(
+        `npm reported a managed npm project corruption signature; quarantined ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding once before retrying.`,
+      );
+      preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
+      const recoveryPeerSync = await syncManagedPeerDependenciesForInstall({
+        omitUnsupportedManagedOverrides,
+      });
+      if (!recoveryPeerSync.ok) {
+        return await rollbackFailedManagedNpmInstallAfterQuarantine({
+          ok: false,
+          error: `managed npm project recovery failed after quarantining ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir}: ${recoveryPeerSync.error}. Original npm error: ${originalError}`,
+        });
+      }
+      install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+      if (install.code !== 0) {
+        return await rollbackFailedManagedNpmInstallAfterQuarantine({
+          ok: false,
+          error: `npm install failed after managed npm project recovery (quarantine: ${quarantine.quarantineDir}): ${formatNpmCommandFailureOutput(install)}. Original npm error: ${originalError}`,
+        });
+      }
+    }
     if (install.code !== 0) {
       return await rollbackFailedManagedNpmInstall({
         ok: false,
-        error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+        error: `npm install failed: ${formatNpmCommandFailureOutput(install)}`,
       });
     }
     let settledManagedPeerDependencies = false;

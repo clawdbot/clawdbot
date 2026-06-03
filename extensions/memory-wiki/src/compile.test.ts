@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -14,6 +14,16 @@ describe("compileMemoryWikiVault", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   afterAll(async () => {
@@ -148,9 +158,7 @@ describe("compileMemoryWikiVault", () => {
         activePageReads += 1;
         maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
         try {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 5);
-          });
+          await Promise.resolve();
           return await originalReadFile(...args);
         } finally {
           activePageReads -= 1;

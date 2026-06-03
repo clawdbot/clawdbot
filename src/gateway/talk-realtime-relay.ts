@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
@@ -45,6 +42,10 @@ import {
 } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import {
+  closeExpiredTalkRelaySessions,
+  requireActiveTalkRelaySession,
+} from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -231,9 +232,7 @@ function broadcastToolResultToOwner(
   },
 ): void {
   const payload =
-    params.forced === true
-      ? { result: params.result, forced: true }
-      : { result: params.result };
+    params.forced === true ? { result: params.result, forced: true } : { result: params.result };
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "toolResult",
@@ -301,16 +300,11 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
-  const validNowMs = asDateTimestampMs(nowMs);
-  if (validNowMs === undefined) {
-    return;
-  }
-  for (const session of relaySessions.values()) {
-    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
-    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
-      closeRelaySession(session, "completed");
-    }
-  }
+  closeExpiredTalkRelaySessions({
+    sessions: relaySessions.values(),
+    closeSession: (session) => closeRelaySession(session, "completed"),
+    nowMs,
+  });
 }
 
 function countRelaySessionsForConn(connId: string): number {
@@ -724,22 +718,13 @@ function ensureRelayTurn(session: RelaySession): string {
 }
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
-  const session = relaySessions.get(relaySessionId);
-  const nowMs = asDateTimestampMs(Date.now());
-  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
-  if (
-    !session ||
-    session.connId !== connId ||
-    nowMs === undefined ||
-    expiresAtMs === undefined ||
-    nowMs > expiresAtMs
-  ) {
-    if (session) {
-      closeRelaySession(session, "completed");
-    }
-    throw new Error("Unknown realtime relay session");
-  }
-  return session;
+  return requireActiveTalkRelaySession({
+    sessions: relaySessions,
+    sessionId: relaySessionId,
+    connId,
+    closeSession: (session) => closeRelaySession(session, "completed"),
+    unknownSessionMessage: "Unknown realtime relay session",
+  });
 }
 
 export function sendTalkRealtimeRelayAudio(params: {

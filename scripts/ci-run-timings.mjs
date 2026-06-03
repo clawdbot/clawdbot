@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
 const RUN_JOBS_PAGE_SIZE = 20;
@@ -337,31 +338,58 @@ function printSection(title, jobs, metric) {
 }
 
 export function parseRunTimingArgs(args) {
-  const recentIndex = args.indexOf("--recent");
-  const limitIndex = args.indexOf("--limit");
-  const ignoredArgIndexes = new Set();
-  for (const [index, arg] of args.entries()) {
-    if (arg === "--" || arg === "--latest-main") {
-      ignoredArgIndexes.add(index);
+  let explicitRunId;
+  let limit = 15;
+  let recentLimit = null;
+  let useLatestMain = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      continue;
     }
+    if (arg === "--latest-main") {
+      useLatestMain = true;
+      continue;
+    }
+    const limitOption = consumePositiveIntFlag(args, index, "--limit");
+    if (limitOption) {
+      limit = limitOption.value;
+      index = limitOption.nextIndex;
+      continue;
+    }
+    const recentOption = consumePositiveIntFlag(args, index, "--recent");
+    if (recentOption) {
+      recentLimit = recentOption.value;
+      index = recentOption.nextIndex;
+      continue;
+    }
+    explicitRunId ??= arg;
   }
-  if (limitIndex !== -1) {
-    ignoredArgIndexes.add(limitIndex);
-    ignoredArgIndexes.add(limitIndex + 1);
-  }
-  if (recentIndex !== -1) {
-    ignoredArgIndexes.add(recentIndex);
-    ignoredArgIndexes.add(recentIndex + 1);
-  }
-  const limit =
-    limitIndex === -1 ? 15 : Math.max(1, Number.parseInt(args[limitIndex + 1] ?? "", 10) || 15);
-  const recentLimit =
-    recentIndex === -1 ? null : Math.max(1, Number.parseInt(args[recentIndex + 1] ?? "", 10) || 10);
+
   return {
-    explicitRunId: args.find((_arg, index) => !ignoredArgIndexes.has(index)),
+    explicitRunId,
     limit,
     recentLimit,
-    useLatestMain: args.includes("--latest-main"),
+    useLatestMain,
+  };
+}
+
+function consumePositiveIntFlag(args, index, flag) {
+  const arg = args[index];
+  const inlinePrefix = `${flag}=`;
+  if (arg.startsWith(inlinePrefix)) {
+    return {
+      nextIndex: index,
+      value: parsePositiveInt(arg.slice(inlinePrefix.length), flag),
+    };
+  }
+  if (arg !== flag) {
+    return null;
+  }
+  return {
+    nextIndex: index + 1,
+    value: parsePositiveInt(args[index + 1], flag),
   };
 }
 

@@ -34,6 +34,7 @@ type McpRequestContext = {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -55,6 +56,11 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -217,9 +223,7 @@ function createMcpHttpBodyTooLargeError(): Error & { code: string } {
   });
 }
 
-export function isMcpHttpBodyTooLargeError(
-  error: unknown,
-): error is Error & { code: string } {
+export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { code: string } {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -239,6 +243,9 @@ export function resolveMcpRequestContext(
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    currentInboundAudio: normalizeMcpCurrentInboundAudio(
+      getHeader(req, "x-openclaw-current-inbound-audio"),
+    ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(

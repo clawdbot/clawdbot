@@ -888,6 +888,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
+    currentInboundAudio: params.currentInboundAudio,
   };
 }
 

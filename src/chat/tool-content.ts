@@ -1,5 +1,16 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
+const TOOL_USE_ID_FIELDS = [
+  "id",
+  "tool_call_id",
+  "toolCallId",
+  "tool_use_id",
+  "toolUseId",
+] as const;
+type ToolUseIdField = (typeof TOOL_USE_ID_FIELDS)[number];
+
 /** Provider-agnostic chat content block shape used before SDK-specific narrowing. */
-export type ToolContentBlock = Record<string, unknown>;
+export type ToolContentBlock = Record<string, unknown> & Partial<Record<ToolUseIdField, unknown>>;
 
 function normalizeToolContentType(value: unknown): string {
   return typeof value === "string" ? value.toLowerCase() : "";
@@ -34,9 +45,11 @@ export function resolveToolBlockArgs(block: ToolContentBlock): unknown {
 
 /** Reads the stable tool-use id across snake_case and camelCase provider field names. */
 export function resolveToolUseId(block: ToolContentBlock): string | undefined {
-  const id =
-    (typeof block.id === "string" && block.id.trim()) ||
-    (typeof block.tool_use_id === "string" && block.tool_use_id.trim()) ||
-    (typeof block.toolUseId === "string" && block.toolUseId.trim());
-  return id || undefined;
+  for (const field of TOOL_USE_ID_FIELDS) {
+    const id = normalizeOptionalString(block[field]);
+    if (id) {
+      return id;
+    }
+  }
+  return undefined;
 }

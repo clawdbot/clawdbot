@@ -90,6 +90,8 @@ import type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookResolveExecEnvContext,
+  PluginHookResolveExecEnvEvent,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -161,6 +163,8 @@ export type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookResolveExecEnvContext,
+  PluginHookResolveExecEnvEvent,
 };
 
 export type HookRunnerLogger = {
@@ -225,6 +229,7 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // logged and the run proceeds without its modifications.
   before_agent_start: 15_000,
   before_prompt_build: 15_000,
+  resolve_exec_env: 15_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -1586,6 +1591,21 @@ export function createHookRunner(
     );
   }
 
+  async function runResolveExecEnv(
+    event: PluginHookResolveExecEnvEvent,
+    ctx: PluginHookResolveExecEnvContext,
+  ): Promise<Record<string, string>> {
+    const result = await runModifyingHook<"resolve_exec_env", Record<string, string>>(
+      "resolve_exec_env",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
+      },
+    );
+    return result ?? {};
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -1649,6 +1669,7 @@ export function createHookRunner(
     runCronChanged,
     // Install hooks
     runBeforeInstall,
+    runResolveExecEnv,
     // Utility
     hasHooks,
     getHookCount,

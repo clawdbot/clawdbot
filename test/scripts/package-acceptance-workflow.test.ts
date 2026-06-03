@@ -141,6 +141,11 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
+    expect(hydratePnpm.run).toContain("reset_crabbox_pnpm_path");
+    expect(hydratePnpm.run).toContain("/var/tmp/openclaw-pnpm-*) rm -rf");
+    expect(hydratePnpm.run).toContain(
+      '[ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]',
+    );
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       "timeout --signal=TERM --kill-after=10s 30s git",
     );

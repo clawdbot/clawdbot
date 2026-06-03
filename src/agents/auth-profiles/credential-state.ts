@@ -107,6 +107,9 @@ export function evaluateStoredCredentialEligibility(params: {
     normalizeSecretInputString(credential.access) === undefined &&
     normalizeSecretInputString(credential.refresh) === undefined
   ) {
+    if (credential.oauthRef) {
+      return { eligible: false, reasonCode: "unresolved_ref" };
+    }
     return { eligible: false, reasonCode: "missing_credential" };
   }
   return { eligible: true, reasonCode: "ok" };

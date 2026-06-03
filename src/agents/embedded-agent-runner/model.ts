@@ -187,10 +187,12 @@ function applyResolvedTransportFallback(params: {
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    modelId: params.model.id,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      modelId: params.model.id,
       api: params.model.api,
       baseUrl: params.model.baseUrl,
     },
@@ -309,6 +311,7 @@ function normalizeResolvedModel(params: {
 
 function resolveProviderTransport(params: {
   provider: string;
+  modelId?: string;
   api?: Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
@@ -321,12 +324,14 @@ function resolveProviderTransport(params: {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
     provider: params.provider,
+    ...(params.modelId ? { modelId: params.modelId } : {}),
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      ...(params.modelId ? { modelId: params.modelId } : {}),
       api: params.api,
       baseUrl: params.baseUrl,
     },
@@ -696,6 +701,7 @@ function applyConfiguredProviderOverrides(params: {
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
+    modelId: discoveredModel.id,
     api: resolvedTransportApi,
     baseUrl: resolvedTransportBaseUrl,
     cfg: params.cfg,
@@ -1060,6 +1066,7 @@ function resolveConfiguredFallbackModel(params: {
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
+    modelId,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
       resolveConfiguredProviderDefaultApi({

@@ -160,6 +160,7 @@ export type AgentsListResult = SchemaType<"AgentsListResult">;
 export type ModelChoice = SchemaType<"ModelChoice">;
 export type ModelsListParams = SchemaType<"ModelsListParams">;
 export type ModelsListResult = SchemaType<"ModelsListResult">;
+export type ChatMetadataParams = SchemaType<"ChatMetadataParams">;
 export type CommandEntry = SchemaType<"CommandEntry">;
 export type CommandsListParams = SchemaType<"CommandsListParams">;
 export type CommandsListResult = SchemaType<"CommandsListResult">;

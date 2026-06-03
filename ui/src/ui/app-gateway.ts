@@ -685,11 +685,10 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
 }
 
-async function loadAgentsThenRefreshActiveTabAfterBootstrap(
+async function loadAgentsThenRefreshActiveTabForClient(
   host: GatewayHost,
   client: GatewayBrowserClient,
 ) {
-  await host.controlUiBootstrapReady?.catch(() => undefined);
   if (host.client !== client) {
     return;
   }
@@ -822,7 +821,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
-      void loadAgentsThenRefreshActiveTabAfterBootstrap(host, client);
+      void loadAgentsThenRefreshActiveTabForClient(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
           return;

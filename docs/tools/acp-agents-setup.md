@@ -286,8 +286,9 @@ different operation limit:
 openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
-Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout` and
-`sessions_spawn.timeoutSeconds`. Restart the gateway after changing this value.
+Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
+`sessions_spawn` does not accept per-call timeout overrides. Restart the
+gateway after changing this value.
 
 ### Health probe agent configuration
 

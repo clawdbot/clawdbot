@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   assertGatewayAuthNotKnownWeak,
-  assertHooksTokenSeparateFromGatewayAuth,
   ensureGatewayStartupAuth,
   mergeGatewayTailscaleConfig,
 } from "./startup-auth.js";
@@ -28,7 +27,6 @@ type StartupAuthInput = Parameters<typeof ensureGatewayStartupAuth>[0];
 type StartupAuthResult = Awaited<ReturnType<typeof ensureGatewayStartupAuth>>;
 type GatewayAuthConfig = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
 type GatewayAuthCheck = Parameters<typeof assertGatewayAuthNotKnownWeak>[0];
-type HooksGatewayAuthCheck = Parameters<typeof assertHooksTokenSeparateFromGatewayAuth>[0]["auth"];
 
 function emptyEnv(): NodeJS.ProcessEnv {
   return {} as NodeJS.ProcessEnv;
@@ -361,23 +359,30 @@ describe("ensureGatewayStartupAuth", () => {
     });
   });
 
-  it("throws when hooks token reuses gateway token resolved from env", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: {
-          hooks: {
-            enabled: true,
-            token: "shared-gateway-token-1234567890",
-          },
+  it("keeps startup non-breaking when hooks token reuses gateway token resolved from env", async () => {
+    const warn = vi.fn();
+    const result = await runStartupAuth({
+      cfg: {
+        hooks: {
+          enabled: true,
+          token: "shared-gateway-token-1234567890",
         },
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+      } as NodeJS.ProcessEnv,
+      warn,
+    });
+
+    expectNoGeneratedToken(result);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe("shared-gateway-token-1234567890");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Security warning"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
   });
 
-  it("does not block startup when hooks token reuses gateway password auth", async () => {
+  it("keeps startup non-breaking when hooks token reuses gateway password auth", async () => {
+    const warn = vi.fn();
     const result = await runStartupAuth({
       cfg: {
         hooks: {
@@ -391,10 +396,34 @@ describe("ensureGatewayStartupAuth", () => {
           },
         },
       },
+      warn,
+    });
+
+    expectResolvedPassword(result, "shared-gateway-password-1234567890");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Security warning"));
+  });
+
+  it("allows distinct hooks token with gateway password auth during startup", async () => {
+    const warn = vi.fn();
+    const result = await runStartupAuth({
+      cfg: {
+        hooks: {
+          enabled: true,
+          token: "distinct-hooks-token-1234567890",
+        },
+        gateway: {
+          auth: {
+            mode: "password",
+            password: "shared-gateway-password-1234567890", // pragma: allowlist secret
+          },
+        },
+      },
+      warn,
     });
 
     expect(result.auth.mode).toBe("password");
     expectNoGeneratedToken(result);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
@@ -515,95 +544,6 @@ describe("assertGatewayAuthNotKnownWeak", () => {
       mode: "none",
       modeSource: "default",
       allowTailscale: false,
-    });
-  });
-});
-
-describe("assertHooksTokenSeparateFromGatewayAuth", () => {
-  function expectHooksGatewayAuthAllowed(params: {
-    enabled?: boolean;
-    hooksToken: string;
-    auth: HooksGatewayAuthCheck;
-  }) {
-    expect(
-      assertHooksTokenSeparateFromGatewayAuth({
-        cfg: {
-          hooks: {
-            enabled: params.enabled ?? true,
-            token: params.hooksToken,
-          },
-        },
-        auth: params.auth,
-      }),
-    ).toBeUndefined();
-  }
-
-  it("throws when hooks token reuses gateway token auth", () => {
-    expect(() =>
-      assertHooksTokenSeparateFromGatewayAuth({
-        cfg: {
-          hooks: {
-            enabled: true,
-            token: "shared-gateway-token-1234567890",
-          },
-        },
-        auth: {
-          mode: "token",
-          modeSource: "config",
-          token: "shared-gateway-token-1234567890",
-          allowTailscale: false,
-        },
-      }),
-    ).toThrow(/hooks\.token must not match gateway auth token/i);
-  });
-
-  it("allows hooks token reuse of gateway password auth", () => {
-    expectHooksGatewayAuthAllowed({
-      hooksToken: "shared-gateway-password-1234567890",
-      auth: {
-        mode: "password",
-        modeSource: "config",
-        password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-        allowTailscale: false,
-      },
-    });
-  });
-
-  it("allows hooks token reuse of trusted-proxy local password fallback", () => {
-    expectHooksGatewayAuthAllowed({
-      hooksToken: "trusted-proxy-local-password-1234567890",
-      auth: {
-        mode: "trusted-proxy",
-        modeSource: "config",
-        trustedProxy: { userHeader: "x-forwarded-user" },
-        password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
-        allowTailscale: false,
-      },
-    });
-  });
-
-  it("allows distinct hooks token when gateway auth is password mode", () => {
-    expectHooksGatewayAuthAllowed({
-      hooksToken: "hook-token-1234567890",
-      auth: {
-        mode: "password",
-        modeSource: "config",
-        password: "gateway-password-1234567890", // pragma: allowlist secret
-        allowTailscale: false,
-      },
-    });
-  });
-
-  it("allows matching values when hooks are disabled", () => {
-    expectHooksGatewayAuthAllowed({
-      enabled: false,
-      hooksToken: "shared-gateway-token-1234567890",
-      auth: {
-        mode: "token",
-        modeSource: "config",
-        token: "shared-gateway-token-1234567890",
-        allowTailscale: false,
-      },
     });
   });
 });

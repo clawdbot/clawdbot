@@ -547,9 +547,9 @@ function renderSourceRootHelpText(
   return result.stdout ?? "";
 }
 
-function renderSourceBrowserHelpText(
+async function renderSourceBrowserHelpText(
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
+): Promise<string> {
   const browserCliUrl = pathToFileURL(
     path.join(rootDir, "extensions/browser/src/cli/browser-cli.ts"),
   ).href;
@@ -568,30 +568,18 @@ function renderSourceBrowserHelpText(
     `browser.outputHelp();`,
     "process.exit(0);",
   ].join("\n");
-  const result = spawnSync(
-    process.execPath,
+  return await spawnText(
     ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
     {
       cwd: rootDir,
-      encoding: "utf8",
       env: {
         ...renderContext.env,
         OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
       },
-      timeout: BROWSER_HELP_RENDER_TIMEOUT_MS,
+      failureMessage: "Failed to render source browser help",
+      timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
     },
   );
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(
-      "Failed to render source browser help" +
-        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
-    );
-  }
-  return result.stdout ?? "";
 }
 
 async function renderSourceCommandHelpText(
@@ -657,7 +645,7 @@ export async function writeCliStartupMetadata(options?: {
   sourceRootDir?: string;
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
   renderSourceRootHelpText?: typeof renderSourceRootHelpText;
-  renderSourceBrowserHelpText?: typeof renderSourceBrowserHelpText;
+  renderSourceBrowserHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceSecretsHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceNodesHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceSubcommandHelpTextRecord?: (
@@ -726,34 +714,50 @@ export async function writeCliStartupMetadata(options?: {
   } catch {
     rootHelpText = (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
   }
-  const browserHelpText = (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
-    renderContext,
+  const browserHelpTextPromise = Promise.resolve(
+    (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
   );
-  const commandHelpText =
+  const hasCustomCommandRenderer =
     options?.renderSourceSecretsHelpText ||
     options?.renderSourceNodesHelpText ||
-    options?.renderSourceSubcommandHelpTextRecord
-      ? null
-      : await renderSourceCommandHelpTextRecord(
-          ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
-          renderContext,
-        );
-  const secretsHelpText = commandHelpText
-    ? commandHelpText.secrets
-    : await (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext);
-  const nodesHelpText = commandHelpText
-    ? commandHelpText.nodes
-    : await (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext);
-  const subcommandHelpText = commandHelpText
-    ? (Object.fromEntries(
-        PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
-          commandName,
-          commandHelpText[commandName],
-        ]),
-      ) as PrecomputedSubcommandHelpText)
-    : await (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+    options?.renderSourceSubcommandHelpTextRecord;
+  const commandHelpTextPromise = hasCustomCommandRenderer
+    ? null
+    : renderSourceCommandHelpTextRecord(
+        ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
         renderContext,
       );
+  const secretsHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
+    : Promise.resolve(
+        (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext),
+      );
+  const nodesHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
+    : Promise.resolve(
+        (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext),
+      );
+  const subcommandHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then(
+        (commandHelpText) =>
+          Object.fromEntries(
+            PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+              commandName,
+              commandHelpText[commandName],
+            ]),
+          ) as PrecomputedSubcommandHelpText,
+      )
+    : Promise.resolve(
+        (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+          renderContext,
+        ),
+      );
+  const [browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] = await Promise.all([
+    browserHelpTextPromise,
+    secretsHelpTextPromise,
+    nodesHelpTextPromise,
+    subcommandHelpTextPromise,
+  ]);
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(

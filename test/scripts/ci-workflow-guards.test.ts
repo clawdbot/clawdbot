@@ -16,6 +16,7 @@ describe("ci workflow guards", () => {
       ".github/workflows/ci.yml",
       ".github/workflows/workflow-sanity.yml",
       ".github/workflows/ci-check-testbox.yml",
+      ".github/workflows/ci-check-arm-testbox.yml",
       ".github/workflows/ci-build-artifacts-testbox.yml",
       ".github/workflows/crabbox-hydrate.yml",
     ];

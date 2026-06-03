@@ -109,6 +109,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Progress Command Text",
     help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
+  "streaming.progress.commentary": {
+    label: "Telegram Progress Commentary",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
+  },
   "retry.attempts": {
     label: "Telegram Retry Attempts",
     help: "Max retry attempts for outbound Telegram API calls (default: 3).",

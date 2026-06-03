@@ -535,6 +535,52 @@ describe("runTsdownBuildInvocation", () => {
     expect(output.chunks.join("")).toContain("stdout-ok");
   });
 
+  it("rejects malformed OPENCLAW_TSDOWN_TIMEOUT_MS values", async () => {
+    const invocation = {
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        env: process.env,
+      },
+    };
+
+    for (const value of ["1.5", "1e3", "10ms", "0"]) {
+      await expect(
+        runTsdownBuildInvocation(invocation, {
+          env: {
+            ...process.env,
+            OPENCLAW_TSDOWN_TIMEOUT_MS: value,
+          },
+        }),
+      ).rejects.toThrow("OPENCLAW_TSDOWN_TIMEOUT_MS must be");
+    }
+  });
+
+  it("rejects malformed OPENCLAW_TSDOWN_HEARTBEAT_MS values", async () => {
+    const invocation = {
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        env: process.env,
+      },
+    };
+
+    for (const value of ["1.5", "1e3", "10ms", "-1"]) {
+      await expect(
+        runTsdownBuildInvocation(invocation, {
+          env: {
+            ...process.env,
+            OPENCLAW_TSDOWN_HEARTBEAT_MS: value,
+          },
+        }),
+      ).rejects.toThrow("OPENCLAW_TSDOWN_HEARTBEAT_MS must be");
+    }
+  });
+
   it("terminates the child when OPENCLAW_TSDOWN_TIMEOUT_MS elapses", async () => {
     const output = createWriteSink();
     const result = await runTsdownBuildInvocation(

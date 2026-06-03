@@ -3,7 +3,7 @@ import {
   normalizeLegacyBrowserConfig,
   normalizeLegacyCrossContextMessageConfig,
   normalizeLegacyMediaProviderOptions,
-  normalizeLegacyMistralModelMaxTokens,
+  normalizeLegacyMistralModelDefaults,
   normalizeLegacyOpenAIModelProviderApi,
   normalizeLegacyOllamaNativeNumCtxParams,
   normalizeLegacyRuntimeModelRefs,
@@ -44,5 +44,5 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
   next = normalizeLegacyOllamaNativeNumCtxParams(next, changes);
-  return normalizeLegacyMistralModelMaxTokens(next, changes);
+  return normalizeLegacyMistralModelDefaults(next, changes);
 }

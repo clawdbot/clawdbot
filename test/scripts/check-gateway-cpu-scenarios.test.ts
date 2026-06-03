@@ -164,9 +164,15 @@ describe("gateway CPU scenario guard", () => {
     expect(result.summary.steps.map((step) => step.name)).toEqual(["private QA build", "qa suite"]);
     expect(calls[0]?.args).toEqual(["scripts/build-all.mjs", "qaRuntime"]);
     expect(calls[0]?.env).toMatchObject({
+      HOME: path.join(outputDir, "qa-state-root", "home"),
       OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_CONFIG_PATH: path.join(outputDir, "qa-state-root", "state", "openclaw.json"),
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_HOME: path.join(outputDir, "qa-state-root", "home"),
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
+      OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
+      USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
     });
     expect(calls[0]?.env?.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS).toBeUndefined();
   });
@@ -178,7 +184,7 @@ describe("gateway CPU scenario guard", () => {
     mkdirSync(pluginSdkDist, { recursive: true });
     writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
     writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; env?: Record<string, string | undefined> }> = [];
     const options = testing.parseArgs([
       "--output-dir",
       outputDir,
@@ -189,16 +195,30 @@ describe("gateway CPU scenario guard", () => {
 
     const result = await testing.runGatewayCpuScenarios(options, {
       cwd,
+      env: {
+        HOME: "/real/user/home",
+        OPENCLAW_CONFIG_PATH: "/real/user/.openclaw/openclaw.json",
+        OPENCLAW_HOME: "/real/user/home",
+        OPENCLAW_STATE_DIR: "/real/user/.openclaw",
+      },
       silent: true,
-      spawnSync: (_command: string, args: string[]) => {
-        calls.push(args);
+      spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
+        calls.push({ args, env: opts?.env });
         return { status: 0 };
       },
     });
 
     expect(result.exitCode).toBe(0);
     expect(result.summary.steps.map((step) => step.name)).toEqual(["qa suite"]);
-    expect(calls.some((args) => args[0] === "scripts/build-all.mjs")).toBe(false);
+    expect(calls.some((call) => call.args[0] === "scripts/build-all.mjs")).toBe(false);
+    expect(calls[0]?.env).toMatchObject({
+      HOME: path.join(outputDir, "qa-state-root", "home"),
+      OPENCLAW_CONFIG_PATH: path.join(outputDir, "qa-state-root", "state", "openclaw.json"),
+      OPENCLAW_HOME: path.join(outputDir, "qa-state-root", "home"),
+      OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
+      USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
+    });
+    expect(calls[0]?.env?.HOME).not.toBe("/real/user/home");
   });
 
   it("fails when completed runs report hot gateway CPU observations", async () => {

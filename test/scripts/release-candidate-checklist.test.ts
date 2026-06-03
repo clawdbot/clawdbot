@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishCommand,
+  githubApi,
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
@@ -124,5 +125,50 @@ describe("release candidate checklist", () => {
         "openclaw-npm-preflight-",
       ),
     ).toBe("openclaw-npm-preflight-dba00");
+  });
+
+  it("bounds GitHub API requests with a timeout signal", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      expect(init?.headers).toMatchObject({
+        Accept: "application/vnd.github+json",
+        Authorization: "Bearer test-token",
+        "X-GitHub-Api-Version": "2022-11-28",
+      });
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: [] }),
+      };
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).resolves.toEqual({ workflow_runs: [] });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/repos/openclaw/openclaw/actions/runs",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("includes the GitHub API path when a request times out", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new DOMException("request timed out", "TimeoutError");
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs/123/jobs", {
+        fetchImpl,
+        timeoutMs: 5,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(
+      "GitHub API repos/openclaw/openclaw/actions/runs/123/jobs timed out after 5ms",
+    );
   });
 });

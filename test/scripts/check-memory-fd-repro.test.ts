@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
+  MEMORY_SEARCH_PROBE_QUERY,
   MEMORY_SEARCH_RESPONSE_MAX_BYTES,
   classifyMemorySearchInvokeResponse,
   hasChildExited,
@@ -12,6 +16,7 @@ import {
   stopGatewayWithRuntime,
   updateGatewayReadyOutputState,
   waitForGatewayReady,
+  writeConfig,
 } from "../../scripts/check-memory-fd-repro.mjs";
 
 function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
@@ -123,6 +128,43 @@ describe("check-memory-fd-repro", () => {
       allowNonDarwin: true,
       fileCount: 20,
     });
+  });
+
+  it("uses a fast matching probe query instead of a no-hit stress query", () => {
+    expect(MEMORY_SEARCH_PROBE_QUERY).toBe("Top-level memory file");
+    expect(MEMORY_SEARCH_PROBE_QUERY).not.toContain("nomatch");
+  });
+
+  it("writes an offline FTS-only memory search config for repro indexing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-fd-config-"));
+    try {
+      const homeDir = path.join(root, "home");
+      const workspaceDir = path.join(root, "workspace");
+      const configPath = writeConfig({
+        homeDir,
+        workspaceDir,
+        port: 12345,
+        token: "test-token",
+      });
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const memorySearch = config.agents.defaults.memorySearch;
+
+      expect(memorySearch).toMatchObject({
+        provider: "none",
+        model: "",
+        store: {
+          path: path.join(homeDir, ".openclaw", "memory", "main.sqlite"),
+          vector: { enabled: false },
+        },
+        sync: {
+          onSearch: false,
+          onSessionStart: false,
+          watch: true,
+        },
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("accepts an available memory_search tool payload", () => {

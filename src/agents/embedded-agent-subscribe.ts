@@ -188,6 +188,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
+    deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
+    deferredBlockReplies: [],
+    deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -210,6 +213,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     replayState: createEmbeddedRunReplayState(params.initialReplayState),
     livenessState: "working",
     hadDeterministicSideEffect: false,
+    pendingEventChain: null,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -254,6 +258,46 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
+  const emitAssistantStreamDataSafely = (
+    delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
+  ) => {
+    const { data } = delivery;
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "assistant",
+      data,
+    });
+    void params.onAgentEvent?.({
+      stream: "assistant",
+      data,
+    });
+    if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
+      void params.onPartialReply(data);
+    }
+  };
+  const emitAssistantStreamData = (
+    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
+    options?: { emitPartialReply?: boolean },
+  ) => {
+    const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
+    if (state.deferBlockReplyDelivery) {
+      state.deferredAssistantEvents.push(delivery);
+      return;
+    }
+    emitAssistantStreamDataSafely(delivery);
+  };
+  const flushDeferredAssistantEvents = () => {
+    if (state.deferredAssistantEvents.length === 0) {
+      return;
+    }
+    const deferred = state.deferredAssistantEvents.splice(0);
+    for (const delivery of deferred) {
+      emitAssistantStreamDataSafely(delivery);
+    }
+  };
+  const clearDeferredAssistantEvents = () => {
+    state.deferredAssistantEvents.length = 0;
+  };
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
@@ -294,10 +338,35 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    if (state.deferBlockReplyDelivery) {
+      const deferredPayload =
+        options?.assistantMessageIndex !== undefined
+          ? setReplyPayloadMetadata(withToolMedia, {
+              assistantMessageIndex: options.assistantMessageIndex,
+            })
+          : withToolMedia;
+      state.deferredBlockReplies.push(deferredPayload);
+      return;
+    }
     const emitted = emitBlockReplySafely(withToolMedia, options);
     if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
       state.visibleBlockReplyCount += 1;
     }
+  };
+  const flushDeferredBlockReplies = () => {
+    if (state.deferredBlockReplies.length === 0) {
+      return;
+    }
+    const deferred = state.deferredBlockReplies.splice(0);
+    for (const payload of deferred) {
+      const emitted = emitBlockReplySafely(payload);
+      if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
+        state.visibleBlockReplyCount += 1;
+      }
+    }
+  };
+  const clearDeferredBlockReplies = () => {
+    state.deferredBlockReplies.length = 0;
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -1132,6 +1201,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
+    state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
+    clearDeferredAssistantEvents();
+    clearDeferredBlockReplies();
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -1165,7 +1237,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     stripBlockTags,
     emitBlockChunk,
     flushBlockReplyBuffer,
+    emitAssistantStreamData,
     emitBlockReply,
+    flushDeferredAssistantEvents,
+    flushDeferredBlockReplies,
+    clearDeferredAssistantEvents,
+    clearDeferredBlockReplies,
     emitReasoningStream,
     consumeReplyDirectives,
     consumePartialReplyDirectives,
@@ -1312,6 +1389,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+    waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

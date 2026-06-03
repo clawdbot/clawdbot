@@ -2492,6 +2492,124 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     }
   });
 
+  it("fails sparse-sync full checkout early when the sync root is too low on disk", () => {
+    const syncRoot = path.join(repoRoot, ".crabbox-test-low-disk-sync-root");
+    rmSync(syncRoot, { recursive: true, force: true });
+    try {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        {
+          env: {
+            OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "999999999999999",
+            OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "insufficient free disk for Crabbox sparse-sync full checkout",
+      );
+      expect(result.stderr).toContain("OPENCLAW_CRABBOX_SYNC_TMPDIR");
+      expect(result.stderr).toContain("OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES");
+      expect(readdirSync(syncRoot)).toEqual([]);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed sparse-sync minimum free byte limits", () => {
+    const syncRoot = path.join(repoRoot, ".crabbox-test-invalid-disk-sync-root");
+    rmSync(syncRoot, { recursive: true, force: true });
+    try {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        {
+          env: {
+            OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "1024mb",
+            OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        'OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES must be a non-negative integer byte count, got "1024mb"',
+      );
+      expect(readdirSync(syncRoot)).toEqual([]);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe sparse-sync minimum free byte limits", () => {
+    const syncRoot = path.join(repoRoot, ".crabbox-test-unsafe-disk-sync-root");
+    rmSync(syncRoot, { recursive: true, force: true });
+    try {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        {
+          env: {
+            OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: String(Number.MAX_SAFE_INTEGER + 1),
+            OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES must be a safe non-negative integer byte count",
+      );
+      expect(readdirSync(syncRoot)).toEqual([]);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed sparse-sync keepalive intervals", () => {
+    const syncRoot = path.join(repoRoot, ".crabbox-test-invalid-keepalive-sync-root");
+    rmSync(syncRoot, { recursive: true, force: true });
+    try {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        {
+          env: {
+            OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS: "10ms",
+            OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        'OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS must be a non-negative integer millisecond interval, got "10ms"',
+      );
+      expect(readdirSync(syncRoot)).toEqual([]);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+    }
+  });
+
   (process.platform === "win32" ? it.skip : it)(
     "recreates sparse-sync temporary full checkouts that disappear while Crabbox is running",
     () => {

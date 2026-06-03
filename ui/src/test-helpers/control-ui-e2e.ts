@@ -382,7 +382,7 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: ["chat.startup"] },
+          features: { events: [], methods: ["chat.metadata", "chat.startup"] },
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -449,6 +449,11 @@ function installControlUiMockGateway(input: {
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+        };
+      case "chat.metadata":
+        return {
+          commands: [],
+          models: scenario.models,
         };
       case "chat.send":
         return {

@@ -92,6 +92,45 @@ describe("resolveLlmIdleTimeoutMs", () => {
     );
   });
 
+  it("does not bound explicit run timeout by agents.defaults.timeoutSeconds", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 45 } },
+    } as OpenClawConfig;
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        modelRequestTimeoutMs: 300_000,
+        runTimeoutMs: 180_000,
+      }),
+    ).toBe(180_000);
+  });
+
+  it("honors provider request timeout when run timeout is the NO_TIMEOUT sentinel", () => {
+    // Regression: when `runTimeoutSeconds` is treated as 0, `resolveAgentTimeoutMs`
+    // hands back the max timer sentinel. An explicit per-model idle timeout
+    // must still take effect: "run is unlimited" does not imply "skip
+    // chunk-level hang detection".
+    expect(
+      resolveLlmIdleTimeoutMs({
+        modelRequestTimeoutMs: 180_000,
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    ).toBe(180_000);
+  });
+
+  it("does not bound provider request timeout by agent default when run timeout is no-timeout", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 45 } },
+    } as OpenClawConfig;
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        modelRequestTimeoutMs: 180_000,
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    ).toBe(180_000);
+  });
+
   it("uses provider request timeout for cron model calls", () => {
     expect(resolveLlmIdleTimeoutMs({ trigger: "cron", modelRequestTimeoutMs: 300_000 })).toBe(
       300_000,

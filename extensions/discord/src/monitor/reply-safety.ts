@@ -1,14 +1,13 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithProfile,
+} from "openclaw/plugin-sdk/text-chunking";
 import { stripPlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
-const DISCORD_INTERNAL_TRACE_LINE_RE =
-  /^(?:>\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
-const DISCORD_INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
-  /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
 const DISCORD_INTERNAL_CHANNEL_LINE_RE =
-  /^(?:>\s*)?(?:analysis|commentary|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call|thinking|reasoning)\s*[:=]/i;
+  /^(?:>\s*)?(?:analysis|commentary|thinking|reasoning)\s*[:=]/i;
 
 function hasNonEmptyRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(
@@ -36,7 +35,11 @@ function hasNonTextReplyPayloadContent(payload: ReplyPayload): boolean {
   );
 }
 
-function stripDiscordInternalTraceLines(text: string): string {
+function collapseExcessBlankLines(text: string): string {
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+}
+
+function stripDiscordInternalChannelLines(text: string): string {
   let inFence = false;
   const kept: string[] = [];
   for (const line of text.split(/\r?\n/)) {
@@ -45,31 +48,20 @@ function stripDiscordInternalTraceLines(text: string): string {
       kept.push(line);
       continue;
     }
-    if (!inFence) {
-      const trimmed = line.trim();
-      if (
-        DISCORD_INTERNAL_TRACE_LINE_RE.test(trimmed) ||
-        DISCORD_INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE.test(trimmed) ||
-        DISCORD_INTERNAL_CHANNEL_LINE_RE.test(trimmed)
-      ) {
-        continue;
-      }
+    if (!inFence && DISCORD_INTERNAL_CHANNEL_LINE_RE.test(line.trim())) {
+      continue;
     }
     kept.push(line);
   }
   return kept.join("\n");
 }
 
-function collapseExcessBlankLines(text: string): string {
-  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
-}
-
 export function sanitizeDiscordFrontChannelText(text: string): string {
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text);
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(withoutToolCallBlocks);
   const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding);
-  const withoutTraceLines = stripDiscordInternalTraceLines(withoutResidualToolCallBlocks);
-  return collapseExcessBlankLines(withoutTraceLines).trim();
+  const withoutChannelLines = stripDiscordInternalChannelLines(withoutResidualToolCallBlocks);
+  return collapseExcessBlankLines(withoutChannelLines).trim();
 }
 
 export function sanitizeDiscordFrontChannelReplyPayloads(
@@ -82,7 +74,9 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
     const safeText =
       typeof payload.text === "string"
         ? preserveVerboseToolProgress
-          ? collapseExcessBlankLines(sanitizeAssistantVisibleText(payload.text)).trim()
+          ? collapseExcessBlankLines(
+              sanitizeAssistantVisibleTextWithProfile(payload.text, "tool-progress"),
+            ).trim()
           : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =

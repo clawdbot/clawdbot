@@ -23,6 +23,7 @@ import {
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatInjectParams,
+  validateChatMetadataParams,
   validateChatMessageGetParams,
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -211,6 +212,62 @@ type PreRegisteredAgentRun = {
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
 
+async function handleChatMetadataRequest({
+  params,
+  respond,
+  context,
+}: GatewayRequestHandlerOptions): Promise<void> {
+  if (!validateChatMetadataParams(params)) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid chat.metadata params: ${formatValidationErrors(validateChatMetadataParams.errors)}`,
+      ),
+    );
+    return;
+  }
+  const metadataParams = params;
+  const cfg = context.getRuntimeConfig();
+  const requestedAgentId =
+    typeof metadataParams.agentId === "string" && metadataParams.agentId.trim()
+      ? normalizeAgentId(metadataParams.agentId)
+      : resolveDefaultAgentId(cfg);
+  if (!listAgentIds(cfg).includes(requestedAgentId)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${metadataParams.agentId}"`),
+    );
+    return;
+  }
+  try {
+    const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
+      import("./models-list-result.js"),
+      import("./commands-list-result.js"),
+    ]);
+    const [models, commands] = await Promise.all([
+      buildModelsListResult({
+        context,
+        agentId: requestedAgentId,
+        params: { view: "configured" },
+      }),
+      Promise.resolve(
+        buildCommandsListResult({
+          cfg,
+          agentId: requestedAgentId,
+          includeArgs: true,
+          scope: "text",
+        }),
+      ),
+    ]);
+    respond(true, { ...models, ...commands });
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+  }
+}
+
 function normalizeUnknownText(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalText(value) : undefined;
 }
@@ -274,6 +331,28 @@ function buildMediaOnlyTtsSupplementTranscriptMarker(
     return undefined;
   }
   return buildTtsSupplementTranscriptMarker(payload);
+}
+
+function resolveWebchatPromptCacheKey(params: {
+  agentId: string;
+  model: string;
+  provider: string;
+  sessionKey: string;
+}): string {
+  const digest = createHash("sha256")
+    .update(
+      [
+        "v1",
+        params.provider.trim().toLowerCase(),
+        params.model.trim(),
+        normalizeAgentId(params.agentId),
+        params.sessionKey,
+      ].join("\0"),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 32);
+  return `openclaw-webchat-${digest}`;
 }
 
 async function buildWebchatAssistantMediaMessage(
@@ -2610,6 +2689,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   "chat.startup": async (opts) => {
     await handleChatHistoryRequest({ ...opts, method: "chat.startup", includeAgentsList: true });
   },
+  "chat.metadata": handleChatMetadataRequest,
   "chat.message.get": async ({ params, respond, context }) => {
     if (!validateChatMessageGetParams(params)) {
       respond(
@@ -3575,6 +3655,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             dispatcher,
             replyOptions: {
               runId: clientRunId,
+              ...(isOperatorUiClient(clientInfo)
+                ? {
+                    promptCacheKey: resolveWebchatPromptCacheKey({
+                      agentId,
+                      provider: resolvedSessionModel.provider,
+                      model: resolvedSessionModel.model,
+                      sessionKey: activeRunScopeKey,
+                    }),
+                  }
+                : {}),
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,

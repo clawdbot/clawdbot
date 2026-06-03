@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
@@ -67,6 +75,47 @@ function withTarball(
 }
 
 describe("check-openclaw-package-tarball", () => {
+  it.runIf(process.platform !== "win32")("removes the extract dir when tar extraction fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-extract-fail-"));
+    try {
+      const fakeBin = join(root, "bin");
+      mkdirSync(fakeBin);
+      const extractDirFile = join(root, "extract-dir.txt");
+      const fakeTar = join(fakeBin, "tar");
+      writeFileSync(
+        fakeTar,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          "const args = process.argv.slice(2);",
+          "if (args[0] === '-tf') { console.log('package/package.json'); process.exit(0); }",
+          "const outputDir = args[args.indexOf('-C') + 1];",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_EXTRACT_DIR_FILE, outputDir);",
+          "console.error('extract denied');",
+          "process.exit(7);",
+        ].join("\n"),
+      );
+      chmodSync(fakeTar, 0o755);
+      const tarball = join(root, "openclaw.tgz");
+      writeFileSync(tarball, "not used by fake tar");
+
+      const result = spawnSync("node", [CHECK_SCRIPT, tarball], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_EXTRACT_DIR_FILE: extractDirFile,
+          PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("extract denied");
+      expect(existsSync(readFileSync(extractDirFile, "utf8"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("allows legacy private QA inventory entries omitted from shipped tarballs through 2026.4.25", () => {
     withTarball(
       ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],

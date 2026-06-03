@@ -2317,6 +2317,81 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("composes streamed reasoning with tool progress in Telegram progress drafts", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`\n• _Checking files_");
+  });
+
+  it("renders configured Telegram commentary progress from preamble item events", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking recent context",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commentary: true },
+        },
+      },
+    });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n_Checking recent context_");
+  });
+
+  it("suppresses Telegram preamble progress when commentary is disabled", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking recent context",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling" },
+        },
+      },
+    });
+
+    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Checking recent"));
+  });
+
   it("keeps the progress draft label when tool progress lines are hidden", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -1,7 +1,11 @@
-import { afterAll } from "vitest";
+import { afterAll, beforeEach, vi } from "vitest";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 const testEnv = installSharedTestSetup({ loadProfileEnv: false });
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
 
 afterAll(() => {
   testEnv.cleanup();

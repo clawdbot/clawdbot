@@ -4,6 +4,7 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type {
@@ -39,6 +40,19 @@ export type ToolCallSummary = {
   mutatingAction: boolean;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
+};
+
+export type AssistantStreamData = {
+  text: string;
+  delta: string;
+  replace?: true;
+  mediaUrls?: string[];
+  phase?: AssistantPhase;
+};
+
+export type AssistantStreamDelivery = {
+  data: AssistantStreamData;
+  emitPartialReply: boolean;
 };
 
 export type EmbeddedAgentSubscribeState = {
@@ -99,6 +113,9 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
+  deferBlockReplyDelivery: boolean;
+  deferredBlockReplies: BlockReplyPayload[];
+  deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
@@ -126,6 +143,7 @@ export type EmbeddedAgentSubscribeState = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   hadDeterministicSideEffect?: boolean;
+  pendingEventChain: Promise<void> | null;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
@@ -218,7 +236,15 @@ export type EmbeddedAgentSubscribeContext = {
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
   getLastCompactionTokensAfter: () => number | undefined;
+  emitAssistantStreamData: (
+    data: AssistantStreamData,
+    options?: { emitPartialReply?: boolean },
+  ) => void;
   emitBlockReply: (payload: BlockReplyPayload) => void;
+  flushDeferredAssistantEvents: () => void;
+  flushDeferredBlockReplies: () => void;
+  clearDeferredAssistantEvents: () => void;
+  clearDeferredBlockReplies: () => void;
 };
 
 /**

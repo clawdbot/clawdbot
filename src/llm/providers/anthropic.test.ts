@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 
 const anthropicMockState = vi.hoisted(() => ({
@@ -215,5 +216,67 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect((capturedPayload as { stop_sequences?: unknown }).stop_sequences).toEqual(["STOP"]);
+  });
+
+  it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect((capturedPayload as { system?: unknown }).system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: "Dynamic suffix",
+      },
+    ]);
+  });
+
+  it("strips the internal cache boundary when Anthropic cache control is disabled", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        cacheRetention: "none",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect((capturedPayload as { system?: unknown }).system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix\nDynamic suffix",
+      },
+    ]);
   });
 });

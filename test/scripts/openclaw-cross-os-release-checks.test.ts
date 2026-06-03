@@ -20,6 +20,7 @@ import {
   agentOutputHasExpectedOkMarker,
   agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
+  buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
@@ -41,6 +42,7 @@ import {
   CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
+  CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   isImmutableReleaseRef,
@@ -51,6 +53,7 @@ import {
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
   maybeBuildOptionalAgentTurnSkipResult,
+  parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
   parseArgs,
   packageHasScript,
@@ -83,6 +86,7 @@ import {
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
+  verifyWindowsPackagedUpgradeFallbackInstall,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
@@ -199,6 +203,23 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("prints command heartbeats before long release commands hit job timeouts", () => {
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeGreaterThan(0);
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeLessThanOrEqual(60);
+  });
+
+  it("rejects malformed cross-OS positive integer environment values", () => {
+    expect(parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {})).toBe(60);
+    expect(
+      parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {
+        OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS: "25",
+      }),
+    ).toBe(25);
+
+    for (const raw of ["1e3", "25ms", "1.5", "0", "-1", String(Number.MAX_SAFE_INTEGER + 1)]) {
+      expect(() =>
+        parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {
+          OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS: raw,
+        }),
+      ).toThrow("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS must be a positive integer");
+    }
   });
 
   it("records packaged-fresh phase timings for release-check summaries", () => {
@@ -1194,6 +1215,28 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
+  it("bounds Discord API calls with a timeout signal", () => {
+    expect(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+
+    const init = buildDiscordFetchInit("discord-token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(init).toMatchObject({
+      method: "POST",
+      body: "{}",
+      headers: {
+        Authorization: "Bot discord-token",
+        "Content-Type": "application/json",
+      },
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it("keeps the dev-update lane for main only", () => {
     expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
     expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(false);
@@ -1354,6 +1397,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         usedWindowsPackagedUpgradeFallback: true,
       }),
     ).toBe(true);
+  });
+
+  it("verifies the Windows packaged-upgrade fallback installed the candidate", () => {
+    expect(() =>
+      verifyWindowsPackagedUpgradeFallbackInstall({
+        installedVersion: "2026.5.4-beta.1",
+        candidateVersion: "2026.5.4-beta.1",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      verifyWindowsPackagedUpgradeFallbackInstall({
+        installedVersion: "2026.5.3",
+        candidateVersion: "2026.5.4-beta.1",
+      }),
+    ).toThrow(/expected 2026\.5\.4-beta\.1/u);
+    expect(() =>
+      verifyWindowsPackagedUpgradeFallbackInstall({
+        installedVersion: "",
+        candidateVersion: "2026.5.4-beta.1",
+      }),
+    ).toThrow(/installed unknown/u);
   });
 
   it("does not recover unrelated packaged update failures", () => {

@@ -177,11 +177,17 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
 
 function positiveEnvInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function runReleaseCheckCommand(

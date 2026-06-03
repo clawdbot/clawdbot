@@ -74,8 +74,18 @@ function hasExplicitUnknownPollValue(key: string, value: unknown): boolean {
   return false;
 }
 
-export function hasPollCreationParams(params: Record<string, unknown>): boolean {
-  for (const key of SHARED_POLL_CREATION_PARAM_NAMES) {
+// Among the shared poll params, only the content-bearing fields (pollQuestion,
+// pollOption) signal poll intent on their own. The modifier fields
+// (pollDurationHours, pollMulti) are exposed by the shared `message` tool
+// schema for both `send` and `poll` actions, so LLMs routinely echo their
+// schema-implied defaults (`1`, `false`) on plain `send` calls — see issue
+// for context. Treating those modifier defaults as "the agent meant to create
+// a poll" produces false positives and blocks routine sends. The modifiers
+// only count when accompanied by a content-bearing field.
+const CONTENT_BEARING_SHARED_POLL_PARAM_NAMES = ["pollQuestion", "pollOption"] as const;
+
+function hasContentBearingPollCreationParam(params: Record<string, unknown>): boolean {
+  for (const key of CONTENT_BEARING_SHARED_POLL_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[key];
     const value = readPollParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
@@ -92,30 +102,18 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
         return true;
       }
     }
-    if (def.kind === "positiveInteger") {
-      // Treat zero-valued numeric defaults as unset, but preserve any non-zero
-      // numeric value as explicit poll intent so invalid durations still hit
-      // the poll-only validation path.
-      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
-        return true;
-      }
-      if (typeof value === "string") {
-        const trimmed = value.trim();
-        const parsed = parseStrictFiniteNumber(trimmed);
-        if (parsed !== undefined && parsed !== 0) {
-          return true;
-        }
-      }
-    }
-    if (def.kind === "boolean") {
-      if (value === true) {
-        return true;
-      }
-      if (typeof value === "string" && normalizeLowercaseStringOrEmpty(value) === "true") {
-        return true;
-      }
-    }
   }
+  return false;
+}
+
+export function hasPollCreationParams(params: Record<string, unknown>): boolean {
+  if (hasContentBearingPollCreationParam(params)) {
+    return true;
+  }
+  // Channel-specific poll-prefixed params (e.g. pollDurationSeconds,
+  // pollPublic) are not part of the shared schema, so an explicit value still
+  // indicates deliberate poll intent and continues to trigger the validator
+  // even without a pollQuestion/pollOption.
   for (const [key, value] of Object.entries(params)) {
     if (isChannelPollCreationParamName(key) && hasExplicitUnknownPollValue(key, value)) {
       return true;

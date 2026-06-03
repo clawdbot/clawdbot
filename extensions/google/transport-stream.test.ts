@@ -1628,6 +1628,76 @@ describe("google transport stream", () => {
     expect(generationConfig).not.toHaveProperty("thinkingConfig");
   });
 
+  it("forwards configured stop sequences to the Gemini generationConfig", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        stop: ["</tool>", "\n\nObservation:"],
+      } as never,
+    );
+
+    const generationConfig = requireGenerationConfig(params);
+    expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
+  });
+
+  it("omits stopSequences when the stop list is empty", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        stop: [],
+      } as never,
+    );
+
+    expect(params.generationConfig ?? {}).not.toHaveProperty("stopSequences");
+  });
+
+  it("sends stopSequences in the serialized Gemini request body via the guarded fetch transport", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"google-generative-ai">,
+      {},
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+          stop: ["</tool>", "\n\nObservation:"],
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    const init = requireRequestInit(guardedCall, "guarded fetch");
+    const payload = parseRequestJsonBody(init);
+    const generationConfig = requireGenerationConfig(payload);
+    expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
+  });
+
   it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),

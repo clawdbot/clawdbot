@@ -73,6 +73,15 @@ docker_build_timeout_required() {
   return 1
 }
 
+docker_build_heartbeat_seconds() {
+  local configured="${OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS:-30}"
+  if [[ "$configured" =~ ^[0-9]+$ ]] && [ "$configured" -ge 1 ]; then
+    echo "$((10#$configured))"
+    return
+  fi
+  echo 30
+}
+
 docker_build_run_command() {
   local timeout_value="$1"
   shift
@@ -83,6 +92,37 @@ docker_build_run_command() {
   fi
 
   "$@"
+}
+
+docker_build_run_logged() {
+  local label="$1"
+  local timeout_value="$2"
+  local log_file="$3"
+  shift 3
+  local heartbeat_seconds
+  heartbeat_seconds="$(docker_build_heartbeat_seconds)"
+  local started_at="$SECONDS"
+  local next_heartbeat=$heartbeat_seconds
+  local build_status=0
+
+  docker_build_run_command "$timeout_value" "$@" >"$log_file" 2>&1 &
+  local build_pid="$!"
+  while kill -0 "$build_pid" 2>/dev/null; do
+    /bin/sleep 1
+    local elapsed_seconds=$((SECONDS - started_at))
+    if [ "$elapsed_seconds" -ge "$next_heartbeat" ] && kill -0 "$build_pid" 2>/dev/null; then
+      local log_bytes="0"
+      if [ -f "$log_file" ]; then
+        log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+        log_bytes="${log_bytes//[[:space:]]/}"
+      fi
+      echo "Docker build $label still running (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)..."
+      next_heartbeat=$((elapsed_seconds + heartbeat_seconds))
+    fi
+  done
+
+  wait "$build_pid" || build_status="$?"
+  return "$build_status"
 }
 
 docker_build_with_retries() {
@@ -101,7 +141,7 @@ docker_build_with_retries() {
   local timeout_value="${OPENCLAW_DOCKER_BUILD_TIMEOUT:-3600s}"
   while true; do
     log_file="$(docker_e2e_run_log "$label")"
-    if docker_build_run_command "$timeout_value" "${command[@]}" >"$log_file" 2>&1; then
+    if docker_build_run_logged "$label" "$timeout_value" "$log_file" "${command[@]}"; then
       rm -f "$log_file"
       return 0
     fi
@@ -116,7 +156,7 @@ docker_build_with_retries() {
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))
-    sleep "$attempt"
+    /bin/sleep "$attempt"
   done
 }
 

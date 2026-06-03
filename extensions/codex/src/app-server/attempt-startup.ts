@@ -109,6 +109,7 @@ export async function startCodexAttemptThread(params: {
       onTimeout: async () => {
         await params.onStartupTimeout();
         await releaseStartupResourcesOnTimeout?.();
+        clearSharedCodexAppServerClientIfCurrent(startupClientForAbandonedRequestCleanup);
       },
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(

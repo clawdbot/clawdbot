@@ -110,6 +110,8 @@ export function createOpenClawTools(
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks. */
     currentMessageId?: string | number;
+    /** True when the current inbound turn carried audio media. */
+    currentInboundAudio?: boolean;
     /** Reply-to mode for auto-threading. */
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -333,6 +335,7 @@ export function createOpenClawTools(
         currentChannelId: options?.currentChannelId,
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
+        currentInboundAudio: options?.currentInboundAudio,
         agentThreadId: options?.agentThreadId,
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,

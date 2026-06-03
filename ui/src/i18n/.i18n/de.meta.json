@@ -1,5 +1,12 @@
 {
   "fallbackKeys": [
+    "workboard.dependencies",
+    "workboard.dependenciesBlocked",
+    "workboard.dependenciesBlockedTitle",
+    "workboard.dependenciesReady",
+    "workboard.dependenciesReadyTitle",
+    "workboard.dependencyMissing",
+    "workboard.dependencyStatusMissing",
     "workboard.detailAddNote",
     "workboard.detailAutomation",
     "workboard.detailAutomationBoard",
@@ -19,14 +26,15 @@
     "workboard.detailUpdatedValue",
     "workboard.detailWorkerLogs",
     "workboard.detailWorkerProtocol",
+    "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-01T02:32:30.623Z",
+  "generatedAt": "2026-06-01T07:19:21.786Z",
   "locale": "de",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "59589c3b29f7126995ed4763e88b763702a7c20b1791b4e16c62b394bca02d45",
-  "totalKeys": 1304,
-  "translatedKeys": 1284,
+  "sourceHash": "0639815f4b249fd84b5149556602c9e5da1136d73a747f26a1c12981a4319ebb",
+  "totalKeys": 1330,
+  "translatedKeys": 1302,
   "workflow": 1
 }

@@ -34,6 +34,13 @@ export const ChatHistoryParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChatMetadataParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const ChatMessageGetParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,

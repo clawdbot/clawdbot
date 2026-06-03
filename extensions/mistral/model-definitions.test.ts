@@ -27,9 +27,27 @@ describe("mistral model definitions", () => {
     expect(MISTRAL_DEFAULT_COST).toEqual({
       input: 0.5,
       output: 1.5,
-      cacheRead: 0,
+      cacheRead: 0.05,
       cacheWrite: 0,
     });
+  });
+
+  it("prices cached Mistral input tokens at ten percent of standard input tokens", () => {
+    const models = buildMistralCatalogModels();
+
+    for (const model of models) {
+      expect(model.cost.cacheRead).toBeCloseTo(model.cost.input * 0.1, 10);
+      expect(model.cost.cacheWrite).toBe(0);
+    }
+  });
+
+  it("charges nonzero cost for cached-token usage on the default model", () => {
+    const model = buildMistralModelDefinition();
+    const cacheReadTokens = 20_000;
+    const cacheReadCost = (model.cost.cacheRead / 1_000_000) * cacheReadTokens;
+
+    expect(cacheReadCost).toBeCloseTo(0.001, 10);
+    expect(cacheReadCost).toBeGreaterThan(0);
   });
 
   it("publishes a curated set of current Mistral catalog models", () => {

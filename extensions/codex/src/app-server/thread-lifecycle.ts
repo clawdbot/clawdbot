@@ -119,32 +119,84 @@ const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
 
-type CodexThreadLifecycleTimingSpan = {
+export type CodexThreadLifecycleTimingSpan = {
   name: string;
   durationMs: number;
   elapsedMs: number;
 };
 
-type CodexThreadLifecycleTimingSummary = {
+export type CodexThreadLifecycleTimingSummary = {
   totalMs: number;
   spans: CodexThreadLifecycleTimingSpan[];
+};
+
+export type CodexThreadLifecycleTimingLogger = {
+  isEnabled?: (level: "trace") => boolean;
+  trace: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+export type CodexThreadLifecycleTimingAction = "started" | "resumed" | "rotated";
+
+export type CodexThreadLifecycleTimingOptions = {
+  enabled?: boolean;
+  now?: () => number;
+  log?: CodexThreadLifecycleTimingLogger;
+  totalThresholdMs?: number;
+  stageThresholdMs?: number;
 };
 
 const CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS = 1_000;
 const CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS = 500;
 
-function createCodexThreadLifecycleTimingTracker(options: { enabled?: boolean } = {}): {
+export function shouldWarnCodexThreadLifecycleTimingSummary(
+  summary: CodexThreadLifecycleTimingSummary,
+  options: CodexThreadLifecycleTimingOptions = {},
+): boolean {
+  const totalThresholdMs =
+    options.totalThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS;
+  const stageThresholdMs =
+    options.stageThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS;
+  return (
+    summary.totalMs >= totalThresholdMs ||
+    summary.spans.some((span) => span.durationMs >= stageThresholdMs)
+  );
+}
+
+export function formatCodexThreadLifecycleTimingSummary(params: {
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  action: CodexThreadLifecycleTimingAction;
+  summary: CodexThreadLifecycleTimingSummary;
+}): string {
+  const spans =
+    params.summary.spans.length > 0
+      ? params.summary.spans
+          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
+          .join(",")
+      : "none";
+  return (
+    `[trace:codex-app-server] thread lifecycle: runId=${params.runId} ` +
+    `sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? "unknown"} ` +
+    `action=${params.action} totalMs=${params.summary.totalMs} stages=${spans}`
+  );
+}
+
+function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTimingOptions = {}): {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
   measureSync: <T>(name: string, run: () => T) => T;
-  logIfSlow: (params: {
+  mark: (name: string) => void;
+  logSummary: (params: {
     runId: string;
     sessionId: string;
     sessionKey?: string;
-    action: "started" | "resumed" | "rotated";
+    action: CodexThreadLifecycleTimingAction;
     threadId?: string;
   }) => void;
 } {
-  if (!options.enabled) {
+  const log = options.log ?? embeddedAgentLog;
+  if (!options.enabled && log.isEnabled?.("trace") !== true) {
     return {
       async measure(_name, run) {
         return await run();
@@ -152,37 +204,31 @@ function createCodexThreadLifecycleTimingTracker(options: { enabled?: boolean } 
       measureSync(_name, run) {
         return run();
       },
-      logIfSlow() {},
+      mark() {},
+      logSummary() {},
     };
   }
 
-  const startedAt = Date.now();
+  const now = options.now ?? Date.now;
+  const startedAt = now();
   let didLog = false;
   const spans: CodexThreadLifecycleTimingSpan[] = [];
   const toMs = (value: number) => Math.max(0, Math.round(value));
   const record = (name: string, spanStartedAt: number) => {
+    const currentAt = now();
     spans.push({
       name,
-      durationMs: toMs(Date.now() - spanStartedAt),
-      elapsedMs: toMs(Date.now() - startedAt),
+      durationMs: toMs(currentAt - spanStartedAt),
+      elapsedMs: toMs(currentAt - startedAt),
     });
   };
   const snapshot = (): CodexThreadLifecycleTimingSummary => ({
-    totalMs: toMs(Date.now() - startedAt),
+    totalMs: toMs(now() - startedAt),
     spans: spans.slice(),
   });
-  const shouldLog = (summary: CodexThreadLifecycleTimingSummary) =>
-    summary.totalMs >= CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS ||
-    summary.spans.some((span) => span.durationMs >= CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS);
-  const formatSpans = (summary: CodexThreadLifecycleTimingSummary) =>
-    summary.spans.length > 0
-      ? summary.spans
-          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
-          .join(",")
-      : "none";
   return {
     async measure(name, run) {
-      const spanStartedAt = Date.now();
+      const spanStartedAt = now();
       try {
         return await run();
       } finally {
@@ -190,38 +236,47 @@ function createCodexThreadLifecycleTimingTracker(options: { enabled?: boolean } 
       }
     },
     measureSync(name, run) {
-      const spanStartedAt = Date.now();
+      const spanStartedAt = now();
       try {
         return run();
       } finally {
         record(name, spanStartedAt);
       }
     },
-    logIfSlow(params) {
+    mark(name) {
+      record(name, now());
+    },
+    logSummary(params) {
       if (didLog) {
         return;
       }
       const summary = snapshot();
-      if (!shouldLog(summary)) {
+      const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, options);
+      if (!shouldWarn && !log.isEnabled?.("trace")) {
         return;
       }
       didLog = true;
-      embeddedAgentLog.warn(
-        `codex app-server thread lifecycle timings runId=${params.runId} sessionId=${
-          params.sessionId
-        } sessionKey=${params.sessionKey ?? "unknown"} action=${params.action} totalMs=${
-          summary.totalMs
-        } stages=${formatSpans(summary)}`,
-        {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          action: params.action,
-          threadId: params.threadId,
-          totalMs: summary.totalMs,
-          spans: summary.spans,
-        },
-      );
+      const message = formatCodexThreadLifecycleTimingSummary({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        action: params.action,
+        summary,
+      });
+      const meta = {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        action: params.action,
+        threadId: params.threadId,
+        totalMs: summary.totalMs,
+        spans: summary.spans,
+      };
+      if (shouldWarn) {
+        log.warn(message, meta);
+      } else {
+        log.trace(message, meta);
+      }
     },
   };
 }
@@ -249,19 +304,22 @@ export async function startOrResumeThread(params: {
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
+  timing?: CodexThreadLifecycleTimingOptions;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   // Thread lifecycle spans are useful when profiling startup churn, but normal
   // turns should not pay Date.now/span-array overhead while resuming threads.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
-    enabled: isCodexAppServerProfilerEnabled(params.params.config),
+    ...params.timing,
+    enabled:
+      params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
   });
-  const dynamicToolsFingerprint = lifecycleTiming.measureSync("fingerprint_dynamic_tools", () =>
+  const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
     fingerprintDynamicTools(params.dynamicTools),
   );
   const dynamicToolsContainDeferred = params.dynamicTools.some(
     (tool) => tool.deferLoading === true,
   );
-  const contextEngineBinding = lifecycleTiming.measureSync("context_engine_binding", () =>
+  const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
   const userMcpServersConfigPatch =
@@ -274,7 +332,7 @@ export async function startOrResumeThread(params: {
   const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
     params.environmentSelection,
   );
-  let binding = await lifecycleTiming.measure("read_binding", () =>
+  let binding = await lifecycleTiming.measure("read-binding", () =>
     readCodexAppServerBinding(params.params.sessionFile, {
       authProfileStore: params.params.authProfileStore,
       agentDir: params.params.agentDir,
@@ -381,7 +439,7 @@ export async function startOrResumeThread(params: {
       })
     ) {
       try {
-        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin_config_recovery", () =>
+        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
           params.pluginThreadConfig?.build(),
         );
         pluginBindingStale =
@@ -474,7 +532,7 @@ export async function startOrResumeThread(params: {
           userMcpServersConfigPatch,
           finalConfigPatch.configPatch,
         );
-        const resumeParams = lifecycleTiming.measureSync("thread_resume_params", () =>
+        const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             authProfileId,
@@ -487,7 +545,7 @@ export async function startOrResumeThread(params: {
           }),
         );
         const response = assertCodexThreadResumeResponse(
-          await lifecycleTiming.measure("thread_resume_request", () =>
+          await lifecycleTiming.measure("thread-resume-request", () =>
             params.client.request("thread/resume", resumeParams, { signal: params.signal }),
           ),
         );
@@ -504,7 +562,7 @@ export async function startOrResumeThread(params: {
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
             : binding.mcpServersFingerprint;
-        await lifecycleTiming.measure("thread_resume_write_binding", () =>
+        await lifecycleTiming.measure("thread-resume-write-binding", () =>
           writeCodexAppServerBinding(
             params.params.sessionFile,
             {
@@ -544,7 +602,8 @@ export async function startOrResumeThread(params: {
             action: "resumed",
           });
         }
-        lifecycleTiming.logIfSlow({
+        lifecycleTiming.mark("thread-ready");
+        lifecycleTiming.logSummary({
           runId: params.params.runId,
           sessionId: params.params.sessionId,
           sessionKey: params.params.sessionKey,
@@ -585,7 +644,7 @@ export async function startOrResumeThread(params: {
 
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
     ? (prebuiltPluginThreadConfig ??
-      (await lifecycleTiming.measure("plugin_config_build", () =>
+      (await lifecycleTiming.measure("plugin-config-build", () =>
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
@@ -593,7 +652,7 @@ export async function startOrResumeThread(params: {
     configPatch: params.finalConfigPatch,
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };
-  const config = lifecycleTiming.measureSync("merge_thread_config", () =>
+  const config = lifecycleTiming.measureSync("merge-thread-config", () =>
     mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
@@ -601,7 +660,7 @@ export async function startOrResumeThread(params: {
       finalConfigPatch.configPatch,
     ),
   );
-  const startParams = lifecycleTiming.measureSync("thread_start_params", () =>
+  const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
     buildThreadStartParams(params.params, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
@@ -613,7 +672,7 @@ export async function startOrResumeThread(params: {
       environmentSelection: params.environmentSelection,
     }),
   );
-  const threadStartResponse = await lifecycleTiming.measure("thread_start_request", async () => {
+  const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
       return await params.client.request("thread/start", startParams, { signal: params.signal });
     } catch (error) {
@@ -636,7 +695,7 @@ export async function startOrResumeThread(params: {
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   if (!preserveExistingBinding) {
-    await lifecycleTiming.measure("thread_start_write_binding", () =>
+    await lifecycleTiming.measure("thread-start-write-binding", () =>
       writeCodexAppServerBinding(
         params.params.sessionFile,
         {
@@ -676,7 +735,8 @@ export async function startOrResumeThread(params: {
       });
     }
   }
-  lifecycleTiming.logIfSlow({
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({
     runId: params.params.runId,
     sessionId: params.params.sessionId,
     sessionKey: params.params.sessionKey,

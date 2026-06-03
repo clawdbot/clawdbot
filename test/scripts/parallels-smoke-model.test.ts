@@ -171,6 +171,9 @@ describe("Parallels smoke model selection", () => {
   let missingProviderKeyResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidModelTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
 
   beforeAll(() => {
     invalidProviderResult = spawnNodeEvalSync(
@@ -190,6 +193,18 @@ describe("Parallels smoke model selection", () => {
     );
     invalidHostPortResult = spawnNodeEvalSync(
       `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxAgentTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S = "1e3"; process.argv = ["node", "${TS_PATHS.linux}"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsAgentTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S = "2700s"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsUpdateTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S = "12.5"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
       { env: process.env, imports: ["tsx"] },
     );
   });
@@ -1067,7 +1082,9 @@ setInterval(() => {}, 1000);
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
-    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700");
+    expect(script).toContain(
+      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"',
+    );
     expect(script).toContain("windowsAgentTurnConfigPatchScript(this.auth.modelId)");
     expect(script).toContain("--model");
     expect(script).toContain('resolveParallelsModelTimeoutSeconds("windows")');
@@ -1118,8 +1135,29 @@ setInterval(() => {}, 1000);
     expect(invalidHostPortResult.status).toBe(1);
     expect(invalidHostPortResult.stderr).toContain("invalid --host-port: 18425x");
 
+    expect(invalidLinuxAgentTimeoutResult.status).toBe(1);
+    expect(invalidLinuxAgentTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S: 1e3",
+    );
+
+    expect(invalidWindowsAgentTimeoutResult.status).toBe(1);
+    expect(invalidWindowsAgentTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S: 2700s",
+    );
+
+    expect(invalidWindowsUpdateTimeoutResult.status).toBe(1);
+    expect(invalidWindowsUpdateTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
+    );
+
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
       'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',
+    );
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain(
+      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S"',
+    );
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain(
+      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S"',
     );
     expect(readFileSync(TS_PATHS.packageArtifact, "utf8")).toContain(
       'readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000)',

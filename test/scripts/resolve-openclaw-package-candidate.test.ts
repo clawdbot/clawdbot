@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  cleanupPackageSourceWorktreeForTest,
   downloadUrl,
   loadTrustedPackageSource,
   parseArgs,
@@ -308,6 +309,33 @@ describe("resolve-openclaw-package-candidate", () => {
         process.kill(childPid, "SIGKILL");
       }
     }
+  });
+
+  it("fails successful ref candidates when package source worktree cleanup fails", async () => {
+    await expect(
+      cleanupPackageSourceWorktreeForTest("/tmp/openclaw-package-source-stuck", {
+        runImpl: async () => {
+          throw new Error("worktree remove denied");
+        },
+      }),
+    ).rejects.toThrow("worktree remove denied");
+  });
+
+  it("preserves original ref candidate failures when worktree cleanup also fails", async () => {
+    const warnings: string[] = [];
+
+    await expect(
+      cleanupPackageSourceWorktreeForTest("/tmp/openclaw-package-source-stuck", {
+        consoleError: (message: string) => warnings.push(message),
+        resolveError: new Error("package build failed"),
+        runImpl: async () => {
+          throw new Error("worktree remove denied");
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(warnings).toEqual([
+      "warning: failed to remove temporary package source worktree /tmp/openclaw-package-source-stuck: worktree remove denied",
+    ]);
   });
 
   it("loads named trusted package URL source policies", async () => {

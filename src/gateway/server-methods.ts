@@ -280,6 +280,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     methods: [
       "chat.history",
       "chat.startup",
+      "chat.metadata",
       "chat.message.get",
       "chat.abort",
       "chat.send",

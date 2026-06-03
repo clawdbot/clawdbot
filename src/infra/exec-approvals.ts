@@ -12,6 +12,7 @@ import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { isShellWrapperInvocation } from "./exec-wrapper-resolution.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
@@ -1262,6 +1263,25 @@ function buildDurableCommandApprovalPattern(commandText: string): string {
   return `=command:${digest}`;
 }
 
+function buildNodeCommandApprovalPattern(commandText: string): string {
+  const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
+  return `=node-command:${digest}`;
+}
+
+export function hasNodeCommandAllowAlwaysMarker(params: {
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
+}): boolean {
+  const normalizedCommand = params.commandText?.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  const commandPattern = buildNodeCommandApprovalPattern(normalizedCommand);
+  return (params.allowlist ?? []).some(
+    (entry) => entry.source === "allow-always" && entry.pattern === commandPattern,
+  );
+}
+
 function hasExactCommandDurableExecApproval(params: {
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
@@ -1380,7 +1400,7 @@ export function addAllowlistEntry(
   const now = Date.now();
   const nextAllowlist = existingEntry
     ? allowlist.map((entry) =>
-        entry.pattern === trimmed
+        entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern
           ? {
               ...entry,
               argPattern: trimmedArgPattern,
@@ -1418,6 +1438,53 @@ export function addDurableCommandApproval(
   });
 }
 
+export function resolveAllowAlwaysPatternCoverage(params: {
+  segments: ExecCommandSegment[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+  strictInlineEval?: boolean;
+}): {
+  complete: boolean;
+  patterns: ReturnType<typeof resolveAllowAlwaysPatternEntries>;
+} {
+  const byKey = new Map<string, ReturnType<typeof resolveAllowAlwaysPatternEntries>[number]>();
+  let representedSegmentCount = 0;
+  for (const segment of params.segments) {
+    if (isShellWrapperInvocation(segment.argv)) {
+      const segmentPatterns = resolveAllowAlwaysPatternEntries({
+        segments: [segment],
+        cwd: params.cwd,
+        env: params.env,
+        platform: params.platform,
+        strictInlineEval: params.strictInlineEval,
+      });
+      for (const pattern of segmentPatterns) {
+        byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
+      }
+      continue;
+    }
+    const segmentPatterns = resolveAllowAlwaysPatternEntries({
+      segments: [segment],
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      strictInlineEval: params.strictInlineEval,
+    });
+    if (segmentPatterns.length === 0) {
+      continue;
+    }
+    representedSegmentCount += 1;
+    for (const pattern of segmentPatterns) {
+      byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
+    }
+  }
+  return {
+    complete: params.segments.length > 0 && representedSegmentCount === params.segments.length,
+    patterns: [...byKey.values()],
+  };
+}
+
 export function persistAllowAlwaysPatterns(params: {
   approvals: ExecApprovalsFile;
   agentId: string | undefined;
@@ -1425,15 +1492,17 @@ export function persistAllowAlwaysPatterns(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  commandText?: string;
   strictInlineEval?: boolean;
 }): ReturnType<typeof resolveAllowAlwaysPatternEntries> {
-  const patterns = resolveAllowAlwaysPatternEntries({
+  const coverage = resolveAllowAlwaysPatternCoverage({
     segments: params.segments,
     cwd: params.cwd,
     env: params.env,
     platform: params.platform,
     strictInlineEval: params.strictInlineEval,
   });
+  const patterns = coverage.patterns;
   for (const pattern of patterns) {
     if (!pattern.pattern) {
       continue;
@@ -1442,6 +1511,17 @@ export function persistAllowAlwaysPatterns(params: {
       argPattern: pattern.argPattern,
       source: "allow-always",
     });
+  }
+  const normalizedCommand = params.commandText?.trim();
+  if (normalizedCommand && coverage.complete && patterns.length > 0) {
+    addAllowlistEntry(
+      params.approvals,
+      params.agentId,
+      buildNodeCommandApprovalPattern(normalizedCommand),
+      {
+        source: "allow-always",
+      },
+    );
   }
   return patterns;
 }

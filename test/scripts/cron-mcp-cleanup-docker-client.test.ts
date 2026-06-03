@@ -2,9 +2,26 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { waitForProbePid } from "../../scripts/e2e/cron-mcp-cleanup-docker-client.ts";
+import {
+  readCronMcpCleanupProbePidWaitMs,
+  waitForProbePid,
+} from "../../scripts/e2e/cron-mcp-cleanup-docker-client.ts";
 
 describe("cron MCP cleanup docker client", () => {
+  it("rejects malformed probe pid wait limits", () => {
+    expect(readCronMcpCleanupProbePidWaitMs({})).toBe(120_000);
+    expect(
+      readCronMcpCleanupProbePidWaitMs({ OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS: "250" }),
+    ).toBe(250);
+    for (const value of ["1.5", "1e3", "10ms", "0"]) {
+      expect(() =>
+        readCronMcpCleanupProbePidWaitMs({
+          OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS: value,
+        }),
+      ).toThrow("invalid OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS");
+    }
+  });
+
   it("bounds missing probe pid waits", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cron-mcp-client-"));
     try {

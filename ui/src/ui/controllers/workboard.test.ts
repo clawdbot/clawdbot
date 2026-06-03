@@ -7,6 +7,7 @@ import {
   createWorkboardCard,
   deleteWorkboardCard,
   getWorkboardLifecycle,
+  getWorkboardDependencyState,
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
@@ -137,6 +138,46 @@ describe("workboard controller", () => {
       cursor: "page-2",
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: "task-1" });
+  });
+
+  it("summarizes parent dependency readiness from loaded cards", () => {
+    const parentDone = {
+      ...sampleCard,
+      id: "parent-done",
+      title: "Done parent",
+      status: "done",
+    } satisfies WorkboardCard;
+    const parentTodo = {
+      ...sampleCard,
+      id: "parent-todo",
+      title: "Todo parent",
+      status: "todo",
+    } satisfies WorkboardCard;
+    const child = {
+      ...sampleCard,
+      id: "child-1",
+      metadata: {
+        links: [
+          { id: "link-1", type: "parent", targetCardId: parentDone.id, createdAt: 1 },
+          { id: "link-2", type: "parent", targetCardId: parentTodo.id, createdAt: 1 },
+          { id: "link-3", type: "parent", targetCardId: "missing-parent", createdAt: 1 },
+        ],
+      },
+    } satisfies WorkboardCard;
+
+    const dependencies = getWorkboardDependencyState(child, [parentDone, parentTodo, child]);
+
+    expect(
+      dependencies.parents.map((parent) => [parent.title, parent.done, parent.missing]),
+    ).toEqual([
+      ["Done parent", true, false],
+      ["Todo parent", false, false],
+      ["missing-parent", false, true],
+    ]);
+    expect(dependencies.blockedParents.map((parent) => parent.id)).toEqual([
+      parentTodo.id,
+      "missing-parent",
+    ]);
   });
 
   it("links unassigned default-agent tasks with canonicalized session keys", async () => {
@@ -717,7 +758,7 @@ describe("workboard controller", () => {
     );
   });
 
-  it("lets the gateway preflight decide starts when local parent state is stale", async () => {
+  it("lets the gateway decide starts when cached parent dependencies are stale", async () => {
     const host = {};
     const parent = { ...sampleCard, id: "parent-1", title: "Parent", status: "running" };
     const child: WorkboardCard = {
@@ -728,13 +769,18 @@ describe("workboard controller", () => {
         links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
       },
     };
-    const running = { ...child, status: "running", sessionKey: "agent:main:dashboard:child" };
+    const running = {
+      ...child,
+      status: "running",
+      sessionKey: "subagent:workboard-default-child-1",
+      runId: "run-1",
+    } satisfies WorkboardCard;
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         return { cards: [parent, child], statuses: ["todo", "running", "done"] };
       }
       if (method === "agent") {
-        return { sessionKey: "agent:main:dashboard:child", runId: "run-child" };
+        return { sessionKey: "subagent:workboard-default-child-1", runId: "run-1" };
       }
       if (method === "tasks.list") {
         return { tasks: [] };
@@ -750,11 +796,16 @@ describe("workboard controller", () => {
       card: child,
     });
 
-    expect(sessionKey).toBe("agent:main:dashboard:child");
+    expect(sessionKey).toBe("subagent:workboard-default-child-1");
     expect(client.request).toHaveBeenNthCalledWith(
       1,
       "workboard.cards.update",
       expect.objectContaining({ id: child.id, patch: { status: "running" } }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({ sessionKey: "subagent:workboard-default-child-1" }),
     );
   });
 

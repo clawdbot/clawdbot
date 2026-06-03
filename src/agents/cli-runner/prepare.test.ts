@@ -102,6 +102,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
           "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
           "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
+          "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
         },
@@ -1222,6 +1223,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentChannelId: undefined,
         currentThreadTs: undefined,
         currentMessageId: undefined,
+        currentInboundAudio: undefined,
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
@@ -1367,6 +1369,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
+        currentInboundAudio: true,
         sourceReplyDeliveryMode: "message_tool_only",
       });
 
@@ -1375,6 +1378,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
         OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
         OPENCLAW_MCP_CURRENT_MESSAGE_ID: "reply-message-1",
+        OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: "true",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
       });

@@ -442,7 +442,7 @@ export function renderMessageGroup(
     normalizedRole === "user"
       ? (userLabel ?? resolvedUserName)
       : normalizedRole === "assistant"
-        ? assistantName
+        ? (userLabel ?? assistantName)
         : normalizedRole === "tool"
           ? "Tool"
           : normalizedRole;

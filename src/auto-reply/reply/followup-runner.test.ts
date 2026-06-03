@@ -1109,6 +1109,7 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundAudio: true,
         currentInboundContext: { text: "[OpenClaw room event]" },
         run: {
           config: runtimeConfig,
@@ -1125,6 +1126,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
@@ -1560,6 +1562,7 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundAudio: true,
         abortSignal: abortController.signal,
         run: {
           provider: "openai",
@@ -1578,6 +1581,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(fallbackCall.abortSignal).not.toBe(abortController.signal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
+    expect(call.currentInboundAudio).toBe(true);
   });
 
   it("does not inherit source abort signals for queued user followups", async () => {

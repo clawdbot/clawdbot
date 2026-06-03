@@ -168,6 +168,7 @@ vi.mock("./event-loop-ready.js", () => ({
 const {
   testing,
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
   callGatewayScoped,
@@ -867,6 +868,33 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.remoteFallbackNote).toBeUndefined();
     expect(details.message).toContain("Gateway target: wss://example.com/ws");
     expect(details.message).toContain("Source: cli --url");
+  });
+
+  it("reuses gateway call TLS resolution for local probe connection details", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        tls: { enabled: true },
+        handshakeTimeoutMs: 4321,
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockReturnValue(18800);
+    testing.setDepsForTests({
+      getRuntimeConfig: () => config,
+      resolveGatewayPort: () => 18800,
+      loadGatewayTlsRuntime: async () => ({
+        enabled: true,
+        fingerprintSha256: "sha256:test-local-gateway-fingerprint",
+        required: true,
+      }),
+    });
+
+    const details = await buildGatewayProbeConnectionDetails({ config });
+
+    expect(details.url).toBe("wss://127.0.0.1:18800");
+    expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
+    expect(details.preauthHandshakeTimeoutMs).toBe(4321);
   });
 
   it("redacts credential-bearing target URLs from connection messages", () => {

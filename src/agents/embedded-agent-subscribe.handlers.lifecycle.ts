@@ -21,6 +21,7 @@ import {
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 
 export {
   handleCompactionEnd,
@@ -43,18 +44,24 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   });
 }
 
-export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promise<void> {
+export function handleAgentEnd(
+  ctx: EmbeddedAgentSubscribeContext,
+  evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
+): void | Promise<void> {
+  type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
   const hasAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
-  const hadDeterministicSideEffect =
+  const hadLivenessPreservingSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
     hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
+  const hadBeforeFinalizeSideEffect =
+    hadLivenessPreservingSideEffect || ctx.state.replayState.hadPotentialSideEffects;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
     lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
@@ -68,7 +75,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
   const derivedWorkingTerminalState = isError
     ? "blocked"
     : replayInvalid &&
-        !hadDeterministicSideEffect &&
+        !hadLivenessPreservingSideEffect &&
         (!hasAssistantVisibleText || incompleteTerminalAssistant)
       ? "abandoned"
       : ctx.state.livenessState;
@@ -217,6 +224,72 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     return undefined;
   };
 
+  const runBeforeTerminalDelivery = ():
+    | BeforeTerminalDeliveryDecision
+    | Promise<BeforeTerminalDeliveryDecision> => {
+    const result = ctx.params.onBeforeTerminalDelivery?.({
+      messages: evt?.messages ?? [],
+      willRetry: evt?.willRetry === true,
+      ...(lastAssistant ? { lastAssistant } : {}),
+      assistantTexts: ctx.state.assistantTexts,
+      hasAssistantVisibleText,
+      isError,
+      incompleteTerminalAssistant,
+      hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
+    });
+    if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(result)) {
+      return result;
+    }
+    return result;
+  };
+
+  const deliverTerminal = () => {
+    ctx.state.deferBlockReplyDelivery = false;
+    ctx.flushDeferredAssistantEvents();
+    ctx.flushDeferredBlockReplies();
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
+    finalizeAgentEnd();
+    const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
+      ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())
+      : flushPendingMediaAndChannel();
+
+    if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
+      return Promise.resolve(flushPendingMediaAndChannelResult).then(
+        () => emitLifecycleTerminalOnce(),
+        (error: unknown) => {
+          const emitted = emitLifecycleTerminalOnce();
+          if (isPromiseLike<void>(emitted)) {
+            return Promise.resolve(emitted).then(() => {
+              throw error;
+            });
+          }
+          throw error;
+        },
+      );
+    }
+    return emitLifecycleTerminalOnce();
+  };
+
+  const deliverTerminalWithLifecycleErrorFallback = () => {
+    try {
+      return deliverTerminal();
+    } catch (error) {
+      const emitted = emitLifecycleTerminalOnce();
+      if (isPromiseLike<void>(emitted)) {
+        return Promise.resolve(emitted).then(() => {
+          throw error;
+        });
+      }
+      throw error;
+    }
+  };
+
+  const suppressTerminalDelivery = () => {
+    ctx.clearDeferredAssistantEvents();
+    ctx.clearDeferredBlockReplies();
+    finalizeAgentEnd();
+  };
+
   let lifecycleTerminalEmitted = false;
   const emitLifecycleTerminalOnce = (): void | Promise<void> => {
     if (lifecycleTerminalEmitted) {
@@ -241,36 +314,33 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     emitLifecycleTerminal();
   };
 
+  let beforeTerminalDelivery:
+    | BeforeTerminalDeliveryDecision
+    | Promise<BeforeTerminalDeliveryDecision>;
   try {
-    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
-    finalizeAgentEnd();
-    const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
-      ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())
-      : flushPendingMediaAndChannel();
-
-    if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
-      return Promise.resolve(flushPendingMediaAndChannelResult).then(
-        () => emitLifecycleTerminalOnce(),
-        (error: unknown) => {
-          const emitted = emitLifecycleTerminalOnce();
-          if (isPromiseLike<void>(emitted)) {
-            return Promise.resolve(emitted).then(() => {
-              throw error;
-            });
-          }
-          throw error;
-        },
-      );
-    }
+    beforeTerminalDelivery = runBeforeTerminalDelivery();
   } catch (error) {
-    const emitted = emitLifecycleTerminalOnce();
-    if (isPromiseLike<void>(emitted)) {
-      return Promise.resolve(emitted).then(() => {
-        throw error;
-      });
-    }
-    throw error;
+    ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
+    return deliverTerminalWithLifecycleErrorFallback();
   }
 
-  return emitLifecycleTerminalOnce();
+  if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(beforeTerminalDelivery)) {
+    return Promise.resolve(beforeTerminalDelivery)
+      .catch((error: unknown) => {
+        ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
+        return undefined;
+      })
+      .then((decision) => {
+        if (decision?.suppressTerminalDelivery === true) {
+          suppressTerminalDelivery();
+          return undefined;
+        }
+        return deliverTerminalWithLifecycleErrorFallback();
+      });
+  }
+  if (beforeTerminalDelivery?.suppressTerminalDelivery === true) {
+    suppressTerminalDelivery();
+    return undefined;
+  }
+  return deliverTerminalWithLifecycleErrorFallback();
 }

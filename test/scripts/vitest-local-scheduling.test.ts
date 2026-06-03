@@ -138,4 +138,20 @@ describe("vitest local full-suite profile", () => {
       vitestMaxWorkers: 1,
     });
   });
+
+  it("rejects malformed explicit worker limits", () => {
+    const hostInfo = {
+      cpuCount: 10,
+      loadAverage1m: 0,
+      totalMemoryBytes: 24 * 1024 ** 3,
+      freeMemoryBytes: 12 * 1024 ** 3,
+    };
+
+    expect(() =>
+      resolveLocalVitestScheduling({ OPENCLAW_VITEST_MAX_WORKERS: "8x" }, hostInfo, "threads"),
+    ).toThrow("OPENCLAW_VITEST_MAX_WORKERS must be a positive integer; got: 8x");
+    expect(() =>
+      resolveLocalVitestScheduling({ OPENCLAW_TEST_WORKERS: "1e0" }, hostInfo, "threads"),
+    ).toThrow("OPENCLAW_TEST_WORKERS must be a positive integer; got: 1e0");
+  });
 });

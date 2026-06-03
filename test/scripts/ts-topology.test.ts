@@ -198,6 +198,15 @@ describe("ts-topology", () => {
     `);
   });
 
+  it("rejects malformed CLI limits", async () => {
+    const captured = createCapturedIo();
+    const exitCode = await main(["--limit=abc"], captured.io);
+
+    expect(exitCode).toBe(1);
+    expect(captured.readStderr()).toContain("--limit must be a positive integer");
+    expect(captured.readStdout()).toBe("");
+  });
+
   it("throws a clear error for invalid text report names", () => {
     expect(() =>
       renderTextReport(

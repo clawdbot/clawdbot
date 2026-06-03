@@ -103,6 +103,21 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("keeps live Docker artifacts isolated by default", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(script).toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).not.toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
+    );
+  });
+
   it("keeps private QA harness imports local while using the installed package dist", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const preparePackage = readFileSync(PREPARE_PACKAGE_PATH, "utf8");

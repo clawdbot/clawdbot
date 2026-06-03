@@ -2,21 +2,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
+import { parsePositiveInt } from "../lib/numeric-options.mjs";
 
 const DEFAULT_LIMIT = 30;
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const files = [];
   let limit = DEFAULT_LIMIT;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--limit") {
-      const raw = argv[index + 1];
-      index += 1;
-      const parsed = Number.parseInt(raw ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        limit = parsed;
-      }
+      limit = parsePositiveInt(argv[(index += 1)], "--limit");
+      continue;
+    }
+    if (arg.startsWith("--limit=")) {
+      limit = parsePositiveInt(arg.slice("--limit=".length), "--limit");
       continue;
     }
     files.push(arg);
@@ -96,11 +97,23 @@ function summarizeProfile(file, limit) {
   }
 }
 
-const { files, limit } = parseArgs(process.argv.slice(2));
-if (files.length === 0) {
-  console.error("usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>");
-  process.exit(2);
+function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  if (options.files.length === 0) {
+    console.error("usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>");
+    process.exit(2);
+  }
+  for (const file of options.files) {
+    summarizeProfile(file, options.limit);
+  }
 }
-for (const file of files) {
-  summarizeProfile(file, limit);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
 }

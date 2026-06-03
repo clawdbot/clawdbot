@@ -65,7 +65,7 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
-export type AgentHarness = {
+export type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
@@ -78,15 +78,33 @@ export type AgentHarness = {
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+};
+
+export type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
+};
+
+export type AgentHarnessClassificationCapability = {
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: AgentHarnessAttemptParams,
   ): AgentHarnessResultClassification | undefined;
+};
+
+export type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
+};
+
+export type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   dispose?(): Promise<void> | void;
 };
+
+export type AgentHarness = AgentHarnessRunCapability &
+  AgentHarnessSideQuestionCapability &
+  AgentHarnessClassificationCapability &
+  AgentHarnessCompactionCapability &
+  AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;

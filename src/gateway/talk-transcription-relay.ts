@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  asDateTimestampMs,
   parseFiniteNumber as readFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -14,6 +13,10 @@ import {
   createTalkSessionController,
 } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import {
+  closeExpiredTalkRelaySessions,
+  requireActiveTalkRelaySession,
+} from "./talk-relay-session-lifecycle.js";
 
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -181,16 +184,11 @@ function closeTranscriptionSession(
 }
 
 function pruneExpiredTranscriptionSessions(nowMs = Date.now()): void {
-  const validNowMs = asDateTimestampMs(nowMs);
-  if (validNowMs === undefined) {
-    return;
-  }
-  for (const session of transcriptionSessions.values()) {
-    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
-    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
-      closeTranscriptionSession(session, "completed");
-    }
-  }
+  closeExpiredTalkRelaySessions({
+    sessions: transcriptionSessions.values(),
+    closeSession: (session) => closeTranscriptionSession(session, "completed"),
+    nowMs,
+  });
 }
 
 function countTranscriptionSessionsForConn(connId: string): number {
@@ -361,22 +359,13 @@ function getTranscriptionSession(
   transcriptionSessionId: string,
   connId: string,
 ): TranscriptionRelaySession {
-  const session = transcriptionSessions.get(transcriptionSessionId);
-  const nowMs = asDateTimestampMs(Date.now());
-  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
-  if (
-    !session ||
-    session.connId !== connId ||
-    nowMs === undefined ||
-    expiresAtMs === undefined ||
-    nowMs > expiresAtMs
-  ) {
-    if (session) {
-      closeTranscriptionSession(session, "completed");
-    }
-    throw new Error("Unknown transcription Talk session");
-  }
-  return session;
+  return requireActiveTalkRelaySession({
+    sessions: transcriptionSessions,
+    sessionId: transcriptionSessionId,
+    connId,
+    closeSession: (session) => closeTranscriptionSession(session, "completed"),
+    unknownSessionMessage: "Unknown transcription Talk session",
+  });
 }
 
 export function sendTalkTranscriptionRelayAudio(params: {

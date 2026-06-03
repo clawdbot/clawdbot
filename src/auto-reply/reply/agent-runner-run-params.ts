@@ -55,6 +55,7 @@ export function buildEmbeddedRunBaseParams(params: {
   provider: string;
   model: string;
   runId: string;
+  promptCacheKey?: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
   isReasoningTagProvider?: ReasoningTagProviderResolver;
@@ -99,6 +100,7 @@ export function buildEmbeddedRunBaseParams(params: {
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
     runId: params.runId,
+    promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
 }

@@ -633,6 +633,34 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toBe(false);
   });
 
+  it.each([
+    ["delivery.channel", { channel: " ", to: "chat-1" }],
+    ["delivery.to", { mode: "announce", channel: "telegram", to: " \t" }],
+    [
+      "delivery.failureDestination.to",
+      { mode: "announce", failureDestination: { mode: "announce", to: " " } },
+    ],
+    [
+      "delivery.completionDestination.to",
+      { mode: "announce", completionDestination: { mode: "webhook", to: "\n" } },
+    ],
+  ])("rejects blank cron.add %s before gateway normalization", async (field, delivery) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-blank-delivery-add", {
+        action: "add",
+        job: {
+          name: "reminder",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery,
+        },
+      }),
+    ).rejects.toThrow(`${field} must be a non-empty string`);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("recovers flattened add params for failureAlert and payload extras", async () => {
     const tool = createTestCronTool();
     await tool.execute("call-flat-add-extras", {
@@ -1334,6 +1362,55 @@ describe("cron tool", () => {
     expect(params?.id).toBe("job-1");
     expect(params?.patch?.name).toBe("new-name");
     expect(params?.patch?.enabled).toBe(false);
+  });
+
+  it.each([
+    ["delivery.channel", { channel: " " }],
+    ["delivery.to", { to: " " }],
+    ["delivery.failureDestination.to", { failureDestination: { to: " " } }],
+    ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: " " } }],
+  ])("rejects blank cron.update %s before gateway normalization", async (field, delivery) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-blank-delivery-update", {
+        action: "update",
+        id: "job-blank-delivery",
+        patch: { delivery },
+      }),
+    ).rejects.toThrow(`${field} must be a non-empty string`);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("passes nullable cron.update delivery clears through to the gateway", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-null-delivery-update", {
+      action: "update",
+      id: "job-clear-delivery",
+      patch: {
+        delivery: {
+          channel: null,
+          to: null,
+          failureDestination: null,
+          completionDestination: null,
+        },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { id?: string; patch?: { delivery?: unknown } }
+      | undefined;
+    expect(params).toEqual({
+      id: "job-clear-delivery",
+      patch: {
+        delivery: {
+          channel: null,
+          to: null,
+          failureDestination: null,
+          completionDestination: null,
+        },
+      },
+    });
   });
 
   it("recovers additional flat patch params for update action", async () => {

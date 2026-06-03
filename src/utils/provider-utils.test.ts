@@ -22,8 +22,8 @@ describe("resolveReasoningOutputMode", () => {
     resolveProviderReasoningOutputModeWithPluginMock.mockReturnValue(undefined);
   });
 
-  it.each([["google-generative-ai", "tagged"]] as const)(
-    "falls back to the built-in map for %s",
+  it.each([["google-generative-ai", "native"]] as const)(
+    "falls back to native for %s when no plugin override is present",
     (provider, expected) => {
       expect(resolveReasoningOutputMode({ provider, workspaceDir: process.cwd() })).toBe(expected);
       expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
@@ -73,7 +73,7 @@ describe("isReasoningTagProvider", () => {
   });
 
   it.each([
-    ["google-generative-ai", true],
+    ["google-generative-ai", false],
     [null, false],
     [undefined, false],
     ["", false],

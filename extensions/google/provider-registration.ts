@@ -1,4 +1,7 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  ProviderReasoningOutputModeContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
@@ -18,6 +21,18 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
+
+function resolveGoogleReasoningOutputMode(
+  ctx: ProviderReasoningOutputModeContext,
+): "native" | "tagged" {
+  if (ctx.provider === "google" || ctx.provider === "google-vertex") {
+    const api = ctx.model?.api ?? ctx.modelApi;
+    if (!api || api === "google-generative-ai" || api === "google-vertex") {
+      return "native";
+    }
+  }
+  return "tagged";
+}
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -81,6 +96,11 @@ export function buildGoogleProvider(): ProviderPlugin {
       return undefined;
     },
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+    // Gemini 2.5+ delivers reasoning via native thinkingParts (thinkingConfig.includeThoughts).
+    // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
+    // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps
+    // tagged mode because it emits JSON text, not native thought parts.
+    resolveReasoningOutputMode: resolveGoogleReasoningOutputMode,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };
 }

@@ -10,6 +10,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
@@ -17,6 +18,7 @@ import {
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
+import type { AuthCredentialReasonCode } from "../../agents/auth-profiles/credential-state.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
@@ -63,6 +65,7 @@ export type ModelAuthStatusProfile = {
   profileId: string;
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
+  reasonCode?: AuthCredentialReasonCode;
   expiry?: ModelAuthExpiry;
 };
 
@@ -108,6 +111,21 @@ export function invalidateModelAuthStatusCache(): void {
   // rotation, etc.). Without this, `/models` and pickers keep advertising
   // providers the running gateway can no longer authenticate.
   clearCurrentProviderAuthState();
+}
+
+async function refreshModelAuthStatusRuntimeState(): Promise<void> {
+  invalidateModelAuthStatusCache();
+  try {
+    if (await refreshActiveSecretsRuntimeSnapshot()) {
+      return;
+    }
+  } catch (err) {
+    log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
+    return;
+  }
+  // Explicit status refresh follows CLI/doctor repairs. If no secrets runtime is
+  // active, drop runtime auth snapshots so the next status read observes disk.
+  clearRuntimeAuthProfileStoreSnapshots();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -220,8 +238,10 @@ export function aggregateOAuthStatus(
   // Priority: expired/missing > expiring > ok > static. Exhaustive — if a
   // new AuthProfileHealthStatus variant is added, the `never` check fires.
   let status: AuthProviderHealthStatus;
-  if (statuses.has("expired") || statuses.has("missing")) {
+  if (statuses.has("expired")) {
     status = "expired";
+  } else if (statuses.has("missing")) {
+    status = "missing";
   } else if (statuses.has("expiring")) {
     status = "expiring";
   } else if (statuses.has("ok")) {
@@ -266,6 +286,7 @@ function mapProvider(
       profileId: prof.profileId,
       type: prof.type,
       status: prof.status,
+      reasonCode: prof.reasonCode,
       expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
     })),
     usage: usage
@@ -439,6 +460,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (bypassCache) {
+        await refreshModelAuthStatusRuntimeState();
+      }
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveDefaultAgentDir(cfg);
       // Use the external-profile-aware store for status reads so the dashboard
@@ -451,6 +475,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         store,
         cfg,
         providers: configured.providers.length > 0 ? configured.providers : undefined,
+        allowKeychainPrompt: false,
       });
 
       // Usage queries usually need refreshable credentials. Keep API-key status

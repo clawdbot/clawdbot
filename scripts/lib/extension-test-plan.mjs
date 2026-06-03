@@ -26,6 +26,7 @@ import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-what
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
+import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
@@ -359,7 +360,8 @@ function pickLeastLoadedShard(shards) {
 export function createExtensionTestShards(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const extensionIds = params.extensionIds ?? listAvailableExtensionIds();
-  const shardCount = Math.max(1, Number.parseInt(String(params.shardCount ?? ""), 10) || 1);
+  const shardCount =
+    params.shardCount === undefined ? 1 : parsePositiveInt(params.shardCount, "shardCount");
   const plans = extensionIds
     .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
     .filter((plan) => plan.hasTests)

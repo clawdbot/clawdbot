@@ -152,4 +152,29 @@ describe("OpenClawApp Talk controls", () => {
     expect(app.chatError).toBe("voice provider missing");
     expect(stopMock).toHaveBeenCalledOnce();
   });
+
+  it("keeps the Talk options toggle inside the open-panel click guard", async () => {
+    await import("./app.ts");
+    const app = document.createElement("openclaw-app");
+    const guardHost = app as unknown as {
+      chatMobileControlsPointerdownHandler: (event: Event) => void;
+      realtimeTalkOptionsOpen: boolean;
+    };
+    const toggle = document.createElement("button");
+    toggle.setAttribute("aria-label", "Talk options");
+    app.append(toggle);
+
+    guardHost.realtimeTalkOptionsOpen = true;
+    guardHost.chatMobileControlsPointerdownHandler({
+      composedPath: () => [toggle, app, document, window],
+    } as unknown as Event);
+
+    expect(guardHost.realtimeTalkOptionsOpen).toBe(true);
+
+    guardHost.chatMobileControlsPointerdownHandler({
+      composedPath: () => [document, window],
+    } as unknown as Event);
+
+    expect(guardHost.realtimeTalkOptionsOpen).toBe(false);
+  });
 });
