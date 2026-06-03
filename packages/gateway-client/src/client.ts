@@ -622,13 +622,25 @@ export class GatewayClient {
   }
 
   stop() {
-    void this.beginStop();
+    // Fire-and-forget teardown (the `openclaw message send` CLI path): nobody
+    // awaits the result, so unref the socket immediately so a lingering close
+    // handshake can't block a natural process exit. Fixes #88230.
+    void this.beginStop({ unrefSocket: true });
   }
 
   async stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
     // Some callers need teardown ordering, not just "close requested". Wait for
     // the socket to close or the terminate fallback to fire.
-    const stopPromise = this.beginStop();
+    //
+    // Capture the live socket BEFORE beginStop() nulls `this.ws`, and pass
+    // unrefSocket:false so the socket stays ref'd through the await below.
+    // Unrefing inside beginStop() here would drop the last ref'd handle before
+    // this promise settles, letting the process exit mid-await — for
+    // `openclaw message send --json` that means exiting before the JSON result
+    // is written (#88230 review, ClawSweeper P1). We unref in `finally`, after
+    // settlement, so natural exit still isn't blocked by the open FD.
+    const ws = this.ws;
+    const stopPromise = this.beginStop({ unrefSocket: false });
     if (!stopPromise) {
       return;
     }
@@ -651,10 +663,39 @@ export class GatewayClient {
       if (timeout) {
         clearTimeout(timeout);
       }
+      // Awaited teardown has settled (closed, terminated, or timed out) and the
+      // caller's result/JSON has been produced. Now release the open FD so it
+      // can't keep the loop alive on a natural exit.
+      if (ws) {
+        this.unrefWsSocket(ws);
+      }
     }
   }
 
-  private beginStop(): Promise<void> | null {
+  /**
+   * Unref the `ws` package's underlying TCP/unix socket so an open file
+   * descriptor cannot keep the Node event loop alive after teardown. `_socket`
+   * is internal to `ws` (not in the public `@types/ws` surface, upgrade-
+   * sensitive), so this is best-effort and guarded. Safe to call more than
+   * once and after `terminate()`.
+   */
+  private unrefWsSocket(ws: WebSocket): void {
+    try {
+      const internalSocket = (
+        ws as unknown as {
+          _socket?: { unref?(): void };
+        }
+      )["_socket"];
+      internalSocket?.unref?.();
+    } catch {
+      // The socket is internal to the `ws` package; ignore if unavailable.
+    }
+  }
+
+  private beginStop(options?: { unrefSocket?: boolean }): Promise<void> | null {
+    // Default to the safe fire-and-forget behavior (unref now) for any caller
+    // that does not await teardown; stopAndWait() opts out and unrefs later.
+    const unrefSocket = options?.unrefSocket ?? true;
     this.stopped = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -683,7 +724,19 @@ export class GatewayClient {
         this.notifyConnectError(error);
         this.logDebug(`gateway connect failed: ${formatGatewayClientErrorForLog(error)}`);
       }
+      // protocol.stop() closes the socket via the transport adapter; the
+      // underlying TCP/unix socket can stay ref'd in the Node event loop and
+      // block natural process exit (e.g. CLI hangs after `openclaw message
+      // send`). The forceTerminateTimer above is already unref'd; the socket
+      // itself was not. Fixes #88230.
+      //
+      // Fire-and-forget stop() unrefs now. stopAndWait() passes false and
+      // unrefs only after its await settles, so an awaited CLI result (e.g.
+      // `--json` output) is written before the process can exit.
       this.protocol.stop();
+      if (unrefSocket) {
+        this.unrefWsSocket(ws);
+      }
       return pendingStop.promise;
     }
     this.protocol.stop();
