@@ -335,7 +335,11 @@ async function executeAgentTurnInternalWithRetryState(
       fallbackAttempts = cycle.fallbackAttempts;
       terminalRunFailed = cycle.terminalRunFailed;
       break;
-    } catch (err) {
+    } catch (caughtErr) {
+      // Mutable alias: a session-takeover error may unwrap to its preserved
+      // promptError below, after which the rest of this handler classifies the
+      // underlying failure. Reassigning the catch parameter trips no-ex-assign.
+      let err = caughtErr;
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
       }
